@@ -26,6 +26,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
 - [geometry.addLine](#commands-geometry-addLine)
+- [geometry.import](#commands-geometry-import)
 - [geometry.nameFace](#commands-geometry-nameFace)
 - [geometry.nameRegion](#commands-geometry-nameRegion)
 - [geometry.remove](#commands-geometry-remove)
@@ -211,6 +212,35 @@ Line Bodies need the 3D idealisation and are not cut, meshed or previewed as sol
 | members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> |  |
 | divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> |  |
+
+<a id="commands-geometry-import"></a>
+
+### geometry.import
+
+Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command
+as `data`, so a Journal replays with no external file, no network and no file system,
+on any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`
+for a part drawn in millimetres). The mesh is welded into a watertight solid, so
+volume, mass, booleans and meshing all work on it; its faces are patches of triangles
+that meet more smoothly than `featureAngle` (30 degrees by default), auto-named
+`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the
+file changes, so for anything you will re-import, name the faces you need with
+geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
+remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
+given length, which is the honest half of defeaturing; there is no fillet, chamfer or
+shell. Give `sha256` to have the engine verify the data is the file you meant.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| format | yes | <code>{"$ref":"#/$defs/MeshFormat"}</code> |  |
+| data | yes | <code>{"type":"string"}</code> | The file itself. Text as it stands, or base64 with &#96;encoding: "base64"&#96;, which is what a binary STL needs. |
+| encoding | no | <code>{"anyOf":[{"$ref":"#/$defs/DataEncoding"},{"type":"null"}]}</code> |  |
+| sha256 | no | <code>{"type":["string","null"]}</code> | Hex sha256 of the decoded file, checked before it is read. |
+| unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> | What one unit in the file means, since the format records no units. |
+| featureAngle | no | <code>{"type":["number","null"],"format":"double"}</code> | Dihedral angle in degrees above which an edge splits two face patches. |
+| simplifyBelow | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> | Collapse mesh features smaller than this before use. |
+| cmd | yes | <code>{"type":"string","const":"geometry.import"}</code> |  |
 
 <a id="commands-geometry-nameFace"></a>
 
@@ -761,6 +791,9 @@ Heat-steady requires a finite positive material conductivity `k`; heat-transient
 requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
 `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
 on its own answer — today a radiation load — and are ignored by a Step that is linear.
+Heat Results report net applied power, positive removed heat and stored-energy rate;
+transient powers belong to the last θ-method integration stage (radiation uses weighted
+endpoint fluxes), while temperature fields belong to its endpoint.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -800,8 +833,9 @@ Step names it in `after`; re-issue that dependent Step without the reference fir
 
 ### step.reorder
 
-Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-this order and a later Step may inherit state (a temperature field) from an earlier one.
+Set the run order of Steps; `order` must list every Step name exactly once and keep each
+Step after the prerequisite named by its `after` field. Steps run in this order and a
+later Step may inherit state (a temperature field) from an earlier one.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -1010,6 +1044,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "center",
         "semiAxes"
       ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>DataEncoding</summary>
+
+```json
+{
+  "description": "How a Command's inline file payload is encoded.",
+  "oneOf": [
+    {
+      "description": "The file's own text, verbatim. The default.",
+      "type": "string",
+      "const": "utf8"
+    },
+    {
+      "description": "Standard base64, for a binary file.",
+      "type": "string",
+      "const": "base64"
     }
   ]
 }
@@ -1254,7 +1311,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
   "type": "string",
   "enum": [
     "displacement",
@@ -1504,6 +1561,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "base",
         "sweep"
       ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>MeshFormat</summary>
+
+```json
+{
+  "description": "The geometry file formats geometry.import reads.",
+  "oneOf": [
+    {
+      "description": "STL, ASCII or binary: a triangle soup with no units, no colours and no face names.",
+      "type": "string",
+      "const": "stl"
     }
   ]
 }
@@ -2936,6 +3011,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
+- [query.difference](#queries-query-difference)
+- [query.field](#queries-query-field)
 - [query.frame](#queries-query-frame)
 - [query.frames](#queries-query-frames)
 - [query.journal](#queries-query-journal)
@@ -2948,6 +3025,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.probe](#queries-query-probe)
 - [query.report](#queries-query-report)
 - [query.result](#queries-query-result)
+- [query.results](#queries-query-results)
 - [query.script](#queries-query-script)
 - [query.set](#queries-query-set)
 
@@ -3013,22 +3091,58 @@ Returns: `ObjectDefinition`.
 | name | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
 
+<a id="queries-query-difference"></a>
+
+### query.difference
+
+Subtract two explicitly retained nodal fields as `left - right` on either Result's
+Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
+null values; nonfinite arithmetic is a structured error. No current Result, display
+conversion, or node-number pairing is implied.
+
+Returns: `DifferenceField`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| left | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
+| right | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
+| onto | yes | <code>{"$ref":"#/$defs/DifferenceOnto"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.difference"}</code> |  |
+
+<a id="queries-query-field"></a>
+
+### query.field
+
+A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
+Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
+omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
+
+Returns: `ResultField`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| step | no | <code>{"type":["string","null"]}</code> |  |
+| resultId | no | <code>{"type":["string","null"]}</code> |  |
+| field | yes | <code>{"type":"string"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.field"}</code> |  |
+
 <a id="queries-query-frame"></a>
 
 ### query.frame
 
-One retained transient primary field. Supply exactly one of zero-based retained index
+One retained primary field from a heat-transient, explicit or amplitude-driven static Step. Supply exactly one of zero-based retained index
 or sample (retained index / physical time with exact or nearest selection). Time
 selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
 policy as sampled probe/path. Values are SI,
 component-fastest, with three components per node, matching final FieldData: a 2D
 displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
-primary field. Derived fields were not retained and are refused. Refuses result.stale.
+primary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.
 
 Returns: `FrameResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | index | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | sample | no | <code>{"anyOf":[{"$ref":"#/$defs/FrameSample"},{"type":"null"}]}</code> |  |
@@ -3039,7 +3153,7 @@ Returns: `FrameResult`.
 
 ### query.frames
 
-Catalogue of retained transient primary-field frames (default: last solved Step).
+Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).
 Index 0 is the initial state; indices count retained frames, not integration steps.
 Metadata remains available for stale Results. No nodal values are copied by this Query.
 
@@ -3047,6 +3161,7 @@ Returns: `FramesResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.frames"}</code> |  |
 
@@ -3145,12 +3260,13 @@ Returns: `ObjectList`.
 
 A field sampled at `n` points along the line from `from` to `to`, for a line plot.
 Optional sample selects a retained primary-field frame; omitted means the final field.
-Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
 
 Returns: `PathResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | field | yes | <code>{"$ref":"#/$defs/Field"}</code> |  |
 | component | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
@@ -3167,12 +3283,13 @@ Returns: `PathResult`.
 A field value interpolated at a point (default: the last solved Step). Component
 indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
 Optional sample selects a retained primary-field frame; omitted means the final field.
-Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
 
 Returns: `ProbeResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | field | yes | <code>{"$ref":"#/$defs/Field"}</code> |  |
 | component | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
@@ -3214,8 +3331,22 @@ Returns: `ResultSummary`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.result"}</code> |  |
+
+<a id="queries-query-results"></a>
+
+### query.results
+
+Catalogue of the eight most recent successful solve instances, oldest first. Reads do
+not extend retention. Evicted ids are unavailable; Model import/new clears records.
+
+Returns: `RetainedResults`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| query | yes | <code>{"type":"string","const":"query.results"}</code> |  |
 
 <a id="queries-query-script"></a>
 
@@ -3634,6 +3765,73 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "from",
         "shape"
+      ]
+    },
+    {
+      "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/$defs/MeshFormat"
+        },
+        "data": {
+          "description": "The file itself. Text as it stands, or base64 with `encoding: \"base64\"`, which is\nwhat a binary STL needs.",
+          "type": "string"
+        },
+        "encoding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataEncoding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sha256": {
+          "description": "Hex sha256 of the decoded file, checked before it is read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unitLength": {
+          "description": "What one unit in the file means, since the format records no units.",
+          "$ref": "#/$defs/Q_length"
+        },
+        "featureAngle": {
+          "description": "Dihedral angle in degrees above which an edge splits two face patches.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "simplifyBelow": {
+          "description": "Collapse mesh features smaller than this before use.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cmd": {
+          "type": "string",
+          "const": "geometry.import"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "format",
+        "data",
+        "unitLength"
       ]
     },
     {
@@ -4393,7 +4591,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
       "type": "object",
       "properties": {
         "name": {
@@ -4556,7 +4754,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+      "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
       "type": "object",
       "properties": {
         "order": {
@@ -4838,6 +5036,78 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>DataEncoding</summary>
+
+```json
+{
+  "description": "How a Command's inline file payload is encoded.",
+  "oneOf": [
+    {
+      "description": "The file's own text, verbatim. The default.",
+      "type": "string",
+      "const": "utf8"
+    },
+    {
+      "description": "Standard base64, for a binary file.",
+      "type": "string",
+      "const": "base64"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>DifferenceOnto</summary>
+
+```json
+{
+  "description": "The retained Result whose Mesh receives the difference values.",
+  "type": "string",
+  "enum": [
+    "left",
+    "right"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>DifferenceOperand</summary>
+
+```json
+{
+  "description": "One explicit retained field used by `query.difference`.",
+  "type": "object",
+  "properties": {
+    "resultId": {
+      "type": "string"
+    },
+    "field": {
+      "type": "string"
+    },
+    "component": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "required": [
+    "resultId",
+    "field"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>Dof</summary>
 
 ```json
@@ -5074,7 +5344,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
   "type": "string",
   "enum": [
     "displacement",
@@ -5428,6 +5698,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "base",
         "sweep"
       ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>MeshFormat</summary>
+
+```json
+{
+  "description": "The geometry file formats geometry.import reads.",
+  "oneOf": [
+    {
+      "description": "STL, ASCII or binary: a triangle soup with no units, no colours and no face names.",
+      "type": "string",
+      "const": "stl"
     }
   ]
 }

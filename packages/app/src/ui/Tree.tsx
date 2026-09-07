@@ -2,7 +2,7 @@
 // with a glyph, a mono name and a one-line summary in display units, the `@` reference button and
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { fieldChoices, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
@@ -93,6 +93,17 @@ const GROUP_OF: Record<string, string> = {
 
 type Valued = { value: number; unit: string } | undefined;
 const q = (v: Valued): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
+
+export type DropEdge = 'before' | 'after';
+
+/** The final permutation for one completed pointer or keyboard gesture; `null` is a no-op. */
+export function reorderSteps(order: string[], source: string, target: string, edge: DropEdge): string[] | null {
+  if (source === target || !order.includes(source) || !order.includes(target)) return null;
+  const next = order.filter((name) => name !== source);
+  const targetIndex = next.indexOf(target);
+  next.splice(targetIndex + (edge === 'after' ? 1 : 0), 0, source);
+  return next.every((name, i) => name === order[i]) ? null : next;
+}
 
 /**
  * The design's Results group: one row per scalar the Result can be contoured by — the fields
@@ -337,12 +348,24 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
 }
 
 export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[] }) {
+  const dragSource = useRef<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{ target: string; edge: DropEdge } | null>(null);
   const openMenu = Object.keys(s.panels).find((panel) => panel.startsWith('tree.menu.') && s.panels[panel]);
   const menu = openMenu?.slice('tree.menu.'.length) ?? null;
   const [adding, setAdding] = useState<string | null>(null);
   const groups = treeGroups(s, shapes);
   const stepNames = (s.model?.steps ?? []).map((x) => x.name);
   const selected = s.form ? String(s.form.values['name'] ?? '') : '';
+  const clearDrag = () => {
+    dragSource.current = null;
+    setDragging(null);
+    setDrop(null);
+  };
+  const commitOrder = (order: string[] | null) => {
+    clearDrag();
+    if (order) void dispatch({ cmd: 'step.reorder', order }).catch(() => undefined);
+  };
   useEffect(() => {
     if (adding === null) return undefined;
     const closeOnEscape = (e: KeyboardEvent): void => {
@@ -380,10 +403,45 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                     const itemKey = `${item.kind}:${item.name}`;
                     const menuPanel = `tree.menu.${itemKey}`;
                     const visible = !s.hiddenBodies.includes(item.name);
+                    const isStep = group.label === 'Steps';
+                    const dropEdge = drop?.target === item.name ? drop.edge : null;
+                    const classes = [
+                      'row',
+                      (item.active ?? selected === item.name) ? 'selected' : '',
+                      isStep ? 'step-row' : '',
+                      dragging === item.name ? 'dragging' : '',
+                      dropEdge ? `drop-${dropEdge}` : '',
+                    ].filter(Boolean).join(' ');
                     return (
                       <div
                         key={itemKey}
-                        class={(item.active ?? selected === item.name) ? 'row selected' : 'row'}
+                        class={classes}
+                        draggable={isStep}
+                        data-cmd={isStep ? 'step.reorder' : undefined}
+                        data-step={isStep ? item.name : undefined}
+                        title={isStep ? `Drag ${item.name} to change the Step run order` : undefined}
+                        onDragStart={isStep ? (e) => {
+                          if (!e.dataTransfer) return;
+                          dragSource.current = item.name;
+                          setDragging(item.name);
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', item.name);
+                        } : undefined}
+                        onDragOver={isStep ? (e) => {
+                          if (!e.dataTransfer || !dragSource.current || dragSource.current === item.name) return;
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          const box = e.currentTarget.getBoundingClientRect();
+                          setDrop({ target: item.name, edge: e.clientY < box.top + box.height / 2 ? 'before' : 'after' });
+                        } : undefined}
+                        onDrop={isStep ? (e) => {
+                          if (!e.dataTransfer) return;
+                          e.preventDefault();
+                          const source = dragSource.current ?? e.dataTransfer.getData('text/plain');
+                          const edge = drop?.target === item.name ? drop.edge : 'before';
+                          commitOrder(reorderSteps(stepNames, source, item.name, edge));
+                        } : undefined}
+                        onDragEnd={isStep ? clearDrag : undefined}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: true }).catch(() => undefined);
@@ -402,22 +460,33 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                             <span class="summary">{item.summary}</span>
                           </span>
                         </Cmd>
-                        {group.label === 'Steps' && stepNames.length > 1 ? (
-                          <Cmd
-                            dispatch={dispatch}
-                            cmd="step.reorder"
-                            class="at"
-                            title="move this Step earlier"
-                            disabled={i === 0}
-                            args={{ order: stepNames }}
-                            onRun={() => {
-                              const order = [...stepNames];
-                              order.splice(i - 1, 0, ...order.splice(i, 1));
-                              void dispatch({ cmd: 'step.reorder', order }).catch(() => undefined);
-                            }}
-                          >
-                            ↑
-                          </Cmd>
+                        {isStep && stepNames.length > 1 ? (
+                          <span class="step-moves">
+                            <Cmd
+                              dispatch={dispatch}
+                              cmd="step.reorder"
+                              class="step-move"
+                              label={`Move ${item.name} earlier`}
+                              title="move this Step earlier"
+                              disabled={i === 0}
+                              args={{ order: stepNames }}
+                              onRun={() => commitOrder(reorderSteps(stepNames, item.name, stepNames[i - 1] ?? item.name, 'before'))}
+                            >
+                              ↑
+                            </Cmd>
+                            <Cmd
+                              dispatch={dispatch}
+                              cmd="step.reorder"
+                              class="step-move"
+                              label={`Move ${item.name} later`}
+                              title="move this Step later"
+                              disabled={i === stepNames.length - 1}
+                              args={{ order: stepNames }}
+                              onRun={() => commitOrder(reorderSteps(stepNames, item.name, stepNames[i + 1] ?? item.name, 'after'))}
+                            >
+                              ↓
+                            </Cmd>
+                          </span>
                         ) : null}
                         {item.kind === 'body' ? (
                           <Cmd

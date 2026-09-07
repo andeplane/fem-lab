@@ -5,11 +5,14 @@
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
+import { benchmarkProvenance } from '../benchmark';
+import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
-
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { blockers } from './schema';
+
+const Theory = lazy(() => import('./Theory').then((module) => module.Theory));
 
 const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—');
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
@@ -18,7 +21,9 @@ const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 
 /** `balance` is a dimensionless ratio; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
   const percent = r.balance * 100;
-  return { pass: Math.abs(r.balance) < 1e-6, text: `Σ reactions = −Σ loads · ${percent.toFixed(4)} %` };
+  const power = r.reactionQuantity === 'power';
+  const equation = power ? 'Net applied = removed + storage' : 'Σ reactions = −Σ loads';
+  return { pass: power ? r.balance <= 1e-9 : Math.abs(r.balance) < 1e-6, text: `${equation} · ${percent.toFixed(4)} %` };
 }
 
 /** The extreme whose largest magnitude leads the table: the number the engineer reads first. */
@@ -138,6 +143,7 @@ function Reactions({ s }: { s: UiState }) {
               </td>
             ))}
           </tr>
+          {r.storagePower && <tr class="total"><td>Storage rate</td><td class="mono n">{num(r.storagePower)}</td></tr>}
         </tbody>
       </table>
       <div class={balance.pass ? 'surface pass' : 'surface warn'} data-balance={r.balance}>
@@ -453,6 +459,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <Sample s={s} query={query} />
       </div>
       <div class="rcol">
+        {s.benchmark ? <Theory benchmark={s.benchmark} result={s.result} study={s.study} current={benchmarkProvenance(s.model, s.journal, s.revision)} query={query} /> : null}
         <div class="section-label">Reactions</div>
         <Reactions s={s} />
         <History s={s} />

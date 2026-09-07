@@ -1,6 +1,8 @@
 import { render } from 'preact';
-import { beforeEach, expect, it, vi } from 'vitest';
-import { appHostCommands } from '../src/host';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { appHostCommands, openExample } from '../src/host';
+import { completeJournalHash, type ExampleEntry } from '../src/benchmark';
+
 import { Store, journalIdentity, unsaved } from '../src/store';
 import { ModelName } from '../src/ui/ModelName';
 import type { WorkerTransport } from '../src/worker-transport';
@@ -8,6 +10,20 @@ import type { WorkerTransport } from '../src/worker-transport';
 beforeEach(() => {
   document.body.innerHTML = '';
 });
+afterEach(() => vi.unstubAllGlobals());
+const example: ExampleEntry = {
+  name: 'cantilever', commands: 2, summary: 'Beam example', title: 'Cantilever',
+  tag: 'static', tags: ['static'], difficulty: 1, thumbnail: null,
+  theory: 'Beam theory',
+  expected: { quantity: 'tip deflection', value: 0.1919619, unit: 'mm', reference: 'Timoshenko' },
+};
+function mockExampleFetch(journal: unknown) {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('examples/index.json')) return Response.json({ examples: [example] });
+    if (url.endsWith('cantilever.json')) return Response.json(journal);
+    throw new Error(`Unexpected example request: ${url}`);
+  }));
+}
 const entries = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'beam' }, hashAfter: 'h' }];
 it('tracks complete Journal content, ignores view changes, and clears when undo returns to the saved content', () => {
   const store = new Store();
@@ -28,6 +44,41 @@ it('tracks complete Journal content, ignores view changes, and clears when undo 
   store.set({ journal: { ...store.state.journal!, entries: edited } });
   store.markSaved({ entries });
   expect(unsaved(store.state)).toBe(true);
+  expect(store.state.savedBaseline).toEqual(entries);
+});
+
+it('compares an imported file through journalDiff without importing or changing the active Journal', async () => {
+  const current = entries[0]!;
+  const imported = { ...current, cmd: { cmd: 'model.new' as const, name: 'imported' } };
+  const store = new Store({ ...new Store().state, journal: { entries: [current], revision: 1, hash: 'active', canUndo: true, canRedo: false } });
+  const query = vi.fn(async () => ({ baseHash: 'base', currentHash: 'active', sharedEntries: 0, removed: [imported], added: [current] }));
+  const importFile = vi.fn();
+  const transport = { query, importFile } as unknown as WorkerTransport;
+  const compare = appHostCommands(store, transport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
+  const result = await compare.run({ json: JSON.stringify({ format: 'femlab/1', journal: { entries: [imported] } }) }, {} as never);
+
+  expect(result).toMatchObject({ sharedEntries: 0, removed: [imported], added: [current] });
+  expect(query).toHaveBeenCalledWith({ query: 'query.journalDiff', base: { entries: [imported] } });
+  expect(importFile).not.toHaveBeenCalled();
+  expect(store.state.journal?.entries).toEqual([current]);
+  expect(store.state.comparisonSource).toBe('imported');
+});
+
+it('rejects malformed comparison files as structured schema errors', async () => {
+  const compare = appHostCommands(new Store(), { query: vi.fn() } as unknown as WorkerTransport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
+  await expect(compare.run({ json: 'null' }, {} as never)).rejects.toMatchObject({ code: 'schema', where: 'file' });
+});
+
+it('keeps an explicit baseline normalized while undo and redo update the causal diff', () => {
+  const first = entries[0]!;
+  const second = { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'girder' }, hashAfter: 'h2' };
+  const store = new Store();
+  store.markSaved({ entries: [first] });
+  store.set({ journal: { entries: [first, second], revision: 2, hash: 'h2', canUndo: true, canRedo: false } });
+  expect(store.state.savedBaseline).toEqual([first]);
+  expect(unsaved(store.state)).toBe(true);
+  store.set({ journal: { entries: [first], revision: 1, hash: 'h', canUndo: false, canRedo: true } });
+  expect(unsaved(store.state)).toBe(false);
 });
 
 it('commits the name exactly once on Enter or blur, cancels Escape, and rejects blank drafts', async () => {
@@ -71,19 +122,22 @@ it('establishes an exact saved baseline only after a bundled example opens compl
   };
   const store = new Store({ ...new Store().state, savedJournal: 'previous baseline' });
   const dispatch = vi.fn(async () => ({ output: { type: 'none' } }));
-  const transport = { dispatch } as unknown as WorkerTransport;
+  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: [first, second] } })) } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: [first, second], revision: 2, hash: 'journal', canUndo: true, canRedo: false } }));
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify([{ cmd: first.cmd }, { cmd: second.cmd }]) })));
+  mockExampleFetch([{ cmd: first.cmd }, { cmd: second.cmd }]);
   const open = appHostCommands(store, transport, { current: null }, refresh).find((def) => def.name === 'file.openExample')!;
 
-  await open.run({ name: 'example' }, {} as never);
+  const ctx = { examples: { open: (name: string) => openExample(name, store, transport, refresh) } } as never;
+  await open.run({ name: 'cantilever' }, ctx);
+
   expect(dispatch).toHaveBeenCalledTimes(2);
   expect(store.state.savedJournal).toBe(journalIdentity([first, second]));
 
   store.set({ savedJournal: 'still previous' });
   dispatch.mockResolvedValueOnce({ output: { type: 'none' } });
   dispatch.mockRejectedValueOnce(new Error('second command failed'));
-  await expect(open.run({ name: 'broken' }, {} as never)).rejects.toThrow('second command failed');
+  await expect(open.run({ name: 'cantilever' }, ctx)).rejects.toThrow('second command failed');
+
   expect(store.state.savedJournal).toBe('still previous');
 });
 
@@ -91,24 +145,26 @@ it('does not include an edit made while an opened example restores its Result', 
   const opened = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'solved example' }, hashAfter: 'opened' }];
   const edited = [...opened, { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'later edit' }, hashAfter: 'edited' }];
   const store = new Store();
+  const finishOldSave = store.beginSave();
   const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
-  const transport = { dispatch } as unknown as WorkerTransport;
+  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: opened, revision: 1, hash: 'opened', canUndo: true, canRedo: false } }));
   let finishResult!: () => void;
   const onAck = vi.fn(() => new Promise<void>((resolve) => { finishResult = resolve; }));
-  vi.stubGlobal('fetch', vi.fn(async () => ({
-    ok: true,
-    text: async () => JSON.stringify([{ cmd: opened[0]!.cmd }, { cmd: { cmd: 'solve.run', step: 'static' } }]),
-  })));
+  mockExampleFetch([{ cmd: opened[0]!.cmd }, { cmd: { cmd: 'solve.run', step: 'static' } }]);
   const open = appHostCommands(store, transport, { current: null }, refresh, { onAck } as never).find((def) => def.name === 'file.openExample')!;
 
-  const pending = open.run({ name: 'solved-example' }, {} as never);
+  const pending = open.run({ name: 'cantilever' }, { examples: { open: (name: string) => openExample(name, store, transport, refresh, { onAck } as never) } } as never);
+
   await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
   store.set({ journal: { entries: edited, revision: 2, hash: 'edited', canUndo: true, canRedo: false } });
   finishResult();
   await pending;
+  finishOldSave({ entries: edited });
 
   expect(store.state.savedJournal).toBe(journalIdentity(opened));
+  expect(store.state.benchmark?.journalHash).toBe(completeJournalHash({ entries: opened, hash: 'opened', revision: 1, canUndo: true, canRedo: false }));
+  expect(store.state.benchmark?.journalHash).not.toBe(completeJournalHash(store.state.journal));
   expect(unsaved(store.state)).toBe(true);
 });
 
@@ -144,4 +200,19 @@ it('opens a browser project against its captured Journal without marking a later
   await expect(ctx.projects.open(project.id)).rejects.toThrow('replay failed');
   expect(store.state.savedJournal).toBe('previous failed-open baseline');
   vi.unstubAllGlobals();
+});
+
+
+it('a new Model has no saved baseline and rejects completions captured for the old document', () => {
+  const store = new Store();
+  store.markSaved({ entries });
+  const complete = store.beginSave();
+  store.newDocument();
+  complete({ entries });
+  expect(store.state.savedBaseline).toBeNull();
+  expect(store.state.savedJournal).toBeNull();
+  expect(store.state.comparisonSource).toBeNull();
+  const fresh = store.beginSave();
+  fresh({ entries });
+  expect(store.state.savedBaseline).toEqual(entries);
 });

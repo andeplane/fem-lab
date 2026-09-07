@@ -42,6 +42,7 @@ const MODEL: ModelSummary = {
 };
 
 const RESULT: ResultSummary = {
+  resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
   revision: 10,
@@ -58,6 +59,7 @@ const RESULT: ResultSummary = {
   appliedTotal: [kN(0), kN(0), kN(-1)],
   balance: 0,
 };
+
 
 describe('the solve state machine', () => {
   const base = { solving: null, result: null, lastError: null } as Parameters<typeof stageOf>[0];
@@ -143,7 +145,7 @@ describe('the Results tab', () => {
     expect(displayUnitOf('reaction', { force: 'N', power: 'kW' }, 'power')).toBe('kW');
     expect(displayUnitOf('reaction', { force: 'kN', power: 'W' }, 'force')).toBe('kN');
     const kw = (value: number): Valued => ({ value, unit: 'kW' });
-    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power',
+    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power', storagePower: kw(0.005),
       reactions: [{ constraint: 'cold', total: [kw(0.01), kw(0), kw(0)] }],
       appliedTotal: [kw(0.01), kw(0), kw(0)], extremes: [] };
     const root = document.createElement('div');
@@ -151,8 +153,12 @@ describe('the Results tab', () => {
     expect(root.textContent).toContain('Power kW');
     expect(root.textContent).not.toContain('Fx');
     const table = [...root.querySelectorAll('table')].find((t) => t.textContent?.includes('Power kW'))!;
-    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2]);
+    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2, 2]);
     expect(table.textContent).toContain('cold0.01');
+    expect(table.textContent).toContain('Storage rate0.005');
+    expect(root.textContent).toContain('Net applied = removed + storage');
+    expect(balanceLine({ ...result, balance: 1e-9 }).pass).toBe(true);
+    expect(balanceLine({ ...result, balance: 2e-9 }).pass).toBe(false);
   });
 
   it('leads with the extreme of the largest magnitude', () => {
@@ -603,7 +609,7 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
   const cost: CostEstimate = {
-    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000, residentResultBytes: 0, resultMeshBytes: 0,
     retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
     wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
     budgetBytes: 1_610_612_736,

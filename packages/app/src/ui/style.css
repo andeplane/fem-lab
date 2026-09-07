@@ -339,7 +339,7 @@ textarea:focus {
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
    text labels while giving the flexible model and command fields the remaining room.
-   Linux needs 1616 px at the wide settings; keep this allocation until 1700 px. */
+   Keep the wide settings above 1700 px so Compare fits beside the document actions. */
 @media (min-width: 1180px) and (max-width: 1699px) {
   .topbar {
     gap: 4px;
@@ -374,10 +374,10 @@ textarea:focus {
 }
 
 /* Linux fallback fonts need more room than macOS at 1200 px. Keep the tight allocation
-   through 1299 px so the next breakpoint has space for every fixed-width action. */
-@media (min-width: 1180px) and (max-width: 1299px) {
+   through 1399 px so Compare and the other fixed-width actions fit before it gives way. */
+@media (min-width: 1180px) and (max-width: 1399px) {
   .topbar {
-    gap: 3px;
+    gap: 2px;
     padding-inline: 6px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
@@ -389,7 +389,7 @@ textarea:focus {
     max-width: 76px;
   }
   .topbar > .chip {
-    max-width: 90px;
+    max-width: 60px;
   }
   .palette-field {
     min-width: 80px;
@@ -455,6 +455,30 @@ textarea:focus {
   background: var(--bg-selected);
   border-left-color: var(--accent);
 }
+.step-row {
+  cursor: grab;
+}
+.step-row.dragging {
+  opacity: 0.45;
+}
+.step-row.drop-before::before,
+.step-row.drop-after::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--cyan);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--cyan) 55%, transparent);
+  pointer-events: none;
+}
+.step-row.drop-before::before {
+  top: -1px;
+}
+.step-row.drop-after::after {
+  bottom: -1px;
+}
 .row-main {
   display: flex;
   align-items: flex-start;
@@ -515,6 +539,24 @@ textarea:focus {
 }
 .at:hover:not(:disabled) {
   color: var(--cyan);
+}
+.step-moves {
+  flex: none;
+  display: flex;
+  padding-top: 3px;
+}
+.step-move {
+  width: 15px;
+  height: 20px;
+  color: #3a4048;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.step-move:hover:not(:disabled) {
+  color: var(--cyan);
+}
+.step-move:disabled {
+  color: #252a31;
 }
 .tree-action {
   flex: none;
@@ -840,6 +882,21 @@ textarea:focus {
 .jrow.stale {
   background: var(--warn-bg);
   border-left-color: var(--yellow);
+}
+.comparison-added .jrow {
+  border-left-color: var(--accent);
+}
+.comparison-removed .jrow {
+  color: var(--text-faint);
+  border-left-color: var(--red-text);
+  text-decoration: line-through;
+}
+.comparison-label,
+.comparison-removed-label {
+  padding: 8px 14px 3px;
+}
+.comparison-removed-label {
+  color: var(--red-text);
 }
 .jrow-main {
   display: flex;
@@ -1876,6 +1933,77 @@ button.solve.stale {
   gap: 6px;
   min-width: 0;
 }
+.theory-panel {
+  margin-bottom: 8px;
+  padding: 11px 12px 12px;
+  border: 1px solid var(--border-divider);
+  border-left: 2px solid var(--cyan);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.theory-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.theory-panel h3 {
+  margin: 5px 0 3px;
+  color: var(--text-high);
+  font-size: 13px;
+}
+.theory-copy {
+  margin: 0 0 10px;
+  color: var(--text-body);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.theory-copy .katex {
+  color: var(--text-high);
+  font-size: 1.02em;
+}
+.theory-values {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) 1fr;
+  gap: 3px 9px;
+  margin-bottom: 7px;
+  padding: 7px 8px;
+  background: var(--bg-well);
+  font-size: 11px;
+}
+.theory-values > span {
+  color: var(--text-faint);
+}
+.theory-values > strong {
+  color: var(--cyan-text);
+  font-weight: 500;
+}
+.theory-stale {
+  color: var(--orange);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.theory-panel.stale .theory-values {
+  opacity: 0.56;
+}
+.theory-reference,
+.theory-source {
+  display: flex;
+  gap: 7px;
+  margin-top: 7px;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.theory-reference > .mono {
+  flex: 0 0 auto;
+  color: var(--yellow);
+  text-transform: uppercase;
+}
+.theory-unmapped {
+  align-items: flex-start;
+}
 .rtable {
   width: 100%;
   border-collapse: collapse;
@@ -2409,7 +2537,7 @@ input.model-name:focus {
 @media (min-width: 1180px) and (max-width: 1699px) {
   .model-title { flex-basis: 140px; max-width: 140px; }
 }
-@media (min-width: 1180px) and (max-width: 1299px) {
+@media (min-width: 1180px) and (max-width: 1399px) {
   .model-title { flex-basis: 96px; max-width: 96px; }
 }
 .palette-intent { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-divider); }

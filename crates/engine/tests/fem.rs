@@ -14,7 +14,7 @@ use femlab_engine::fem::assembly::{
     ResolvedConstraints,
 };
 use femlab_engine::fem::checks;
-use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, Iso, Material};
+use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, InverseMap, Iso, Material};
 use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
@@ -35,7 +35,7 @@ use femlab_engine::fem::shape::{
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::post::convergence::{observed_rate, richardson};
-use femlab_engine::post::probe::{path, probe};
+use femlab_engine::post::probe::{path, probe, probe_checked};
 use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
@@ -1372,8 +1372,60 @@ fn thermal_load_is_the_stiffness_times_the_free_expansion() {
     }
 }
 
+struct LegacyInverseMap {
+    inner: &'static dyn Element,
+    mapped: Option<[f64; 3]>,
+}
+
+impl Element for LegacyInverseMap {
+    fn kind(&self) -> ElementKind {
+        self.inner.kind()
+    }
+    fn n_dof(&self) -> usize {
+        self.inner.n_dof()
+    }
+    fn n_gp(&self) -> usize {
+        self.inner.n_gp()
+    }
+    fn stiffness(&self, c: &ElementCtx<'_>, k: &mut [f64]) -> Result<f64, Error> {
+        self.inner.stiffness(c, k)
+    }
+    fn mass(&self, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -> Result<(), Error> {
+        self.inner.mass(c, m, lumped)
+    }
+    fn body_load(&self, c: &ElementCtx<'_>, f: &dyn Fn([f64; 3]) -> [f64; 3], out: &mut [f64]) -> Result<(), Error> {
+        self.inner.body_load(c, f, out)
+    }
+    fn thermal_load(&self, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<(), Error> {
+        self.inner.thermal_load(c, out)
+    }
+    fn face_load(&self, c: &ElementCtx<'_>, local_face: u8, load: FaceLoad, out: &mut [f64]) -> Result<(), Error> {
+        self.inner.face_load(c, local_face, load, out)
+    }
+    fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
+        self.inner.recover(c, u, stress, strain)
+    }
+    fn gp_xi(&self, i: usize) -> [f64; 3] {
+        self.inner.gp_xi(i)
+    }
+    fn shape_at(&self, xi: [f64; 3], n: &mut [f64]) {
+        self.inner.shape_at(xi, n);
+    }
+    fn inverse_map(&self, _coords: &[f64], _x: [f64; 3]) -> Option<[f64; 3]> {
+        self.mapped
+    }
+    fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error> {
+        self.inner.omega_max(c)
+    }
+}
+
 #[test]
 fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
+    let legacy = LegacyInverseMap { inner: element_for(ElementKind::Hex8), mapped: Some([0.25, -0.5, 0.75]) };
+    assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Inside([0.25, -0.5, 0.75]));
+    let legacy = LegacyInverseMap { inner: element_for(ElementKind::Hex8), mapped: None };
+    assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Failed);
+
     for kind in ALL_KINDS {
         let el = element_for(kind);
         let coords = distorted(kind);
@@ -1393,8 +1445,144 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
                 assert!((back[k] - xi[k]).abs() <= 1e-10, "{kind:?} gp {i} dir {k}");
             }
         }
-        assert!(el.inverse_map(&coords, [100.0, 100.0, 100.0]).is_none(), "{kind:?} far point");
-        assert!(el.inverse_map(&folded(kind), [2.0, 1.0, 0.5]).is_none(), "{kind:?} folded");
+        let outside_xi = match kind {
+            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 => [1.1, 0.0, 0.0],
+            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => [-0.1, 0.0, 0.0],
+        };
+        el.shape_at(outside_xi, &mut n);
+        let outside =
+            std::array::from_fn(|k| n.iter().enumerate().map(|(node, value)| value * coords[3 * node + k]).sum());
+        assert_eq!(el.inverse_map_status(&coords, outside), InverseMap::Outside, "{kind:?} mapped outside point");
+        assert_eq!(el.inverse_map_status(&folded(kind), [2.0, 1.0, 0.5]), InverseMap::Failed, "{kind:?} folded");
+        assert_eq!(el.inverse_map_status(&coords, [f64::NAN, 0.0, 0.0]), InverseMap::Failed, "{kind:?} nonfinite");
+    }
+    assert_eq!(
+        element_for(ElementKind::Hex20).inverse_map_status(&distorted(ElementKind::Hex20), [100.0; 3]),
+        InverseMap::Failed,
+        "a valid curved element must report a far Newton failure rather than guessing from the last iterate"
+    );
+    assert_eq!(
+        element_for(ElementKind::Hex20).inverse_map_status(&distorted(ElementKind::Hex20), [f64::MAX; 3]),
+        InverseMap::Failed,
+        "a finite request whose Newton update overflows is still a locator failure"
+    );
+    let extreme_quad = vec![
+        -f64::MAX,
+        -1.0,
+        0.0,
+        f64::MAX,
+        -1.0,
+        0.0,
+        -f64::MAX,
+        1.0,
+        0.0,
+        f64::MAX,
+        1.0,
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        0.0,
+        0.0,
+    ];
+    assert_eq!(
+        element_for(ElementKind::Quad8).inverse_map_status(&extreme_quad, [f64::MAX / 4.0, 0.0, 0.0]),
+        InverseMap::Failed,
+        "finite opposite-sign extrema must not overflow the residual tolerance and accept the centre"
+    );
+}
+
+#[test]
+fn a_curved_quadratic_probe_is_not_rejected_by_its_nodal_box() {
+    let kind = ElementKind::Quad8;
+    // This positively oriented isoparametric element has a curved top edge. At ξ = 5/6,
+    // its physical x is 1.0296, beyond the largest nodal x (1.0); a nodal AABB is therefore
+    // not a sound rejection bound for a quadratic element.
+    let coords = vec![
+        -1.0,
+        -1.0,
+        0.0,
+        1.0,
+        -1.0,
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        -1.0,
+        1.0,
+        0.0,
+        -0.623_871_456_418_218_1,
+        -0.403_780_038_227_63,
+        0.0,
+        0.533_587_919_073_732_5,
+        0.105_866_302_482_681_58,
+        0.0,
+        0.642_435_506_149_044_8,
+        1.561_562_153_585_714_7,
+        0.0,
+        -1.519_061_237_959_067_1,
+        0.008_414_688_222_026_179,
+        0.0,
+    ];
+    assert!(min_det_j(kind, &coords).is_some(), "the curved map is positively oriented at its integration points");
+    let element = element_for(kind);
+    let physical = |xi: [f64; 3]| {
+        let mut shape = vec![0.0; kind.n_nodes()];
+        element.shape_at(xi, &mut shape);
+        std::array::from_fn(|k| shape.iter().enumerate().map(|(node, value)| value * coords[3 * node + k]).sum())
+    };
+    let inside = physical([5.0 / 6.0, 1.0, 0.0]);
+    assert!(inside[0] > coords.iter().step_by(3).copied().fold(f64::NEG_INFINITY, f64::max));
+    let InverseMap::Inside(back) = element.inverse_map_status(&coords, inside) else {
+        panic!("the curved edge point is inside")
+    };
+    assert!((back[0] - 5.0 / 6.0).abs() < 1e-10 && (back[1] - 1.0).abs() < 1e-10);
+    assert_eq!(element.inverse_map_status(&coords, physical([1.2, 0.0, 0.0])), InverseMap::Outside);
+
+    let mesh = Mesh {
+        dim: 2,
+        coords: coords.clone(),
+        blocks: vec![ElementBlock { kind, conn: (0..8).collect(), first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let field = FieldData::new(Per::Node, 1, coords.iter().step_by(3).copied().collect());
+    let (_, value) = probe(&mesh, &field, inside).expect("quadratic probing must not use the unsafe nodal box");
+    assert!((value[0] - inside[0]).abs() < 1e-10, "linear-coordinate interpolation is exact");
+    assert_eq!(
+        probe_checked(&mesh, &field, [100.0; 3]),
+        Ok(None),
+        "the curved control hull proves a far point outside"
+    );
+    assert_eq!(
+        probe_checked(&mesh, &field, [f64::NAN, 0.0, 0.0]),
+        Err(0),
+        "a nonfinite requested point reaches the locator and remains a numerical failure"
+    );
+    let mut nonfinite_mesh = mesh.clone();
+    nonfinite_mesh.coords[0] = f64::NAN;
+    assert_eq!(
+        probe_checked(&nonfinite_mesh, &field, inside),
+        Err(0),
+        "nonfinite retained coordinates cannot be classified as outside coverage"
+    );
+
+    for kind in [ElementKind::Quad8, ElementKind::Hex20, ElementKind::Tri6, ElementKind::Tet10] {
+        let mesh = Structured { kind, n: [1, 1, 1] }.box_([1.0; 3]);
+        let field = FieldData::new(Per::Node, 1, vec![0.0; mesh.n_nodes()]);
+        assert_eq!(
+            probe_checked(&mesh, &field, [100.0; 3]),
+            Ok(None),
+            "a far point is positively outside a straight quadratic {kind:?}"
+        );
     }
 }
 
@@ -1565,8 +1753,11 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
 // ==================================================================================
 
 use femlab_engine::io::msh::gmsh_permutation;
-use femlab_engine::io::{read_msh, write_inp, write_msh, write_stl, write_stl_mesh, write_vtu};
-use femlab_geometry::{elliptic_annulus, split_to_simplices, ElementBlock, Face, Shape, Solid, TriMesh};
+use femlab_engine::io::vtu::base64;
+use femlab_engine::io::{
+    base64_decode, read_msh, read_stl, write_inp, write_msh, write_stl, write_stl_mesh, write_vtu,
+};
+use femlab_geometry::{elliptic_annulus, split_to_simplices, ElementBlock, Face, Shape, Sketch, Solid, TriMesh};
 
 // ---------------------------------------------------------------- msh: gmsh_permutation
 
@@ -4106,6 +4297,138 @@ fn a_bar_between_two_fixed_temperatures_is_linear_for_every_kind() {
         // The heat that enters at the hot end leaves at the cold one, and the balance says so.
         let (cold, hot) = (res.reactions[0].1[0], res.reactions[1].1[0]);
         assert!((cold + hot).abs() <= 1e-9 * hot.abs(), "{kind:?}: {cold} + {hot}");
+    }
+}
+
+/// E: net heat entering equals heat removed, for every built-in element family.
+#[test]
+fn steady_heat_power_balances_flux_sources_and_outgoing_convection() {
+    for kind in ALL_KINDS {
+        for n in [2, 4] {
+            let (mesh, id, area) = if kind.dim() == 3 {
+                (Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]), Idealisation::Solid3d, 0.01)
+            } else {
+                (
+                    Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.1, 0.0]),
+                    Idealisation::PlaneStress { thickness: 0.2 },
+                    0.02,
+                )
+            };
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id.clone(),
+                conductor(45.0, 1.0, 1.0),
+                vec![hold("cold", "xmax", 293.15)],
+                vec![
+                    HeatLoad::Flux { faces: "xmin".into(), q: 1000.0 },
+                    HeatLoad::Source { bodies: bodies.clone(), q: 500.0 },
+                ],
+            );
+            let res = run_step(&p, &steady()).unwrap();
+            let expected = area * (1000.0 + 500.0 * 1.0); // q_surface*A + q_volume*V
+            assert!((res.scalars["applied_total_x"] - expected).abs() < 1e-8, "{kind:?}");
+            assert!((res.reactions[0].1[0] - expected).abs() < 1e-8, "{kind:?}");
+            assert_eq!(res.scalars["storage_power"], 0.0);
+            // With no temperature support, the film must remove all prescribed input.
+            for flux in [0.0, 1000.0] {
+                let p = heat_problem(
+                    &mesh,
+                    &sets,
+                    &bodies,
+                    id.clone(),
+                    conductor(45.0, 1.0, 1.0),
+                    Vec::new(),
+                    vec![
+                        HeatLoad::Flux { faces: "xmin".into(), q: flux },
+                        HeatLoad::Convection { faces: "xmax".into(), h: 25.0, t_inf: 283.15 },
+                        HeatLoad::Convection { faces: "xmax".into(), h: 25.0, t_inf: 303.15 },
+                    ],
+                );
+                let res = run_step(&p, &steady()).unwrap();
+                assert!(res.scalars["applied_total_x"].abs() < 1e-8, "{kind:?}: {:?}", res.scalars);
+                assert!(res.reactions.is_empty());
+                // The film face temperature follows q/h independently of k or mesh spacing.
+                for &node in &sets["xmax"].nodes {
+                    assert!((temperature_of(&res)[node as usize] - (293.15 + flux / 50.0)).abs() < 1e-8);
+                }
+            }
+        }
+    }
+}
+
+/// E: prescribed T(x,t)=(10+4x)(1+t) has exact energy rate ρcp V*12. The last
+/// θ-stage gradient is 4*(1+t_old+θdt), which distinguishes stage powers from endpoint powers.
+#[test]
+fn transient_heat_reactions_include_storage_at_the_last_theta_stage() {
+    for n in [2, 4] {
+        for theta in [0.5, 0.75, 1.0] {
+            for (requested_dt, end, effective_dt) in [(1.0, 2.0, 1.0), (0.4, 0.9, 0.3)] {
+                let mesh = Structured { kind: ElementKind::Hex8, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]);
+                let mut sets = sets_of(&mesh);
+                let bodies = one_body();
+                let mut constraints = Vec::new();
+                for node in 0..mesh.n_nodes() as u32 {
+                    let name = format!("node{node}");
+                    sets.insert(
+                        name.clone(),
+                        ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: Vec::new(), elems: Vec::new() },
+                    );
+                    constraints.push(hold(&name, &name, 10.0 + 4.0 * mesh.node(node)[0]));
+                }
+                for (loads, film) in [
+                    (Vec::new(), 0.0),
+                    (vec![HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 100.0 }], 50.0),
+                ] {
+                    let p = heat_problem(
+                        &mesh,
+                        &sets,
+                        &bodies,
+                        Idealisation::Solid3d,
+                        conductor(45.0, 1.0, 1.0),
+                        constraints.clone(),
+                        loads,
+                    );
+                    // Keep only endpoints: power uses the final internal interval, including
+                    // the independently known 0.3 s increment for a 0.4/0.9 s request.
+                    let step = Step::HeatTransient {
+                        dt: requested_dt,
+                        t_end: end,
+                        theta,
+                        initial: 10.0,
+                        output_every: 99,
+                        amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 2.0], value: vec![1.0, 3.0] }),
+                        solver: SolveOptions::default(),
+                        control: NonlinearControl::default(),
+                    };
+                    let res = run_step(&p, &step).unwrap();
+                    assert!((res.scalars["storage_power"] - 0.12).abs() < 1e-10);
+                    assert!((res.scalars["dt"] - effective_dt).abs() < 1e-15);
+                    let stage_factor = 1.0 + end - (1.0 - theta) * effective_dt;
+                    let applied = film * 0.01 * (100.0 - 14.0 * stage_factor);
+                    assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-10);
+                    let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+                    assert!((removed - applied + 0.12).abs() < 1e-10); // prescribed heating adds, rather than removes, power
+                    let cold: f64 = sets["xmin"]
+                        .nodes
+                        .iter()
+                        .map(|&node| res.fields[&Field::Reaction].data[node as usize * 3])
+                        .sum();
+                    let dx = 1.0 / n as f64;
+                    // Exact integral of the left-end linear basis times dT/dt over its adjacent cell.
+                    let storage_at_cold = 0.01 * dx * (30.0 + 4.0 * dx) / 6.0;
+                    let expected_cold = 45.0 * 0.01 * 4.0 * stage_factor - storage_at_cold;
+                    assert!((cold - expected_cold).abs() < 1e-10, "n={n}, θ={theta}: {cold} vs {expected_cold}");
+                    assert_eq!(res.history.as_ref().unwrap().times, [0.0, end]);
+                    for (node, t) in temperature_of(&res).iter().enumerate() {
+                        assert!((t - (1.0 + end) * (10.0 + 4.0 * mesh.node(node as u32)[0])).abs() < 1e-12);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -7006,6 +7329,9 @@ fn a_radiating_slab_reaches_the_surface_temperature_a_bisection_predicts() {
             (through_support - radiated).abs() <= 1e-9 * radiated,
             "n = {n}: {through_support} W in, {radiated} W radiated"
         );
+        assert!((res.scalars["applied_total_x"] + radiated).abs() <= 1e-9 * radiated);
+        assert_eq!(res.scalars["storage_power"], 0.0);
+        assert!((res.scalars["applied_total_x"] - res.reactions[0].1[0]).abs() <= 1e-9 * radiated);
         answers.push(got);
     }
     // A linear profile is in the quad4 space, so refining must not move the answer at all.
@@ -7113,6 +7439,81 @@ fn a_radiating_block_follows_its_analytic_cooling_curve_at_the_theta_method_rate
     assert!(radiating_block_error(0.5, 0.005, t_end) < 1e-3);
 }
 
+/// Radiation uses endpoint fourth powers, not the fourth power of the averaged temperature.
+/// Direct rectangular integration of the nodal temperature increment independently checks
+/// stored energy; a sparse History must retain the same last-internal-step power balance.
+#[test]
+fn radiative_cooling_reports_endpoint_fluxes_and_the_exact_stored_energy_rate() {
+    let (length, height, rho, cp) = (0.001, 0.001, 100.0, 100.0);
+    for nx in [1usize, 2, 4] {
+        let mesh = Structured { kind: ElementKind::Quad4, n: [nx, 1, 1] }.box_([length, height, 0.0]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStrain,
+            conductor(1.0e4, rho, cp),
+            Vec::new(),
+            vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+        );
+        for theta in [0.5, 1.0] {
+            let mut step = Step::HeatTransient {
+                dt: 0.02,
+                t_end: 0.06,
+                theta,
+                initial: 1000.0,
+                output_every: 1,
+                amplitude: None,
+                solver: SolveOptions::default(),
+                // Large conductivity keeps this block nearly isothermal but makes 1e-12
+                // state-change stopping sensitive to f64 solve roundoff (Linux reached
+                // 1.18e-12 after 100 passes). Stop at 1e-10 and check the actual power/energy
+                // accuracy independently below; none of those physical tolerances change.
+                control: NonlinearControl { tol: 1e-10, max_iterations: 100 },
+            };
+            let full = run_step(&p, &step).unwrap();
+            let history = full.history.as_ref().unwrap();
+            let old = &history.values[history.values.len() - 2];
+            let new = &history.values[history.values.len() - 1];
+            let dt = history.times[history.times.len() - 1] - history.times[history.times.len() - 2];
+            let surface = |values: &[f64]| {
+                sets["xmax"].nodes.iter().map(|&i| values[i as usize]).sum::<f64>() / sets["xmax"].nodes.len() as f64
+            };
+            let fourth = |t: f64| t * t * t * t;
+            let applied = -SIGMA * height * ((1.0 - theta) * fourth(surface(old)) + theta * fourth(surface(new)));
+            let integral = old
+                .iter()
+                .zip(new)
+                .enumerate()
+                .map(|(i, (a, b))| {
+                    let x = mesh.node(i as u32)[0];
+                    let adjacent = if x == 0.0 || x == length { 1.0 } else { 2.0 };
+                    adjacent * (b - a)
+                })
+                .sum::<f64>()
+                * length
+                * height
+                / (4.0 * nx as f64);
+            let storage = rho * cp * integral / dt;
+            assert!((storage - applied).abs() < 1e-6 * applied.abs(), "nx={nx}, theta={theta}: {storage} vs {applied}");
+            assert!((full.scalars["applied_total_x"] - applied).abs() < 1e-8 * applied.abs());
+            assert!((full.scalars["storage_power"] - storage).abs() < 1e-9 * storage.abs());
+            assert!(full.reactions.is_empty());
+            assert!(full.fields[&Field::Reaction].data.iter().all(|&v| v == 0.0));
+            // Only endpoints are retained, but postprocessing must use the last internal old T.
+            let Step::HeatTransient { output_every, .. } = &mut step else { panic!() };
+            *output_every = 99;
+            let sparse = run_step(&p, &step).unwrap();
+            assert_eq!(sparse.history.as_ref().unwrap().times, [0.0, 0.06]);
+            assert_eq!(temperature_of(&sparse), temperature_of(&full));
+            assert_eq!(sparse.scalars["applied_total_x"], full.scalars["applied_total_x"]);
+            assert_eq!(sparse.scalars["storage_power"], full.scalars["storage_power"]);
+        }
+    }
+}
+
 /// A face whose film is negative makes the system indefinite whatever the temperature, and both
 /// radiating procedures let the factorisation error out rather than taking the host down with it.
 /// The Command boundary refuses a negative emissivity, so only a direct Problem can get here —
@@ -7184,4 +7585,257 @@ fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
     let transient_error = run_step(&p, &transient).expect_err("one pass cannot converge an increment either");
     assert_eq!(transient_error.code, ErrorCode::SolveDiverged);
     assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
+}
+
+/// Exact integral of a trilinear field over this test's axis-aligned Hex8 cells: each corner
+/// owns one eighth of its cell volume. This does not call capacity or any FE quadrature.
+fn box_temperature_integral(mesh: &Mesh, values: &[f64]) -> f64 {
+    (0..mesh.n_elems() as u32)
+        .map(|elem| {
+            let nodes = mesh.elem_nodes(elem);
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for &node in nodes {
+                let x = mesh.node(node);
+                for k in 0..3 {
+                    lo[k] = lo[k].min(x[k]);
+                    hi[k] = hi[k].max(x[k]);
+                }
+            }
+            let volume = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+            nodes.iter().map(|&n| values[n as usize]).sum::<f64>() * volume / 8.0
+        })
+        .sum()
+}
+
+/// A tied, held interface must transfer the slave's capacity residual too. Uniform heating
+/// has T=300+2t, source rho*cp*2, and zero support power, independently of the split mesh.
+#[test]
+fn a_held_thermal_tie_transfers_storage_and_starts_with_an_admissible_history() {
+    let bodies = two_bodies();
+    for nx in [1, 2, 4] {
+        let mesh = two_blocks(ElementKind::Hex8, [nx, 1, 1], [nx, 1, 1], [0.5, 0.1, 0.1], 0.0);
+        let sets = sets_of(&mesh);
+        let mut p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(1.0, 10.0, 2.0),
+            vec![hold("interface", "a.xmax", 1.0)],
+            vec![HeatLoad::Source { bodies: bodies.clone(), q: 40.0 }],
+        );
+        p.couplings = vec![bond(1e-9)];
+        for theta in [0.5, 1.0] {
+            let step = |initial| Step::HeatTransient {
+                dt: 0.1,
+                t_end: 0.3,
+                theta,
+                initial,
+                output_every: 1,
+                amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 0.3], value: vec![300.0, 300.6] }),
+                solver: SolveOptions::default(),
+                control: NonlinearControl::default(),
+            };
+            let res = run_step(&p, &step(300.0)).unwrap();
+            for t in temperature_of(&res) {
+                assert!((t - 300.6).abs() < 1e-8, "nx={nx}, theta={theta}: {t}");
+            }
+            assert!((res.scalars["applied_total_x"] - 0.4).abs() < 1e-10);
+            assert!((res.scalars["storage_power"] - 0.4).abs() < 1e-9);
+            assert!(res.reactions[0].1[0].abs() < 1e-9, "the held interface supplies no heat to the uniform ramp");
+            // Deliberately give free nodes a different initial temperature. The held master
+            // and its slave must agree before the very first capacity/radiation evaluation.
+            let res = run_step(&p, &step(299.0)).unwrap();
+            let h = res.history.as_ref().unwrap();
+            for &node in &sets["b.xmin"].nodes {
+                assert!((h.values[0][node as usize] - 300.0).abs() < 1e-10);
+            }
+            let last = h.values.len() - 1;
+            let storage = 20.0
+                * (box_temperature_integral(&mesh, &h.values[last])
+                    - box_temperature_integral(&mesh, &h.values[last - 1]))
+                / (h.times[last] - h.times[last - 1]);
+            assert!((res.scalars["storage_power"] - storage).abs() < 1e-9);
+            assert!((0.4 - res.reactions[0].1[0] - storage).abs() < 1e-8);
+        }
+    }
+}
+
+/// Radiation crosses a perfect contact with the same steady scalar flux law. During cooling,
+/// the weighted endpoint surface flux equals the full two-body stored-energy rate.
+#[test]
+fn a_thermal_tie_preserves_radiation_endpoint_power_and_whole_body_storage() {
+    let bodies = two_bodies();
+    let (length, area, k, rho_cp) = (0.1, 0.0004, 55.6, 10_000.0);
+    for nx in [1, 2, 4] {
+        let mesh = two_blocks(ElementKind::Hex8, [nx, 1, 1], [nx, 1, 1], [0.05, 0.02, 0.02], 0.0);
+        let sets = sets_of(&mesh);
+        let mut p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(k, 100.0, 100.0),
+            vec![hold("hot", "a.xmin", 1000.0)],
+            vec![HeatLoad::Radiation { faces: "b.xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+        );
+        p.couplings = vec![bond(1e-9)];
+        let surface = radiating_slab_surface(k, length, 1000.0, 0.0, 1.0);
+        let outgoing = SIGMA * area * surface.powi(4);
+        let res = run_step(&p, &steady()).unwrap();
+        assert!((res.scalars["applied_total_x"] + outgoing).abs() < 1e-7 * outgoing);
+        assert!((res.reactions[0].1[0] + outgoing).abs() < 1e-7 * outgoing);
+        p.constraints.clear();
+        for theta in [0.5, 1.0] {
+            let step = Step::HeatTransient {
+                dt: 0.1,
+                t_end: 0.3,
+                theta,
+                initial: 1000.0,
+                output_every: 1,
+                amplitude: None,
+                solver: SolveOptions::default(),
+                control: NonlinearControl { tol: 1e-10, max_iterations: 100 },
+            };
+            let res = run_step(&p, &step).unwrap();
+            let h = res.history.as_ref().unwrap();
+            let last = h.values.len() - 1;
+            let mean_surface = |values: &[f64]| {
+                sets["b.xmax"].nodes.iter().map(|&n| values[n as usize]).sum::<f64>()
+                    / sets["b.xmax"].nodes.len() as f64
+            };
+            let applied = -SIGMA
+                * area
+                * ((1.0 - theta) * mean_surface(&h.values[last - 1]).powi(4)
+                    + theta * mean_surface(&h.values[last]).powi(4));
+            let storage = rho_cp
+                * (box_temperature_integral(&mesh, &h.values[last])
+                    - box_temperature_integral(&mesh, &h.values[last - 1]))
+                / (h.times[last] - h.times[last - 1]);
+            assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-8 * applied.abs());
+            assert!((res.scalars["storage_power"] - storage).abs() < 1e-9 * storage.abs());
+            assert!((storage - applied).abs() < 1e-7 * applied.abs(), "nx={nx}, theta={theta}");
+            assert!(res.reactions.is_empty());
+        }
+    }
+}
+
+// ---------------------------------------------------------------- STL reading (#350)
+
+/// The same triangles as `write_stl` writes, packed as a binary STL.
+fn binary_stl(positions: &[[f64; 3]], triangles: &[[u32; 3]]) -> Vec<u8> {
+    let mut out = vec![0u8; 80];
+    out.extend_from_slice(&(triangles.len() as u32).to_le_bytes());
+    for t in triangles {
+        out.extend_from_slice(&[0u8; 12]); // facet normal: ignored on the way back in
+        for v in t {
+            for c in positions[*v as usize] {
+                out.extend_from_slice(&(c as f32).to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&[0u8; 2]); // attribute byte count
+    }
+    out
+}
+
+#[test]
+fn stl_reads_back_exactly_what_it_wrote_for_every_primitive() {
+    let shapes = [
+        Shape::Box { size: [1.0, 2.0, 3.0] },
+        Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(32) },
+        Shape::Sphere { radius: 1.0, segments: Some(16) },
+        Shape::Revolve { sketch: Sketch::rect(1.0, 2.0), angle: 360.0, segments: Some(24) },
+    ];
+    for shape in shapes {
+        let solid = Solid::evaluate(&shape).unwrap();
+        let tri = solid.triangles();
+        let (positions, triangles) = read_stl(write_stl(tri, "part").as_bytes()).unwrap();
+        // the writer prints f64 losslessly and the reader welds on exact bits, so the mesh
+        // comes back with the same vertices and the same connectivity, only renumbered
+        assert_eq!(positions.len(), tri.positions.len(), "{shape:?}");
+        assert_eq!(triangles.len(), tri.triangles.len(), "{shape:?}");
+        let same = |t: &[u32; 3], p: &[[f64; 3]]| [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]];
+        for (a, b) in triangles.iter().zip(&tri.triangles) {
+            assert_eq!(same(a, &positions), same(b, &tri.positions), "{shape:?}");
+        }
+    }
+}
+
+#[test]
+fn stl_reads_binary_by_its_declared_facet_count() {
+    let solid = Solid::evaluate(&Shape::Box { size: [1.0, 2.0, 3.0] }).unwrap();
+    let tri = solid.triangles();
+    let bytes = binary_stl(&tri.positions, &tri.triangles);
+    assert_eq!(bytes.len(), 84 + 50 * 12);
+    let (positions, triangles) = read_stl(&bytes).unwrap();
+    assert_eq!(positions.len(), 8);
+    assert_eq!(triangles.len(), 12);
+    // f32 coordinates, so the box is exact only because 1, 2 and 3 are exact in f32
+    let (lo, hi) = positions.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(mut lo, mut hi), p| {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+        (lo, hi)
+    });
+    assert_eq!((lo, hi), ([0.0; 3], [1.0, 2.0, 3.0]));
+    // a header whose facet count does not match the length is read as text and refused
+    let mut lying = bytes.clone();
+    lying[80] = 99;
+    assert!(read_stl(&lying).unwrap_err().cause.contains("neither a binary STL"));
+}
+
+#[test]
+fn stl_welds_repeated_vertices_and_treats_minus_zero_as_zero() {
+    let text = "solid t\n\
+        facet normal 0 0 0 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet\n\
+        facet normal 0 0 0 outer loop vertex -0.0 -0.0 -0.0 vertex 1 0 0 vertex 0 0 1 endloop endfacet\n\
+        facet normal 0 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\n\
+        facet normal 0 0 0 outer loop vertex 1 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\n\
+        endsolid t\n";
+    let (positions, triangles) = read_stl(text.as_bytes()).unwrap();
+    assert_eq!(positions.len(), 4, "{positions:?}");
+    assert_eq!(triangles.len(), 4);
+    assert_eq!(positions[0], [0.0; 3]);
+    // and VERTEX in any case is still a vertex
+    let (upper, _) = read_stl(text.to_uppercase().as_bytes()).unwrap();
+    assert_eq!(upper.len(), 4);
+}
+
+#[test]
+fn stl_refuses_every_way_a_file_can_be_broken() {
+    let cause = |bytes: &[u8]| read_stl(bytes).unwrap_err().cause;
+    assert_eq!(read_stl(b"").unwrap_err().code, ErrorCode::Schema);
+    assert!(cause(b"").contains("holds no triangles"));
+    assert!(cause(b"solid empty\nendsolid empty\n").contains("holds no triangles"));
+    assert!(cause(b"vertex 0 0 0 vertex 1 0 0").contains("ends in the middle of a facet"));
+    assert!(cause(b"vertex 0 0").contains("ends before its three coordinates"));
+    assert!(cause(b"vertex 0 0 nope").contains("'nope' is not a number (vertex coordinate 2)"));
+    // not UTF-8 and not a binary STL either
+    assert!(cause(&[0xff, 0xfe, 0x00, 0x01]).contains("neither a binary STL"));
+    let err = read_stl(b"solid x\n").unwrap_err();
+    assert_eq!(err.where_.as_deref(), Some("data"));
+    assert!(err.suggestion.is_some());
+}
+
+#[test]
+fn base64_round_trips_and_refuses_what_is_not_base64() {
+    for n in 0..8usize {
+        let bytes: Vec<u8> = (0..n).map(|i| (i * 37 + 11) as u8).collect();
+        let text = base64(&bytes);
+        assert_eq!(text.len() % 4, 0);
+        assert_eq!(base64_decode(&text).unwrap(), bytes, "{n} bytes");
+    }
+    assert_eq!(base64_decode("QUJD").unwrap(), b"ABC");
+    // whitespace is skipped, so a wrapped payload still reads
+    assert_eq!(base64_decode("QU\nJD\n").unwrap(), b"ABC");
+    assert_eq!(base64_decode("QQ==").unwrap(), b"A");
+    assert_eq!(base64_decode("QUI=").unwrap(), b"AB");
+    assert_eq!(base64_decode(""), Some(vec![]));
+    assert_eq!(base64_decode("QUJ$"), None, "a character outside the alphabet");
+    assert_eq!(base64_decode("Q"), None, "one leftover character is not a byte");
+    assert_eq!(base64_decode("QQ=A"), None, "data after the padding");
+    assert_eq!(base64_decode("QUJD="), None, "padding that does not complete a quantum");
+    assert_eq!(base64_decode("QQ==="), None, "three pad characters");
 }

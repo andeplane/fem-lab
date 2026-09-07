@@ -5,9 +5,9 @@
 //! map, which is exact for a curved element and cheap enough at the rate a person clicks.
 //! `// ponytail: linear scan; a kd-tree if probes ever get hot.`
 
-use femlab_geometry::Mesh;
+use femlab_geometry::{ElementKind, Mesh};
 
-use crate::fem::element::element_for;
+use crate::fem::element::{element_for, InverseMap};
 use crate::post::FieldData;
 
 /// How far outside its own bounding box an element is still considered, relative to the box.
@@ -16,18 +16,30 @@ const BBOX_SLACK: f64 = 1e-9;
 /// The element containing `x` and the nodal field interpolated there, or `None` when the point
 /// is outside the mesh. Ties (a point on a shared face) go to the lowest element id.
 pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)> {
+    probe_checked(mesh, f, x).ok().flatten()
+}
+
+/// Point location that preserves the distinction between a positively outside point and a
+/// numerical inversion failure. The failing element id makes the Query error actionable.
+pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(u32, Vec<f64>)>, u32> {
     let mut coords = Vec::new();
     let mut shape = Vec::new();
+    let mut failed = None;
     for elem in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(elem);
         coords.resize(kind.n_nodes() * 3, 0.0);
         mesh.elem_coords(elem, &mut coords);
-        if !in_bbox(&coords, x) {
+        if !in_bbox(kind, &coords, x) {
             continue;
         }
         let element = element_for(kind);
-        let Some(xi) = element.inverse_map(&coords, x) else {
-            continue;
+        let xi = match element.inverse_map_status(&coords, x) {
+            InverseMap::Inside(xi) => xi,
+            InverseMap::Outside => continue,
+            InverseMap::Failed => {
+                failed = Some(elem);
+                continue;
+            }
         };
         shape.resize(kind.n_nodes(), 0.0);
         element.shape_at(xi, &mut shape);
@@ -37,21 +49,94 @@ pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)>
                 *o += shape[a] * f.data[node as usize * f.comps + c];
             }
         }
-        return Some((elem, out));
+        return Ok(Some((elem, out)));
     }
-    None
+    match failed {
+        Some(elem) => Err(elem),
+        None => Ok(None),
+    }
 }
 
-/// Is `x` inside the box the element's nodes span, up to a relative slack?
-fn in_bbox(coords: &[f64], x: [f64; 3]) -> bool {
-    (0..3).all(|k| {
-        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for p in coords.chunks_exact(3) {
-            lo = lo.min(p[k]);
-            hi = hi.max(p[k]);
+fn bounds(points: impl IntoIterator<Item = [f64; 3]>) -> ([f64; 3], [f64; 3]) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for point in points {
+        for k in 0..3 {
+            lo[k] = lo[k].min(point[k]);
+            hi[k] = hi[k].max(point[k]);
         }
-        let slack = BBOX_SLACK * (hi - lo).max(1.0);
-        x[k] >= lo - slack && x[k] <= hi + slack
+    }
+    (lo, hi)
+}
+
+fn nodal_bounds(coords: &[f64]) -> ([f64; 3], [f64; 3]) {
+    bounds(coords.chunks_exact(3).map(|point| [point[0], point[1], point[2]]))
+}
+
+/// Convex-hull bounds of a quadratic simplex in its degree-two Bernstein basis. The corner
+/// controls equal the corner nodes; an edge control is `2 midpoint - (corner0 + corner1)/2`.
+fn simplex_control_bounds(kind: ElementKind, coords: &[f64]) -> ([f64; 3], [f64; 3]) {
+    let corners = kind.n_corners();
+    let mut controls: Vec<[f64; 3]> =
+        coords[..3 * corners].chunks_exact(3).map(|point| [point[0], point[1], point[2]]).collect();
+    for (edge, &[a, b]) in kind.edges().iter().enumerate() {
+        controls.push(std::array::from_fn(|k| {
+            2.0 * coords[3 * (corners + edge) + k] - 0.5 * (coords[3 * a as usize + k] + coords[3 * b as usize + k])
+        }));
+    }
+    bounds(controls)
+}
+
+/// Convex-hull bounds of a square/cube map after converting its values on the 3^dim quadratic
+/// Lagrange grid to tensor-product Bernstein controls. This contains curved extrema that can
+/// extend beyond every nodal coordinate.
+fn tensor_control_bounds(kind: ElementKind, coords: &[f64]) -> ([f64; 3], [f64; 3]) {
+    let dim = kind.dim();
+    let count = 3usize.pow(dim as u32);
+    let element = element_for(kind);
+    let mut shape = vec![0.0; kind.n_nodes()];
+    let mut controls = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut digits = index;
+        let mut xi = [0.0; 3];
+        for value in xi.iter_mut().take(dim) {
+            *value = [-1.0, 0.0, 1.0][digits % 3];
+            digits /= 3;
+        }
+        element.shape_at(xi, &mut shape);
+        controls.push(std::array::from_fn(|k| {
+            shape.iter().enumerate().map(|(node, value)| value * coords[3 * node + k]).sum()
+        }));
+    }
+    for axis in 0..dim {
+        let stride = 3usize.pow(axis as u32);
+        for base in 0..count {
+            if (base / stride).is_multiple_of(3) {
+                let (low, middle, high) = (controls[base], controls[base + stride], controls[base + 2 * stride]);
+                controls[base + stride] = std::array::from_fn(|k| 2.0 * middle[k] - 0.5 * (low[k] + high[k]));
+            }
+        }
+    }
+    bounds(controls)
+}
+
+/// Is `x` inside a conservative physical box for the element, up to relative slack? Linear
+/// elements use their nodal hull. Quadratic elements use Bernstein controls because a curved
+/// map can extend beyond every nodal coordinate while its Jacobian stays positive.
+fn in_bbox(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> bool {
+    if coords.iter().any(|value| !value.is_finite()) || x.iter().any(|value| !value.is_finite()) {
+        return true;
+    }
+    let (lo, hi) = match kind {
+        ElementKind::Hex8 | ElementKind::Tet4 | ElementKind::Quad4 | ElementKind::Tri3 | ElementKind::Truss2 => {
+            nodal_bounds(coords)
+        }
+        ElementKind::Tet10 | ElementKind::Tri6 => simplex_control_bounds(kind, coords),
+        ElementKind::Hex20 | ElementKind::Quad8 => tensor_control_bounds(kind, coords),
+    };
+    (0..3).all(|k| {
+        let slack = BBOX_SLACK * (hi[k] - lo[k]).max(1.0);
+        x[k] >= lo[k] - slack && x[k] <= hi[k] + slack
     })
 }
 

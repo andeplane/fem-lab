@@ -1,9 +1,10 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
+import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
 import { TABS, type Tab } from './ui/tabs';
@@ -23,6 +24,7 @@ export function unsaved(s: UiState): boolean {
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
 export { TABS, type Tab } from './ui/tabs';
+
 export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
 export type PanelSizes = Record<ResizablePanel, number>;
 export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
@@ -32,7 +34,6 @@ export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: numbe
   bottom: { min: 184, max: 480 },
   assistant: { min: 320, max: 520 },
 };
-
 export function clampPanelSize(panel: ResizablePanel, size: number): number {
   const limits = PANEL_SIZE_LIMITS[panel];
   return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
@@ -94,6 +95,13 @@ export interface UiState {
   journal: JournalDump | null;
   /** Exact normalized Journal of the last successful explicit open/save; autosave is separate. */
   savedJournal: string | null;
+  /** The complete normalized baseline, retained so comparison can show removed entries too. */
+  savedBaseline: JournalDump['entries'] | null;
+  /** Current-vs-baseline causal diff, or an explicitly imported comparison. */
+  journalComparison: JournalDiff | null;
+  comparisonSource: 'saved' | 'imported' | null;
+  /** Imported comparison baseline, retained so a later refresh can recompute it read-only. */
+  comparisonBaseline: JournalDump['entries'] | null;
   script: string;
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
@@ -137,6 +145,8 @@ export interface UiState {
   theme: 'dark' | 'light';
   /** `query.result` for the last solved Step; `stale` on it is the engine's own hash check. */
   result: ResultSummary | null;
+  /** Metadata for the bundled example that produced this Model, retained while edits stale it. */
+  benchmark: ActiveBenchmark | null;
   /** The Step a solve is running for, `null` when none is. */
   solving: string | null;
   /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
@@ -220,6 +230,10 @@ export const initialState: UiState = {
   model: null,
   journal: null,
   savedJournal: null,
+  savedBaseline: null,
+  journalComparison: null,
+  comparisonSource: null,
+  comparisonBaseline: null,
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
@@ -264,6 +278,7 @@ export const initialState: UiState = {
   progress: null,
   theme: 'dark',
   result: null,
+  benchmark: null,
   solving: null,
   fieldKey: 'vonMises',
   legend: null,
@@ -335,6 +350,9 @@ export class Store {
    * it so "do it for me" behaves exactly like a click on the real control (issue #37, #12).
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
+  private comparisonRequest = 0;
+  private documentIdentity = {};
+  private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
   constructor(public state: UiState = initialState) {}
@@ -350,8 +368,44 @@ export class Store {
   }
 
   set(patch: Partial<UiState>): void {
+    // A comparison belongs to the complete current Journal; do not draw an old tail while
+    // refresh is waiting for the next query reply.
+    if (patch.journal && patch.journal !== this.state.journal && !('journalComparison' in patch)) {
+      patch = { ...patch, journalComparison: null };
+    }
     this.state = { ...this.state, ...patch };
     for (const fn of this.listeners) fn();
+  }
+
+  setJournalDiffQuery(query: (base: Journal) => Promise<JournalDiff>): void {
+    this.journalDiffQuery = query;
+  }
+
+  /** A reply may draw only while its request, current Journal and baseline selection still match. */
+  beginJournalComparison(): (diff?: JournalDiff) => boolean {
+    const request = ++this.comparisonRequest;
+    const { journal, savedBaseline, comparisonBaseline, comparisonSource } = this.state;
+    return diff => request === this.comparisonRequest && journal === this.state.journal
+      && savedBaseline === this.state.savedBaseline && comparisonBaseline === this.state.comparisonBaseline
+      && comparisonSource === this.state.comparisonSource
+      // The live engine may advance before the displayed Journal finishes hydration.
+      && (diff === undefined || diff.currentHash === journal?.hash);
+  }
+
+  async refreshJournalComparison(): Promise<JournalDiff | null> {
+    const source = this.state.comparisonSource === 'imported' ? 'imported' : 'saved';
+    const entries = source === 'imported' ? this.state.comparisonBaseline : this.state.savedBaseline;
+    const current = this.beginJournalComparison();
+    if (!entries || !this.journalDiffQuery) return null;
+    try {
+      const diff = await this.journalDiffQuery({ entries });
+      if (!current(diff)) return null;
+      this.set({ journalComparison: diff, comparisonSource: source });
+      return diff;
+    } catch (error) {
+      if (!current()) return null;
+      throw error;
+    }
   }
 
   /**
@@ -387,12 +441,38 @@ export class Store {
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
   }
 
-  resizePanel(panel: ResizablePanel, size: number): void {
-    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
+  /** Capture before I/O; ordinary edits keep this identity, replacing the Model does not. */
+  beginSave(): (journal: { entries: JournalDump['entries'] }) => void {
+    const identity = this.documentIdentity;
+    return journal => {
+      if (identity === this.documentIdentity) this.markSaved(journal);
+    };
+  }
+
+  /** A successful explicit open owns a new document and its normalized saved baseline. */
+  markOpened(journal: { entries: JournalDump['entries'] }): void {
+    this.documentIdentity = {};
+    this.markSaved(journal);
+  }
+
+  /** A successful new Model has no saved baseline and invalidates older save completions. */
+  newDocument(): void {
+    this.documentIdentity = {};
+    this.set({ savedJournal: null, savedBaseline: null, journalComparison: null, comparisonSource: null, comparisonBaseline: null });
   }
 
   markSaved(journal: { entries: JournalDump['entries'] }): void {
-    this.set({ savedJournal: journalIdentity(journal.entries) });
+    this.set({
+      savedJournal: journalIdentity(journal.entries),
+      savedBaseline: structuredClone(journal.entries),
+      journalComparison: null,
+      comparisonSource: null,
+      comparisonBaseline: null,
+    });
+  }
+
+  resizePanel(panel: ResizablePanel, size: number): void {
+    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
   }
 
   fail(e: unknown): void {

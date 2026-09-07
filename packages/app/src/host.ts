@@ -1,8 +1,10 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+
 import { z } from 'zod';
+import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
@@ -38,6 +40,16 @@ async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
   if (!res.ok) throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
   return res.text();
+}
+
+async function fetchExampleMetadata(name: string): Promise<ActiveBenchmark> {
+  const res = await fetch(`${import.meta.env.BASE_URL}examples/index.json`);
+  if (!res.ok) throw new FemError('file.not-found', 'the bundled example index could not be read', name, 'reload the app and open Examples again');
+  const entry = ((await res.json()) as { examples?: ExampleEntry[] }).examples?.find((example) => example.name === name);
+  if (!entry || typeof entry.theory !== 'string' || typeof entry.expected?.reference !== 'string') {
+    throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
+  }
+  return attachComparison(entry);
 }
 
 /**
@@ -139,6 +151,7 @@ export function makeHostContext(
   save: Autosave = autosave,
   printPage: () => void = () => window.print(),
   captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment(),
+  refresh: () => Promise<void> = async () => undefined,
 ): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
@@ -151,14 +164,17 @@ export function makeHostContext(
     // Capture normalized replay output before Result restoration yields to another edit.
     const opened = await transport.exportFile();
     if (solved) await results?.onAck(solved);
-    store.markSaved(opened.journal);
+    store.markOpened(opened.journal);
   };
   const own = makeProjects({
     // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
     // projects are then per-session, the start screen says so, and file.save is still there.
     store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
     replay,
-    reset: async (name) => void (await transport.dispatch({ cmd: 'model.new', name } as never)),
+    reset: async (name) => {
+      await transport.dispatch({ cmd: 'model.new', name } as never);
+      store.newDocument();
+    },
     thumbnail: () => thumbnailOf(viewer),
     initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
     onError: (e) => console.warn('the project save failed', e),
@@ -325,7 +341,8 @@ export function makeHostContext(
     skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
-      markSaved: (journal) => store.markSaved(journal),
+      beginSave: () => store.beginSave(),
+      markSaved: (journal) => store.markOpened(journal),
       pick: () =>
         new Promise<string>((resolve, reject) => {
           const input = document.createElement('input');
@@ -336,6 +353,19 @@ export function makeHostContext(
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
             if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
+          };
+          input.click();
+        }),
+      pickBytes: (accept) =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = accept;
+          input.onchange = () => {
+            const file = input.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_GEOMETRY_FILE_BYTES) return reject(new FemError('schema', 'the geometry file exceeds the 32 MiB import limit', 'picker', 'decimate the mesh in the tool that wrote it'));
+            file.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
           };
           input.click();
         }),
@@ -413,10 +443,11 @@ export function makeHostContext(
 
       info: () => null,
       readText: soon('the folder on disk', 'use file.open for now'),
+      readBytes: soon('the folder on disk', 'use geometry.importFile with the picker for now'),
       writeText: soon('the folder on disk', 'use file.save for now'),
       writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
-    examples: { fetch: fetchExample },
+    examples: { open: (name) => openExample(name, store, transport, refresh, results) },
     ai: {
       setKey: (key, provider: AiProvider) => {
         storeKey(provider, key);
@@ -428,6 +459,40 @@ export function makeHostContext(
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };
+}
+
+/** Replay bundled Journals through the engine and publish a baseline only after a complete open. */
+export async function openExample(name: string, store: Store, transport: EngineTransport, refresh: () => Promise<void>, results?: ResultsView) {
+  const benchmark = await fetchExampleMetadata(name);
+  const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
+  // An example that ends on solve.run opens solved, and a solved Model is shown as one:
+  // the last solve's Ack goes where the Solve button's would (results tab, contours).
+  store.set({ benchmark: null, study: null });
+  let solved: unknown = null;
+  let study: unknown = null;
+  let opened: Awaited<ReturnType<EngineTransport['exportFile']>>;
+  try {
+    for (const e of entries) {
+      const ack = await transport.dispatch(e.cmd as never);
+      if (String(e.cmd.cmd).startsWith('solve.')) solved = ack;
+      if (e.cmd.cmd === 'study.converge') study = ack;
+    }
+    opened = await transport.exportFile();
+  } finally {
+    // A rejected later Command can leave a partial Journal. Show that state, but never
+    // replace the preceding saved baseline unless the entire open finishes successfully.
+    await refresh();
+  }
+  // The gallery has done its job; leaving it up hides the Model it just opened.
+  store.togglePanel('examples', false);
+  const provenance = benchmarkProvenance(store.state.model, store.state.journal, store.state.revision);
+  if (study) await results?.onAck(study);
+  if (solved) await results?.onAck(solved);
+  store.set({ benchmark: { ...benchmark, ...provenance } });
+  // An example is an explicit open. Use the normalized Journal captured from the engine
+  // before UI hydration, and establish the baseline only after the whole open succeeded.
+  store.markOpened(opened.journal);
+  return { name, commands: entries.length };
 }
 
 type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
@@ -451,14 +516,14 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
 }
 
 /**
- * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
- * mode segmented control, opening a bundled example that is a Journal rather than a saved
- * `femlab/1` file, and putting a Command into the Properties form without running it (every
+ * Shell Commands outside the shared registry include display controls, an example-open alias,
+ * and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, _results?: ResultsView, registry?: () => Registry): HostDef[] {
   let intentRun = 0;
+  store.setJournalDiffQuery(async (base) => (await transport.query({ query: 'query.journalDiff', base })) as JournalDiff);
   return [
     {
       name: 'palette.resolve',
@@ -545,29 +610,59 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'file.openExample',
-      description: "Open a bundled example by name (see the Examples panel). Its Journal is dispatched Command by Command onto the current Model, so you end up with the example's own Journal rather than an opaque file. Use query.model afterwards to see what it built.",
+      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, and establish the saved baseline only after a complete open.",
       schema: z.object({ name: z.string() }),
       tool: true,
-      run: async (input) => {
+      run: async (input, ctx) => {
         const { name } = input as { name: string };
-        const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
-        // An example that ends on solve.run opens solved, and a solved Model is shown as one:
-        // the last solve's Ack goes where the Solve button's would (results tab, contours).
-        let solved: unknown = null;
-        for (const e of entries) {
-          const ack = await transport.dispatch(e.cmd as never);
-          if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+        return ctx.examples.open(name);
+      },
+    },
+    {
+      name: 'file.compare',
+      description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open or new Model.',
+      schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
+      tool: true,
+      run: async (input) => {
+        const current = store.beginJournalComparison();
+        const how = input as { json?: string; picker?: true };
+        const text = how.json ?? await new Promise<string>((resolve, reject) => {
+          const picker = document.createElement('input');
+          picker.type = 'file';
+          picker.accept = '.json,application/json';
+          picker.onchange = () => {
+            const file = picker.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            file.text().then(resolve, reject);
+          };
+          picker.addEventListener('cancel', () => reject(new FemError('file.not-found', 'no file was chosen', 'picker')), { once: true });
+          picker.click();
+        });
+        let file: { format?: unknown; journal?: unknown } | null;
+        try {
+          file = JSON.parse(text) as { format?: unknown; journal?: unknown };
+        } catch (e) {
+          throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'use file.save to write a comparable Model file');
         }
-        // The gallery has done its job; leaving it up hides the Model it just opened.
-        store.togglePanel('examples', false);
-        await refresh();
-        const opened = store.state.journal;
-        if (solved) await results?.onAck(solved);
-        // An example is an explicit open. Use the normalized Journal that refresh just read
-        // from the engine, and establish the baseline only after the whole open succeeded.
-        if (opened) store.markSaved(opened);
-        return { name, commands: entries.length };
+        if (!file || typeof file !== 'object' || file.format !== 'femlab/1' || !file.journal || typeof file.journal !== 'object' || !Array.isArray((file.journal as { entries?: unknown }).entries)) {
+          throw new FemError('schema', 'the comparison file is not a femlab/1 file with a Journal', 'file', 'use file.save to write a comparable Model file');
+        }
+        const importedJournal = file.journal as Journal;
+        const diff = (await transport.query({ query: 'query.journalDiff', base: importedJournal })) as JournalDiff;
+        if (current(diff)) store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: structuredClone(importedJournal.entries) });
+        return diff;
       },
     },
   ] as HostDef[];
+}
+
+/** The current causal Journal comparison, exposed to the AI without exposing Store internals. */
+export function appHostQueries(store: Store): HostDef[] {
+  return [{
+    name: 'query.journalComparison',
+    description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline, and a new Model clears it. Autosave does not select a baseline.',
+    schema: z.object({}),
+    tool: true,
+    run: () => store.refreshJournalComparison(),
+  }];
 }

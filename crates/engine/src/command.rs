@@ -141,7 +141,8 @@ pub enum Solver {
 
 /// Result fields. Reaction is support force in N for structural Results and removed heat
 /// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
-/// display units.
+/// display units. Transient thermal reactions include stored energy and refer to the last
+/// θ-method integration stage, not an endpoint steady-state residual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -629,6 +630,24 @@ impl Placement {
     }
 }
 
+/// The geometry file formats geometry.import reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeshFormat {
+    /// STL, ASCII or binary: a triangle soup with no units, no colours and no face names.
+    Stl,
+}
+
+/// How a Command's inline file payload is encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DataEncoding {
+    /// The file's own text, verbatim. The default.
+    Utf8,
+    /// Standard base64, for a binary file.
+    Base64,
+}
+
 /// A shape with unit strings; the geometry crate's `Shape` is its SI form.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -837,6 +856,40 @@ pub enum Command {
     /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtract", rename_all = "camelCase")]
     GeometrySubtract { name: String, from: String, shape: ShapeSpec },
+
+    /// Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command
+    /// as `data`, so a Journal replays with no external file, no network and no file system,
+    /// on any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`
+    /// for a part drawn in millimetres). The mesh is welded into a watertight solid, so
+    /// volume, mass, booleans and meshing all work on it; its faces are patches of triangles
+    /// that meet more smoothly than `featureAngle` (30 degrees by default), auto-named
+    /// `<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the
+    /// file changes, so for anything you will re-import, name the faces you need with
+    /// geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
+    /// remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
+    /// given length, which is the honest half of defeaturing; there is no fillet, chamfer or
+    /// shell. Give `sha256` to have the engine verify the data is the file you meant.
+    #[serde(rename = "geometry.import", rename_all = "camelCase")]
+    GeometryImport {
+        name: String,
+        format: MeshFormat,
+        /// The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+        /// what a binary STL needs.
+        data: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<DataEncoding>,
+        /// Hex sha256 of the decoded file, checked before it is read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
+        /// What one unit in the file means, since the format records no units.
+        unit_length: Q<Length>,
+        /// Dihedral angle in degrees above which an edge splits two face patches.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_angle: Option<f64>,
+        /// Collapse mesh features smaller than this before use.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_below: Option<Q<Length>>,
+    },
 
     /// Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
     /// of those) so constraints and loads can target it. Rules are re-evaluated after every
@@ -1108,6 +1161,10 @@ pub enum Command {
     /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
     /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
     /// on its own answer — today a radiation load — and are ignored by a Step that is linear.
+    /// Heat Results report net applied power, positive removed heat and stored-energy rate;
+    /// transient powers belong to the last θ-method integration stage (radiation uses weighted
+    /// endpoint fluxes), while temperature fields belong to its endpoint.
+
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -1157,8 +1214,9 @@ pub enum Command {
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
-    /// Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-    /// this order and a later Step may inherit state (a temperature field) from an earlier one.
+    /// Set the run order of Steps; `order` must list every Step name exactly once and keep each
+    /// Step after the prerequisite named by its `after` field. Steps run in this order and a
+    /// later Step may inherit state (a temperature field) from an earlier one.
     #[serde(rename = "step.reorder", rename_all = "camelCase")]
     StepReorder { order: Vec<String> },
 

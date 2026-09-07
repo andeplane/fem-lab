@@ -3,7 +3,7 @@ import { browserScriptValidator } from './script-validation-host';
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
 // before the 3.2 MB wasm module has finished downloading.
-import { HOST_COMMANDS, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
+import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
@@ -13,8 +13,9 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
+import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
+import { appHostCommands, appHostQueries, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { openShared } from './share';
@@ -22,6 +23,7 @@ import { Store } from './store';
 import { App } from './ui/App';
 import './ui/style.css';
 import { WorkerTransport } from './worker-transport';
+import { serializeModelDispatch } from './model-dispatch';
 
 declare global {
   interface Window {
@@ -63,7 +65,7 @@ async function boot(): Promise<void> {
     schedule: (callback, ms) => setTimeout(callback, ms),
     cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   });
-  const ctx = makeHostContext(store, transport, viewer, host, scripts, results);
+  const ctx = makeHostContext(store, transport, viewer, host, scripts, results, undefined, undefined, undefined, () => refresh());
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
   transport.onProgress((p) => store.set({ progress: { phase: p.phase, fraction: p.fraction ?? 0 } }));
@@ -81,6 +83,7 @@ async function boot(): Promise<void> {
     const script = ((await transport.query({ query: 'query.script' })) as { text: string }).text;
     const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
+    await store.refreshJournalComparison();
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();
     // Where a project comes from: with none open and a non-empty Journal this creates one named
@@ -93,6 +96,7 @@ async function boot(): Promise<void> {
     schema: schema as unknown as EngineSchema,
     host: ctx,
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results, () => registry)],
+    hostQueries: [...HOST_QUERIES, ...appHostQueries(store)],
   });
 
   /**
@@ -104,26 +108,51 @@ async function boot(): Promise<void> {
   const REPLACES_MODEL = new Set(['model.new', 'file.open', 'file.openExample', 'example.open']);
   /**
    * Host Commands after which the Model, the Journal or the project has changed and the shell
-   * has to catch up. `file.open` and `example.open` replace the whole Model through the
+   * has to catch up. `file.open` replaces the whole Model through the
    * transport, so without this the tree, the Journal and the new project all lag a Command
-   * behind; `file.openExample` refreshes on its own way out and needs no row here.
+   * behind; both example-open Commands refresh internally and need no row here.
+   * `geometry.importFile` reads a file the host owns and dispatches `geometry.import`, so the
+   * Model gains a Body the tree and the viewer have to see.
    */
-  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.save', 'file.open', 'project.new', 'project.open', 'geometry.importFile']);
 
+  // Preserve the provider dispatch before decorating the public registry. Instrumentation can
+  // wrap registry.dispatch without the provider call recursing back through that wrapper.
+  const registryDispatch = registry.dispatch.bind(registry);
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
-  const dispatch: Registry['dispatch'] = async (cmd) => {
+  registry.dispatch = serializeModelDispatch(registry, async (cmd) => {
     store.set({ lastError: null });
-    // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
-    // has to have happened or the example is written over the project it replaced.
-    if (cmd.cmd === 'file.openExample') forkProject();
-    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run'].includes(cmd.cmd)) results.invalidateTransient();
+    // Both example Commands refresh internally, so the fork must happen before dispatch: it
+    // prevents that refresh from writing over the project being replaced.
+    const opensExample = cmd.cmd === 'file.openExample' || cmd.cmd === 'example.open';
+    if (opensExample) forkProject();
+    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run', 'geometry.importFile'].includes(cmd.cmd)) results.invalidateTransient();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
-      const ack = await registry.dispatch(cmd);
-      if (REPLACES_MODEL.has(cmd.cmd) && cmd.cmd !== 'file.openExample') forkProject();
+      const ack = await registryDispatch(cmd);
+      if (cmd.cmd === 'model.new') store.newDocument();
+      if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
+      if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });
+      if (clearsBenchmark(cmd.cmd, ack) || opensExample) {
+        // A replacement owns a fresh set of model targets. Invalidate pending definition
+        // reads before clearing their form, even when both Models have the same revision.
+        ctx.selection.clear();
+        viewer.current?.setHighlight({});
+        viewer.current?.setVisible(store.state.hiddenBodies, true);
+        if (cmd.cmd === 'project.new' || cmd.cmd === 'model.new') {
+          viewer.current?.setMode('geometry');
+          store.set({ viewMode: 'geometry' });
+        }
+        store.set({
+          form: null, formError: null, formHints: null,
+          pickInto: null, pickTarget: 'off', hiddenBodies: [], paletteIntent: null,
+          journalWho: {}, lastError: null,
+          panels: Object.fromEntries(Object.entries(store.state.panels).filter(([key]) => !key.startsWith('tree.menu.'))),
+        });
+      }
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
       // Journal outright, so the store, viewer and Results have to catch up after those too.
@@ -140,11 +169,13 @@ async function boot(): Promise<void> {
     } finally {
       if (long) store.set({ solving: null, progress: null });
     }
-  };
+  });
+  const dispatch: Registry['dispatch'] = (cmd) => registry.dispatch(cmd);
   const query: Registry['query'] = (q) => registry.query(q);
   late.dispatch = dispatch;
   late.query = query;
 
+  // Expose the same dispatch through the explicit registry, panels and generated proxy.
   const proxy = makeFemProxy(dispatch, query) as unknown as Record<string, unknown>;
   window.fem = new Proxy({} as Window['fem'], {
     get: (_t, k: string | symbol) =>
@@ -153,9 +184,8 @@ async function boot(): Promise<void> {
 
   // The Assistant's tool calls and the tutorial's "do it for me" go through the same wrapper
   // as a click, so the Journal, the tree and the viewer surface all catch up either way.
-  const panelRegistry = new Proxy(registry, { get: (t, k) => (k === 'dispatch' ? dispatch : Reflect.get(t, k, t)) });
   store.dispatch = dispatch;
-  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={panelRegistry} />, root);
+  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={registry} />, root);
 
   // The Recent projects list is what the start screen leads with, so it is read before the
   // 3.2 MB wasm module rather than after it.

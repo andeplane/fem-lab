@@ -360,6 +360,9 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
         r.reactions.iter().map(|x| (format!("`{}`", x.constraint), x.total.each_ref().map(|v| v.value))).collect();
     totals.push(("**Σ reactions**".into(), sum));
     totals.push(("**Σ applied**".into(), r.applied_total.each_ref().map(|v| v.value)));
+    if let Some(storage) = &r.storage_power {
+        totals.push(("**Storage rate**".into(), [storage.value, 0.0, 0.0]));
+    }
     let rows = totals
         .into_iter()
         .map(|(label, values)| {
@@ -373,6 +376,9 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
         if power { &["Constraint", "Power", "Unit"] } else { &["Constraint", "Fx", "Fy", "Fz", "Unit"] };
     s += &table(headers, rows, "unreachable");
     s += &format!("{}\n\n", balance_line(r.balance, r.reaction_quantity));
+    if power && !r.history.is_empty() {
+        s += "Thermal powers describe the last integration step; temperature extrema describe its endpoint.\n\n";
+    }
     if !r.frequencies.is_empty() {
         s += "#### Natural frequencies\n\n";
         s += &table(
@@ -397,9 +403,13 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
 
 /// The one line a reviewer reads first: equilibrium, or the solve did not converge.
 fn balance_line(balance: f64, quantity: crate::units::ReactionQuantity) -> String {
-    let symbol = if quantity == crate::units::ReactionQuantity::Power { "Q" } else { "F" };
+    let equation = if quantity == crate::units::ReactionQuantity::Power {
+        "Thermal balance |net applied − removed − storage| / assembled power scale"
+    } else {
+        "Reaction balance |Σ reactions + Σ applied| / max|F|"
+    };
     format!(
-        "Reaction balance |Σ reactions + Σ applied| / max|{symbol}| = {} — **{}** (tolerance {}).",
+        "{equation} = {} — **{}** (tolerance {}).",
         fmt_sig(balance, 3),
         if balance <= BALANCE_TOL { "pass" } else { "fail" },
         fmt_sig(BALANCE_TOL, 1)
@@ -618,7 +628,9 @@ mod tests {
         })).unwrap();
         let zero = Valued { value: 0.0, unit: "mm".into() };
         let result = ResultSummary {
+            result_id: "result-1".into(),
             reaction_quantity: crate::units::ReactionQuantity::Force,
+            storage_power: None,
             step: "static".into(),
             revision: 1,
             stale: false,
