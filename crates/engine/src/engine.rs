@@ -732,6 +732,9 @@ impl Engine {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
                 let settings = crate::mesh::mesher_settings(mesher)?;
+                if let crate::model::MesherSettings::Lattice { sizes, .. } = &settings {
+                    crate::mesh::validate_body_sizes(&self.model, sizes)?;
+                }
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
@@ -1232,7 +1235,7 @@ impl Engine {
                 users.push(format!("set '{}'", s.name));
             }
         }
-        if m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()) == Some(name) {
+        if m.mesh.as_ref().is_some_and(|mesh| mesh.mesher.references_body(name)) {
             users.push("mesher geometry".into());
         }
         if !users.is_empty() {
