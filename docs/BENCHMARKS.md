@@ -562,7 +562,8 @@ paper is on hand; no row here depends on them.
 
 I2 is gated at 2 % on 20 elements because that is where the mesh is, not the formulation:
 refining to 40 elements moves the tip deflection from −382.2 mm to −385.3 mm against the
-elastica's −387.3 mm, and to 80 elements −386.1 mm. The cheap mesh keeps the case fast.
+elastica's −387.3 mm, so the error falls from 1.31 % to 0.49 %. The cheap mesh keeps the case
+fast; the engine test in `crates/engine/tests/fem.rs` runs the same beam at both slopes.
 
 **What is deliberately not here.** Follower loads: the external force is deformation-independent,
 so a pressure keeps the direction and the area it had on the reference mesh. Line search: the
