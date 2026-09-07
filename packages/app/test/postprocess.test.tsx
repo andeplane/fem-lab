@@ -255,7 +255,7 @@ describe('the deformation bar', () => {
   it('offers the scrub once the Result is a mode shape or has a history', () => {
     expect(mount({ result: modal, fieldKey: 'mode:2' }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
     document.body.innerHTML = '';
-    const catalogue = { step: 'heat', modelHash: 'h', stale: false, nodeCount: 1, field: 'temperature', components: 3, storedComponents: 1, retainedBytes: 48, frames: transient.history!.map((row, index) => ({ index, timeSi: row.time.value, time: row.time })) } as const;
+    const catalogue = { resultId: 'result-heat', step: 'heat', modelHash: 'h', stale: false, nodeCount: 1, field: 'temperature', components: 3, storedComponents: 1, retainedBytes: 48, frames: transient.history!.map((row, index) => ({ index, timeSi: row.time.value, time: row.time })) } as const;
     const shown = { generation: 1, catalogue, frame: catalogue.frames[1]!, playing: false, speed: 1 };
     expect(mount({ result: transient, transient: shown }).root.querySelector('.deform-bar [aria-label="retained transient frame"]')).not.toBeNull();
   });

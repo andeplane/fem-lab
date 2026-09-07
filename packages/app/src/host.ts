@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
@@ -351,6 +351,19 @@ export function makeHostContext(
           };
           input.click();
         }),
+      pickBytes: (accept) =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = accept;
+          input.onchange = () => {
+            const file = input.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_GEOMETRY_FILE_BYTES) return reject(new FemError('schema', 'the geometry file exceeds the 32 MiB import limit', 'picker', 'decimate the mesh in the tool that wrote it'));
+            file.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
+          };
+          input.click();
+        }),
       download: (name, mime, data) => {
         const url = URL.createObjectURL(new Blob([data as BlobPart], { type: mime }));
         const a = Object.assign(document.createElement('a'), { href: url, download: name });
@@ -425,6 +438,7 @@ export function makeHostContext(
 
       info: () => null,
       readText: soon('the folder on disk', 'use file.open for now'),
+      readBytes: soon('the folder on disk', 'use geometry.importFile with the picker for now'),
       writeText: soon('the folder on disk', 'use file.save for now'),
       writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
