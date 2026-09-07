@@ -26,7 +26,7 @@ const STAGNANT_LIMIT: usize = 3;
 /// 1e-10. A run that lands within this factor of what was asked has hit that floor and is as
 /// accurate as the direct factorisation; one that stops further away has genuinely failed, and
 /// the error names `cpu-direct`.
-const FLOOR_GRACE: f64 = 100.0;
+pub(super) const FLOOR_GRACE: f64 = 100.0;
 
 /// Drive `inner` until the f64 residual of `K x = b` is below `rel_tol`.
 ///

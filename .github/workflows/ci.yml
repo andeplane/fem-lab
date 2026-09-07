@@ -72,7 +72,21 @@ jobs:
       # reports 99 % on lines that ran. The 66k-DOF D5 sibling is `#[ignore]`d out of that binary
       # and run on its own in release, where it takes seconds instead of ten minutes. Override
       # the ordinary level-1 test profile here so instrumentation retains exact source regions.
-      - run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      - name: strict GPU coverage
+        id: gpu_coverage
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      # Preserve the failed gate; export its existing profiles so a missed region is located
+      # precisely rather than guessed from rounded percentages. This does not rebuild or retest.
+      - name: export failed GPU coverage detail
+        if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --features gpu-tests --json --output-path gpu-coverage.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
+        with:
+          name: gpu-coverage-detail
+          path: gpu-coverage.json
+          if-no-files-found: error
+          retention-days: 7
       - run: cargo test --release -p femlab-engine --features gpu-tests --test gpu_kernels -- --ignored sixty_six --nocapture
 
   # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
