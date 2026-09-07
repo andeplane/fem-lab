@@ -1481,6 +1481,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "size": {
           "$ref": "#/$defs/LatticeSize"
         },
+        "sizes": {
+          "description": "Optional positive element lengths keyed by existing Body name. Each entry overrides\n`size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave\nsize to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions\nand cannot have size overrides. Names follow model.rename; remove an override before\nremoving its Body. A new mesh.set replaces all overrides; convergence studies scale\nthem with the global size, preserving the refinement ratio.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
         "kind": {
           "type": "string",
           "const": "lattice"
@@ -5640,6 +5647,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "properties": {
         "size": {
           "$ref": "#/$defs/LatticeSize"
+        },
+        "sizes": {
+          "description": "Optional positive element lengths keyed by existing Body name. Each entry overrides\n`size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave\nsize to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions\nand cannot have size overrides. Names follow model.rename; remove an override before\nremoving its Body. A new mesh.set replaces all overrides; convergence studies scale\nthem with the global size, preserving the refinement ratio.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Q_length"
+          }
         },
         "kind": {
           "type": "string",

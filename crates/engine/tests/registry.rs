@@ -1095,7 +1095,7 @@ fn enum_helpers_used_by_hosts() {
     assert_eq!(Procedure::Static, Procedure::Static);
     let spec = IdealisationSpec::PlaneStrain;
     assert_eq!(serde_json::to_string(&spec).unwrap(), r#"{"kind":"planeStrain"}"#);
-    let m = MesherSpec::Lattice { size: LatticeSize::Counts { nx: 1, ny: 2, nz: 3 } };
+    let m = MesherSpec::Lattice { size: LatticeSize::Counts { nx: 1, ny: 2, nz: 3 }, sizes: Default::default() };
     assert!(serde_json::to_string(&m).unwrap().contains("\"nx\":1"));
     let p = FacePredicate::Normal { normal: [0.0, 0.0, 1.0], max_angle_deg: None };
     assert!(p.to_si().is_ok());
@@ -7761,6 +7761,157 @@ fn two_cubes(e: &mut Engine) {
     ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
     ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["a","b"]}"#);
     ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"},"order":1}"#);
+}
+
+#[test]
+fn lattice_body_sizes_validate_references_and_survive_rename_replay_and_undo() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    let original = e.model_hash();
+    for (body, value, code) in [
+        ("missing", "250 mm", ErrorCode::NotFound),
+        ("b", "1 kg", ErrorCode::UnitDimension),
+        ("b", "0 mm", ErrorCode::Schema),
+        ("b", "-1 mm", ErrorCode::Schema),
+    ] {
+        let error = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":"500 mm","sizes":{{"{body}":"{value}"}}}}}}"#
+            ),
+        );
+        assert_eq!(error.code, code);
+        assert_eq!(error.where_.as_deref(), Some(format!("mesher.sizes.{body}").as_str()));
+        assert_eq!(e.model_hash(), original);
+    }
+    for fallback in [r#""500 mm""#, r#"{"nx":2,"ny":2,"nz":2}"#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{fallback},"sizes":{{"b":"250 mm"}}}}}}"#
+            ),
+        );
+        assert_eq!(set_info(&mut e, "a.xmax").count, 4);
+        assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+        assert_eq!(mesh_summary(&mut e).elements, 72);
+        let before_rename = e.model_hash();
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"b","to":"fine"}"#);
+        assert_eq!(set_info(&mut e, "fine.xmin").count, 16);
+        assert_eq!(err(&mut e, r#"{"cmd":"geometry.remove","name":"fine"}"#).code, ErrorCode::InUse);
+        let mut replayed = engine();
+        pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
+        assert_eq!(replayed.model_hash(), e.model_hash());
+        assert_eq!(mesh_summary(&mut replayed), mesh_summary(&mut e));
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(e.model_hash(), before_rename);
+        assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"}}"#);
+        assert_eq!(mesh_summary(&mut e).elements, 16);
+    }
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm","sizes":{"b":"250 mm"}}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"b","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("mesher.sizes.b"));
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+    // A line uses its own member divisions and must never silently ignore an override.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"line","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm","sizes":{"line":"250 mm"}}}"#).code,
+        ErrorCode::Unsupported
+    );
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"b"}"#);
+}
+
+#[test]
+fn lattice_body_sizes_run_the_installed_nonmatching_patch_at_two_refinements() {
+    for text in [
+        include_str!("../../femlab/benches/cases/tie-nonmatching-patch.json"),
+        include_str!("../../femlab/benches/cases/tie-nonmatching-patch-refined.json"),
+    ] {
+        let case: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut reference = None;
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            for command in case["journal"].as_array().unwrap() {
+                ok(&mut e, &command.to_string());
+            }
+            let QueryResult::Field(stress) =
+                e.query(Query::Field { step: None, result_id: None, field: "vonMises".into() }).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                &stress.values,
+                reference.get_or_insert(stress.values.clone()),
+                "thread count must not change the field"
+            );
+            assert_eq!(stress.unit, "Pa");
+            assert!(!stress.values.is_empty());
+            for value in stress.values {
+                assert!((value - 1e6).abs() < 0.1, "uniform tension must carry 1 MPa at every node, got {value}");
+            }
+            for check in case["checks"].as_array().unwrap() {
+                let query = serde_json::from_value(check["query"].clone()).unwrap();
+                let result = serde_json::to_value(e.query(query).unwrap()).unwrap();
+                let got = result.pointer(check["path"].as_str().unwrap()).unwrap();
+                if let Some(expected) = check["expect"].as_f64() {
+                    let tolerance = check["tol"].as_f64().unwrap();
+                    let scale = if check["rel"] == true { expected.abs() } else { 1.0 };
+                    assert!((got.as_f64().unwrap() - expected).abs() <= tolerance * scale, "{check}: got {got}");
+                } else {
+                    assert_eq!(got, &check["expect"]);
+                }
+            }
+            let before_study = e.model_hash();
+            let summary = study(
+                &mut e,
+                r#"{"cmd":"study.converge","step":"static","sizes":["1 m","500 mm"],"quantity":{"kind":"max","field":"displacement"},"restore":false}"#,
+            );
+            assert_eq!(summary.rows[0].dofs, 105);
+            assert_eq!(summary.rows[1].dofs, 456);
+            assert_eq!(set_info(&mut e, "a.xmax").count, 4);
+            assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+            let mut replayed = engine();
+            pollster::block_on(replayed.replay(&e.export_file().journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), e.model_hash());
+            ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+            assert_eq!(e.model_hash(), before_study);
+        }
+    }
+}
+
+#[test]
+fn lattice_body_sizes_scale_with_convergence_while_preserving_ratios() {
+    use femlab_engine::model::{MesherSettings, Sweep};
+    for fallback in [r#""500 mm""#, r#"{"nx":2,"ny":2,"nz":2}"#] {
+        let spec: MesherSpec =
+            serde_json::from_str(&format!(r#"{{"kind":"lattice","size":{fallback},"sizes":{{"b":"250 mm"}}}}"#))
+                .unwrap();
+        let original = femlab_engine::mesh::mesher_settings(&spec).unwrap();
+        let mut swept = MesherSettings::Sweep {
+            base: Box::new(original.clone()),
+            sweep: Sweep::Extrude { layers: 1, height: 1.0 },
+        };
+        assert!(swept.references_body("b"));
+        assert!(!swept.references_body("a"));
+        swept.rename_body("b", "fine");
+        assert!(swept.references_body("fine"));
+        assert!(!swept.references_body("b"));
+        let scaled = femlab_engine::mesh::scale_mesher(&original, 0.5, 0.25);
+        let json = serde_json::to_value(&scaled).unwrap();
+        assert_eq!(json["sizes"]["b"], 0.125);
+        let twice = femlab_engine::mesh::scale_mesher(&original, 0.5, 0.125);
+        assert_eq!(serde_json::to_value(twice).unwrap()["sizes"]["b"], 0.0625);
+    }
+    // A dimensional global size defines the ratio even if the first study size differs.
+    let spec: MesherSpec =
+        serde_json::from_str(r#"{"kind":"lattice","size":"500 mm","sizes":{"b":"250 mm"}}"#).unwrap();
+    let original = femlab_engine::mesh::mesher_settings(&spec).unwrap();
+    assert_eq!(
+        serde_json::to_value(femlab_engine::mesh::scale_mesher(&original, 0.25, 0.125)).unwrap()["sizes"]["b"],
+        0.0625
+    );
 }
 
 /// `contact.add` is a Constraint object with two Set references: it validates both, is listed as

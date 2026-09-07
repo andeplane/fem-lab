@@ -554,7 +554,7 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
 | F3 | SDOF under step load, `u = (F/k)(1 − cos ωt)`; one hex8 with one free DOF, `k = 2Ea/9`, `m = ρa³/8` at ν = 0 | F/k at T/4, 2F/k at T/2, 0 at T | 1 % | the explicit path from a Journal against a phase-sensitive closed form; the cantilever and Newmark/HHT forms wait on #72 | green |
 | F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
-| F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
+| F4b | The same patch test with master/slave sizes 500/250 mm and 250/125 mm | as F4, including node-to-face projections with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | green + engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
@@ -571,16 +571,16 @@ and F4c gate at roundoff rather than at an engineering tolerance. F4c's referenc
 `cantilever-hex8-im` measures on the single Body beside it, not a published number: it is an
 equivalence, and the published Timoshenko value is the one that case is gated against.
 
-**F4b is an engine test, not an installed case, because the Command API cannot yet build it.**
-`mesh.set` takes one element size for the whole Model, and the lattice mesher divides each Body's
-bounding box by it, so two prismatic Bodies that share a face are always meshed compatibly
-across it: a non-conforming interface cannot be expressed from a Journal today. The engine test
-(`crates/engine/tests/fem.rs`) builds one directly, with the slave block meshed at half the
-master's size, and runs the same three assertions. It is deliberately a *nested* refinement:
-node-to-face ties reproduce a constant stress state exactly when the fine grid's cell edges
-include the coarse grid's, and only approximately when they do not — which is what mortar
-methods exist for and what no tutorial in TUTORIAL-COVERAGE needs. Per-Body mesh sizes would
-make F4b an installed case: #359.
+F4b is installed as `tie-nonmatching-patch` and `tie-nonmatching-patch-refined`.
+The public Command `mesh.set` uses `mesher: { kind: "lattice", size: "500 mm",
+sizes: { b: "250 mm" } }` to give the slave Body half the master's element size;
+the refined case halves both sizes. The cases gate the unequal interface face counts,
+the analytical displacement and stress, and global reaction balance. Registry tests
+also check constant stress at every node. The refinement is deliberately *nested*:
+node-to-face ties reproduce a constant stress state exactly when the fine grid's cell
+edges include the coarse grid's, and only approximately when they do not — which is
+what mortar methods exist for. The original direct engine patch test remains as an
+independent check of the coupling itself.
 
 F4d covers a trap the elimination hides. The solved system enforces equilibrium of the retained
 combination, `Tᵀ(Ku − f) = 0`, so at a DOF that is both held by a Constraint and a master of a
