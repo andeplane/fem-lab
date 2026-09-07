@@ -6475,11 +6475,12 @@ fn invert3(a: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
         for v in m[col].iter_mut() {
             *v /= pivot;
         }
+        let pivot_row = m[col];
         for row in 0..3 {
             if row != col {
                 let f = m[row][col];
-                for j in 0..6 {
-                    m[row][j] -= f * m[col][j];
+                for (v, p) in m[row].iter_mut().zip(pivot_row) {
+                    *v -= f * p;
                 }
             }
         }
