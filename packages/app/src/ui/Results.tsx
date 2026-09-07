@@ -366,6 +366,23 @@ export function History({ s }: { s: UiState }) {
 }
 
 /**
+ * A harmonic Step's frequency response: the largest nodal amplitude at every retained
+ * frequency, and the phase lag that goes with it. `query.result.sweep` is one row per retained
+ * frequency (crates/engine/src/solve_run.rs), so this is a plot of the Result.
+ */
+export function Sweep({ s }: { s: UiState }) {
+  const rows = s.result?.sweep ?? [];
+  if (rows.length === 0) return null;
+  return (
+    <>
+      <div class="section-label">Frequency response · {s.result!.step}</div>
+      <LineChart x={rows.map((r) => r.frequency.value)} y={rows.map((r) => r.amplitude.value)} xUnit={rows[0]!.frequency.unit} yUnit={rows[0]!.amplitude.unit} xLabel="f" yLabel="amplitude" />
+      <LineChart x={rows.map((r) => r.frequency.value)} y={rows.map((r) => r.phase.value)} xUnit={rows[0]!.frequency.unit} yUnit="rad" xLabel="f" yLabel="phase" />
+    </>
+  );
+}
+
+/**
  * A modal Step's natural frequencies, with the Command that puts each mode shape on screen.
  * Mode `k`'s shape is the Result field `mode:k` (crates/engine/src/solve_run.rs).
  */
@@ -463,6 +480,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <div class="section-label">Reactions</div>
         <Reactions s={s} />
         <History s={s} />
+        <Sweep s={s} />
         <Convergence s={s} />
       </div>
     </div>
