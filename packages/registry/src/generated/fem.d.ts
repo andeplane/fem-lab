@@ -123,6 +123,11 @@ export interface Fem {
      * a Body name distinct from explicit geometry. Keeping that name preserves its material;
      * changing/removing it requires no remaining Body references and clears its material.
      * Use model.rename to change an implicit Body name while preserving its references.
+     * `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+     * (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+     * geometry: the selected mesher still determines the boundary approximation. `formulation`
+     * has no effect when `simplices` is true, because simplex elements have no incompatible
+     * modes.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**

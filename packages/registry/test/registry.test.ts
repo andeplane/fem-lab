@@ -239,7 +239,7 @@ describe('Registry', () => {
     expect(host.clipboard.writeText).toHaveBeenCalledTimes(4);
   });
 
-  it('file.open imports from json, folder path or picker; example.open fetches then imports', async () => {
+  it('file.open imports from json, folder path or picker; example.open delegates Journal replay to the host', async () => {
     const { registry, host, transport } = make(true);
     await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(MODEL_FILE) });
     await registry.dispatch({ cmd: 'file.open', path: './models/beam.json' });
@@ -249,8 +249,8 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.open', picker: true });
     expect(host.files.pick).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'example.open', name: 'cantilever' });
-    expect(host.examples.fetch).toHaveBeenCalledWith('cantilever');
-    expect(transport.importFile).toHaveBeenCalledTimes(4);
+    expect(host.examples.open).toHaveBeenCalledWith('cantilever');
+    expect(transport.importFile).toHaveBeenCalledTimes(3);
   });
 
   it('file.save and file.export deliver to the open folder when there is one, else download', async () => {
