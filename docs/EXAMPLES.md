@@ -30,7 +30,7 @@ Difficulty is 1 (a first model), 2 (a real workflow) or 3 (needs the theory to r
 
 Every reference-bearing example, its published or closed-form reference, and what the bundled
 Journal actually computes. Solve times are `femlab run <journal> --verify --cpu` on one laptop
-core in a release build; all 22 together take a couple of seconds on an idle machine.
+core in a release build; all 27 together take a couple of seconds on an idle machine.
 
 Native tests use Cargo's level-1 test profile: debug assertions remain enabled, while sparse
 assembly and factorisation get enough optimisation for this full-catalogue check. The CPU and
@@ -39,13 +39,14 @@ counts unreliable. Reproduce the source-accurate CPU gate with
 `CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry
 --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100
 --fail-under-regions 100`. A paired warm-binary measurement on one Apple M4 Max core replayed
-the same 22 Journals, including every solve and hash comparison, in 170.86 s at level 0 and
+the then-22 Journals, including every solve and hash comparison, in 170.86 s at level 0 and
 9.12 s at level 1. Those execution times exclude compilation and do not predict a CI runner's
 total job time; runner load, compiler cache state and host hardware all affect wall time.
 
 A bundled example that is bigger than the picture it draws still wastes verification time. Keep
 them around 20 000 degrees of freedom at the very most — the largest here are
-`plate-with-hole-2d` (19 396) and `slab-strip` (19 215) — and prefer a mesh that shows the physics
+`plate-with-hole-2d` (19 396) and `slab-strip` (19 215), and the three building-structures
+examples added for issue #440 cost 36, 3 480 and 5 805 dofs — and prefer a mesh that shows the physics
 to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 
 | Example | Quantity | Reference | Computed | Error | Solve |
@@ -66,6 +67,10 @@ to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 | `nafems-le1-membrane` | σ_yy at D | 92.7 MPa (NAFEMS LE1) | 92.16 MPa | −0.58 % | 0.02 s |
 | `nafems-le10-plate` | σ_yy at D, upper surface | −5.25 MPa (ESRD full-face LE10 variant) | −5.234 MPa | −0.30 % | — |
 | `macneal-harder-beam` | tip deflection | 0.1081 (MacNeal & Harder 1985) | 0.10733 | −0.71 % | 0.02 s |
+| `steel-roof-truss` | mid-span bottom-chord δ | 7.0427 mm (unit-load virtual work) | 7.04266 mm | −0.00 % | 0.02 s |
+| `steel-roof-truss` | diagonal U2–L3 axial stress | 10.731 MPa (method of sections, N = 10√2 kN) | 10.7308 MPa | −0.00 % | — |
+| `column-buckling` | P_cr | 11 054 kN (π²EI/L², K = 1) | 10 912 kN (λ = 272.81 × 40 kN) | −1.28 % | 0.08 s |
+| `concrete-floor-slab` | mid-span δ | 7.617 mm (5wL⁴/384EI + wL²/8GA_s) | 7.5922 mm | −0.33 % | 0.04 s |
 
 The everyday models have no published reference, so their `expected` sidecar names the hand
 estimate to sanity-check against instead: `bracket-L` 15.7 MPa peak von Mises (at a singular
@@ -88,6 +93,9 @@ path, not a stress: the lattice puts two or three elements across a bolt hole),
 | `heated-fin-convection` | 2 | An aluminium fin held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula. | θ/θ_b = cosh m(L−x) / cosh mL | [heat-conduction](../packages/app/tutorials/heat-conduction.json) |
 | `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | [thermal-stress-chaining](../packages/app/tutorials/thermal-stress-chaining.json) |
 | `explicit-free-fall` | 3 | An unconstrained block under gravity, integrated by central differences — explicit dynamics checked against a schoolbook drop. | u = gt²/2 = 4.905 µm at 1 ms | — |
+| `steel-roof-truss` | 2 | A 12 m parallel-chord Pratt roof truss in CHS 88.9 × 5 S355, pinned one end and rollered the other, 20 kN at each top-chord joint. | δ = Σ N n L / EA = 7.0427 mm | [steel-roof-truss](../packages/app/tutorials/steel-roof-truss.json) |
+| `column-buckling` | 3 | A 200 × 200 mm S355 column, 5 m between pins, modelled as its lower half with a symmetry plane at mid-height. | P_cr = π²EI/(KL)² = 11 054 kN | [column-buckling](../packages/app/tutorials/column-buckling.json) |
+| `concrete-floor-slab` | 2 | A 6 m one-way C30/37 floor strip on knife-edge bearings under self-weight plus a 5 kN/m² imposed load. | δ = 5wL⁴/384EI + wL²/8GA_s = 7.617 mm | [concrete-floor-slab](../packages/app/tutorials/concrete-floor-slab.json) |
 
 ## NAFEMS and named benchmarks
 
@@ -155,5 +163,6 @@ Every tutorial's `doIt` sequence is validated by `packages/app/test/tutorial-fix
 which replays it through the wasm build in Node — the same engine the browser gets. Where a
 tutorial shadows an example (`cantilever`, `plate-with-hole-2d`, `heated-fin`,
 `cantilever-modal`, `bar-transient-heat`, `mesh-convergence-cantilever`,
-`kirsch-quarter-plate`, `free-free-beam-modal`), it is by construction the same Command sequence
+`kirsch-quarter-plate`, `free-free-beam-modal`, `steel-roof-truss`, `column-buckling`,
+`concrete-floor-slab`), it is by construction the same Command sequence
 the CLI has also checked, so a tutorial can never drift from a Model with a known answer.

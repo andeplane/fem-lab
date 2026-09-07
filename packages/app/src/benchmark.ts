@@ -74,6 +74,14 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     tolerance: { kind: 'percent', value: 2 },
     source: 'Self-weight closed form σ = ρgL · bundled benchmark metadata',
   },
+  'column-buckling': null,
+  'concrete-floor-slab': {
+    locator: { kind: 'probe', field: 'displacement', component: 2, at: ['3 m', '500 mm', '100 mm'] },
+    reference: { values: [7.6171], unit: 'mm', label: '|uᶻ| at mid-span on the neutral axis' },
+    tolerance: { kind: 'percent', value: 2 },
+    magnitude: true,
+    source: 'Simply supported UDL closed form 5wL⁴/384EI with the wL²/8GAs shear term · EN 1992-1-1 §7.4.1 serviceability check',
+  },
   'cook-membrane': {
     locator: { kind: 'probe', field: 'displacement', component: 1, at: ['48 mm', '52 mm', '0 mm'] },
     reference: { values: [23.9], unit: 'mm', label: 'uʸ at loaded-edge midpoint C' },
@@ -151,6 +159,13 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
   'plate-with-hole-2d': null,
   'simply-supported-beam': null,
   'slab-strip': null,
+  'steel-roof-truss': {
+    locator: { kind: 'probe', field: 'displacement', component: 1, at: ['6 m', '0 mm', '0 mm'] },
+    reference: { values: [7.0427], unit: 'mm', label: '|uʸ| at the mid-span bottom-chord joint' },
+    tolerance: { kind: 'percent', value: 0.5 },
+    magnitude: true,
+    source: 'Unit-load virtual work δ = Σ N n L / EA over the 21 members of the determinate truss',
+  },
   'thermal-stress-plate': {
     locator: { kind: 'probe', field: 'stress', component: 0, at: ['0.5 m', '0.5 m', '0 m'] },
     reference: { values: [-150], unit: 'MPa', label: 'σₓₓ at mid-height' },
@@ -169,6 +184,7 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
 export const BENCHMARK_UNMAPPED_REASONS: Record<string, string> = {
   'bolt-flange': 'No live comparison: the quoted peak is a stair-stepped bolt-hole stress with only two or three elements across the hole. The metadata explicitly treats it as a load-path picture, not a converged stress oracle.',
   'bracket-L': 'No live comparison: the Result peak lies at the sharp re-entrant corner, where linear-elastic stress is singular and rises with refinement. There is no finite corner-stress reference to pass.',
+  'column-buckling': 'No live comparison: the Result observable is a dimensionless load factor on the reference pressure, and readBenchmark has no buckling-factor locator. The eigenvalue is also an upper bound on strength, not a value a design check may pass against.',
   'plate-with-hole-2d': 'No live comparison: 3σ is the local hoop stress of an infinite plate, while this finite-width full model reports global Cartesian and von Mises extrema. Those are different stress quantities and locations.',
   'simply-supported-beam': 'No live comparison: the textbook formulas assume ideal line supports at the neutral axis, but this solid model restrains translation over both complete end faces. Its bundled expected value is the resulting global von Mises peak at a support, not the mid-span beam quantity.',
   'slab-strip': 'No live comparison: 6M/bh² is longitudinal stress at the mid-span extreme fibre for ideal line supports, but this solid model restrains both complete end faces. Its bundled expected value is the resulting global von Mises peak near a support.',

@@ -31,6 +31,9 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`pressure-vessel`](../packages/app/tutorials/pressure-vessel.json) | 10 | A thick cylinder revolved into an axisymmetric slice instead of meshed as a 3D solid (the `lame-cylinder-axisymmetric` example). | Lamé's σθθ(a) = 100 MPa, σrr(a) = −60 MPa against the pr/t thin-wall shortcut, which breaks at this vessel's t/a = 1 |
 | [`composite-block-shear`](../packages/app/tutorials/composite-block-shear.json) | 12 | A steel-faced, aluminium-cored sandwich panel in pure shear: `geometry.subtract` for the cavity, a second Body for the core, `constraint.prescribe` for the shear, `contact.add` to bond the two. | The Reuss/Voigt series and parallel bounds, and why a finite specimen falls just outside them |
 | [`solve-cost-and-solvers`](../packages/app/tutorials/solve-cost-and-solvers.json) | 8 | The cantilever at two mesh sizes, `query.cost` before each solve, `cpu-direct` and `cpu-pcg` forced on the same model. | The auto solver threshold (200 000 / 100 000 dofs), and `solve.stalled` on issue #3's 780 300-dof case |
+| [`steel-roof-truss`](../packages/app/tutorials/steel-roof-truss.json) | 14 | A 12 m parallel-chord Pratt roof truss from `geometry.addLine` and a CHS `section.add`, braced out of plane, pin and roller, purlin loads on the top-chord joints (the `steel-roof-truss` example). | Reactions by statics, one diagonal by the method of sections (N = 10√2 = 14.142 kN, σ = 10.731 MPa against 10.7308 computed), mid-span δ = Σ N n L/EA = 7.0427 mm against 7.0427, and why a joint needs `stressUnaveraged` |
+| [`column-buckling`](../packages/app/tutorials/column-buckling.json) | 11 | A pinned–pinned 200 × 200 mm S355 column, modelled as its lower half with a mid-height symmetry plane, one `procedure: buckling` Step (the `column-buckling` example). | P_cr = π²EI/(KL)² = 11 054 kN against λ × 40 kN = 10 912 kN, K for the four classic end conditions, λ̄ = 1.14, and why EN 1993-1-1 curve c puts N_b,Rd at 6 575 kN — 60 % of the eigenvalue |
+| [`concrete-floor-slab`](../packages/app/tutorials/concrete-floor-slab.json) | 13 | A 6 m one-way C30/37 floor strip on knife-edge bearings, self-weight plus a 5 kN/m² imposed load (the `concrete-floor-slab` example). | δ = 5wL⁴/384EI + wL²/8GA_s = 7.617 mm against 7.5922 computed, the EN 1992-1-1 §7.4.1 span/250 limit, and why cracking and creep put a real slab three times further down |
 
 The first four are the phase-1 set. The rest each own one procedure, one idealisation or one
 piece of method that the Commands alone do not explain.
@@ -101,10 +104,13 @@ takes the first that is on screen:
 Rungs 2–5 skip `aside.props` deliberately: the form's **Revert** button is `form.open` with the
 very Command the step is about, so without that skip the spotlight would land on Revert.
 
-Nine of the twenty `highlight` values across the bundled tutorials take rung 5 today —
-`material.assign`, `load.traction`, `constraint.temperature`, `constraint.symmetry`,
-`load.temperature`, `load.convection`, `study.converge`, `model.setIdealisation` and
-`geometry.add`. That is honest rather than a gap to paper over: it teaches the palette, which
+Fifteen distinct `highlight` values across the bundled tutorials take rung 5 today —
+`material.assign`, `load.traction`, `load.force`, `load.gravity`, `constraint.temperature`,
+`constraint.symmetry`, `load.temperature`, `load.convection`, `study.converge`,
+`model.setIdealisation`, `geometry.add`, `geometry.addLine`, `geometry.nameRegion`,
+`section.add` and `section.assign` (the last six arrived with the building-structures
+tutorials; the Tree's `+ add …` chips cover bodies, materials, meshes, constraints,
+connections, loads and Steps, and nothing else). That is honest rather than a gap to paper over: it teaches the palette, which
 runs every Command whether or not it has a button. Issue #43 gives most of them a control.
 
 A read-only step that names no `highlight` points at nothing at all, and the card stays docked:

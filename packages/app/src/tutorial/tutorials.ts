@@ -2,8 +2,10 @@
 // one is adding a file here, not writing a component. Vite bundles JSON imports directly, so
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
 import cantilever from '../../tutorials/cantilever.json';
+import columnBuckling from '../../tutorials/column-buckling.json';
 import freeFreeModal from '../../tutorials/free-free-modal.json';
 import compositeBlockShear from '../../tutorials/composite-block-shear.json';
+import concreteFloorSlab from '../../tutorials/concrete-floor-slab.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
 import journalAsProgram from '../../tutorials/journal-as-program.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
@@ -12,6 +14,7 @@ import plateWithHole from '../../tutorials/plate-with-hole.json';
 import pressureVessel from '../../tutorials/pressure-vessel.json';
 import readAResult from '../../tutorials/read-a-result.json';
 import solveCostAndSolvers from '../../tutorials/solve-cost-and-solvers.json';
+import steelRoofTruss from '../../tutorials/steel-roof-truss.json';
 import symmetryAnd2d from '../../tutorials/symmetry-and-2d.json';
 import thermalBar from '../../tutorials/thermal-bar.json';
 import thermalStressChaining from '../../tutorials/thermal-stress-chaining.json';
@@ -36,6 +39,9 @@ export const TUTORIALS: Tutorial[] = [
   pressureVessel,
   compositeBlockShear,
   solveCostAndSolvers,
+  steelRoofTruss,
+  columnBuckling,
+  concreteFloorSlab,
 ] as Tutorial[];
 
 export function tutorialById(id: string): Tutorial | undefined {
