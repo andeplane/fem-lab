@@ -299,7 +299,18 @@ export function makeHostContext(
         }
       },
       stop: () => scripts?.stop(),
-      setSource: (code, append) => store.set({ scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code, tab: 'script' }),
+      setSource: (code, append) =>
+        store.set({
+          scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code,
+          scriptEditing: true,
+          tab: 'script',
+        }),
+      setEditing: (scriptEditing) =>
+        store.set({
+          scriptDraft: scriptEditing ? (store.state.scriptDraft ?? store.state.script) : store.state.scriptDraft,
+          scriptEditing,
+          tab: 'script',
+        }),
     },
     // The drawer rebinds these the moment it mounts; until then they are no-ops, so a
     // `chat.send` from a script or the palette never throws at a person. The `import()` keeps

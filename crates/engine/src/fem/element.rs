@@ -19,6 +19,7 @@ use std::f64::consts::PI;
 use std::marker::PhantomData;
 
 use femlab_geometry::mesh::ElementKind;
+use femlab_geometry::{Face, Mesh};
 
 use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
@@ -596,13 +597,26 @@ fn thermal_load_of(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Re
     Ok(())
 }
 
+/// Loaded area through the same boundary quadrature as pressure and traction. This needs no
+/// material: plane stress includes thickness, axisymmetry includes 2πr, and plane strain
+/// uses the solver's unit-depth convention.
+pub(crate) fn loaded_face_measure(mesh: &Mesh, face: Face, idealisation: &Idealisation) -> f64 {
+    let kind = mesh.kind_of(face.elem);
+    let mut coords = vec![0.0; kind.n_nodes() * 3];
+    mesh.elem_coords(face.elem, &mut coords);
+    let mut force = vec![0.0; kind.n_nodes() * kind.dim()];
+    face_load_of(kind, &coords, idealisation, face.local, FaceLoad::Traction([1.0, 0.0, 0.0]), &mut force);
+    force.iter().step_by(kind.dim()).sum()
+}
+
 fn face_load_of(
     kind: ElementKind,
-    c: &ElementCtx<'_>,
+    coords: &[f64],
+    idealisation: &Idealisation,
     local_face: u8,
     load: FaceLoad,
     out: &mut [f64],
-) -> Result<(), Error> {
+) {
     let dim = kind.dim();
     let fk = kind.face_kind();
     let nodes = kind.face_nodes(local_face as usize);
@@ -618,7 +632,7 @@ fn face_load_of(
         let mut t = [[0.0f64; 3]; 2];
         let mut x = [0.0; 3];
         for (i, &node) in nodes.iter().enumerate() {
-            let xc = &c.coords[3 * node as usize..3 * node as usize + 3];
+            let xc = &coords[3 * node as usize..3 * node as usize + 3];
             for k in 0..3 {
                 x[k] += sh[i] * xc[k];
                 t[0][k] += ds[i][0] * xc[k];
@@ -637,7 +651,7 @@ fn face_load_of(
             [t[0][1], -t[0][0], 0.0]
         };
         let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
-        let w = rule.weights[g] * scale_at(&c.idealisation, x);
+        let w = rule.weights[g] * scale_at(idealisation, x);
         let traction = match load {
             FaceLoad::Pressure(p) => [-p * area[0] / jac, -p * area[1] / jac, -p * area[2] / jac],
             FaceLoad::Traction(t) => t,
@@ -648,7 +662,6 @@ fn face_load_of(
             }
         }
     }
-    Ok(())
 }
 
 fn recover_of(
@@ -817,7 +830,8 @@ impl<R: RefElement> Element for Iso<R> {
         thermal_load_of(R::KIND, c, out)
     }
     fn face_load(&self, c: &ElementCtx<'_>, local_face: u8, load: FaceLoad, out: &mut [f64]) -> Result<(), Error> {
-        face_load_of(R::KIND, c, local_face, load, out)
+        face_load_of(R::KIND, c.coords, &c.idealisation, local_face, load, out);
+        Ok(())
     }
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         recover_of(R::KIND, c, u, stress, strain)

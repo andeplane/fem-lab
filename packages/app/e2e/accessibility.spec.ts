@@ -116,7 +116,7 @@ test.describe('@cpu accessibility and small screens', () => {
       const scriptTab = page.getByRole('tab', { name: /script/ });
       await scriptTab.click();
       await expect(scriptTab).toHaveAttribute('aria-selected', 'true');
-      const script = page.locator('textarea.script-edit');
+      const script = page.getByRole('textbox', { name: 'TypeScript editor' });
       if ((await script.count()) === 0) await page.getByRole('button', { name: 'edit this script', exact: true }).click();
       await script.focus();
       await expect(script).toBeFocused();

@@ -13,7 +13,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, Load};
-use crate::fem::problem::{Constraint, Problem};
+use crate::fem::problem::{Constraint, Coupling, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
@@ -28,6 +28,10 @@ use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuan
 
 /// The material law every Model material resolves to for now; plugins add their own later.
 const LAW: &str = "linear-elastic";
+
+/// A `contact.add` without a `tol` pairs across this fraction of the Mesh bounding-box
+/// diagonal: tight enough that a tie between faces that are not really touching is refused.
+const DEFAULT_TOL: f64 = 1e-4;
 
 /// The dimension a Result field carries, so a summary reports it in the Model's own units.
 pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
@@ -84,10 +88,25 @@ fn build_problem_with_temperature<'a>(
             model.materials.iter().position(|m| m.name == name)
         })
         .collect();
+    // A tie has no prescribed value and names two Sets, so it leaves the Constraint list here
+    // and becomes a Coupling; `default_tol` is the gap a `contact.add` without one accepts.
+    let (lo, hi) = built.mesh.bbox();
+    let default_tol =
+        DEFAULT_TOL * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    let mut couplings = Vec::new();
     let mut constraints = Vec::with_capacity(step.constraints.len());
     for name in &step.constraints {
         let c = model.constraint(name).expect("step.add validated the Constraint names");
         let (dofs, value) = match &c.kind {
+            ConstraintKind::Bonded { master, tol } => {
+                couplings.push(Coupling::Bonded {
+                    name: c.name.clone(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
             ConstraintKind::Fix { dofs } => {
                 let mut on = [false; 3];
                 for d in dofs {
@@ -120,6 +139,7 @@ fn build_problem_with_temperature<'a>(
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,
+        couplings,
         loads: Vec::new(),
         temperature: None,
         heat,
@@ -768,6 +788,7 @@ impl Engine {
                 })
                 .collect(),
             balance: residual / biggest,
+            warnings: res.warnings.clone(),
         })
     }
 }

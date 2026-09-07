@@ -207,13 +207,33 @@ impl Engine {
                 }
             })
             .collect();
+        let connections = m
+            .constraints
+            .iter()
+            .filter_map(|c| match &c.kind {
+                ConstraintKind::Bonded { master, tol } => Some(ConnectionRow {
+                    name: c.name.clone(),
+                    kind: "bonded".into(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    summary: match tol {
+                        None => "bonded, pairing tolerance from the mesh size".to_string(),
+                        Some(t) => {
+                            let v = display(m, *t, Length::DIM);
+                            format!("bonded, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
+                        }
+                    },
+                }),
+                _ => None,
+            })
+            .collect();
         let constraints = m
             .constraints
             .iter()
-            .map(|c| ConstraintRow {
-                name: c.name.clone(),
-                on: c.on.clone(),
-                summary: match &c.kind {
+            .filter_map(|c| {
+                let summary = match &c.kind {
+                    // A tie prescribes nothing and names two Sets: it is a Connection above.
+                    ConstraintKind::Bonded { .. } => return None,
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
@@ -227,7 +247,8 @@ impl Engine {
                         let v = display(m, *value, Temperature::DIM);
                         format!("temperature = {} {}", units::fmt_sig(v.value, 4), v.unit)
                     }
-                },
+                };
+                Some(ConstraintRow { name: c.name.clone(), on: c.on.clone(), summary })
             })
             .collect();
         let loads = m
@@ -324,6 +345,7 @@ impl Engine {
             materials,
             sets,
             constraints,
+            connections,
             loads,
             steps,
             mesh_settings: m.mesh.clone(),
@@ -408,6 +430,16 @@ impl Engine {
             count: set.count() as u32,
             bbox: bbox6(m, lo, hi),
             measure: display(m, measure, Dimension([exponent, 0, 0, 0])),
+            pressure_area: if set.kind == crate::mesh::SetKind::Face {
+                let area = set
+                    .faces
+                    .iter()
+                    .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
+                    .sum();
+                Some(display(m, area, Dimension([2, 0, 0, 0])))
+            } else {
+                None
+            },
             centroid: [
                 display(m, centroid[0], Length::DIM),
                 display(m, centroid[1], Length::DIM),
