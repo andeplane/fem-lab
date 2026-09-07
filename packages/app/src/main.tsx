@@ -22,7 +22,7 @@ import { App } from './ui/App';
 import { SessionWorkspace } from './session-workspace';
 import { SessionTransport, sameSession } from './session-transport';
 import type { ReplacementSource } from './session-protocol';
-import { bindRegistryProducer } from './producer-registry';
+import { bindRegistryProducer, type RegistryProducer } from './producer-registry';
 import './ui/style.css';
 
 declare global {
@@ -184,39 +184,67 @@ class Bundle {
 class Producer {
   readonly registry: Registry;
   private native: Registry;
+  private readonly lifetime = new AbortController();
+  private detach = () => {};
   constructor(public bundle: Bundle, public transport: SessionTransport) {
     this.native = this.makeNative();
     this.registry = this.makeNative();
     this.registry.dispatch = (command) => this.dispatch(command);
     this.registry.query = (query) => this.query(query);
-    bindRegistryProducer(this.registry, async () => new Producer(this.bundle, await this.transport.fork()).registry);
+    bindRegistryProducer(this.registry, async () => {
+      const owner = this.bundle; const transport = this.transport;
+      const child = new Producer(owner, await transport.fork());
+      return child.handle();
+    });
     this.listen();
   }
+  private handle(): RegistryProducer {
+    return { registry: this.registry, signal: this.lifetime.signal, store: () => this.bundle.store,
+      release: async () => { this.lifetime.abort(); this.detach(); await this.transport.release().catch(() => undefined); } };
+  }
   private listen(): void {
+    this.detach();
+    const signal = this.transport.channel.signal;
+    const expire = () => this.lifetime.abort(signal.reason);
+    signal.addEventListener('abort', expire, { once: true });
+    this.detach = () => signal.removeEventListener('abort', expire);
+    if (signal.aborted) expire();
     this.transport.onReplacement(next => {
       const bundle = bundles.get(next.channel);
       if (!bundle) throw new FemError('internal', 'replacement has no published resource bundle');
+      // These two application panels own producer lifetimes; their visibility contains no model targets.
+      for (const panel of ['assistant', 'tutorial']) if (this.bundle.store.state.panels[panel]) bundle.store.togglePanel(panel, true);
       this.bundle = bundle; this.transport = next; this.native = this.makeNative(); this.listen();
     });
   }
   private makeNative(): Registry {
     const bundle = this.bundle; const transport = this.transport;
     const ctx = makeHostContext(bundle.store, transport, bundle.viewer, host, bundle.validation, bundle.results, undefined, undefined, undefined, () => bundle.refresh(), {
-      projects: bundle.projectApi(transport),
+      projects: bundle.projectApi(transport), active: () => transport.assertActive(),
       replay: async (commands, benchmark) => { await transport.replaceWith({ kind: 'commands', commands: commands as Command[], ...(benchmark ? { benchmark } : {}) }); },
     });
-    ctx.script.run = async (code, timeoutMs) => {
+    ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());
+      try {
+        const { chatBridge } = await import('./ai');
+        if (child.lifetime.signal.aborted) throw expired();
+        chatBridge.send(text, Promise.resolve(child.handle()));
+      } catch (error) { await child.handle().release(); throw error; }
+    };
+    ctx.script.run = async (code, timeoutMs) => {
+      const child = this;
       const runner = new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), p => child.registry.dispatch(p as { cmd: string }), p => child.registry.query(p as { query: string }), browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
+      const stop = () => runner.stop();
+      child.lifetime.signal.addEventListener('abort', stop, { once: true });
       const job = { runner, producer: child }; scriptJobs.add(job);
       child.bundle.store.set({ scriptRunning: true, source: 'ai' });
       try {
         const result = await runner.run(code, timeoutMs);
         child.bundle.store.set({ scriptOut: [...result.console, result.error ?? 'done'] });
         return result;
-      } finally { child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); await child.transport.release().catch(() => undefined); }
+      } finally { child.lifetime.signal.removeEventListener('abort', stop); child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); }
     };
-    ctx.script.stop = () => { for (const job of scriptJobs) { job.runner.stop(); void job.producer.transport.release().catch(() => undefined); } };
+    ctx.script.stop = () => { for (const job of scriptJobs) { job.runner.stop(); job.producer.lifetime.abort(); void job.producer.transport.release().catch(() => undefined); } };
     const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store)] });
     return registry;
   }
@@ -270,7 +298,7 @@ const workspace = new SessionWorkspace<Bundle>({
     window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleProducer.registry : key === 'dispatch' ? consoleProducer.registry.dispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
     bundle.store.dispatch = dispatch;
     if (!root.querySelector('.shell, .start-layout, .start')) root.textContent = '';
-    render(<App key={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} commands={ui.registry.list().commands} registry={ui.registry} />, root);
+    render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} commands={ui.registry.list().commands} registry={ui.registry} />, root);
   },
 });
 async function boot(): Promise<void> {

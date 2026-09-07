@@ -2,15 +2,15 @@
 // so `test/data-cmd.test.tsx` and the Playwright smoke can hold the DOM against
 // `registry.list()`. Nothing in `src/ui/*` renders a bare `<button>`.
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useCallback } from 'preact/hooks';
+import { useSyncExternalStore } from 'preact/compat';
 import type { Store, UiState } from '../store';
 
 export type Dispatch = (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>;
 
 export function useStore(store: Store): UiState {
-  const [state, setState] = useState(store.state);
-  useEffect(() => store.subscribe(() => setState(store.state)), [store]);
-  return state;
+  const subscribe = useCallback((notify: () => void) => store.subscribe(notify), [store]);
+  return useSyncExternalStore(subscribe, () => store.state);
 }
 
 export interface CmdProps {

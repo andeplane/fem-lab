@@ -4,6 +4,8 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { sessionEngine, type CheckedModule } from './session-engine';
 
 /** What this host uses of the wasm-bindgen `Engine`; the rest of its surface is the viewer's. */
 export interface WasmEngine {
@@ -17,6 +19,9 @@ export interface WasmModule {
 
 /** JSON in, JSON out: everything a tool call needs from the engine, and nothing else. */
 export interface EngineHandle {
+  /** Only the request admission boundary may acquire the current session. */
+  acquire?(): Promise<EngineHandle>;
+  release?(): Promise<void>;
   dispatch(cmd: Record<string, unknown>): Promise<unknown>;
   query(q: Record<string, unknown>): Promise<unknown>;
   /** The `femlab/1` file: the Model snapshot plus its Journal. */
@@ -54,8 +59,8 @@ export function missingEngine(here: string): Error {
 export function loadEngine(here: string, threads = 1): EngineHandle {
   const found = wasmCandidates(here).find((p) => existsSync(p));
   if (found === undefined) throw missingEngine(here);
-  const wasm = createRequire(import.meta.url)(found) as WasmModule;
-  return handleOf(new wasm.Engine(threads));
+  const wasm = createRequire(import.meta.url)(found) as CheckedModule;
+  return sessionEngine(wasm, threads, randomUUID());
 }
 
 /** The wasm engine as an [`EngineHandle`]; errors come back as the engine's structured object. */

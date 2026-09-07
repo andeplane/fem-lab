@@ -18,6 +18,8 @@ interface Pending {
 
 /** Owns one immutable Worker endpoint; closing it revokes pending and future traffic. */
 export class SessionChannel {
+  private readonly lifetime = new AbortController();
+  get signal(): AbortSignal { return this.lifetime.signal; }
   private nextId = 0;
   private closed = false;
   private history: { stamp: Stamp; entries: JournalEntry[]; revision: number } | undefined;
@@ -80,6 +82,7 @@ export class SessionChannel {
   close(error: unknown = expired()): void {
     if (this.closed) return;
     this.closed = true;
+    this.lifetime.abort(error);
     this.worker.terminate();
     for (const item of this.pending.values()) item.reject(error);
     this.pending.clear();
@@ -96,10 +99,10 @@ export class SessionTransport implements EngineTransport {
   constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace, private readonly recover: (origin: SessionTransport) => Promise<void> = async origin => origin.release()) {}
   onReplacement(listener: (next: SessionTransport) => void): void { this.replacementListener = listener; }
   async replaceWith(source: ReplacementSource): Promise<SessionTransport> {
-    const next = await this.replace(this, source);
-    this.replacementListener?.(next);
-    return next;
+    return this.replace(this, source);
   }
+  /** Called at the activation commit, before the previous endpoint is revoked. */
+  adopted(next: SessionTransport): void { this.replacementListener?.(next); }
   get stamp(): Stamp { return structuredClone(this.lease.stamp); }
   get runId(): string { return this.lease.runId; }
   onProgress(sink: (p: Progress) => void): void { this.sink = sink; }

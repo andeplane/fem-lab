@@ -143,6 +143,7 @@ export function forkProject(): void {
 
 export interface SessionHostServices {
   projects: Projects;
+  active?(): Promise<void>;
   replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
 }
 
@@ -340,10 +341,10 @@ export function makeHostContext(
     // the two AI SDKs off the boot path: a static `chatBridge` import would drag `src/ai/**`,
     // and with it @anthropic-ai/sdk and openai, into the landing chunk.
     chat: {
-      send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
-      insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
-      setDraft: (text) => import('./ai').then((m) => m.chatBridge.setDraft(text)),
-      clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
+      send: (text) => import('./ai').then(async (m) => { await session?.active?.(); return m.chatBridge.send(text); }),
+      insertMention: (ref) => import('./ai').then(async (m) => { await session?.active?.(); return m.chatBridge.insertMention(ref); }),
+      setDraft: (text) => import('./ai').then(async (m) => { await session?.active?.(); return m.chatBridge.setDraft(text); }),
+      clear: () => import('./ai').then(async (m) => { await session?.active?.(); return m.chatBridge.clear(); }),
     },
     skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },

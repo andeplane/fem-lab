@@ -106,6 +106,7 @@ export class SessionWorkspace<T extends SessionResources> {
       await origin.channel.request({ op: 'retire', ticket });
       const next = { transport: candidate, initial, resources };
       this.current = next;
+      origin.adopted(initiating);
       published = true;
       this.recoveryRequested = false;
       // Publish a complete bundle synchronously, then revoke all old endpoint traffic.

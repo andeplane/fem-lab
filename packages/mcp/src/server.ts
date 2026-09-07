@@ -100,7 +100,7 @@ function linkError(p: string): FemError {
 
 /** The text of one export, from the engine or from the Journal. */
 export async function exportText(engine: EngineHandle, format: ExportFormat, step?: string): Promise<string> {
-  if (format === 'journal') return `${JSON.stringify(engine.modelFile(), null, 2)}\n`;
+  if (format === 'journal') return `${JSON.stringify(await engine.modelFile(), null, 2)}\n`;
   if (format === 'script') return ((await engine.query({ query: 'query.script' })) as { text: string }).text;
   const ack = (await engine.dispatch({ cmd: 'mesh.export', format, ...(step === undefined ? {} : { step }) })) as {
     output: { text: string };
@@ -154,6 +154,16 @@ export function createRegistry(deps: ServerDeps): Registry {
     description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
   }));
   registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
+  const acquire = deps.engine.acquire;
+  if (acquire) {
+    const request = async <T>(run: (scoped: Registry) => Promise<T>): Promise<T> => {
+      const engine = await acquire();
+      try { return await run(createRegistry({ ...deps, engine })); }
+      finally { await engine.release?.(); }
+    };
+    registry.dispatch = command => request(scoped => scoped.dispatch(command));
+    registry.query = query => request(scoped => scoped.query(query));
+  }
   return registry;
 }
 

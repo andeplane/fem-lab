@@ -1,3 +1,5 @@
+import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
+import { useStore } from '../ui/cmd';
 // The assistant drawer of docs/design/README.md. It owns the conversation (never persisted, never
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
@@ -41,11 +43,10 @@ export interface AssistantPanelProps {
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
+  pendingProducer: undefined as Promise<RegistryProducer> | undefined,
   pendingDraft: null as string | null,
   setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
-  send: (text: string): void => {
-    chatBridge.pending = text;
-  },
+  send: (text: string, producer?: Promise<RegistryProducer>): void => buffer(text, producer),
   insertMention: (ref: string): void => void ref,
   clear: (): void => {
     chatBridge.pending = null;
@@ -53,11 +54,13 @@ export const chatBridge = {
 };
 
 /** What `chatBridge.send` goes back to when the panel unmounts: buffer again, never a no-op. */
-const buffer = (text: string): void => {
+const buffer = (text: string, producer?: Promise<RegistryProducer>): void => {
+  void chatBridge.pendingProducer?.then(owner => owner.release()).catch(() => undefined);
+  chatBridge.pendingProducer = producer;
   chatBridge.pending = text;
 };
 
-interface QueuedMessage { text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
+interface QueuedMessage { producer: Promise<RegistryProducer>; text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
 
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
@@ -65,7 +68,7 @@ type Item =
   | { kind: 'verify'; record: AssistantVerification }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
-  | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
+  | { kind: 'diff'; owner: RegistryProducer | null; entries: JournalEntry[]; steps: number; journal: string | null }
   | { kind: 'files'; files: string[] }
   | { kind: 'bad'; text: string };
 
@@ -121,12 +124,6 @@ export function mentionAt(draft: string, caret: number): { from: number; q: stri
   const before = draft.slice(0, Math.max(0, Math.min(caret, draft.length)));
   const hit = /(?:^|\s)@([^\s@]*)$/.exec(before);
   return hit === null ? null : { from: before.length - hit[1]!.length - 1, q: hit[1]! };
-}
-
-function useStore(store: Store): UiState {
-  const [state, setState] = useState(store.state);
-  useEffect(() => store.subscribe(() => setState(store.state)), [store]);
-  return state;
 }
 
 /** Every clickable in the drawer: one Command name, one `data-cmd`, errors shown not thrown. */
@@ -250,6 +247,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [keyDraft, setKeyDraft] = useState('');
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
+  const summaries = useRef<RegistryProducer[]>([]);
   const queue = useRef<QueuedMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const activeRequest = useRef<AbortController | null>(null);
@@ -260,7 +258,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     const owner = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(ui.assistantModel!));
     if (owner) { setProvider(owner); setModel(ui.assistantModel); }
   }, [ui.assistantModel]);
-  useEffect(() => () => { queue.current = []; activeRequest.current?.abort(); }, []);
+  useEffect(() => () => { for (const owner of summaries.current) void owner.release(); for (const job of queue.current) void job.producer.then(owner => owner.release()).catch(() => undefined); queue.current = []; activeRequest.current?.abort(); }, []);
   const composer = useRef<HTMLTextAreaElement>(null);
   const focusDraft = useRef(false);
   useLayoutEffect(() => {
@@ -317,7 +315,12 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   };
 
   const runMessage = useCallback(
-    async (job: QueuedMessage, signal: AbortSignal) => {
+    async (job: QueuedMessage, requestSignal: AbortSignal) => {
+      let producer: RegistryProducer;
+      try { producer = await job.producer; } catch (error) { add({ kind: 'bad', text: String(error) }); return; }
+      const registry = producer.registry;
+      const signal = AbortSignal.any([requestSignal, producer.signal]);
+      const ownedStore = () => producer.store() ?? store;
       const { text: line, images: attached, provider, model, key: apiKey } = job;
       const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
       setBusy('thinking…');
@@ -327,7 +330,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       const finishProse = () => {
         if (prose.trim()) flushProse(prose, add, (rows) => {
           const record = { rows, ...proseContext! };
-          store.set({ assistantVerifications: [...store.state.assistantVerifications, record] });
+          const target = ownedStore();
+          target.set({ assistantVerifications: [...target.state.assistantVerifications, record] });
           return record;
         });
         prose = '';
@@ -335,7 +339,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         setStreaming('');
       };
       try {
-        const built = await buildTurn({ text: line, registry, images: attached, selection: ui.selection, skills });
+        if (signal.aborted) return;
+        const built = await buildTurn({ text: line, registry, images: attached, selection: ownedStore().state.selection, skills });
         if (signal.aborted) return;
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
         for (const bad of built.unresolved) add({ kind: 'bad', text: `${bad.ref}: ${bad.cause}` });
@@ -345,7 +350,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal })) {
           if (event.type === 'text') {
             if (!proseContext) {
-              const state = store.state;
+              const state = ownedStore().state;
               proseContext = { model: state.model?.name ?? null, revision: state.revision, journalHash: state.journal?.hash ?? null, result: state.result ? { step: state.result.step, revision: state.result.revision } : null };
             }
             prose += event.text;
@@ -367,7 +372,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             finishProse();
             const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
-            if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
+            if (event.turn.diff.length > 0) {
+              const owner = event.turn.undoSteps > 0 ? await acquireRegistryProducer(registry) : null;
+              if (owner) summaries.current.push(owner);
+              add({ kind: 'diff', owner, entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
+            }
             setTurn(event.turn);
           }
         }
@@ -380,15 +389,17 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         setItems(cur => cur.map(i => i.kind === 'tool' && i.call.status === 'preparing'
           ? { kind: 'tool', call: { ...i.call, status: 'cancelled', result: 'Not executed: response ended before this call could run.' } } : i));
         if (signal.aborted) add({ kind: 'prose', text: 'Response interrupted.' });
+        await producer.release();
       }
     },
     [registry, ui.selection, skills, enabled, folder, store],
   );
   execute.current = runMessage;
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, supplied?: Promise<RegistryProducer>) => {
     const line = text.trim();
     if (!line) {
+      void supplied?.then(owner => owner.release());
       if (queue.current.length && activeRequest.current) {
         activeRequest.current.abort();
         setBusy('interrupting… waiting for any active tool');
@@ -399,11 +410,14 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     const selectedProvider = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(selectedModel)) ?? provider;
     const apiKey = resolveKey(selectedProvider).key;
     if (!apiKey) {
+      void supplied?.then(owner => owner.release());
       add({ kind: 'bad', text: `no ${selectedProvider} API key yet — open Settings and paste one; it stays in this browser` });
       store.togglePanel('assistant.settings', true);
       return;
     }
-    queue.current.push({ text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey });
+    const producer = supplied ?? acquireRegistryProducer(registry);
+    void producer.catch(() => undefined);
+    queue.current.push({ producer, text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey });
     followBottom.current = true;
     setQueued([...queue.current]);
     setDraft('');
@@ -420,7 +434,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       finally { activeRequest.current = null; }
     }
     setBusy('');
-  }, [images, provider, model, store]);
+  }, [images, provider, model, store, registry]);
 
   const refreshIndex = useCallback(async () => {
     setIndex(await objectIndex(registry).catch(() => []));
@@ -429,9 +443,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   // `chat.send` from a script, the palette or a viewer click reaches the same code the Send button
   // does — including one that arrived before this panel existed, which is what `pending` holds.
   useEffect(() => {
-    chatBridge.send = (text) => {
+    chatBridge.send = (text, producer) => {
       store.togglePanel('assistant', true);
-      void send(text);
+      void send(text, producer);
     };
     chatBridge.setDraft = (text) => {
       store.togglePanel('assistant', true);
@@ -453,8 +467,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       setTurn(null);
     };
     const queued = chatBridge.pending;
-    chatBridge.pending = null;
-    if (queued !== null) void send(queued);
+    const producer = chatBridge.pendingProducer;
+    chatBridge.pending = null; chatBridge.pendingProducer = undefined;
+    if (queued !== null) void send(queued, producer);
     return () => {
       chatBridge.send = buffer;
       chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
@@ -552,7 +567,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
       }}>
         {items.map((item, i) => (
-          <Item key={i} item={item} registry={registry} dispatch={dispatch} state={ui} />
+          <Item key={i} item={item} dispatch={dispatch} state={ui} />
         ))}
         {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
@@ -800,7 +815,7 @@ function flushProse(text: string, add: (item: Item) => void, record: (rows: Veri
   if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
 }
 
-function Item({ item, registry, dispatch, state }: { state: UiState; item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -864,10 +879,11 @@ function Item({ item, registry, dispatch, state }: { state: UiState; item: Item;
     <div class="card diff">
       <div class="head">
         <span>Journal diff · this turn</span>
-        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" disabled={undoState !== 'ready' || item.steps === 0} run={async () => {
+        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" disabled={undoState !== 'ready' || item.steps === 0 || !item.owner || item.owner.signal.aborted} run={async () => {
           setUndoState('pending');
           try {
-            await undoTurn(registry, item.steps, item.journal);
+            if (!item.owner || item.owner.signal.aborted) throw new FemError('session.expired', 'this turn belongs to an inactive project');
+            await undoTurn(item.owner.registry, item.steps, item.journal);
             setUndoState('done');
           } catch (e) {
             setUndoState('failed');
