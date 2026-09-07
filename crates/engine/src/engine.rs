@@ -334,7 +334,12 @@ impl Engine {
                     where_: Some(format!("body '{}'", b.name)),
                 });
             }
-            if b.shape.dim() != m.idealisation.dim() {
+            // Line Bodies (geometry.addLine) are 1D and only ever valid under the 3D
+            // idealisation, which is the sole idealisation with dim() == 3: a dim() == 1
+            // Body there is the intended shape, not a mismatch. A line Body under a 2D
+            // idealisation is still a genuine mismatch and keeps the warning.
+            let is_line_under_3d = b.shape.dim() == 1 && m.idealisation.dim() == 3;
+            if !is_line_under_3d && b.shape.dim() != m.idealisation.dim() {
                 w.push(Warning {
                     code: "model.ill-posed".into(),
                     text: format!(
