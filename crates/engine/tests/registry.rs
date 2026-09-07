@@ -5,8 +5,9 @@ use femlab_engine::command::{
     Axis, Dof, FacePredicate, Field, IdealisationSpec, LatticeSize, MesherSpec, ObjectKind, Procedure, RegionPredicate,
     Solver,
 };
+use femlab_engine::model::Model;
 use femlab_engine::post::convergence::richardson;
-use femlab_engine::query::{AssumedMaterialProperty, Output, Query, QueryResult};
+use femlab_engine::query::{AssumedMaterialProperty, Output, Query, QueryResult, Valued};
 use femlab_engine::report::ReportSection;
 use femlab_engine::units::{Quantity, Q};
 use femlab_engine::{Command, Engine, Error, ErrorCode, Host, NoClock, Progress};
@@ -6272,6 +6273,7 @@ fn editable_definitions_preserve_every_public_object_variant() {
     for case in cases {
         let mut e = engine();
         ok(&mut e, r#"{"cmd":"geometry.addBox","name":"base","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addMass","name":"ref","at":["2 m","0 m","0 m"],"mass":"1 kg"}"#);
         ok(&mut e, r#"{"cmd":"step.add","name":"prior","procedure":"heat-steady","constraints":[],"loads":[]}"#);
         ok(&mut e, &case["command"].to_string());
         let kind: ObjectKind = serde_json::from_value(case["kind"].clone()).unwrap();
@@ -8096,6 +8098,241 @@ fn a_step_that_lists_a_tie_solves_the_assembly_as_one_part() {
     assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
     assert_eq!(r.warnings[0].code, "contact.gap");
     assert_eq!(r.warnings[0].where_.as_deref(), Some("contact 'weld'"));
+}
+
+/// One steel cantilever, meshed, with a point mass at its tip: the Model every point-mass test
+/// below starts from.
+fn lugged_beam(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"lugged"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    ok(e, r#"{"cmd":"geometry.addMass","name":"lug","at":["1 m","50 mm","50 mm"],"mass":"12 kg"}"#);
+}
+
+/// `geometry.addMass` is a point with a Set of its own name: it appears on the Mesh as one node
+/// nothing else touches, it is reported by `query.model` and `query.set`, it is replaced by
+/// re-issuing, and `geometry.remove` deletes it once nothing names it.
+#[test]
+fn a_point_mass_is_a_node_and_a_set_of_its_own_name() {
+    let mut e = engine();
+    lugged_beam(&mut e);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.points.len(), 1);
+    assert_eq!(m.points[0].name, "lug");
+    assert_eq!(m.points[0].mass, Valued { value: 12.0, unit: "kg".into() });
+    assert_eq!(m.points[0].at[0], Valued { value: 1.0, unit: "m".into() });
+    assert!(m.points[0].coupled_by.is_empty(), "nothing attaches it yet");
+
+    // The Mesh gained exactly one node, and it is alone in the Set the point owns.
+    let QueryResult::Set(s) = e.query(Query::Set { name: "lug".into() }).unwrap() else { panic!() };
+    assert_eq!((s.kind.as_str(), s.count), ("node", 1));
+    assert_eq!(s.centroid[0], Valued { value: 1.0, unit: "m".into() });
+    let QueryResult::Mesh(mesh) = e.query(Query::Mesh {}).unwrap() else { panic!() };
+    let with = mesh.nodes;
+    // A Load on the point holds it in use, exactly as one on a named Set holds that Set.
+    ok(&mut e, r#"{"cmd":"load.force","name":"pull","on":"lug","total":["1 kN","0 N","0 N"]}"#);
+    let held = err(&mut e, r#"{"cmd":"geometry.remove","name":"lug"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+    assert!(held.cause.contains("load 'pull'"), "{}", held.cause);
+    // An unknown name lists the point masses that do exist, beside the bodies, cuts and Sets.
+    let ghost = err(&mut e, r#"{"cmd":"geometry.remove","name":"ghost"}"#);
+    assert_eq!(ghost.code, ErrorCode::NotFound);
+    assert!(ghost.suggestion.as_deref().is_some_and(|k| k.contains("lug")), "{:?}", ghost.suggestion);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"pull"}"#);
+
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"lug"}"#);
+    let QueryResult::Mesh(mesh) = e.query(Query::Mesh {}).unwrap() else { panic!() };
+    assert_eq!(with, mesh.nodes + 1, "the point is one node of the Mesh");
+    assert!(e.model().points.is_empty());
+    let gone = e.query(Query::Set { name: "lug".into() }).unwrap_err();
+    assert_eq!(gone.code, ErrorCode::NotFound);
+
+    // Re-issuing replaces it in place rather than adding a second one.
+    ok(&mut e, r#"{"cmd":"geometry.addMass","name":"lug","at":["1 m","50 mm","50 mm"],"mass":"12 kg"}"#);
+    let ack = ok(&mut e, r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"3 kg"}"#);
+    assert!(matches!(ack.output, Output::Replaced { .. }), "{:?}", ack.output);
+    assert_eq!(e.model().points.len(), 1);
+    assert_eq!(e.model().points[0].mass, 3.0);
+    assert_eq!(e.model().points[0].at, [0.0, 0.0, 0.0]);
+    // A Model with no point mass serialises exactly as it did before they existed.
+    let empty = serde_json::to_string(&Model::new("x")).unwrap();
+    assert!(!empty.contains("points"), "{empty}");
+}
+
+/// Everything `geometry.addMass` refuses, and where it says the fault is. Nothing is recorded.
+#[test]
+fn add_mass_refuses_a_bad_name_unit_or_mass() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"lugged"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"corner","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["1 m","1 m","1 m"]}}"#,
+    );
+    let cases: [(&str, ErrorCode, &str); 7] = [
+        (
+            r#"{"cmd":"geometry.addMass","name":"a.b","at":["0 m","0 m","0 m"],"mass":"1 kg"}"#,
+            ErrorCode::Schema,
+            "name",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"1 m"}"#,
+            ErrorCode::UnitDimension,
+            "mass",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"0 kg"}"#,
+            ErrorCode::Schema,
+            "mass",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"-2 kg"}"#,
+            ErrorCode::Schema,
+            "mass",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"1e400 kg"}"#,
+            ErrorCode::Schema,
+            "mass",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","1 kg","0 m"],"mass":"1 kg"}"#,
+            ErrorCode::UnitDimension,
+            "at[1]",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"corner","at":["0 m","0 m","0 m"],"mass":"1 kg"}"#,
+            ErrorCode::NameTaken,
+            "name",
+        ),
+    ];
+    for (cmd, code, at) in cases {
+        let error = err(&mut e, cmd);
+        assert_eq!((error.code, error.where_.as_deref()), (code, Some(at)), "{cmd}");
+    }
+    // A Body's name is taken too: the point would shadow its auto face prefix.
+    let body = err(&mut e, r#"{"cmd":"geometry.addMass","name":"beam","at":["0 m","0 m","0 m"],"mass":"1 kg"}"#);
+    assert_eq!(body.code, ErrorCode::NameTaken);
+    assert!(body.suggestion.as_deref().is_some_and(|s| s.contains("another name")));
+    assert!(e.model().points.is_empty(), "nothing was recorded");
+    let missing = err(&mut e, r#"{"cmd":"geometry.remove","name":"lug"}"#);
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    assert!(missing.cause.contains("body, cut, set or point mass"), "{}", missing.cause);
+}
+
+/// `constraint.couple` is a Connection like a tie: it validates its point and its face Set, is
+/// listed apart from the Constraints, holds both in use, survives a rename and round-trips
+/// through `query.definition`.
+#[test]
+fn constraint_couple_is_a_connection_between_a_point_and_a_face() {
+    let mut e = engine();
+    lugged_beam(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.couple","name":"intro","point":"lug","on":"beam.xmax","kind":"distributed"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.constraints.is_empty(), "a coupling is not a Constraint row: {:?}", m.constraints);
+    assert_eq!(m.connections.len(), 1);
+    let row = &m.connections[0];
+    assert_eq!((row.name.as_str(), row.kind.as_str()), ("intro", "distributed"));
+    assert_eq!((row.master.as_str(), row.slave.as_str()), ("beam.xmax", "lug"));
+    assert!(row.summary.contains("weighted mean"), "{}", row.summary);
+    assert_eq!(m.points[0].coupled_by, ["intro"]);
+
+    // Rigid names the point as the master, because that is the DOF everything follows.
+    ok(&mut e, r#"{"cmd":"constraint.couple","name":"intro","point":"lug","on":"beam.xmax","kind":"rigid"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!((m.connections[0].kind.as_str(), m.connections[0].master.as_str()), ("rigid", "lug"));
+    assert!(m.connections[0].summary.contains("follows point 'lug'"), "{}", m.connections[0].summary);
+
+    // Both the point and the Body under the face are in use while the coupling names them.
+    let point = err(&mut e, r#"{"cmd":"geometry.remove","name":"lug"}"#);
+    assert_eq!(point.code, ErrorCode::InUse);
+    assert!(point.cause.contains("constraint 'intro'"), "{}", point.cause);
+    let body = err(&mut e, r#"{"cmd":"geometry.remove","name":"beam"}"#);
+    assert_eq!(body.code, ErrorCode::InUse);
+    // Renaming the Body rewrites the face reference, as it does for every other Constraint.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"beam","to":"bar"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].slave, "bar.xmax");
+
+    // The editable definition is the Command itself, losslessly.
+    let QueryResult::Definition(def) =
+        e.query(Query::Definition { kind: ObjectKind::Constraint, name: "intro".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    let before = e.model().clone();
+    ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+    assert_eq!(e.model(), &before);
+}
+
+/// Everything `constraint.couple` refuses.
+#[test]
+fn constraint_couple_refuses_an_unknown_point_or_set() {
+    let mut e = engine();
+    lugged_beam(&mut e);
+    let point =
+        err(&mut e, r#"{"cmd":"constraint.couple","name":"intro","point":"nope","on":"beam.xmax","kind":"rigid"}"#);
+    assert_eq!((point.code, point.where_.as_deref()), (ErrorCode::NotFound, Some("point")));
+    assert!(point.suggestion.as_deref().is_some_and(|s| s.contains("geometry.addMass")));
+    let set = err(&mut e, r#"{"cmd":"constraint.couple","name":"intro","point":"lug","on":"nope","kind":"rigid"}"#);
+    assert_eq!((set.code, set.where_.as_deref()), (ErrorCode::NotFound, Some("on")));
+    let named =
+        err(&mut e, r#"{"cmd":"constraint.couple","name":"a.b","point":"lug","on":"beam.xmax","kind":"rigid"}"#);
+    assert_eq!((named.code, named.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+    assert!(e.model().constraints.is_empty(), "nothing was recorded");
+}
+
+/// A point mass reaches a solve through its coupling and nowhere else: gravity puts m·g on it
+/// and the supports carry the beam plus the lump, a modal Step feels the extra mass, and a Step
+/// that leaves the point unattached is refused rather than factorised.
+#[test]
+fn a_coupled_point_mass_carries_its_weight_into_the_supports() {
+    let mut e = engine();
+    lugged_beam(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"clamp","on":"beam.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":["g"]}"#);
+    // Unattached, the point has mass and no stiffness at all.
+    let loose = err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(loose.code, ErrorCode::ModelIllPosed);
+    assert!(loose.cause.contains("point mass 'lug'"), "{}", loose.cause);
+
+    ok(&mut e, r#"{"cmd":"constraint.couple","name":"intro","point":"lug","on":"beam.xmax","kind":"distributed"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp","intro"],"loads":["g"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: None }).unwrap() else { panic!() };
+    assert!(r.balance.abs() < 1e-9, "the reactions balance: {}", r.balance);
+    // 78.5 kg of steel beam plus the 12 kg lump, at 9.81 m/s².
+    let want = -(7850.0 * 1.0 * 0.1 * 0.1 + 12.0) * 9.81;
+    assert!((r.applied_total[2].value - want).abs() <= 1e-6 * want.abs(), "{:?}", r.applied_total[2]);
+
+    // A modal Step feels the same mass: heavier means slower.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["clamp","intro"],"loads":[],"nModes":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let QueryResult::Result(heavy) = e.query(Query::Result { result_id: None, step: Some("modes".into()) }).unwrap()
+    else {
+        panic!()
+    };
+    ok(&mut e, r#"{"cmd":"geometry.addMass","name":"lug","at":["1 m","50 mm","50 mm"],"mass":"1 g"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let QueryResult::Result(light) = e.query(Query::Result { result_id: None, step: Some("modes".into()) }).unwrap()
+    else {
+        panic!()
+    };
+    assert!(
+        heavy.frequencies[0].value < light.frequencies[0].value,
+        "{:?} against {:?}",
+        heavy.frequencies[0],
+        light.frequencies[0]
+    );
 }
 
 /// `load.radiation` validates its Set, its emissivity and its absolute surrounding temperature
