@@ -1,0 +1,181 @@
+{
+  "name": "explicit-wave-bar",
+  "reference": "Benchmark F9 in Command form: a 1 m fixed-free bar of 200 hex8 with nu = 0 and every lateral DOF held with formulation: full is exactly the 1-D rod rho u_tt = E u_xx with c = sqrt(E/rho) = 5000 m/s (E = 200 GPa, rho = 8000 kg/m^3), so L/c = 200 us. A step traction sigma0 = 200 MPa (500 kN on the 50 x 50 mm end) at t = 0 sends a front toward the root at c; behind it the material moves at sigma0/(rho c) = 5 m/s. The free end has moved sigma0 c t / E = 1 mm at t = L/c, before the reflection returns at 2L/c. Mid-length is still at rest at 0.4 L/c (lumped-mass central differences have no precursor) and has moved 0.9 sigma0 L / E = 0.9 mm at 1.4 L/c, between the front's arrival at L/2c and the root reflection's return at 3L/2c. Gates are 1 % of the ramp; the engine test fits the ramp and gates the arrival time and wave speed at 0.5 % on two meshes.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "explicit-wave-bar"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "1 m",
+        "50 mm",
+        "50 mm"
+      ]
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "everywhere",
+      "where": {
+        "kind": "body",
+        "name": "bar"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "rod",
+      "E": "200 GPa",
+      "nu": 0.0,
+      "rho": "8000 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "rod",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 200,
+          "ny": 1,
+          "nz": 1
+        }
+      },
+      "formulation": "full"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "bar.xmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "lateral",
+      "on": "everywhere",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "bar.xmax",
+      "total": [
+        "500 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "wave",
+      "procedure": "explicit",
+      "constraints": [
+        "root",
+        "lateral"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "tEnd": "3e-4 s",
+      "dtFactor": 0.9,
+      "outputEvery": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "wave"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "2e-4 s",
+          "sampling": "nearest"
+        },
+        "at": [
+          "1000 mm",
+          "25 mm",
+          "25 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 0.01,
+      "rel": true,
+      "note": "free end at t = L/c: sigma0 c t / E = 1 mm, the particle velocity times the time"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "2.8e-4 s",
+          "sampling": "nearest"
+        },
+        "at": [
+          "500 mm",
+          "25 mm",
+          "25 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.9,
+      "tol": 0.01,
+      "rel": true,
+      "note": "mid-length at 1.4 L/c: the front arrived at 0.5 L/c, so 0.9 sigma0 L / E = 0.9 mm"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "8e-5 s",
+          "sampling": "nearest"
+        },
+        "at": [
+          "500 mm",
+          "25 mm",
+          "25 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 0.001,
+      "rel": false,
+      "note": "mid-length at 0.4 L/c: nothing has arrived, within 0.1 % of the ramp"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-explicit"
+    }
+  ]
+}
