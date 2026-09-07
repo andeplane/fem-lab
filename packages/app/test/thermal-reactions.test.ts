@@ -27,6 +27,8 @@ describe('thermal reaction units through the actual wasm engine', () => {
       await e.dispatch(JSON.stringify({ cmd: 'model.setUnits', units }), undefined);
       const r = JSON.parse(e.query(JSON.stringify({ query: 'query.result', step: 'heat' }))) as ResultSummary;
       expect(r.reactionQuantity).toBe('power');
+      expect(r.balance).toBeLessThan(1e-9);
+      expect(r.storagePower).toEqual({ value: 0, unit: units.power });
       const from = siUnitOf('reaction', r.reactionQuantity);
       const to = displayUnitOf('reaction', units, r.reactionQuantity);
       expect(from).toBe('W');

@@ -4250,6 +4250,138 @@ fn a_bar_between_two_fixed_temperatures_is_linear_for_every_kind() {
     }
 }
 
+/// E: net heat entering equals heat removed, for every built-in element family.
+#[test]
+fn steady_heat_power_balances_flux_sources_and_outgoing_convection() {
+    for kind in ALL_KINDS {
+        for n in [2, 4] {
+            let (mesh, id, area) = if kind.dim() == 3 {
+                (Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]), Idealisation::Solid3d, 0.01)
+            } else {
+                (
+                    Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.1, 0.0]),
+                    Idealisation::PlaneStress { thickness: 0.2 },
+                    0.02,
+                )
+            };
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id.clone(),
+                conductor(45.0, 1.0, 1.0),
+                vec![hold("cold", "xmax", 293.15)],
+                vec![
+                    HeatLoad::Flux { faces: "xmin".into(), q: 1000.0 },
+                    HeatLoad::Source { bodies: bodies.clone(), q: 500.0 },
+                ],
+            );
+            let res = run_step(&p, &steady()).unwrap();
+            let expected = area * (1000.0 + 500.0 * 1.0); // q_surface*A + q_volume*V
+            assert!((res.scalars["applied_total_x"] - expected).abs() < 1e-8, "{kind:?}");
+            assert!((res.reactions[0].1[0] - expected).abs() < 1e-8, "{kind:?}");
+            assert_eq!(res.scalars["storage_power"], 0.0);
+            // With no temperature support, the film must remove all prescribed input.
+            for flux in [0.0, 1000.0] {
+                let p = heat_problem(
+                    &mesh,
+                    &sets,
+                    &bodies,
+                    id.clone(),
+                    conductor(45.0, 1.0, 1.0),
+                    Vec::new(),
+                    vec![
+                        HeatLoad::Flux { faces: "xmin".into(), q: flux },
+                        HeatLoad::Convection { faces: "xmax".into(), h: 25.0, t_inf: 283.15 },
+                        HeatLoad::Convection { faces: "xmax".into(), h: 25.0, t_inf: 303.15 },
+                    ],
+                );
+                let res = run_step(&p, &steady()).unwrap();
+                assert!(res.scalars["applied_total_x"].abs() < 1e-8, "{kind:?}: {:?}", res.scalars);
+                assert!(res.reactions.is_empty());
+                // The film face temperature follows q/h independently of k or mesh spacing.
+                for &node in &sets["xmax"].nodes {
+                    assert!((temperature_of(&res)[node as usize] - (293.15 + flux / 50.0)).abs() < 1e-8);
+                }
+            }
+        }
+    }
+}
+
+/// E: prescribed T(x,t)=(10+4x)(1+t) has exact energy rate ρcp V*12. The last
+/// θ-stage gradient is 4*(1+t_old+θdt), which distinguishes stage powers from endpoint powers.
+#[test]
+fn transient_heat_reactions_include_storage_at_the_last_theta_stage() {
+    for n in [2, 4] {
+        for theta in [0.5, 0.75, 1.0] {
+            for (requested_dt, end, effective_dt) in [(1.0, 2.0, 1.0), (0.4, 0.9, 0.3)] {
+                let mesh = Structured { kind: ElementKind::Hex8, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]);
+                let mut sets = sets_of(&mesh);
+                let bodies = one_body();
+                let mut constraints = Vec::new();
+                for node in 0..mesh.n_nodes() as u32 {
+                    let name = format!("node{node}");
+                    sets.insert(
+                        name.clone(),
+                        ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: Vec::new(), elems: Vec::new() },
+                    );
+                    constraints.push(hold(&name, &name, 10.0 + 4.0 * mesh.node(node)[0]));
+                }
+                for (loads, film) in [
+                    (Vec::new(), 0.0),
+                    (vec![HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 100.0 }], 50.0),
+                ] {
+                    let p = heat_problem(
+                        &mesh,
+                        &sets,
+                        &bodies,
+                        Idealisation::Solid3d,
+                        conductor(45.0, 1.0, 1.0),
+                        constraints.clone(),
+                        loads,
+                    );
+                    // Keep only endpoints: power uses the final internal interval, including
+                    // the independently known 0.3 s increment for a 0.4/0.9 s request.
+                    let step = Step::HeatTransient {
+                        dt: requested_dt,
+                        t_end: end,
+                        theta,
+                        initial: 10.0,
+                        output_every: 99,
+                        amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 2.0], value: vec![1.0, 3.0] }),
+                        solver: SolveOptions::default(),
+                        control: NonlinearControl::default(),
+                    };
+                    let res = run_step(&p, &step).unwrap();
+                    assert!((res.scalars["storage_power"] - 0.12).abs() < 1e-10);
+                    assert!((res.scalars["dt"] - effective_dt).abs() < 1e-15);
+                    let stage_factor = 1.0 + end - (1.0 - theta) * effective_dt;
+                    let applied = film * 0.01 * (100.0 - 14.0 * stage_factor);
+                    assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-10);
+                    let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+                    assert!((removed - applied + 0.12).abs() < 1e-10); // prescribed heating adds, rather than removes, power
+                    let cold: f64 = sets["xmin"]
+                        .nodes
+                        .iter()
+                        .map(|&node| res.fields[&Field::Reaction].data[node as usize * 3])
+                        .sum();
+                    let dx = 1.0 / n as f64;
+                    // Exact integral of the left-end linear basis times dT/dt over its adjacent cell.
+                    let storage_at_cold = 0.01 * dx * (30.0 + 4.0 * dx) / 6.0;
+                    let expected_cold = 45.0 * 0.01 * 4.0 * stage_factor - storage_at_cold;
+                    assert!((cold - expected_cold).abs() < 1e-10, "n={n}, θ={theta}: {cold} vs {expected_cold}");
+                    assert_eq!(res.history.as_ref().unwrap().times, [0.0, end]);
+                    for (node, t) in temperature_of(&res).iter().enumerate() {
+                        assert!((t - (1.0 + end) * (10.0 + 4.0 * mesh.node(node as u32)[0])).abs() < 1e-12);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Benchmark E2 (Ansys VM97): a fin with convection along both faces and over its tip, against
 /// the closed-form fin with a convective tip.
 ///
@@ -6420,6 +6552,9 @@ fn a_radiating_slab_reaches_the_surface_temperature_a_bisection_predicts() {
             (through_support - radiated).abs() <= 1e-9 * radiated,
             "n = {n}: {through_support} W in, {radiated} W radiated"
         );
+        assert!((res.scalars["applied_total_x"] + radiated).abs() <= 1e-9 * radiated);
+        assert_eq!(res.scalars["storage_power"], 0.0);
+        assert!((res.scalars["applied_total_x"] - res.reactions[0].1[0]).abs() <= 1e-9 * radiated);
         answers.push(got);
     }
     // A linear profile is in the quad4 space, so refining must not move the answer at all.
@@ -6527,6 +6662,81 @@ fn a_radiating_block_follows_its_analytic_cooling_curve_at_the_theta_method_rate
     assert!(radiating_block_error(0.5, 0.005, t_end) < 1e-3);
 }
 
+/// Radiation uses endpoint fourth powers, not the fourth power of the averaged temperature.
+/// Direct rectangular integration of the nodal temperature increment independently checks
+/// stored energy; a sparse History must retain the same last-internal-step power balance.
+#[test]
+fn radiative_cooling_reports_endpoint_fluxes_and_the_exact_stored_energy_rate() {
+    let (length, height, rho, cp) = (0.001, 0.001, 100.0, 100.0);
+    for nx in [1usize, 2, 4] {
+        let mesh = Structured { kind: ElementKind::Quad4, n: [nx, 1, 1] }.box_([length, height, 0.0]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStrain,
+            conductor(1.0e4, rho, cp),
+            Vec::new(),
+            vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+        );
+        for theta in [0.5, 1.0] {
+            let mut step = Step::HeatTransient {
+                dt: 0.02,
+                t_end: 0.06,
+                theta,
+                initial: 1000.0,
+                output_every: 1,
+                amplitude: None,
+                solver: SolveOptions::default(),
+                // Large conductivity keeps this block nearly isothermal but makes 1e-12
+                // state-change stopping sensitive to f64 solve roundoff (Linux reached
+                // 1.18e-12 after 100 passes). Stop at 1e-10 and check the actual power/energy
+                // accuracy independently below; none of those physical tolerances change.
+                control: NonlinearControl { tol: 1e-10, max_iterations: 100 },
+            };
+            let full = run_step(&p, &step).unwrap();
+            let history = full.history.as_ref().unwrap();
+            let old = &history.values[history.values.len() - 2];
+            let new = &history.values[history.values.len() - 1];
+            let dt = history.times[history.times.len() - 1] - history.times[history.times.len() - 2];
+            let surface = |values: &[f64]| {
+                sets["xmax"].nodes.iter().map(|&i| values[i as usize]).sum::<f64>() / sets["xmax"].nodes.len() as f64
+            };
+            let fourth = |t: f64| t * t * t * t;
+            let applied = -SIGMA * height * ((1.0 - theta) * fourth(surface(old)) + theta * fourth(surface(new)));
+            let integral = old
+                .iter()
+                .zip(new)
+                .enumerate()
+                .map(|(i, (a, b))| {
+                    let x = mesh.node(i as u32)[0];
+                    let adjacent = if x == 0.0 || x == length { 1.0 } else { 2.0 };
+                    adjacent * (b - a)
+                })
+                .sum::<f64>()
+                * length
+                * height
+                / (4.0 * nx as f64);
+            let storage = rho * cp * integral / dt;
+            assert!((storage - applied).abs() < 1e-6 * applied.abs(), "nx={nx}, theta={theta}: {storage} vs {applied}");
+            assert!((full.scalars["applied_total_x"] - applied).abs() < 1e-8 * applied.abs());
+            assert!((full.scalars["storage_power"] - storage).abs() < 1e-9 * storage.abs());
+            assert!(full.reactions.is_empty());
+            assert!(full.fields[&Field::Reaction].data.iter().all(|&v| v == 0.0));
+            // Only endpoints are retained, but postprocessing must use the last internal old T.
+            let Step::HeatTransient { output_every, .. } = &mut step else { panic!() };
+            *output_every = 99;
+            let sparse = run_step(&p, &step).unwrap();
+            assert_eq!(sparse.history.as_ref().unwrap().times, [0.0, 0.06]);
+            assert_eq!(temperature_of(&sparse), temperature_of(&full));
+            assert_eq!(sparse.scalars["applied_total_x"], full.scalars["applied_total_x"]);
+            assert_eq!(sparse.scalars["storage_power"], full.scalars["storage_power"]);
+        }
+    }
+}
+
 /// A face whose film is negative makes the system indefinite whatever the temperature, and both
 /// radiating procedures let the factorisation error out rather than taking the host down with it.
 /// The Command boundary refuses a negative emissivity, so only a direct Problem can get here —
@@ -6598,6 +6808,140 @@ fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
     let transient_error = run_step(&p, &transient).expect_err("one pass cannot converge an increment either");
     assert_eq!(transient_error.code, ErrorCode::SolveDiverged);
     assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
+}
+
+/// Exact integral of a trilinear field over this test's axis-aligned Hex8 cells: each corner
+/// owns one eighth of its cell volume. This does not call capacity or any FE quadrature.
+fn box_temperature_integral(mesh: &Mesh, values: &[f64]) -> f64 {
+    (0..mesh.n_elems() as u32)
+        .map(|elem| {
+            let nodes = mesh.elem_nodes(elem);
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for &node in nodes {
+                let x = mesh.node(node);
+                for k in 0..3 {
+                    lo[k] = lo[k].min(x[k]);
+                    hi[k] = hi[k].max(x[k]);
+                }
+            }
+            let volume = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+            nodes.iter().map(|&n| values[n as usize]).sum::<f64>() * volume / 8.0
+        })
+        .sum()
+}
+
+/// A tied, held interface must transfer the slave's capacity residual too. Uniform heating
+/// has T=300+2t, source rho*cp*2, and zero support power, independently of the split mesh.
+#[test]
+fn a_held_thermal_tie_transfers_storage_and_starts_with_an_admissible_history() {
+    let bodies = two_bodies();
+    for nx in [1, 2, 4] {
+        let mesh = two_blocks(ElementKind::Hex8, [nx, 1, 1], [nx, 1, 1], [0.5, 0.1, 0.1], 0.0);
+        let sets = sets_of(&mesh);
+        let mut p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(1.0, 10.0, 2.0),
+            vec![hold("interface", "a.xmax", 1.0)],
+            vec![HeatLoad::Source { bodies: bodies.clone(), q: 40.0 }],
+        );
+        p.couplings = vec![bond(1e-9)];
+        for theta in [0.5, 1.0] {
+            let step = |initial| Step::HeatTransient {
+                dt: 0.1,
+                t_end: 0.3,
+                theta,
+                initial,
+                output_every: 1,
+                amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 0.3], value: vec![300.0, 300.6] }),
+                solver: SolveOptions::default(),
+                control: NonlinearControl::default(),
+            };
+            let res = run_step(&p, &step(300.0)).unwrap();
+            for t in temperature_of(&res) {
+                assert!((t - 300.6).abs() < 1e-8, "nx={nx}, theta={theta}: {t}");
+            }
+            assert!((res.scalars["applied_total_x"] - 0.4).abs() < 1e-10);
+            assert!((res.scalars["storage_power"] - 0.4).abs() < 1e-9);
+            assert!(res.reactions[0].1[0].abs() < 1e-9, "the held interface supplies no heat to the uniform ramp");
+            // Deliberately give free nodes a different initial temperature. The held master
+            // and its slave must agree before the very first capacity/radiation evaluation.
+            let res = run_step(&p, &step(299.0)).unwrap();
+            let h = res.history.as_ref().unwrap();
+            for &node in &sets["b.xmin"].nodes {
+                assert!((h.values[0][node as usize] - 300.0).abs() < 1e-10);
+            }
+            let last = h.values.len() - 1;
+            let storage = 20.0
+                * (box_temperature_integral(&mesh, &h.values[last])
+                    - box_temperature_integral(&mesh, &h.values[last - 1]))
+                / (h.times[last] - h.times[last - 1]);
+            assert!((res.scalars["storage_power"] - storage).abs() < 1e-9);
+            assert!((0.4 - res.reactions[0].1[0] - storage).abs() < 1e-8);
+        }
+    }
+}
+
+/// Radiation crosses a perfect contact with the same steady scalar flux law. During cooling,
+/// the weighted endpoint surface flux equals the full two-body stored-energy rate.
+#[test]
+fn a_thermal_tie_preserves_radiation_endpoint_power_and_whole_body_storage() {
+    let bodies = two_bodies();
+    let (length, area, k, rho_cp) = (0.1, 0.0004, 55.6, 10_000.0);
+    for nx in [1, 2, 4] {
+        let mesh = two_blocks(ElementKind::Hex8, [nx, 1, 1], [nx, 1, 1], [0.05, 0.02, 0.02], 0.0);
+        let sets = sets_of(&mesh);
+        let mut p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(k, 100.0, 100.0),
+            vec![hold("hot", "a.xmin", 1000.0)],
+            vec![HeatLoad::Radiation { faces: "b.xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+        );
+        p.couplings = vec![bond(1e-9)];
+        let surface = radiating_slab_surface(k, length, 1000.0, 0.0, 1.0);
+        let outgoing = SIGMA * area * surface.powi(4);
+        let res = run_step(&p, &steady()).unwrap();
+        assert!((res.scalars["applied_total_x"] + outgoing).abs() < 1e-7 * outgoing);
+        assert!((res.reactions[0].1[0] + outgoing).abs() < 1e-7 * outgoing);
+        p.constraints.clear();
+        for theta in [0.5, 1.0] {
+            let step = Step::HeatTransient {
+                dt: 0.1,
+                t_end: 0.3,
+                theta,
+                initial: 1000.0,
+                output_every: 1,
+                amplitude: None,
+                solver: SolveOptions::default(),
+                control: NonlinearControl { tol: 1e-10, max_iterations: 100 },
+            };
+            let res = run_step(&p, &step).unwrap();
+            let h = res.history.as_ref().unwrap();
+            let last = h.values.len() - 1;
+            let mean_surface = |values: &[f64]| {
+                sets["b.xmax"].nodes.iter().map(|&n| values[n as usize]).sum::<f64>()
+                    / sets["b.xmax"].nodes.len() as f64
+            };
+            let applied = -SIGMA
+                * area
+                * ((1.0 - theta) * mean_surface(&h.values[last - 1]).powi(4)
+                    + theta * mean_surface(&h.values[last]).powi(4));
+            let storage = rho_cp
+                * (box_temperature_integral(&mesh, &h.values[last])
+                    - box_temperature_integral(&mesh, &h.values[last - 1]))
+                / (h.times[last] - h.times[last - 1]);
+            assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-8 * applied.abs());
+            assert!((res.scalars["storage_power"] - storage).abs() < 1e-9 * storage.abs());
+            assert!((storage - applied).abs() < 1e-7 * applied.abs(), "nx={nx}, theta={theta}");
+            assert!(res.reactions.is_empty());
+        }
+    }
 }
 
 // ---------------------------------------------------------------- STL reading (#350)

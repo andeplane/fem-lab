@@ -406,6 +406,15 @@ and this catalogue only hard-codes numbers somebody has read from a source: E4 t
 **resolve**, and E6 — whose oracle is a scalar equation this repository solves itself — is the
 row that gates the feature.
 
+**Radiation and the reported heat balance (#208 × #360).** E6 also checks that the reported
+net applied power and hot-face reaction both equal minus the physical radiated power, with
+zero storage. A transient companion uses 1, 2 and 4 longitudinal Quad4 cells at θ = 0.5 and 1:
+its reported applied power equals `−σεA[(1−θ)Told⁴ + θTnew⁴]`, while direct rectangular
+integration of the nodal temperature increment gives `ρcp∫(Tnew−Told)dV/dt`. These agree to
+1e-6 relative without a temperature constraint. Full and endpoint-only Histories yield identical
+final fields and power scalars. Radiation is evaluated at both endpoints, not at the averaged
+temperature, and its Newton tangent RHS is never counted as an external heat input.
+
 **E6 and E7 are the two halves of a radiation gate.** E6 fixes the steady answer against an
 oracle that never touches a finite element, and adds a conservation check: at convergence the
 heat entering through the held face equals `σε∫(T⁴ − T∞⁴)dS` off the radiating one, to 1e-9. E7
@@ -893,9 +902,43 @@ power values to `1e-9 W`; positive reaction retains the current removed-heat con
 Result totals/extremes, probes and paths report W independently of force=N/kN and convert
 to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
 `ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
-retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
-separately tracks the existing balance diagnostic sign, net-convection and transient-storage
-defects; the physical reaction checks here do not treat that diagnostic as an oracle.
+retain force units and their vector components. The conservation cases below (#208) also
+verify the corrected signs, net convection and stored-energy rate against physical oracles.
+
+
+### Steady and transient heat conservation (#208)
+
+For all eight element families, two- and four-cell bars with `q_surface=1000 W/m²` and
+`q_volume=500 W/m³` remove `q_surface*A + q_volume*V` at the held end. A second case has
+no held temperature and convects at the opposite end: the film removes all input, net
+applied power is zero, and its face is exactly `T_inf + q_surface/h`. Two overlapping
+films with equal coefficients and different ambient temperatures check additive assembly
+against their weighted effective ambient. With zero flux it
+settles to `T_inf` and still reports a small conservation residual, not a spurious failure
+caused by dividing roundoff by zero net heat flow. Absolute-zero equilibrium separately
+checks a zero assembled-power scale. Power errors stay below `1e-8 W`.
+
+The independent transient field `T(x,t)=(10+4x)(1+t)` on a unit-long `0.1×0.1 m` bar with
+`rho=cp=1` has exactly `dU/dt=0.12 W`. Tests prescribe that field on two meshes for
+`theta=0.5,0.75,1`, with and without an end film. Requested `(dt,tEnd)` pairs `(1,2)`
+and `(0.4,0.9)` s use known effective increments `1` and `0.3` s. The final-step
+conduction gradient is `4*(1+tEnd-(1-theta)*effectiveDt)`; the cold-end storage contribution is the exact basis integral
+`0.01*dx*(30+4*dx)/6`. These give independent cold-end reaction and net-film powers to
+`1e-10 W`. Saving only the initial/final history rows proves that the last internal state,
+not the last saved output, defines the final-step powers. A source-driven uniform ramp
+with free interior DOFs separately checks `dT/dt=q/(rho*cp)=1 K/s`, zero support heat flow
+and `dU/dt=36.11 kW` through the registry, on two meshes and two theta values with both
+endpoint schedules. This detects dividing the storage increment by the nominal `0.4 s`
+instead of the actual `0.3 s` interval.
+
+Positive thermal reaction is removed power. The conservation equation is
+`net applied − removed − storage = 0`, with net convection `integral h*(T_inf−T) dA`.
+Transient powers use `T_theta=(1−theta)T_old+theta*T_new` and
+`C*(T_new−T_old)/dt`, matching the discrete integration equation; temperature fields and
+history remain endpoint values. The reported relative residual uses the assembled-power
+(backward-error) scale `sum|Kij*T_theta_j| + sum|f_i| + sum|(C*dT/dt)_i|`. This remains
+meaningful at zero net flow. Tests independently assert absolute physical powers as well
+as this normalized residual, so an oversized denominator cannot stand in for conservation.
 
 ### Automatic hand-reference applicability (#149)
 
@@ -986,10 +1029,25 @@ Vec headers, spare capacity and allocator overhead are deliberately separate; Hi
 the exact outer frame count and remains the only full-series allocation.
 
 The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
-the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+the retained payload and a conservative full-field f64 working allowance: `9 × nodes × 8` bytes
 for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
-vectors are charged at the full nodal length; the five-field allowance covers the temporary old
-and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+vectors are charged at the full nodal length; the original five-field allowance covers the temporary old
+and new temperature vectors during `expand`. Heat balance recovery (#208) adds four nodal
+buffers at its capacity-multiplication peak: film weights, θ-stage temperature, the previous
+temperature reused in place as its rate, and capacity times that rate. The rate is dropped before
+final field recovery. These nine vectors extend the existing counted allowance, not the
+excluded assembly/solver allocations or final derived fields. Radiating heat uses `13 × nodes × 8`
+bytes as a conservative allowance. With contact, the seven outer vectors are film weights,
+zero RHS, temperature, previous temperature, full RHS, free RHS and free solution. The old
+radiation residual and next iterate add two. The film RHS becomes the full original load;
+its transposed replacement is dropped before solving. Reduced RHS, solution and expanded
+replacement add three at expansion (twelve total, within thirteen). The temporary zero RHS
+from the contact operator transform does not overlap those three. Linear heat drops its
+transposed load before expansion and adds no persistent contact work vector.
+The old radiation tangent/RHS are released before Newton; iteration scratch is released before
+balance recovery. The two endpoint radiation systems are assembled sequentially, never retained
+together. Reduction metadata and tangent/factor matrices remain within the stated exclusions.
+The frame-read phase counts retained payload plus one
 normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
 normalized numeric payloads alive at once: the current JSON path's parsed source and structured
 clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
@@ -1004,6 +1062,28 @@ unknown.
 An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
 `query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
 `solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
-Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+Result intact. The same regression also chooses the largest History admitted by the old five-vector
+heat allowance and verifies that the additional balance buffers now cause preallocation rejection
+without changing the Journal. Restoring the original Step makes that Result current and a later
+solve succeeds.
 An explicit regression independently checks that the pre-solve count equals the history rows
 produced by its element-frequency-derived integration schedule.
+
+### Thermal balance across bonded contact (#208 × #61)
+
+Two Hex8 blocks use one, two and four cells per half with both θ=1/2 and θ=1.
+A source of 40 W/m³ in a 0.01 m³ assembly with ρc_p=20 J/(m³ K) gives the
+independent uniform ramp T=300+2t K. Its held, tied interface supplies zero power,
+while net input and storage both equal 0.4 W. This checks that slave capacity
+residuals transfer to held masters along with conductivity and applied loads.
+A deliberately different free-node initial temperature also checks that the first
+History frame already recovers tied slave temperatures from the held master;
+subsequent stored energy is integrated as cell volume times the eight-corner mean.
+
+A 0.1 m radiating slab split into two blocks uses the same three refinements.
+Steady input and support reaction both equal minus the outgoing surface power from
+the independent scalar conduction/radiation bisection. With no held temperature,
+transient net input equals minus the θ-weighted endpoint fourth-power radiation,
+and equals the change in the two bodies' integrated thermal energy divided by the
+last increment. Interface flux is internal and never appears as a support reaction.
+These are integration oracles; they must pass before this combined change is accepted.

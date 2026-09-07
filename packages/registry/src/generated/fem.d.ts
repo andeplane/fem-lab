@@ -293,6 +293,9 @@ export interface Fem {
      * requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
      * `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
      * on its own answer — today a radiation load — and are ignored by a Step that is linear.
+     * Heat Results report net applied power, positive removed heat and stored-energy rate;
+     * transient powers belong to the last θ-method integration stage (radiation uses weighted
+     * endpoint fluxes), while temperature fields belong to its endpoint.
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**

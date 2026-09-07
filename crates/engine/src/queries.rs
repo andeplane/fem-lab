@@ -545,7 +545,7 @@ impl Engine {
         let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
-        if matches!(procedure, crate::procedure::Step::Explicit { .. }) {
+        if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
             Ok(crate::solve_run::planned_cost(&built.mesh, Some(&problem), &procedure)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))

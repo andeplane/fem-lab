@@ -378,7 +378,15 @@ pub(crate) fn planned_cost(
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
             let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 5)
+            // Linear heat: original five plus film, evaluated, previous/rate and capacity_rate.
+            // Radiation retains the conservative thirteen-vector allowance. Contact reuses
+            // film RHS for the original load, drops it after transposition, and drops that
+            // transformed load before expansion: seven outer + old radiation + next iterate
+            // + reduced RHS/solution + replacement = twelve at that peak, within thirteen.
+            // Reduction and matrix/factor storage (including contact fill) remain excluded.
+            let p = explicit_problem.expect("a transient heat cost plan needs its resolved Problem");
+            let work = if procedure::heat::radiates(p) { 13 } else { 9 };
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
         }
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
@@ -746,17 +754,24 @@ impl Engine {
                 *s += r[c];
             }
         }
-        let residual = sum.iter().map(|x| x * x).sum::<f64>().sqrt();
-        let biggest = res
+        let mut residual = sum.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let mut biggest = res
             .reactions
             .iter()
             .flat_map(|(_, r)| r.iter())
             .chain(applied.iter())
             .fold(f64::MIN_POSITIVE, |acc, x| acc.max(x.abs()));
+        let storage_power = res.scalars.get("storage_power").copied();
+        if let Some(storage) = storage_power {
+            let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+            residual = (applied[0] - removed - storage).abs();
+            biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
+        }
         Ok(ResultSummary {
             result_id: record.id.clone(),
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
+            storage_power: storage_power.map(|p| display(m, p, Power::DIM)),
             revision: record.revision,
             stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
