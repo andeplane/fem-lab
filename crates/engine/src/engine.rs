@@ -765,6 +765,9 @@ impl Engine {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
                 let settings = crate::mesh::mesher_settings(mesher)?;
+                if let crate::model::MesherSettings::Lattice { sizes, .. } = &settings {
+                    crate::mesh::validate_body_sizes(&self.model, sizes)?;
+                }
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
@@ -877,10 +880,23 @@ impl Engine {
                 self.model
                     .constraint(name)
                     .ok_or_else(|| Error::not_found("constraint", name, &self.model.names(ObjectKind::Constraint)))?;
-                let users: Vec<&str> =
-                    self.model.steps.iter().filter(|s| s.constraints.contains(name)).map(|s| s.name.as_str()).collect();
+                let users: Vec<String> = self
+                    .model
+                    .steps
+                    .iter()
+                    .filter(|s| s.constraints.contains(name))
+                    .map(|s| format!("step '{}'", s.name))
+                    .chain(
+                        self.model
+                            .loads
+                            .iter()
+                            .filter(|l| l.kind.constraint() == Some(name.as_str()))
+                            .map(|l| format!("load '{}'", l.name)),
+                    )
+                    .collect();
                 if !users.is_empty() {
-                    return Err(in_use("constraint", name, &users, "steps"));
+                    let u: Vec<&str> = users.iter().map(String::as_str).collect();
+                    return Err(in_use("constraint", name, &u, "objects"));
                 }
                 self.model.constraints.retain(|c| c.name != *name);
                 Ok(Output::None)
@@ -975,6 +991,24 @@ impl Engine {
                 self.check_bodies(bodies)?;
                 let v = q.si().map_err(|e| e.at("q"))?;
                 let l = Load { name: name.clone(), kind: LoadKind::HeatSource { bodies: bodies.clone(), q: v } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
+            Command::ContactThermal { name, of, conductance } => {
+                check_name(name)?;
+                let c = self
+                    .model
+                    .constraint(of)
+                    .ok_or_else(|| Error::not_found("constraint", of, &self.model.names(ObjectKind::Constraint)))?;
+                if !matches!(c.kind, ConstraintKind::Bonded { .. }) {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("contact '{name}': '{of}' is not a bonded contact"),
+                    )
+                    .at("of")
+                    .suggest("contact.thermal naming a contact.add Constraint"));
+                }
+                let h = conductance.si().map_err(|e| e.at("conductance"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::ThermalContact { of: of.clone(), h } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
             Command::LoadRemove { name } => {
@@ -1265,7 +1299,7 @@ impl Engine {
                 users.push(format!("set '{}'", s.name));
             }
         }
-        if m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()) == Some(name) {
+        if m.mesh.as_ref().is_some_and(|mesh| mesh.mesher.references_body(name)) {
             users.push("mesher geometry".into());
         }
         if !users.is_empty() {
@@ -1418,7 +1452,7 @@ impl Engine {
                                 }
                             }
                         }
-                        LoadKind::Gravity { .. } => {}
+                        LoadKind::Gravity { .. } | LoadKind::ThermalContact { .. } => {}
                     }
                 }
                 for s in &mut m.sets {
@@ -1490,7 +1524,10 @@ impl Engine {
                                 *on = to.into();
                             }
                         }
-                        LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => {}
+                        LoadKind::Gravity { .. }
+                        | LoadKind::Temperature { .. }
+                        | LoadKind::HeatSource { .. }
+                        | LoadKind::ThermalContact { .. } => {}
                     }
                 }
             }
@@ -1504,6 +1541,13 @@ impl Engine {
                     for c in &mut s.constraints {
                         if c == name {
                             *c = to.into();
+                        }
+                    }
+                }
+                for l in &mut m.loads {
+                    if let LoadKind::ThermalContact { of, .. } = &mut l.kind {
+                        if of == name {
+                            *of = to.into();
                         }
                     }
                 }

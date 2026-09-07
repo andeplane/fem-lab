@@ -58,16 +58,23 @@ pub enum HeatLoad {
     /// Grey-body radiation from a face Set to a large surrounding at `t_inf`: the surface loses
     /// `sigma eps (T^4 - Tinf^4)` per unit area. Both temperatures are absolute.
     Radiation { faces: String, emissivity: f64, t_inf: f64 },
+    /// A finite conductance across the bonded contact `of`: `h (T_slave − T_master)` crosses the
+    /// interface per unit area, so the two sides are no longer at the same temperature. `of`
+    /// names a Coupling rather than a Set — the interface it acts on comes from the tie's own
+    /// slave faces — which is why [`HeatLoad::set`] answers `None` for it, unlike every other
+    /// variant here.
+    Contact { of: String, h: f64 },
 }
 
 impl HeatLoad {
-    /// The face Set this load acts on, if it acts on one.
+    /// The face Set this load acts on, if it acts on one. A thermal contact names a Coupling,
+    /// not a Set, so it is not one of the Sets [`crate::fem::checks::all`] checks here.
     pub fn set(&self) -> Option<&str> {
         match self {
             HeatLoad::Convection { faces, .. } | HeatLoad::Flux { faces, .. } | HeatLoad::Radiation { faces, .. } => {
                 Some(faces)
             }
-            HeatLoad::Source { .. } => None,
+            HeatLoad::Source { .. } | HeatLoad::Contact { .. } => None,
         }
     }
 }
