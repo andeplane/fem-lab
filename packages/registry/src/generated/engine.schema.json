@@ -3336,7 +3336,7 @@
     "description": "Every Query. Serialised with a `query` tag: `{ \"query\": \"query.model\" }`.",
     "oneOf": [
       {
-        "description": "Everything about the Model in one read: bodies with volumes and materials, materials,\nnamed Sets, constraints, loads with their totals, steps, mesh settings, and the\nwell-posedness warnings that would block a solve. Read this before changing anything.",
+        "description": "Everything about the Model in one read: bodies with volumes and materials, imported\nface patches with paste-ready naming predicates, named Sets, constraints, loads with\ntheir totals, steps, mesh settings, and the well-posedness warnings that would block a\nsolve. Read this before changing anything.",
         "type": "object",
         "properties": {
           "query": {
@@ -7670,6 +7670,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "patches": {
+            "description": "Measured source patches and durable naming suggestions, for an imported mesh Body.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ImportedPatchRow"
+            }
           }
         },
         "required": [
@@ -7694,6 +7701,254 @@
         "required": [
           "value",
           "unit"
+        ]
+      },
+      "ImportedPatchRow": {
+        "description": "One face patch of an imported mesh Body.",
+        "type": "object",
+        "properties": {
+          "tag": {
+            "description": "The import's ordinal face name. Use `suggestedPredicate` to create a durable name.",
+            "type": "string"
+          },
+          "triangleCount": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "area": {
+            "$ref": "#/$defs/Valued"
+          },
+          "centroid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "meanNormal": {
+            "description": "Area-weighted mean of the triangles' outward unit normals. It is zero for a complete curved side.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "suggestedPredicate": {
+            "description": "Paste this value into `geometry.nameFace.where`.",
+            "$ref": "#/$defs/FacePredicate"
+          }
+        },
+        "required": [
+          "tag",
+          "triangleCount",
+          "area",
+          "centroid",
+          "meanNormal",
+          "suggestedPredicate"
+        ]
+      },
+      "FacePredicate": {
+        "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
+        "oneOf": [
+          {
+            "description": "Boundary faces on the plane `normal · x = offset` whose outward normal is within 10° of ±normal.",
+            "type": "object",
+            "properties": {
+              "normal": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "offset": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "const": "plane"
+              }
+            },
+            "required": [
+              "kind",
+              "normal",
+              "offset"
+            ]
+          },
+          {
+            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10°) of `normal`.",
+            "type": "object",
+            "properties": {
+              "normal": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "max_angle_deg": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "normal"
+              }
+            },
+            "required": [
+              "kind",
+              "normal"
+            ]
+          },
+          {
+            "description": "Boundary faces whose centroid lies inside the box.",
+            "type": "object",
+            "properties": {
+              "min": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "max": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "kind": {
+                "type": "string",
+                "const": "bbox"
+              }
+            },
+            "required": [
+              "kind",
+              "min",
+              "max"
+            ]
+          },
+          {
+            "description": "Boundary faces at distance `radius` from the axis through `point` along `axis` (a circle in 2D).",
+            "type": "object",
+            "properties": {
+              "point": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "axis": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "radius": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "const": "cylinder"
+              }
+            },
+            "required": [
+              "kind",
+              "point",
+              "axis",
+              "radius"
+            ]
+          },
+          {
+            "description": "Faces matching any of the predicates.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/FacePredicate"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "any"
+              }
+            },
+            "required": [
+              "kind",
+              "of"
+            ]
+          }
+        ]
+      },
+      "Q_length": {
+        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "length"
+      },
+      "Quantity": {
+        "description": "A number with a unit, as text or as parts.",
+        "anyOf": [
+          {
+            "description": "`\"2 MPa\"`, `\"250 mm\"`, `\"1.2e-5 1/K\"`.",
+            "type": "string"
+          },
+          {
+            "description": "`{ \"value\": 2, \"unit\": \"MPa\" }`.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "number",
+                "format": "double"
+              },
+              "unit": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value",
+              "unit"
+            ]
+          }
         ]
       },
       "MaterialRow": {
@@ -9918,37 +10173,6 @@
           }
         ]
       },
-      "Q_length": {
-        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
-        "$ref": "#/$defs/Quantity",
-        "x-dimension": "length"
-      },
-      "Quantity": {
-        "description": "A number with a unit, as text or as parts.",
-        "anyOf": [
-          {
-            "description": "`\"2 MPa\"`, `\"250 mm\"`, `\"1.2e-5 1/K\"`.",
-            "type": "string"
-          },
-          {
-            "description": "`{ \"value\": 2, \"unit\": \"MPa\" }`.",
-            "type": "object",
-            "properties": {
-              "value": {
-                "type": "number",
-                "format": "double"
-              },
-              "unit": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "value",
-              "unit"
-            ]
-          }
-        ]
-      },
       "ObjectKind": {
         "description": "Kinds of nameable objects in a Model.",
         "type": "string",
@@ -10390,175 +10614,6 @@
             "description": "Standard base64, for a binary file.",
             "type": "string",
             "const": "base64"
-          }
-        ]
-      },
-      "FacePredicate": {
-        "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
-        "oneOf": [
-          {
-            "description": "Boundary faces on the plane `normal · x = offset` whose outward normal is within 10° of ±normal.",
-            "type": "object",
-            "properties": {
-              "normal": {
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "double"
-                },
-                "minItems": 3,
-                "maxItems": 3
-              },
-              "offset": {
-                "$ref": "#/$defs/Q_length"
-              },
-              "tol": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/Q_length"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "plane"
-              }
-            },
-            "required": [
-              "kind",
-              "normal",
-              "offset"
-            ]
-          },
-          {
-            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10°) of `normal`.",
-            "type": "object",
-            "properties": {
-              "normal": {
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "double"
-                },
-                "minItems": 3,
-                "maxItems": 3
-              },
-              "max_angle_deg": {
-                "type": [
-                  "number",
-                  "null"
-                ],
-                "format": "double"
-              },
-              "kind": {
-                "type": "string",
-                "const": "normal"
-              }
-            },
-            "required": [
-              "kind",
-              "normal"
-            ]
-          },
-          {
-            "description": "Boundary faces whose centroid lies inside the box.",
-            "type": "object",
-            "properties": {
-              "min": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/Q_length"
-                },
-                "minItems": 3,
-                "maxItems": 3
-              },
-              "max": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/Q_length"
-                },
-                "minItems": 3,
-                "maxItems": 3
-              },
-              "kind": {
-                "type": "string",
-                "const": "bbox"
-              }
-            },
-            "required": [
-              "kind",
-              "min",
-              "max"
-            ]
-          },
-          {
-            "description": "Boundary faces at distance `radius` from the axis through `point` along `axis` (a circle in 2D).",
-            "type": "object",
-            "properties": {
-              "point": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/Q_length"
-                },
-                "minItems": 3,
-                "maxItems": 3
-              },
-              "axis": {
-                "type": "array",
-                "items": {
-                  "type": "number",
-                  "format": "double"
-                },
-                "minItems": 3,
-                "maxItems": 3
-              },
-              "radius": {
-                "$ref": "#/$defs/Q_length"
-              },
-              "tol": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/Q_length"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "kind": {
-                "type": "string",
-                "const": "cylinder"
-              }
-            },
-            "required": [
-              "kind",
-              "point",
-              "axis",
-              "radius"
-            ]
-          },
-          {
-            "description": "Faces matching any of the predicates.",
-            "type": "object",
-            "properties": {
-              "of": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/FacePredicate"
-                }
-              },
-              "kind": {
-                "type": "string",
-                "const": "any"
-              }
-            },
-            "required": [
-              "kind",
-              "of"
-            ]
           }
         ]
       },

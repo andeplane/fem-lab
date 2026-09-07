@@ -8450,6 +8450,128 @@ fn an_imported_stl_body_measures_exactly_what_its_shape_did() {
     assert!((row.mass.unwrap().value - 6.0 * 7850.0).abs() < 1e-6);
 }
 
+fn name_suggested_patches(e: &mut Engine, body: &str) -> Vec<String> {
+    let row = body_row(e, 0);
+    row.patches
+        .iter()
+        .enumerate()
+        .map(|(i, patch)| {
+            let name = format!("suggested-{i}");
+            ok(
+                e,
+                &serde_json::json!({
+                    "cmd": "geometry.nameFace",
+                    "name": name,
+                    "of": body,
+                    "where": patch.suggested_predicate,
+                })
+                .to_string(),
+            );
+            name
+        })
+        .collect()
+}
+
+fn command_predicate_kind(predicate: &FacePredicate) -> &'static str {
+    match predicate {
+        FacePredicate::Plane { .. } => "plane",
+        FacePredicate::Normal { .. } => "normal",
+        FacePredicate::Bbox { .. } => "bbox",
+        FacePredicate::Cylinder { .. } => "cylinder",
+        FacePredicate::Any { .. } => "any",
+    }
+}
+
+fn every_suggestion_resolves_at_three_sizes(e: &mut Engine, names: &[String]) {
+    for n in [3, 5, 7] {
+        ok(
+            e,
+            &serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":n,"nz":n}}})
+                .to_string(),
+        );
+        for name in names {
+            let QueryResult::Set(set) = e.query(Query::Set { name: name.clone() }).unwrap() else { panic!() };
+            assert!(set.count > 0, "{name} was empty at {n} cells per axis");
+        }
+    }
+}
+
+/// J2: the returned patch values use geometric first moments, and each predicate is sent back
+/// through the public Command and resolved by the real mesher at three unrelated sizes.
+#[test]
+fn imported_patch_suggestions_are_complete_paste_ready_and_durable() {
+    let mut cube = engine();
+    ok(&mut cube, r#"{"cmd":"model.new","name":"cube patches"}"#);
+    ok(&mut cube, &import_cmd("part", &stl_of(&Shape::Box { size: [1.0; 3] }), ""));
+    let row = body_row(&mut cube, 0);
+    assert_eq!(row.patches.len(), 6);
+    assert_eq!(row.patches.iter().map(|p| p.triangle_count).sum::<u32>(), 12);
+    for patch in &row.patches {
+        assert_eq!(patch.area.unit, "m^2");
+        assert!((patch.area.value - 1.0).abs() < 1e-12);
+        assert!(patch.centroid.iter().all(|v| v.unit == "m"));
+        assert_eq!(command_predicate_kind(&patch.suggested_predicate), "plane");
+    }
+    let cube_names = name_suggested_patches(&mut cube, "part");
+    every_suggestion_resolves_at_three_sizes(&mut cube, &cube_names);
+    for name in &cube_names {
+        let QueryResult::Set(set) = cube.query(Query::Set { name: name.clone() }).unwrap() else { panic!() };
+        assert!((set.measure.value - 1.0).abs() < 1e-12, "{name}: {set:?}");
+    }
+
+    let mut cylinder = engine();
+    ok(&mut cylinder, r#"{"cmd":"model.new","name":"cylinder patches"}"#);
+    ok(
+        &mut cylinder,
+        &import_cmd("part", &stl_of(&Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(32) }), ""),
+    );
+    let row = body_row(&mut cylinder, 0);
+    assert_eq!(row.patches.len(), 3);
+    assert_eq!(row.patches.iter().filter(|p| command_predicate_kind(&p.suggested_predicate) == "plane").count(), 2);
+    let side = row
+        .patches
+        .iter()
+        .find(|p| command_predicate_kind(&p.suggested_predicate) == "cylinder")
+        .expect("cylinder side");
+    let FacePredicate::Cylinder { radius, .. } = &side.suggested_predicate else { panic!() };
+    assert!((radius.si().unwrap() - 1.0).abs() < 1e-9);
+    let cylinder_names = name_suggested_patches(&mut cylinder, "part");
+    every_suggestion_resolves_at_three_sizes(&mut cylinder, &cylinder_names);
+
+    // Saved Models can wrap an imported mesh in a placement even though geometry.import itself
+    // has no placement argument. query.model still recognizes and fits that imported source.
+    let mut saved = cylinder.export_file();
+    let source = saved.model.bodies[0].shape.clone();
+    saved.model.bodies[0].shape = Shape::Transform {
+        shape: Box::new(source),
+        at: femlab_geometry::Affine3 {
+            translate: [1.0e6, -2.0e6, 3.0e6],
+            rotate: [23.0, 37.0, -19.0],
+            scale: [2.0; 3],
+        },
+    };
+    let mut transformed = engine();
+    transformed.import_file(saved).unwrap();
+    let transformed_row = body_row(&mut transformed, 0);
+    assert_eq!(transformed_row.patches.len(), 3);
+    let transformed_side = transformed_row
+        .patches
+        .iter()
+        .find(|p| command_predicate_kind(&p.suggested_predicate) == "cylinder")
+        .expect("transformed cylindrical side");
+    let FacePredicate::Cylinder { radius, .. } = &transformed_side.suggested_predicate else { panic!() };
+    assert!((radius.si().unwrap() - 2.0).abs() < 1e-8);
+
+    let mut sphere = engine();
+    ok(&mut sphere, r#"{"cmd":"model.new","name":"fallback patch"}"#);
+    ok(&mut sphere, &import_cmd("part", &stl_of(&Shape::Sphere { radius: 1.0, segments: Some(16) }), ""));
+    let row = body_row(&mut sphere, 0);
+    assert_eq!(row.patches.len(), 1);
+    assert_eq!(command_predicate_kind(&row.patches[0].suggested_predicate), "bbox");
+    let sphere_names = name_suggested_patches(&mut sphere, "part");
+    every_suggestion_resolves_at_three_sizes(&mut sphere, &sphere_names);
+}
+
 #[test]
 fn unit_length_says_what_one_file_unit_means() {
     let mut e = engine();

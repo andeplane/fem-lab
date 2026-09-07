@@ -77,7 +77,7 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
     })
 }
 
-fn face(p: &Face) -> FacePredicate {
+pub(crate) fn face(p: &Face) -> FacePredicate {
     match p {
         Face::Plane { normal, offset, tol } => {
             FacePredicate::Plane { normal: *normal, offset: length(*offset), tol: tol.map(length) }

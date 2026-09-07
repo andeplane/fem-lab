@@ -3888,6 +3888,10 @@ export interface BodyRow {
    * Auto-named faces of this body (`beam.xmin` …), plus its cuts' faces.
    */
   faces: string[];
+  /**
+   * Measured source patches and durable naming suggestions, for an imported mesh Body.
+   */
+  patches?: ImportedPatchRow[];
 }
 /**
  * A value with its display unit.
@@ -3902,6 +3906,188 @@ export interface Valued {
 export interface Valued1 {
   value: number;
   unit: string;
+}
+/**
+ * One face patch of an imported mesh Body.
+ */
+export interface ImportedPatchRow {
+  /**
+   * The import's ordinal face name. Use `suggestedPredicate` to create a durable name.
+   */
+  tag: string;
+  triangleCount: number;
+  area: Valued;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  centroid: [Valued, Valued, Valued];
+  /**
+   * Area-weighted mean of the triangles' outward unit normals. It is zero for a complete curved side.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  meanNormal: [number, number, number];
+  /**
+   * Paste this value into `geometry.nameFace.where`.
+   */
+  suggestedPredicate:
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         */
+        normal: [number, number, number];
+        /**
+         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        offset:
+          | string
+          | {
+              value: number;
+              unit: string;
+            };
+        tol?:
+          | (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          | null;
+        kind: "plane";
+      }
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         */
+        normal: [number, number, number];
+        max_angle_deg?: number | null;
+        kind: "normal";
+      }
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         *
+         * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        min: [
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        ];
+        /**
+         * @minItems 3
+         * @maxItems 3
+         *
+         * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        max: [
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        ];
+        kind: "bbox";
+      }
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         *
+         * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        point: [
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        ];
+        /**
+         * @minItems 3
+         * @maxItems 3
+         */
+        axis: [number, number, number];
+        /**
+         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        radius:
+          | string
+          | {
+              value: number;
+              unit: string;
+            };
+        tol?:
+          | (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          | null;
+        kind: "cylinder";
+      }
+    | {
+        of: FacePredicate[];
+        kind: "any";
+      };
 }
 export interface MaterialRow {
   name: string;
