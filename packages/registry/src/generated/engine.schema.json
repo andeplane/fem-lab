@@ -1622,8 +1622,7 @@
             "type": "object",
             "properties": {
               "twist": {
-                "type": "boolean",
-                "default": false
+                "type": "boolean"
               },
               "kind": {
                 "type": "string",
@@ -5656,8 +5655,7 @@
             "type": "object",
             "properties": {
               "twist": {
-                "type": "boolean",
-                "default": false
+                "type": "boolean"
               },
               "kind": {
                 "type": "string",
@@ -9744,8 +9742,7 @@
             "type": "object",
             "properties": {
               "twist": {
-                "type": "boolean",
-                "default": false
+                "type": "boolean"
               },
               "kind": {
                 "type": "string",
@@ -13862,9 +13859,8 @@
             "type": "object",
             "properties": {
               "twist": {
-                "description": "Adds a third degree of freedom, the circumferential displacement u_theta, so the\nsection can carry torsion. With twist, the third component of a vector Command is\nthe circumferential direction. Defaults to false, so every Journal and saved Model\nwritten before this field existed still loads.",
-                "type": "boolean",
-                "default": false
+                "description": "Adds a third degree of freedom, the circumferential displacement u_theta, so the\nsection can carry torsion. With twist, the third component of a vector Command is\nthe circumferential direction. Defaults to false, so every Journal and saved Model\nwritten before this field existed still loads, and an untwisted axisymmetric Model\nserialises byte-identically to before (`MeshSettings::simplices`'s convention).",
+                "type": "boolean"
               },
               "kind": {
                 "type": "string",
@@ -17484,8 +17480,7 @@
             "type": "object",
             "properties": {
               "twist": {
-                "type": "boolean",
-                "default": false
+                "type": "boolean"
               },
               "kind": {
                 "type": "string",

@@ -1429,8 +1429,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "twist": {
-          "type": "boolean",
-          "default": false
+          "type": "boolean"
         },
         "kind": {
           "type": "string",
@@ -5578,8 +5577,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "twist": {
-          "type": "boolean",
-          "default": false
+          "type": "boolean"
         },
         "kind": {
           "type": "string",
