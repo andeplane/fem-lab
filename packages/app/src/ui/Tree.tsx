@@ -204,12 +204,14 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         ? [
             {
               cmd: 'mesh.set',
-              args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation },
+              args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
               kind: 'mesh',
               glyph: '▦',
               glyphClass: 'glyph low',
               name: 'mesh',
-              summary: `${m.meshSettings.mesher.kind} · order ${m.meshSettings.order} · ${m.meshSettings.formulation}`,
+              summary: m.meshSettings.simplices
+                ? `${m.meshSettings.mesher.kind} · ${m.idealisation === 'solid3d' ? `Tet ${m.meshSettings.order === 1 ? 4 : 10}` : `Tri ${m.meshSettings.order === 1 ? 3 : 6}`} · order ${m.meshSettings.order}`
+                : `${m.meshSettings.mesher.kind} · order ${m.meshSettings.order} · ${m.meshSettings.formulation}`,
               select: {},
               remove: null,
             },
@@ -231,6 +233,23 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         name: x.name,
         summary: `${x.summary} on ${x.on}`,
         select: { sets: [x.on] },
+        remove: 'constraint.remove',
+      })),
+    ),
+    group(
+      'Connections',
+      'Bonded contact between parts: the two faces behave as one, so an assembly solves like a single body.',
+      { what: 'connection', cmd: 'contact.add' },
+      (m?.connections ?? []).map((x) => ({
+        cmd: 'form.edit',
+        args: { kind: 'constraint', name: x.name },
+        run: true,
+        kind: 'constraint',
+        glyph: '⋈',
+        glyphClass: 'glyph cyan',
+        name: x.name,
+        summary: `${x.summary} · ${x.master} to ${x.slave}`,
+        select: { sets: [x.master, x.slave] },
         remove: 'constraint.remove',
       })),
     ),

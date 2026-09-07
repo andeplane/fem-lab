@@ -164,6 +164,13 @@ pub enum ConstraintKind {
     Temperature {
         value: f64,
     },
+    /// A bonded contact: the Constraint's own Set is the slave, `master` names the face Set it
+    /// is tied to, and `tol` is the largest pairing gap in metres (`None` scales with the Mesh).
+    Bonded {
+        master: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
 }
 
 /// A Constraint on a Set.
@@ -174,6 +181,27 @@ pub struct Constraint {
     pub on: String,
     #[serde(flatten)]
     pub kind: ConstraintKind,
+}
+
+impl Constraint {
+    /// Every Set this Constraint names: the one it holds, and a bonded tie's master face. One
+    /// accessor, so a rename or an in-use check can never miss the second one.
+    pub fn sets(&self) -> Vec<&str> {
+        let mut out = vec![self.on.as_str()];
+        if let ConstraintKind::Bonded { master, .. } = &self.kind {
+            out.push(master);
+        }
+        out
+    }
+
+    /// The same Sets, for a rename to rewrite in place.
+    pub fn sets_mut(&mut self) -> Vec<&mut String> {
+        let mut out = vec![&mut self.on];
+        if let ConstraintKind::Bonded { master, .. } = &mut self.kind {
+            out.push(master);
+        }
+        out
+    }
 }
 
 /// Load kinds, SI.
@@ -348,6 +376,9 @@ pub struct MeshSettings {
     pub mesher: MesherSettings,
     pub order: u8,
     pub formulation: Formulation,
+    /// Split the chosen mesher's quads/hexes into triangles/tetrahedra.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub simplices: bool,
 }
 
 /// A Plugin used by the Model (phase P).

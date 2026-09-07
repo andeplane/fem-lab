@@ -153,6 +153,13 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 ConstraintKind::Temperature { value } => {
                     Command::ConstraintTemperature { name, on, value: Q::new(*value, "K") }
                 }
+                ConstraintKind::Bonded { master, tol } => Command::ContactAdd {
+                    name,
+                    master: master.clone(),
+                    slave: on,
+                    kind: ContactKind::Bonded,
+                    tol: tol.map(length),
+                },
             }
         }
         ObjectKind::Load => {

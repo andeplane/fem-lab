@@ -9,9 +9,13 @@
 //! depends on a random seed.
 //!
 //! The dense `q × q` work runs under `Par::Seq`: it is tiny, and a sequential reduction keeps
-//! the frequencies bit-identical at any thread count.
+//! the frequencies bit-identical at any thread count. That parallelism is passed per call, so a
+//! modal Step never touches faer's process-global setting other Engines read (ADR 0019).
 
-use faer::Side;
+use dyn_stack::{MemBuffer, MemStack};
+use faer::linalg::cholesky::llt::factor::{cholesky_in_place, cholesky_in_place_scratch};
+use faer::linalg::evd::{self_adjoint_evd, self_adjoint_evd_scratch, ComputeEigenvectors};
+use faer::Par;
 
 use crate::command::Field;
 use crate::engine::OnProgress;
@@ -19,6 +23,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::{assemble_stiffness, pattern, reduce, resolve, Csr, Pattern};
 use crate::fem::checks;
 use crate::fem::element::element_for;
+use crate::fem::mpc;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, Per};
@@ -31,6 +36,8 @@ const TOL: f64 = 1e-10;
 const MAX_SWEEPS: usize = 60;
 /// `σ = −SHIFT · tr(K)/tr(M)` when the Step does not name one.
 const SHIFT: f64 = 1e-6;
+/// The `q × q` dense reduction is sequential at any host thread count, per call, never globally.
+const DENSE_PAR: Par = Par::Seq;
 
 /// `M = ∫ ρ NᵀN dV` for the whole mesh, into a fresh copy of `pat.csr`.
 ///
@@ -91,9 +98,14 @@ pub fn run(
     let (a, m) =
         pool.install(|| assemble_stiffness(p, &pat).and_then(|a| assemble_mass(p, &pat, false).map(|m| (a, m))))?;
     let rc = resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     let zeros = vec![0.0; a.k.n];
-    let red_k = reduce(&a.k, &zeros, &rc);
-    let red_m = reduce(&m, &zeros, &rc);
+    // Both operators take the same `T`, so the eigenproblem stays the generalised symmetric
+    // one the subspace iteration wants.
+    let (kt, _) = pool.install(|| mpc::transform(&a.k, &zeros, &mpc));
+    let (mt, _) = pool.install(|| mpc::transform(&m, &zeros, &mpc));
+    let red_k = reduce(&kt, &zeros, &rc, &mpc.slaves);
+    let red_m = reduce(&mt, &zeros, &rc, &mpc.slaves);
     let n = red_k.k_ff.n;
     if n == 0 {
         return Err(Error::new(
@@ -116,8 +128,10 @@ pub fn run(
         for (i, &dof) in red_k.free.iter().enumerate() {
             full[dof as usize] = shape[i];
         }
+        mpc::recover(&mpc, &mut full);
         res.modes.push(vector_field(&full, dpn));
     }
+    res.warnings = mpc.warnings;
     res.fields.insert(Field::Displacement, res.modes[0].clone());
     res.scalars.insert("min_det_j".to_string(), a.min_det_j);
     for axis in ["x", "y", "z"] {
@@ -186,9 +200,8 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
         sweeps = sweep;
         for c in 0..q {
             m.spmv(&x[c], &mut y);
-            // A factorised direct solve cannot fail; the trait returns a Result for the
-            // iterative solvers, which can run out of iterations.
-            factored.solve(&y, &mut bar[c]).expect("a factorised solve");
+            // A factorization may still produce an unacceptable residual.
+            factored.solve(&y, &mut bar[c])?;
         }
         // K̂ = X̄ᵀ K X̄ and M̂ = X̄ᵀ M X̄, both q × q and symmetric by construction.
         let (k_hat, m_hat) = (project(k, &bar, q, n), project(m, &bar, q, n));
@@ -232,20 +245,44 @@ fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
 /// eigendecomposition returns them nondecreasing, and `z = L⁻ᵀ Q` makes the eigenvectors
 /// M̂-orthonormal, which is what keeps the iterated subspace M-orthonormal too.
 fn dense_eigen(k_hat: &[f64], m_hat: &[f64], q: usize) -> (Vec<f64>, Vec<f64>) {
-    faer::set_global_parallelism(faer::Par::Seq);
-    let m = faer::Mat::<f64>::from_fn(q, q, |i, j| m_hat[i * q + j]);
     // `M̂ = X̄ᵀ M X̄` with `M` positive definite (the density check above) and `X̄` of full rank,
-    // so the factorisation and the symmetric eigendecomposition below cannot fail.
-    let llt = m.llt(Side::Lower).expect("the projected mass matrix is positive definite");
-    let l = llt.L();
+    // so the factorisation and the symmetric eigendecomposition below cannot fail. Both are the
+    // low-level faer entry points, which take the parallelism as an argument: the high-level
+    // `llt`/`self_adjoint_eigen` read the process-global setting instead, and pinning that to
+    // `Par::Seq` here would pin it for every other Engine in the host as well.
+    let mut lower = faer::Mat::<f64>::from_fn(q, q, |i, j| if j <= i { m_hat[i * q + j] } else { 0.0 });
+    cholesky_in_place(
+        lower.as_mut(),
+        Default::default(),
+        DENSE_PAR,
+        MemStack::new(&mut MemBuffer::new(cholesky_in_place_scratch::<f64>(q, DENSE_PAR, Default::default()))),
+        Default::default(),
+    )
+    .expect("the projected mass matrix is positive definite");
+    // Only the lower triangle and the diagonal are ever read below, which is all `cholesky_in_place` writes.
+    let l = lower.as_ref();
     // c = L⁻¹ K̂ L⁻ᵀ, built as (L⁻¹ (L⁻¹ K̂)ᵀ), which is the same matrix because it is symmetric.
     let mut c: Vec<f64> = forward(&l, k_hat, q);
     c = forward(&l, &transpose(&c, q), q);
-    let eig = faer::Mat::<f64>::from_fn(q, q, |i, j| c[i * q + j])
-        .self_adjoint_eigen(Side::Lower)
-        .expect("a real symmetric matrix has a real eigendecomposition");
-    let lambda: Vec<f64> = (0..q).map(|i| eig.S()[i]).collect();
-    let qmat: Vec<f64> = (0..q * q).map(|idx| eig.U()[(idx / q, idx % q)]).collect();
+    let a = faer::Mat::<f64>::from_fn(q, q, |i, j| c[i * q + j]);
+    let mut s = faer::diag::Diag::<f64>::zeros(q);
+    let mut u = faer::Mat::<f64>::zeros(q, q);
+    self_adjoint_evd(
+        a.as_ref(),
+        s.as_mut(),
+        Some(u.as_mut()),
+        DENSE_PAR,
+        MemStack::new(&mut MemBuffer::new(self_adjoint_evd_scratch::<f64>(
+            q,
+            ComputeEigenvectors::Yes,
+            DENSE_PAR,
+            Default::default(),
+        ))),
+        Default::default(),
+    )
+    .expect("a real symmetric matrix has a real eigendecomposition");
+    let lambda: Vec<f64> = (0..q).map(|i| s.column_vector()[i]).collect();
+    let qmat: Vec<f64> = (0..q * q).map(|idx| u[(idx / q, idx % q)]).collect();
     (lambda, backward(&l, &qmat, q))
 }
 
@@ -287,4 +324,27 @@ fn transpose(a: &[f64], q: usize) -> Vec<f64> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dense_modes_preserve_global_parallelism_and_the_generalized_eigenproblem() {
+        let before = faer::get_global_parallelism();
+        // M=diag(4,9), M^-1/2 K M^-1/2=[[6.5,2.5],[2.5,6.5]]:
+        // its eigenvalues are exactly 4 and 9. Both eigenvectors must have unit M-norm.
+        let k = [26.0, 15.0, 15.0, 58.5];
+        let m = [4.0, 0.0, 0.0, 9.0];
+        let (values, vectors) = super::dense_eigen(&k, &m, 2);
+        assert_eq!(faer::get_global_parallelism(), before);
+        for (column, expected) in [4.0, 9.0].into_iter().enumerate() {
+            assert!((values[column] - expected).abs() < 1e-12);
+            let x = vectors[column];
+            let y = vectors[2 + column];
+            assert!((4.0 * x * x + 9.0 * y * y - 1.0).abs() < 1e-12);
+            assert!((26.0 * x + 15.0 * y - expected * 4.0 * x).abs() < 1e-12);
+            assert!((15.0 * x + 58.5 * y - expected * 9.0 * y).abs() < 1e-12);
+        }
+        assert!((4.0 * vectors[0] * vectors[1] + 9.0 * vectors[2] * vectors[3]).abs() < 1e-12);
+    }
 }

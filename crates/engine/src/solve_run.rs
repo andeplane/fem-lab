@@ -2,7 +2,7 @@
 //!
 //! This is the seam between the registry and the numerics. Everything above it speaks names,
 //! Sets and `Quantity`; everything below it speaks SI `f64` on a Mesh (plan A §6, plan B §2.1).
-//! Results are kept per Step with the Model hash they were solved at, so an edit does not throw
+//! Results are kept per Step with their Result-validity fingerprint (ADR 0017), so an edit does not throw
 //! them away — it makes them *stale*, which `query.result` says out loud.
 
 use femlab_geometry::Mesh;
@@ -13,13 +13,16 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, Load};
-use crate::fem::problem::{Constraint, Problem};
+use crate::fem::problem::{Constraint, Coupling, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData};
 use crate::procedure::{self, report, StepResult};
-use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
+use crate::query::{
+    AssumedMaterialProperty, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary, StudyReport,
+    StudyRow, Valued,
+};
 use crate::solve::SolveOptions;
 use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
 
@@ -47,6 +50,10 @@ fn resolve_material(m: &crate::model::Material) -> Material {
         axes: m.orientation.as_ref().map(crate::model::Orientation::rows),
     }
 }
+
+/// A `contact.add` without a `tol` pairs across this fraction of the Mesh bounding-box
+/// diagonal: tight enough that a tie between faces that are not really touching is refused.
+const DEFAULT_TOL: f64 = 1e-4;
 
 /// The dimension a Result field carries, so a summary reports it in the Model's own units.
 pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
@@ -92,10 +99,25 @@ fn build_problem_with_temperature<'a>(
             model.materials.iter().position(|m| m.name == name)
         })
         .collect();
+    // A tie has no prescribed value and names two Sets, so it leaves the Constraint list here
+    // and becomes a Coupling; `default_tol` is the gap a `contact.add` without one accepts.
+    let (lo, hi) = built.mesh.bbox();
+    let default_tol =
+        DEFAULT_TOL * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    let mut couplings = Vec::new();
     let mut constraints = Vec::with_capacity(step.constraints.len());
     for name in &step.constraints {
         let c = model.constraint(name).expect("step.add validated the Constraint names");
         let (dofs, value) = match &c.kind {
+            ConstraintKind::Bonded { master, tol } => {
+                couplings.push(Coupling::Bonded {
+                    name: c.name.clone(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
             ConstraintKind::Fix { dofs } => {
                 let mut on = [false; 3];
                 for d in dofs {
@@ -128,6 +150,7 @@ fn build_problem_with_temperature<'a>(
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,
+        couplings,
         loads: Vec::new(),
         temperature: None,
         heat,
@@ -215,6 +238,65 @@ fn thermal_field(
     Ok(Some((nodal, 0.0)))
 }
 
+/// Explain which mass-bearing path read an omitted density.
+fn rho_assumption_cause(procedure: Procedure, has_gravity: bool) -> Option<&'static str> {
+    match procedure {
+        Procedure::Static if has_gravity => Some("gravity read the omitted density as zero"),
+        Procedure::Modal => Some("modal mass assembly read the omitted density as zero"),
+        Procedure::Explicit => Some("explicit mass assembly read the omitted density as zero"),
+        _ => None,
+    }
+}
+
+/// Optional material values this exact procedure read after the Model-to-Problem boundary
+/// resolved an omission to zero. Callers attach these only after the procedure succeeds.
+fn result_assumptions(
+    model: &Model,
+    built: &BuiltMesh,
+    step: &str,
+    procedure: Procedure,
+    p: &Problem<'_>,
+) -> Vec<ResultAssumption> {
+    let rho_cause = rho_assumption_cause(procedure, p.loads.iter().any(|load| matches!(load, Load::Gravity { .. })));
+    // Static and explicit assembly both form the thermal force. Modal forms stiffness too, but
+    // discards that load vector, so alpha is not solver-used there.
+    let reads_alpha = matches!(procedure, Procedure::Static | Procedure::Explicit) && p.temperature.is_some();
+    // A BuiltMesh block always has elements. Collecting by Body and material also collapses a
+    // mapped Body made from several blocks into one assumption row per property.
+    let assigned: std::collections::BTreeMap<(&str, usize), ()> = built
+        .body_of_block
+        .iter()
+        .zip(&p.material_of_block)
+        .filter_map(|(body, material)| material.map(|index| ((body.as_str(), index), ())))
+        .collect();
+    let mut out = Vec::new();
+    for ((body, material_index), ()) in assigned {
+        let material = &model.materials[material_index];
+        let mut push = |property, unit: &str, cause: &str| {
+            out.push(ResultAssumption {
+                step: step.to_string(),
+                body: body.to_string(),
+                material: material.name.clone(),
+                property,
+                value: Valued { value: 0.0, unit: unit.to_string() },
+                source: material.source.clone(),
+                cause: cause.to_string(),
+            });
+        };
+        if let (Some(cause), None) = (rho_cause, material.rho) {
+            push(AssumedMaterialProperty::Rho, "kg/m^3", cause);
+        }
+        if reads_alpha && material.alpha.is_none() {
+            push(
+                AssumedMaterialProperty::Alpha,
+                "1/K",
+                "the resolved temperature field read the omitted thermal expansion coefficient as zero",
+            );
+        }
+    }
+    out
+}
+
 /// The wire name of a procedure, from serde's rename.
 pub fn procedure_name(p: Procedure) -> String {
     serde_json::to_string(&p).unwrap_or_default().trim_matches('"').to_string()
@@ -242,7 +324,19 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
         })
     };
     Ok(match step.procedure {
-        Procedure::Static => procedure::Step::Static { solver: opts },
+        Procedure::Static => {
+            // A static Step needs no clock, so unlike a transient one it defaults rather than
+            // refusing: one second of nominal time, covered in a single increment. An
+            // amplitude table written in step fraction therefore works unchanged.
+            let t_end = step.t_end.unwrap_or(1.0);
+            procedure::Step::Static {
+                solver: opts,
+                dt: step.dt.unwrap_or(t_end),
+                t_end,
+                amplitude: step.amplitude.as_ref().map(amplitude),
+                output_every: step.output_every.unwrap_or(1) as usize,
+            }
+        }
         Procedure::Modal => {
             procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
         }
@@ -279,7 +373,16 @@ pub(crate) fn planned_cost(
     step: &procedure::Step,
 ) -> Result<PlannedCost, Error> {
     let mut estimate = match step {
-        procedure::Step::Static { solver } | procedure::Step::Modal { solver, .. } => {
+        // An amplituded static Step retains a displacement history like any transient, so it
+        // is budgeted like one: `f`, `f_thermal`, `u`, `u_th`, `u_L` and the frame being built
+        // are the full-field vectors alive while it retains.
+        procedure::Step::Static { solver, dt, t_end, amplitude: Some(_), output_every } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
+        }
+        procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
             crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
         }
         procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
@@ -349,13 +452,13 @@ impl Engine {
         // node count, which a field-length check cannot distinguish from a compatible Result.
         let prev = match &step.after {
             Some(name) => {
-                let current_hash = self.model_hash();
+                let current_hash = crate::hash::result_hash(&self.model);
                 let (hash, _, result) = self.results.get(name).ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                         .at(format!("step '{}'", step.name))
                         .suggest(format!("solve.run on step '{name}' first"))
                 })?;
-                if hash != &current_hash {
+                if hash.validity != current_hash {
                     return Err(Error::new(
                         ErrorCode::ResultStale,
                         format!("step '{name}' has a Result that does not match the current Model state"),
@@ -377,15 +480,25 @@ impl Engine {
                 &step,
                 prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
             )?;
-            if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
+            if matches!(
+                &proc_step,
+                procedure::Step::HeatTransient { .. }
+                    | procedure::Step::Explicit { .. }
+                    | procedure::Step::Static { amplitude: Some(_), .. }
+            ) {
                 planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
             }
-            procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
+            let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+            let mut result =
+                procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?;
+            result.assumptions = assumptions;
+            result
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        let hash = self.model_hash();
+        let hash =
+            crate::engine::ResultHashes { model: self.model_hash(), validity: crate::hash::result_hash(&self.model) };
         self.results.insert(step.name.clone(), (hash, self.revision(), result));
-        Ok(Output::Solve { summary: self.result_summary(&step.name) })
+        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -459,8 +572,12 @@ impl Engine {
             let (mut result, dofs) = {
                 let built = self.mesh.as_ref().expect("built above");
                 let p = build_problem(&self.model, built, &step)?;
-                let result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
-                (result, p.n_dofs() as u64)
+                let dofs = p.n_dofs() as u64;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let mut result =
+                    procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+                result.assumptions = assumptions;
+                (result, dofs)
             };
             result.solver.time_ms = self.host.now_ms() - started;
             let built = self.mesh.as_ref().expect("built above");
@@ -474,7 +591,10 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            let hash = self.model_hash();
+            let hash = crate::engine::ResultHashes {
+                model: self.model_hash(),
+                validity: crate::hash::result_hash(&self.model),
+            };
             self.results.insert(step.name, (hash, self.revision(), last.expect("at least two sizes ran")));
         } else {
             self.model.mesh = Some(settings);
@@ -558,7 +678,7 @@ impl Engine {
     pub(crate) fn stored<'e>(
         &'e self,
         step: Option<&str>,
-    ) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
+    ) -> Result<(&'e str, &'e crate::engine::ResultHashes, u32, &'e StepResult), Error> {
         let name: &'e str = match step {
             Some(n) => self.results.get_key_value(n).map(|(k, _)| k.as_str()).unwrap_or(""),
             None => self
@@ -573,10 +693,11 @@ impl Engine {
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
-    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    /// changed coordinates or connectivity; the Result-validity fingerprint covers every
+    /// physics and mesh input while deliberately excluding the display name (ADR 0017).
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
         let (name, hash, _, result) = self.stored(step)?;
-        if *hash != self.model_hash() {
+        if hash.validity != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
                 format!("step '{name}' has a Result that does not match the current Model state"),
@@ -639,7 +760,7 @@ impl Engine {
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
             revision: revision + 1,
-            stale: *hash != self.model_hash(),
+            stale: hash.validity != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,
@@ -654,6 +775,7 @@ impl Engine {
                 })
                 .collect(),
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
+            assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             history: res
                 .history
@@ -668,6 +790,7 @@ impl Engine {
                 })
                 .collect(),
             balance: residual / biggest,
+            warnings: res.warnings.clone(),
         }
     }
 }
@@ -709,6 +832,22 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn density_assumption_causes_name_the_procedure_reading_it() {
+        assert_eq!(rho_assumption_cause(Procedure::Static, true), Some("gravity read the omitted density as zero"));
+        assert_eq!(
+            rho_assumption_cause(Procedure::Modal, false),
+            Some("modal mass assembly read the omitted density as zero")
+        );
+        assert_eq!(
+            rho_assumption_cause(Procedure::Explicit, false),
+            Some("explicit mass assembly read the omitted density as zero")
+        );
+        for procedure in [Procedure::Static, Procedure::HeatSteady, Procedure::HeatTransient] {
+            assert_eq!(rho_assumption_cause(procedure, false), None);
+        }
+    }
 
     /// Every Result field reaches a summary in the Model's own units, so every one of them
     /// needs a dimension and a name — including the ones only a later procedure produces.

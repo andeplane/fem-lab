@@ -49,7 +49,7 @@ export function fakeTransport(): EngineTransport {
     field: vi.fn(),
     export: vi.fn(async () => ({ filename: 'beam.vtu', mime: 'application/xml', bytes: new Uint8Array([1, 2]) })),
     exportFile: vi.fn(async () => MODEL_FILE),
-    importFile: vi.fn(async () => ACK),
+    importFile: vi.fn(async () => ({ ...ACK, journal: MODEL_FILE.journal })),
     cancel: vi.fn(async () => undefined),
   };
 }
@@ -86,13 +86,14 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
     selection: { set: vi.fn(), clear: vi.fn(), setPickTarget: vi.fn(), get: vi.fn(() => ({ bodies: ['beam'], faces: ['beam.top'], sets: [], refs: ['body:beam', 'face:beam.top'] })) },
     panels: { toggle: vi.fn(), resize: vi.fn() },
     report: { print: vi.fn() },
-    script: { validate: vi.fn(async () => ({ ok: true, diagnostics: [] })), run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn() },
+    script: { validate: vi.fn(async () => ({ ok: true, diagnostics: [] })), run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn(), setEditing: vi.fn() },
     chat: { send: vi.fn(), insertMention: vi.fn(), setDraft: vi.fn(), clear: vi.fn() },
     skills: vi.fn(() => [{ name: 'beam-theory-check', description: 'Compare a cantilever with Euler–Bernoulli beam theory.', when: 'a beam', body: '# Steps', source: 'builtin' as const }]),
     clipboard: { writeText: vi.fn(async () => undefined) },
     files: {
       pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
       download: vi.fn(),
+      markSaved: vi.fn(),
       shareLink: vi.fn(async () => ({ url: 'https://x/#j' })),
       restore: vi.fn(async (id?: string) => id === undefined ? SAVED : AUTOSAVES.find(x => x.id === id) ?? null),
       autosave: vi.fn(() => ({ enabled: autosaveOn, saved: SAVED })),

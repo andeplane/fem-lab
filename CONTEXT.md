@@ -93,6 +93,11 @@ A named, schema-typed read of the Model, Mesh or Result that changes nothing. Qu
 what let a script or an AI observe before deciding.
 _Avoid_: getter, probe, inspect
 
+**Result-validity fingerprint**:
+An internal hash of Model parameters with only the display name excluded. It determines
+whether a cached Result is stale. Full Model and Journal hashes still include the name for
+saved-file and replay identity ([ADR 0017](docs/adr/0017-result-validity-and-document-identity.md)).
+
 **Journal**:
 The ordered list of Commands applied to a Model since it was created. Replaying the Journal
 rebuilds the Model; exporting it yields a script; undo pops it.

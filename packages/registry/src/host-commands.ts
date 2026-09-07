@@ -174,6 +174,7 @@ export interface HostContext {
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
     stop(): void;
     setSource(code: string, append?: boolean): void;
+    setEditing(editing: boolean): void;
   };
   chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void | Promise<void>; clear(): void };
   skills(): Skill[];
@@ -182,6 +183,8 @@ export interface HostContext {
     /** Open a file picker and return the chosen file's text. */
     pick(): Promise<string>;
     download(name: string, mime: string, data: string | Uint8Array): void;
+    /** Establish the explicit save/open baseline from that operation's exact normalized Journal. */
+    markSaved(journal: ModelFile['journal']): void;
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the background save into the open project on or off. The choice sticks in this browser. */
     setAutosave(on: boolean): void;
@@ -253,7 +256,9 @@ async function importText(ctx: HostContext, text: string) {
   } catch (e) {
     throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'open a file written by file.save or an example from the gallery');
   }
-  return ctx.transport.importFile(file);
+  const ack = await ctx.transport.importFile(file);
+  ctx.files.markSaved(ack.journal);
+  return ack;
 }
 
 /** One row of the Export dialog (design §Export modal), and what `file.export` accepts. */
@@ -403,6 +408,7 @@ export const HOST_COMMANDS: HostDef[] = [
   }, false),
   def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
+  def('script.setEditing', 'Show the editable Script draft or the live Script generated from the Journal. Leaving edit mode retains the draft so the person can compare it with the Journal and resume it later.', z.object({ editing: z.boolean() }), ({ editing }, ctx) => ctx.script.setEditing(editing)),
   def('chat.send', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
   def('chat.insertMention', 'Insert an `@kind:name` chip into the chat input, as a viewer or tree click does while the chat is focused. Not a tool; the AI receives chips, it does not type them.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
   def('chat.clear', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
@@ -428,7 +434,9 @@ export const HOST_COMMANDS: HostDef[] = [
   }),
   def('file.save', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. `name` defaults to `<model name>.femlab.json`.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
     const file = await ctx.transport.exportFile();
-    return deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
+    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
+    ctx.files.markSaved(file.journal);
+    return receipt;
   }),
   def('file.export', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
     spec: z.union([
@@ -465,14 +473,18 @@ export const HOST_COMMANDS: HostDef[] = [
     'Open a saved project by id (query.projects lists them) and replay its Journal, so the Model, its history and its undo stack come back as they were left. Replaces whatever is open, which has already been saved under its own id.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.open(id)),
   def('project.rename',
-    'Rename a saved project, by default the one that is open. The name is what the top bar and the Recent projects list show; the Journal is not rewritten, so a file saved from it keeps the name the Model was created with.',
+    'Rename a saved project, by default the one that is open. The name appears in the Projects dialog and Recent projects list. This changes browser-project metadata only; use model.setName to edit the Model name shown in the top bar and saved in its Journal.',
     z.object({ id: z.string().optional(), name: z.string() }), ({ id, name }, ctx) => ctx.projects.rename(id, name)),
   def('project.delete',
     'Delete a saved project and its Journal from this browser for good. There is no undo and nothing was ever uploaded anywhere, so use file.save first if the model might be wanted again. Not a tool: deleting a person\u2019s work is theirs to do.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.delete(id), false),
   def('project.save',
     'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
-    none, (_, ctx) => ctx.projects.save()),
+    none, async (_, ctx) => {
+      const saved = await ctx.projects.save();
+      if (saved) ctx.files.markSaved(saved.journal);
+      return saved;
+    }),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
   def('ai.setKey', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
