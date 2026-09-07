@@ -2,6 +2,7 @@
 // one is adding a file here, not writing a component. Vite bundles JSON imports directly, so
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
 import cantilever from '../../tutorials/cantilever.json';
+import columnBuckling from '../../tutorials/column-buckling.json';
 import freeFreeModal from '../../tutorials/free-free-modal.json';
 import compositeBlockShear from '../../tutorials/composite-block-shear.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
@@ -38,6 +39,7 @@ export const TUTORIALS: Tutorial[] = [
   compositeBlockShear,
   solveCostAndSolvers,
   steelRoofTruss,
+  columnBuckling,
 ] as Tutorial[];
 
 export function tutorialById(id: string): Tutorial | undefined {

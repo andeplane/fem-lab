@@ -1,0 +1,135 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "column-buckling"
+    },
+    "hashAfter": "496b57c6433aa568584a15f3f043d3fa33a0b500501e3705a5c230d6f550bac0"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "kN",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "27244bf77915ff3606a2700d7257d3699bab679a72a804651c2f668db496a817"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "column",
+      "size": [
+        "200 mm",
+        "200 mm",
+        "2.5 m"
+      ]
+    },
+    "hashAfter": "9ec85f6c50c2d5b3d832ff70b645dd22c16dd15d8002e1b3303e4af006d6107f"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "S355",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025-2 S355J2"
+    },
+    "hashAfter": "29f98446b22012c725218e4af6f8f989128bce18b2a9fac6e90be8c499f21782"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "S355",
+      "bodies": [
+        "column"
+      ]
+    },
+    "hashAfter": "eb91b4afa1f73c3966b01f992bfe58171b25c2a9496282540a9e50a02ff437dd"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 3,
+          "ny": 3,
+          "nz": 20
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "fe466d19849c3a2c2d257a9cbed1a828686df6f565b5e0a9845db7c53970cd71"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "pin-foot",
+      "on": "column.zmin",
+      "dofs": [
+        "ux",
+        "uy"
+      ]
+    },
+    "hashAfter": "c6e7f46db1484fa1621720b4820bfc277d75f07234bb59d7e5053466c3b62ea3"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "mid-height",
+      "on": "column.zmax",
+      "normal": "z"
+    },
+    "hashAfter": "fd7c12f2ef7bc8391b90683189f4e621c0ced48ec7688bf7ca3f8d0d0114f8f0"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "axial",
+      "on": "column.zmin",
+      "value": "1 MPa"
+    },
+    "hashAfter": "90a5c35350fd555ab57ab70ae5f9d90f1a0d30069c52649386a620be1d0abbb8"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "buckle",
+      "procedure": "buckling",
+      "constraints": [
+        "pin-foot",
+        "mid-height"
+      ],
+      "loads": [
+        "axial"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 2
+    },
+    "hashAfter": "b1f473feb8d07b0a072912eedb849e8f33a8f146044d32885ab419a1c781e025"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "buckle"
+    },
+    "hashAfter": "b1f473feb8d07b0a072912eedb849e8f33a8f146044d32885ab419a1c781e025"
+  }
+]
