@@ -193,3 +193,57 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn acquisition_query_errors_and_oversized_operations_do_not_bypass_admission() {
+    let mut owner = owner("runtime");
+    let mut client = Client::acquire(&mut owner);
+    let old = client.lease.stamp.session.clone();
+    client.write(&mut owner, NEW).unwrap();
+    assert_eq!(owner.begin_run(&old).unwrap_err().code, ErrorCode::SessionExpired);
+    let mut malformed = client.context();
+    malformed.run_id.clear();
+    assert_eq!(
+        owner.query(ReadRequest { context: malformed, query: Query::Model {} }).unwrap_err().code,
+        ErrorCode::Schema
+    );
+    assert_eq!(
+        owner
+            .query(ReadRequest {
+                context: client.context(),
+                query: Query::Definition { kind: femlab_engine::command::ObjectKind::Body, name: "missing".into() }
+            })
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    let request = client.prepare(ADD);
+    let reply = dispatch(&mut owner, request.clone()).unwrap();
+    client.lease.stamp = reply.stamp.clone();
+    let mut reused = request;
+    reused.expected_version = reply.stamp.state_version;
+    assert_eq!(dispatch(&mut owner, reused).unwrap_err().code, ErrorCode::OperationReused);
+    let large = client.prepare(&format!(r#"{{"cmd":"model.setName","name":"{}"}}"#, "x".repeat(70_000)));
+    let reply = dispatch(&mut owner, large.clone()).unwrap();
+    client.lease.stamp = reply.stamp;
+    assert_eq!(dispatch(&mut owner, large).unwrap_err().code, ErrorCode::OperationUnknown);
+    // A tiny request can have an oversized error (known-name suggestions); neither is retained.
+    let huge_body =
+        format!(r#"{{"cmd":"geometry.addBox","name":"{}","size":["1 m","1 m","1 m"]}}"#, "b".repeat(70_000));
+    client.write(&mut owner, &huge_body).unwrap();
+    let missing = client.prepare(BAD_REMOVE);
+    assert_eq!(dispatch(&mut owner, missing.clone()).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(dispatch(&mut owner, missing).unwrap_err().code, ErrorCode::OperationUnknown);
+}
+const BAD_REMOVE: &str = r#"{"cmd":"geometry.remove","name":"missing"}"#;
+
+#[test]
+fn a_failed_model_snapshot_is_reported_with_no_fabricated_snapshot() {
+    let mut owner = owner("runtime");
+    let mut client = Client::acquire(&mut owner);
+    client.write(&mut owner, r#"{"cmd":"geometry.addBox","name":"body","size":["2 m","2 m","2 m"]}"#).unwrap();
+    client.write(&mut owner, r#"{"cmd":"geometry.subtractBox","name":"cut","from":"body","size":["1.5 m","1.5 m","1.5 m"],"at":["0 m","0 m","0 m"]}"#).unwrap();
+    client.write(&mut owner, r#"{"cmd":"geometry.addBox","name":"body","size":["1 m","1 m","1 m"]}"#).unwrap();
+    let error = owner.snapshot(&client.context()).unwrap_err();
+    assert!(error.cause.contains("empty solid"));
+}

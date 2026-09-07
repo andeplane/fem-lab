@@ -50,7 +50,8 @@ const MAX_RUNS: usize = 256;
 const MAX_OUTCOMES: usize = 128;
 type OperationKey = (SessionRef, String, String);
 struct Outcome {
-    digest: String,
+    command: Command,
+    expected_version: StateVersion,
     result: Result<WriteReply, Error>,
 }
 
@@ -151,9 +152,8 @@ impl SessionOwner {
         request.context.validate()?;
         let key =
             (request.context.session.clone(), request.context.run_id.clone(), request.context.operation_id.clone());
-        let digest = crate::hash::sha256_hex(&serde_json::to_vec(&request)?);
         if let Some(outcome) = self.outcomes.get(&key) {
-            if outcome.digest != digest {
+            if outcome.expected_version != request.expected_version || outcome.command != request.command {
                 return Err(Error::new(
                     ErrorCode::OperationReused,
                     "operation id was already used for a different request",
@@ -173,12 +173,21 @@ impl SessionOwner {
             .at("context.operationId"));
         }
         *last = sequence;
+        // Compare the complete typed payload, not a fallible serialization or a lossy hash.
+        // Large inputs/results are not retained; their operation high-water mark still prevents
+        // reexecution if the acknowledgement is lost. The bounded formatter never allocates text.
+        let captured =
+            small_enough(&request.command).then(|| (request.command.clone(), request.expected_version.clone()));
         let result = self.execute(request, progress).await;
-        self.outcomes.insert(key.clone(), Outcome { digest, result: result.clone() });
-        self.outcome_order.push_back(key);
-        if self.outcome_order.len() > MAX_OUTCOMES {
-            let oldest = self.outcome_order.pop_front().expect("length checked");
-            self.outcomes.remove(&oldest);
+        if let Some((command, expected_version)) = captured {
+            if small_enough(&result) {
+                self.outcomes.insert(key.clone(), Outcome { command, expected_version, result: result.clone() });
+                self.outcome_order.push_back(key);
+                if self.outcome_order.len() > MAX_OUTCOMES {
+                    let oldest = self.outcome_order.pop_front().expect("length checked");
+                    self.outcomes.remove(&oldest);
+                }
+            }
         }
         result
     }
@@ -204,4 +213,20 @@ impl SessionOwner {
         }
         Ok(WriteReply { context: request.context, stamp: self.stamp(), ack })
     }
+}
+
+// A conservative retention budget supplements the entry count. Debug formatting is used only
+// to bound retention, never for identity; exact typed equality above decides duplicate requests.
+struct RetentionBudget(usize);
+impl std::fmt::Write for RetentionBudget {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if text.len() > self.0 {
+            return Err(std::fmt::Error);
+        }
+        self.0 -= text.len();
+        Ok(())
+    }
+}
+fn small_enough(value: &dyn std::fmt::Debug) -> bool {
+    std::fmt::write(&mut RetentionBudget(64 * 1024), format_args!("{value:?}")).is_ok()
 }
