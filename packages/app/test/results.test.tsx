@@ -11,9 +11,10 @@ import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, leg
 import { makeHostContext } from '../src/host';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
-import { Store, initialState, solveLabel, stageOf } from '../src/store';
+import { Store, initialState, solveLabel, stageOf, verificationState, type AssistantVerification } from '../src/store';
 import { exaggerationHelp, probeLine } from '../src/ui/App';
 import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
+
 import { specOf, unavailable } from '../src/ui/Export';
 import type { WorkerTransport } from '../src/worker-transport';
 
@@ -33,6 +34,7 @@ const MODEL: ModelSummary = {
   materials: [],
   sets: [],
   constraints: [],
+  connections: [],
   loads: [],
   steps: [],
   meshSettings: null,
@@ -212,7 +214,7 @@ describe('the probe readout', () => {
 });
 
 describe('the Export dialog', () => {
-  const has = { hasMesh: true, hasResult: true };
+  const has = { hasMesh: true, hasResult: true, hasAnimation: true };
   it('says why a row cannot run yet', () => {
     expect(unavailable({ needs: 'none' } as never, has)).toBeNull();
     expect(unavailable({ needs: 'soon' } as never, has)).toBe('not written yet');
@@ -220,6 +222,8 @@ describe('the Export dialog', () => {
     expect(unavailable({ needs: 'mesh' } as never, has)).toBeNull();
     expect(unavailable({ needs: 'result' } as never, { ...has, hasResult: false })).toContain('solved Step');
     expect(unavailable({ needs: 'result' } as never, has)).toBeNull();
+    expect(unavailable({ needs: 'animation' } as never, { ...has, hasAnimation: false })).toContain('mode shape');
+    expect(unavailable({ needs: 'animation' } as never, has)).toBeNull();
   });
 
   it('builds the spec each row exports', () => {
@@ -227,6 +231,7 @@ describe('the Export dialog', () => {
     expect(specOf({ format: 'csv' } as never, undefined)).toEqual({ format: 'csv', table: 'extremes' });
     expect(specOf({ format: 'vtu' } as never, 'static')).toEqual({ format: 'vtu', step: 'static' });
     expect(specOf({ format: 'vtu' } as never, undefined)).toEqual({ format: 'vtu' });
+    expect(specOf({ format: 'webm' } as never, 'modes')).toEqual({ format: 'webm', width: 1280, height: 720 });
     expect(specOf({ format: 'stl' } as never, 'static')).toEqual({ format: 'stl' });
     expect(specOf({ format: 'png' } as never, 'static', { width: 1280, height: 720 })).toEqual({ format: 'png', width: 1280, height: 720 });
   });
@@ -234,7 +239,7 @@ describe('the Export dialog', () => {
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120), animate: vi.fn() };
+  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
@@ -518,6 +523,14 @@ describe('ResultsView', () => {
     expect(first).not.toBe(1);
   });
 
+  it('preserves an explicitly requested exaggeration when a solve completes', async () => {
+    const { store, viewer, results } = harness();
+    results.setDeformScale(200);
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(200);
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(200);
+  });
+
   it('recomputes an `auto` that had no Viewer to compute it with when one arrives', async () => {
     const { store, viewer, results } = harness();
     const arriving = viewer.current;
@@ -586,7 +599,6 @@ describe("the viewer's rounding and its stale-displacement guard", () => {
   });
 });
 
-
 it.each([null, false] as const)('shows honest cost bounds and %s feasibility in Checks', async (feasible) => {
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
@@ -615,4 +627,19 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   } finally {
     render(null, root);
   }
+});
+
+describe('Assistant observations remain distinct from engine checks', () => {
+  it('marks history changes, result changes and missing history as stale or unconfirmed', () => {
+    const record: AssistantVerification = { rows: [], model: null, revision: 10, journalHash: 'saved-history', result: { step: 'static', revision: 10 } };
+    const state = { ...initialState, revision: 10, journal: { hash: 'saved-history', entries: [], revision: 10, canUndo: true, canRedo: false }, result: RESULT };
+    expect(verificationState(record, state)).toContain('Result static rev 10');
+    expect(verificationState({ ...record, result: null }, state)).toContain('Stale');
+    expect(verificationState(record, { ...state, journal: { ...state.journal, hash: 'same-revision-other-history' } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, stale: true } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, step: 'other' } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, revision: 11 } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: null })).toContain('Stale');
+    expect(verificationState({ ...record, journalHash: null }, state)).toContain('unconfirmed');
+  });
 });

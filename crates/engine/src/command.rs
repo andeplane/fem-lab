@@ -17,6 +17,15 @@ use crate::units::{
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
 pub type SetRef = String;
 
+/// How two faces interact where they meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ContactKind {
+    /// Glued: the two faces never separate and never slide, so the assembly behaves as one
+    /// part. Linear, and the only kind there is today.
+    Bonded,
+}
+
 /// A displacement component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -96,7 +105,9 @@ pub enum Procedure {
     Explicit,
 }
 
-/// A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+/// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
+/// temperature of a heat-transient Step, and every Load and prescribed displacement of a
+/// static one.
 ///
 /// Commands are replayed from the Journal, so a time function is data, never a closure: it is
 /// either a sine or a piecewise-linear table, and nothing else.
@@ -268,6 +279,9 @@ pub enum MesherSpec {
     /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
     /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
     /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    /// Sheet translation, rotation about z and positive in-plane scaling are applied before
+    /// meshing. Size and refine boxes use world coordinates; curved boundaries are sampled
+    /// to one tenth of size in world space. Nested or out-of-plane transforms are unsupported.
     Free {
         of: String,
         size: Q<Length>,
@@ -689,6 +703,12 @@ pub enum Command {
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
     ModelSetUnits { units: UnitSet },
 
+    /// Change the Model's display name without resetting geometry, history or solved Results.
+    /// A name-only edit is undoable and changes the full Model/Journal identity, but does not
+    /// change the Result-validity fingerprint. Whitespace-only names are rejected.
+    #[serde(rename = "model.setName", rename_all = "camelCase")]
+    ModelSetName { name: String },
+
     /// Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
     /// or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
     /// solid bodies; mixing them makes the Model ill-posed.
@@ -819,6 +839,11 @@ pub enum Command {
     /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
     /// changing/removing it requires no remaining Body references and clears its material.
     /// Use model.rename to change an implicit Body name while preserving its references.
+    /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+    /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
+    /// has no effect when `simplices` is true, because simplex elements have no incompatible
+    /// modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -826,6 +851,8 @@ pub enum Command {
         order: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplices: Option<bool>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
@@ -871,13 +898,34 @@ pub enum Command {
     #[serde(rename = "constraint.temperature", rename_all = "camelCase")]
     ConstraintTemperature { name: String, on: SetRef, value: Q<Temperature> },
 
+    /// Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+    /// point it projects onto in `master`, in every displacement component. It is a linear
+    /// constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+    /// bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+    /// slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+    /// gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+    /// master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+    /// so the two parts are in perfect thermal contact. A tie is listed in a Step's
+    /// `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+    /// between Bodies that share no element, which query.cost does not count.
+    #[serde(rename = "contact.add", rename_all = "camelCase")]
+    ContactAdd {
+        name: String,
+        master: SetRef,
+        slave: SetRef,
+        kind: ContactKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<Q<Length>>,
+    },
+
     /// Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
     /// it first. Removing a constraint makes existing Results of that Step stale.
     #[serde(rename = "constraint.remove", rename_all = "camelCase")]
     ConstraintRemove { name: String },
 
     /// Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-    /// The total force is the pressure times the face area and is reported by query.model.
+    /// Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+    /// force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
     #[serde(rename = "load.pressure", rename_all = "camelCase")]
     LoadPressure { name: String, on: SetRef, value: Q<Stress> },
 
@@ -925,6 +973,19 @@ pub enum Command {
     #[serde(rename = "load.heatFlux", rename_all = "camelCase")]
     LoadHeatFlux { name: String, on: SetRef, q: Q<HeatFlux> },
 
+    /// Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
+    /// `sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant
+    /// sigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model
+    /// displayed in degC is converted to kelvin before the fourth power is taken. `emissivity`
+    /// is dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this
+    /// holds the temperature, so a heat Step whose only boundary is radiation is still well
+    /// posed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and
+    /// solution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A
+    /// heat-steady Result reports the number of passes as its solver iteration count, and a Step
+    /// that runs out of them fails with solve.diverged rather than returning a wrong answer.
+    #[serde(rename = "load.radiation", rename_all = "camelCase")]
+    LoadRadiation { name: String, on: SetRef, emissivity: f64, t_inf: Q<Temperature> },
+
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
     /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
     /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
@@ -944,9 +1005,17 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
-    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-    /// `theta` must lie in [0, 1].
+    /// `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
+    /// `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+    /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
+    /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
+    /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
+    /// scaled, so its thermal strain is present in full at every increment. Without an
+    /// `amplitude` a static Step is the single solve it has always been and retains nothing.
+    /// Heat-steady requires a finite positive material conductivity `k`; heat-transient also
+    /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
+    /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
+    /// on its own answer — today a radiation load — and are ignored by a Step that is linear.
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -961,8 +1030,9 @@ pub enum Command {
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<f64>,
-        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
-        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
+        /// Maximum time increment of a heat-transient Step, or of a static Step with an
+        /// amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+        /// tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -979,6 +1049,14 @@ pub enum Command {
         amplitude: Option<AmplitudeSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial: Option<Q<Temperature>>,
+        /// Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+        /// the solution between two passes. Default 1e-6.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonlinear_tolerance: Option<f64>,
+        /// Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+        /// Default 50.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonlinear_max_iterations: Option<u32>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
@@ -993,10 +1071,17 @@ pub enum Command {
     StepReorder { order: Vec<String> },
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
-    /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress. A Step
-    /// with `after` requires its predecessor's Result to match the current Model state;
-    /// after an edit, solve the predecessor again before continuing the chain.
+    /// element quality) and refuses with a suggested fix. Returns extremes, reactions and every
+    /// omitted optional material property the successful solver actually read as zero; always
+    /// check that reactions balance the applied loads before trusting a stress. A Step with
+    /// `after` requires its predecessor's Result to match the current Model state; after an edit,
+    /// solve the predecessor again before continuing the chain.
+    /// Direct linear solves verify their residual too: nonfinite or excessive residuals return
+    /// solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
+    /// (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+    /// direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+    /// On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+    /// assembly and triangular solves retain the engine thread count.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
@@ -1010,13 +1095,15 @@ pub enum Command {
 
     /// Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
     /// the observed convergence rate and a Richardson estimate of the converged value. Sizes
-    /// should halve each time (three or more). Restores the previous mesh settings afterwards
-    /// unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-    /// measure equilibrium fields; transient heat and explicit dynamics measure the final
-    /// field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-    /// unsupported because a mode amplitude is not a mesh-independent quantity; compare
-    /// frequencies with solve.run/query.result instead. Steps with after are unsupported:
-    /// solve their dependencies and target at each mesh explicitly.
+    /// may have unequal refinement ratios. Three distinct positive sizes are needed for a
+    /// finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+    /// are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+    /// Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+    /// transient heat and explicit dynamics measure the final field at the configured tEnd
+    /// with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+    /// amplitude is not a mesh-independent quantity; compare frequencies with
+    /// solve.run/query.result instead. Steps with after are unsupported: solve their
+    /// dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
     StudyConverge {
         step: String,

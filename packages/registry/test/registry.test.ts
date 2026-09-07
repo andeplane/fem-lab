@@ -27,17 +27,21 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.setClip': { plane: { normal: [0, 0, 1], offset: 0 } },
   'view.toggle': { layer: 'mesh' },
   'view.setVisible': { bodies: ['beam'], on: false },
+  'view.highlight': { faces: ['beam.top'] },
   'view.setTheme': { theme: 'dark' },
-  'view.animate': { step: 'static', playing: true },
-  'selection.set': { bodies: ['beam'], mode: 'add' },
+  'view.animate': { step: 'modes', mode: 1, playing: true },
+  'view.playTransient': { step: 'heat', playing: false, sample: { kind: 'frame', index: 0 } },
+  'selection.set': { refs: ['material:steel'], mode: 'add' },
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
   'panel.resize': { panel: 'tree', size: 300 },
+  'report.print': {},
   'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
+  'script.setEditing': { editing: false },
   'chat.send': { text: 'hello @body:beam' },
   'chat.insertMention': { ref: 'body:beam' },
   'chat.clear': {},
@@ -46,6 +50,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.open': { json: JSON.stringify(MODEL_FILE) },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
+  'file.cancelAnimationCapture': {},
   'file.shareLink': {},
   'file.autosave': { on: true },
   'file.restore': {},
@@ -142,6 +147,13 @@ describe('Registry', () => {
     expect(bad.where).toBe('position');
     const root = (await registry.query({ query: 'query.screenshot', width: 'wide' }).catch((e: unknown) => e)) as FemError;
     expect(root.code).toBe('schema');
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 0, height: 720 } })).rejects.toMatchObject({ code: 'schema', where: 'spec', suggestion: expect.stringContaining("describe('file.export')") });
+    for (const input of [
+      { cmd: 'view.animate', step: '', mode: 1, playing: true },
+      { cmd: 'view.animate', step: 'modes', mode: 0, playing: true },
+      { cmd: 'view.animate', step: 'modes', mode: 1, playing: true, speed: 0 },
+      { cmd: 'view.animate', step: 'modes', mode: 1, playing: false, frame: 101 },
+    ]) await expect(registry.dispatch(input)).rejects.toMatchObject({ code: 'schema' });
     // a union that matches no member reports at the root: `where` is null
     const union = (await registry.dispatch({ cmd: 'view.showField', nothing: true }).catch((e: unknown) => e)) as FemError;
     expect(union.toJSON()).toMatchObject({ code: 'schema', where: null });
@@ -193,10 +205,22 @@ describe('Registry', () => {
     expect(host.view.showField).toHaveBeenCalledWith({ field: null });
     await registry.dispatch({ cmd: 'view.showField', field: '' });
     expect(host.view.showField).toHaveBeenCalledWith({ field: '' });
+    await registry.dispatch({ cmd: 'view.highlight', bodies: ['beam'] });
+    expect(host.view.highlight).toHaveBeenCalledWith({ bodies: ['beam'] });
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
+    await registry.dispatch({ cmd: 'selection.set', refs: ['load:p'] });
+    expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(host.script.setEditing).toHaveBeenCalledWith(true);
+  });
+
+  it('opens the host print path for the calculation note', async () => {
+    const { registry, host } = make();
+    await registry.dispatch({ cmd: 'report.print' });
+    expect(host.report.print).toHaveBeenCalledOnce();
   });
 
   it('skill.invoke returns the body or a not-found error listing the skills', async () => {
@@ -348,6 +372,12 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 0 } })).rejects.toThrow();
     await expect(registry.query({ query: 'query.screenshot', height: -2 })).rejects.toThrow();
 
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 1280, height: 720 } });
+    expect(host.view.captureAnimation).toHaveBeenCalledWith({ width: 1280, height: 720, fps: 30, duration: 4 });
+    expect(wrote()).toEqual(['beam.webm', 'video/webm', new Uint8Array([26, 69, 223, 163])]);
+    (host.view.captureAnimation as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ webm: null });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 640, height: 360, fps: 24, duration: 2 } })).resolves.toEqual({ cancelled: true });
+
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
     expect(wrote()[0]).toBe('beam-extremes.csv');
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv', table: 'reactions', step: 'static' } });
@@ -400,6 +430,56 @@ describe('Registry', () => {
   });
 });
 
+it('marks only successful explicit saves and imports, using the captured normalized Journal', async () => {
+  const { registry, host, transport } = make(true);
+  const captured = { ...MODEL_FILE, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'saved' }, hashAfter: 'saved-hash' }] } };
+  const later = { ...MODEL_FILE, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'edited' }, hashAfter: 'edited-hash' }] } };
+  vi.mocked(transport.exportFile).mockResolvedValue(captured);
+  let finish!: () => void;
+  vi.mocked(host.folder.writeText).mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const saving = registry.dispatch({ cmd: 'file.save', to: 'folder' });
+  await vi.waitFor(() => expect(host.folder.writeText).toHaveBeenCalled());
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  vi.mocked(transport.exportFile).mockResolvedValue(later);
+  finish(); await saving;
+  expect(host.files.markSaved).toHaveBeenLastCalledWith(captured.journal);
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(host.folder.writeText).mockRejectedValue(new Error('write failed'));
+  await expect(registry.dispatch({ cmd: 'file.save', to: 'folder' })).rejects.toThrow('write failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  // The engine may normalize omitted/default fields; the imported receipt is authoritative.
+  vi.mocked(transport.importFile).mockResolvedValue({ ...ACK, journal: later.journal });
+  await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) });
+  expect(host.files.markSaved).toHaveBeenLastCalledWith(later.journal);
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(transport.importFile).mockRejectedValue(new Error('import failed'));
+  await expect(registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) })).rejects.toThrow('import failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+});
+
+it('marks exactly the successful project-save receipt, leaving failures and null saves unchanged', async () => {
+  const { registry, host, transport } = make();
+  const journal = { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'captured' }, hashAfter: 'captured' }] };
+  const receipt = { ...PROJECT, saving: false, autosave: false, journal };
+  let finish!: (value: typeof receipt) => void;
+  vi.mocked(host.projects.save).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = registry.dispatch({ cmd: 'project.save' });
+  await vi.waitFor(() => expect(host.projects.save).toHaveBeenCalledOnce());
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  // A later edit must not replace the payload that the project actually persisted.
+  vi.mocked(transport.exportFile).mockResolvedValue({ ...MODEL_FILE, journal: { entries: [] } });
+  finish(receipt);
+  await expect(pending).resolves.toEqual(receipt);
+  expect(host.files.markSaved).toHaveBeenCalledExactlyOnceWith(journal);
+  expect(transport.exportFile).not.toHaveBeenCalled();
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(host.projects.save).mockRejectedValueOnce(new Error('storage failed'));
+  await expect(registry.dispatch({ cmd: 'project.save' })).rejects.toThrow('storage failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  vi.mocked(host.projects.save).mockResolvedValueOnce(null);
+  await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+});
 
 it('rejects oversized Model files from every input route before importing', async () => {
   const { registry, host, transport } = make(true);

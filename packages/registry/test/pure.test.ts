@@ -114,11 +114,12 @@ describe('decodeBulk', () => {
     const positions = new Float32Array([1, 2, 3]);
     const indices = new Uint32Array([0, 1, 2]);
     const flags = new Uint8Array([1]);
+    const frame = new Float64Array([1 + 2 ** -40]);
     const out = decodeBulk(
-      { value: { faceNames: ['top'] }, buffers: [{ name: 'positions', dtype: 'f32', length: 3 }, { name: 'indices', dtype: 'u32', length: 3 }, { name: 'flags', dtype: 'u8', length: 1 }] },
-      [positions.buffer, indices.buffer, flags.buffer],
+      { value: { faceNames: ['top'] }, buffers: [{ name: 'positions', dtype: 'f32', length: 3 }, { name: 'indices', dtype: 'u32', length: 3 }, { name: 'flags', dtype: 'u8', length: 1 }, { name: 'frame', dtype: 'f64', length: 1 }] },
+      [positions.buffer, indices.buffer, flags.buffer, frame.buffer],
     );
-    expect(out).toEqual({ faceNames: ['top'], positions, indices, flags });
+    expect(out).toEqual({ faceNames: ['top'], positions, indices, flags, frame });
     expect(out['positions']).toBeInstanceOf(Float32Array);
     expect(decodeBulk({ value: { n: 1 } }, [])).toEqual({ n: 1 });
   });

@@ -18,3 +18,28 @@ test('@cpu mesh accuracy warning previews a supported quadratic switch', async (
   await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.at(-1)?.cmd)).toEqual({ cmd: 'mesh.set', ...args, order: 2 });
   expect((await page.evaluate(() => window.fem.query.journal())).entries).toHaveLength(journal.entries.length + 1);
 });
+
+test('@cpu tetrahedral accuracy fix produces quadratic tetrahedra on Apply', async ({ page }) => {
+  await page.goto('./');
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
+  await page.evaluate(async () => {
+    await window.fem.model.new({ name: 'tetrahedral-accuracy' });
+    await window.fem.geometry.addBox({ name: 'block', size: ['1 m', '1 m', '1 m'] });
+    await window.fem.mesh.set({ mesher: { kind: 'lattice', size: '1 m' }, simplices: true, order: 1 });
+  });
+  expect((await page.evaluate(() => window.fem.query.mesh())).elementKind).toBe('tet4');
+  await expect(page.locator('.tree .summary').filter({ hasText: 'Tet 4' })).toHaveCount(1);
+  const args = { mesher: { kind: 'lattice', size: '1 m' }, simplices: true, order: 1 };
+  await page.evaluate((args) => window.fem.dispatch({ cmd: 'form.open', command: 'mesh.set', args }), args);
+  const journal = await page.evaluate(() => window.fem.query.journal());
+  const warning = page.locator('.props [data-field="order"] [role="status"]');
+  await expect(warning).toContainText('Linear tetrahedra');
+  await warning.getByRole('button', { name: 'Switch to quadratic' }).click();
+  expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+  await page.locator('.props button.apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.mesh()).elementKind)).toBe('tet10');
+  await expect(page.locator('.tree .summary').filter({ hasText: 'Tet 10' })).toHaveCount(1);
+  const after = await page.evaluate(() => window.fem.query.journal());
+  expect(after.entries).toHaveLength(journal.entries.length + 1);
+  expect(after.entries.at(-1)?.cmd).toEqual({ cmd: 'mesh.set', ...args, order: 2 });
+});

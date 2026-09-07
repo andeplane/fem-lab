@@ -50,6 +50,21 @@ impl Engine {
                     can_redo: self.can_redo(),
                 }))
             }
+            Query::JournalDiff { base } => {
+                let shared = base
+                    .entries
+                    .iter()
+                    .zip(&self.journal.entries)
+                    .take_while(|(a, b)| a.cmd == b.cmd && a.hash_after == b.hash_after)
+                    .count();
+                Ok(QueryResult::JournalDiff(JournalDiff {
+                    base_hash: base.hash(),
+                    current_hash: self.journal.hash(),
+                    shared_entries: shared as u32,
+                    removed: base.entries[shared..].to_vec(),
+                    added: self.journal.entries[shared..].to_vec(),
+                }))
+            }
             Query::Script {} => Ok(QueryResult::Script(ScriptText { text: self.journal.as_script(crate::version()) })),
             Query::Convert { quantity, to } => {
                 let (value, unit) = quantity.split()?;
@@ -75,12 +90,16 @@ impl Engine {
                 let name = self.stored(step.as_deref())?.0.to_string();
                 Ok(QueryResult::Result(self.result_summary(&name)))
             }
-            Query::Probe { step, field, component, at } => {
-                self.query_probe(step.as_deref(), field, component, at).map(QueryResult::Probe)
+            Query::Frames { step } => self.query_frames(step.as_deref()).map(QueryResult::Frames),
+            Query::Frame { step, index, sample, field } => {
+                self.query_frame(step.as_deref(), index, sample, field).map(QueryResult::Frame)
             }
-            Query::Path { step, field, component, from, to, n } => {
-                self.query_path(step.as_deref(), field, component, from, to, n).map(QueryResult::Path)
+            Query::Probe { step, field, component, sample, at } => {
+                self.query_probe(step.as_deref(), field, component, sample.as_ref(), at).map(QueryResult::Probe)
             }
+            Query::Path { step, field, component, sample, from, to, n } => self
+                .query_path(step.as_deref(), field, component, sample.as_ref(), [from, to], n)
+                .map(QueryResult::Path),
             Query::Cost { step } => self.query_cost(&step).map(QueryResult::Cost),
             Query::Report { step, include } => {
                 self.report(step.as_deref(), include.as_deref()).map(QueryResult::Report)
@@ -180,13 +199,33 @@ impl Engine {
                 }
             })
             .collect();
+        let connections = m
+            .constraints
+            .iter()
+            .filter_map(|c| match &c.kind {
+                ConstraintKind::Bonded { master, tol } => Some(ConnectionRow {
+                    name: c.name.clone(),
+                    kind: "bonded".into(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    summary: match tol {
+                        None => "bonded, pairing tolerance from the mesh size".to_string(),
+                        Some(t) => {
+                            let v = display(m, *t, Length::DIM);
+                            format!("bonded, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
+                        }
+                    },
+                }),
+                _ => None,
+            })
+            .collect();
         let constraints = m
             .constraints
             .iter()
-            .map(|c| ConstraintRow {
-                name: c.name.clone(),
-                on: c.on.clone(),
-                summary: match &c.kind {
+            .filter_map(|c| {
+                let summary = match &c.kind {
+                    // A tie prescribes nothing and names two Sets: it is a Connection above.
+                    ConstraintKind::Bonded { .. } => return None,
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
@@ -200,7 +239,8 @@ impl Engine {
                         let v = display(m, *value, Temperature::DIM);
                         format!("temperature = {} {}", units::fmt_sig(v.value, 4), v.unit)
                     }
-                },
+                };
+                Some(ConstraintRow { name: c.name.clone(), on: c.on.clone(), summary })
             })
             .collect();
         let loads = m
@@ -224,6 +264,18 @@ impl Engine {
                                 "h = {} {}, tInf = {} {}",
                                 units::fmt_sig(hv.value, 4),
                                 hv.unit,
+                                units::fmt_sig(t.value, 4),
+                                t.unit
+                            ),
+                        )
+                    }
+                    LoadKind::Radiation { emissivity, t_inf, .. } => {
+                        let t = display(m, *t_inf, Temperature::DIM);
+                        (
+                            "radiation",
+                            format!(
+                                "emissivity = {}, tInf = {} {}",
+                                units::fmt_sig(*emissivity, 4),
                                 units::fmt_sig(t.value, 4),
                                 t.unit
                             ),
@@ -285,6 +337,7 @@ impl Engine {
             materials,
             sets,
             constraints,
+            connections,
             loads,
             steps,
             mesh_settings: m.mesh.clone(),
@@ -369,6 +422,16 @@ impl Engine {
             count: set.count() as u32,
             bbox: bbox6(m, lo, hi),
             measure: display(m, measure, Dimension([exponent, 0, 0, 0])),
+            pressure_area: if set.kind == crate::mesh::SetKind::Face {
+                let area = set
+                    .faces
+                    .iter()
+                    .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
+                    .sum();
+                Some(display(m, area, Dimension([2, 0, 0, 0])))
+            } else {
+                None
+            },
             centroid: [
                 display(m, centroid[0], Length::DIM),
                 display(m, centroid[1], Length::DIM),
@@ -379,18 +442,27 @@ impl Engine {
 
     /// The nodal field a probe or a path samples, plus its physical dimension, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
-    fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, Dimension), Error> {
-        // Every sampled query must reject a Result from an older Model revision. Keep the
-        // Result's reaction quantity so thermal reaction fields retain their power dimension.
+    fn sampled(
+        &mut self,
+        step: Option<&str>,
+        field: Field,
+        sample: Option<&FrameSample>,
+    ) -> Result<(FieldData, Dimension, Option<ResolvedFrame>), Error> {
         let reaction_quantity = self.current_result(step)?.reaction_quantity;
-        let f = self.field(step, field)?.clone();
+        let (f, resolved) = match sample {
+            Some(sample) => {
+                let (f, resolved, _) = self.sampled_frame(step, Some(field), sample)?;
+                (f, Some(resolved))
+            }
+            None => (self.field(step, field)?.clone(), None),
+        };
         if f.per != crate::post::Per::Node {
             return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let dim = crate::solve_run::field_dimension(field, reaction_quantity);
         self.mesh().expect("a Result with the current Model hash was solved on this Mesh");
-        Ok((f, dim))
+        Ok((f, dim, resolved))
     }
 
     /// One component of a sampled value: the named one, or the magnitude of a vector.
@@ -407,16 +479,17 @@ impl Engine {
         step: Option<&str>,
         field: Field,
         component: Option<u8>,
+        sample: Option<&FrameSample>,
         at: [Q<Length>; 3],
     ) -> Result<ProbeResult, Error> {
-        let (f, dim) = self.sampled(step, field)?;
+        let (f, dim, sample) = self.sampled(step, field, sample)?;
         let x = si3(&at)?;
         let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
         let (elem, v) = crate::post::probe::probe(mesh, &f, x).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, "the point is outside the mesh").at("at").suggest("query.mesh reports bbox")
         })?;
         let value = display(&self.model, Engine::pick(&v, component), dim);
-        Ok(ProbeResult { value, element: elem, interpolated: true })
+        Ok(ProbeResult { sample, value, element: elem, interpolated: true })
     }
 
     /// `query.path`: a field sampled along a line.
@@ -425,16 +498,17 @@ impl Engine {
         step: Option<&str>,
         field: Field,
         component: Option<u8>,
-        from: [Q<Length>; 3],
-        to: [Q<Length>; 3],
+        sample: Option<&FrameSample>,
+        line: [[Q<Length>; 3]; 2],
         n: u32,
     ) -> Result<PathResult, Error> {
-        let (f, dim) = self.sampled(step, field)?;
-        let (a, b) = (si3(&from)?, si3(&to)?);
+        let (f, dim, sample) = self.sampled(step, field, sample)?;
+        let (a, b) = (si3(&line[0])?, si3(&line[1])?);
         let unit = display(&self.model, 0.0, dim).unit;
         let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
         let samples = crate::post::probe::path(mesh, &f, a, b, n as usize);
         Ok(PathResult {
+            sample,
             s: samples.iter().map(|(s, _)| *s).collect(),
             values: samples
                 .iter()

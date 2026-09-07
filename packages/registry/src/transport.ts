@@ -1,6 +1,9 @@
 import type { Ack, Command, EngineError, Field, ModelFile, Query, QueryResult } from './generated/engine';
 import { FemError } from './error';
 
+/** Import completion and its normalized Journal, captured atomically at the import boundary. */
+export interface ImportAck extends Ack { journal: ModelFile['journal'] }
+
 export interface Progress {
   phase: string;
   fraction?: number;
@@ -16,6 +19,10 @@ export interface Surface {
   edgeFace?: Uint32Array;
   edgeBody?: Uint32Array;
   faceNames: string[];
+  /** All face-Set memberships, CSR by original surface triangle; includes named predicate Sets. */
+  setNames?: string[];
+  triSetOffsets?: Uint32Array;
+  triSets?: Uint32Array;
   bodyNames: string[];
 }
 export interface FieldData {
@@ -47,7 +54,7 @@ export interface EngineTransport {
   field(step: string, field: Field, component?: number): Promise<FieldData>;
   export(spec: ExportSpec): Promise<ExportedFile>;
   exportFile(): Promise<ModelFile>;
-  importFile(file: ModelFile): Promise<Ack>;
+  importFile(file: ModelFile): Promise<ImportAck>;
   cancel(): Promise<void>;
 }
 
@@ -58,7 +65,7 @@ export interface Req {
   op: Op;
   payload: unknown;
 }
-export type Dtype = 'f32' | 'u32' | 'u8';
+export type Dtype = 'f64' | 'f32' | 'u32' | 'u8';
 export interface BufferSpec {
   name: string;
   dtype: Dtype;
@@ -69,7 +76,7 @@ export type Res =
   | { id: number; ok: false; error: EngineError }
   | { id: number; progress: Progress };
 
-const VIEW = { f32: Float32Array, u32: Uint32Array, u8: Uint8Array } as const;
+const VIEW = { f64: Float64Array, f32: Float32Array, u32: Uint32Array, u8: Uint8Array } as const;
 
 /**
  * A bulk reply is a JSON header whose `buffers` list names, dtypes and lengths, followed by the

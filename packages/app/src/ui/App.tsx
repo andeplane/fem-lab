@@ -9,24 +9,27 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, type ResizablePanel, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
+import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
 import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
+import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
 import { blockers, type Defs, shapeKinds } from './schema';
 
 export type { Dispatch } from './cmd';
 
-// Three chunks that must not be on the boot path: the two AI SDKs, the tutorial runner and (in
-// `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
+// Chunks that must not be on the boot path: the two AI SDKs, the tutorial runner, the report
+// renderer and (in `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
 const AssistantPanel = lazy(() => import('../ai').then((m) => m.AssistantPanel));
 const TutorialPanel = lazy(() => import('../tutorial').then((m) => m.TutorialPanel));
 const Tour = lazy(() => import('../tutorial').then((m) => m.Tour));
+const Report = lazy(() => import('./Report').then((m) => m.Report));
 
 export interface AppProps {
   store: Store;
@@ -88,6 +91,7 @@ const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
 
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const dirty = useMemo(() => unsaved(s), [s.journal, s.savedJournal]);
   const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
   const step = s.model?.steps[0]?.name ?? '';
   // Design state 7: while an error card stands, Solve is disabled and carries the same code.
@@ -101,7 +105,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <ProjectName s={s} dispatch={dispatch} />
+      <ModelName name={s.model?.name ?? 'no model'} dirty={dirty} dispatch={dispatch} />
+      <ProjectSaved s={s} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -162,41 +167,16 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-/**
- * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
- * next to it. There is no "unsaved" dot: the Journal is written into the open project after
- * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
- */
-function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const [draft, setDraft] = useState<string | null>(null);
+/** Browser autosave status is separate from the document's explicit-save baseline. */
+function ProjectSaved({ s }: { s: UiState }) {
   const p = s.project;
-  const rename = (name: string): void => {
-    setDraft(null);
-    if (p && name.trim() && name.trim() !== p.name) void dispatch({ cmd: 'project.rename', name: name.trim() }).catch(() => undefined);
-  };
-  const chip = !p ? '' : p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  const tone = !p || p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
-  const name = draft ?? p?.name ?? s.model?.name ?? 'no model';
+  if (!p) return null;
+  const chip = p.autosave === false ? 'autosave off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const tone = p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
   return (
-    <span class="project-chip">
-      <input
-        class="mono model-name"
-        aria-label="project name"
-        data-cmd="project.rename"
-        disabled={p === null}
-        title={name}
-        value={name}
-        onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-        onBlur={(e) => rename((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          if (e.key === 'Escape') setDraft(null);
-        }}
-      />
-      <span class={`saved-chip ${tone}`} title={p ? `${chip} — ${p.commands} Commands in this browser` : 'no project yet'}>
-        <span class="dot" />
-        <span class="saved-text">{chip}</span>
-      </span>
+    <span class={`saved-chip ${tone}`} title={`${p.name}: ${chip} — ${p.commands} Commands in this browser`}>
+      <span class="dot" />
+      <span class="saved-text">{chip}</span>
     </span>
   );
 }
@@ -326,7 +306,7 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
         <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
-          {s.result?.step} · {s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}
+          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{s.transient?.catalogue.field === 'temperature' ? '' : ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}`}
         </span>
       </div>
       <div class="legend-body">
@@ -348,7 +328,8 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             class="field-chip mono"
             args={showFieldArgs(c)}
             pressed={s.fieldKey === c.key}
-            title={`view.showField ${showFieldArgs(c).field}`}
+            disabled={s.transient !== null && (c.field !== s.transient.catalogue.field || Boolean(c.derived))}
+            title={s.transient && c.field !== s.transient.catalogue.field ? "This field is not retained at historical times" : `view.showField ${showFieldArgs(c).field}`}
           >
             {c.label}
           </Cmd>
@@ -374,8 +355,7 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 /**
  * The deformation bar: play / pause, the phase scrub, the scale slider, true scale and the
  * screenshot. ▶ sweeps the drawn shape through `A·sin(2πt)`, which is what a mode shape means;
- * a transient Result keeps only its final field, so the sweep there is the amplitude rather
- * than a replay of the history, and the bar's own title says so.
+ * transient Results use the separate retained-frame controls with physical time.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
   const phaseStart = useRef<{ phase: number; playing: boolean } | null>(null);
@@ -413,11 +393,12 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     store.set({ deformScale: scale });
     viewer.current?.previewDeformScale(scale);
   };
-  const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
+  const physical = mode === undefined && (s.result?.history?.length ?? 0) > 0;
+  const sweeps = mode !== undefined;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
     <div class="deform-bar">
-      <Cmd
+      {physical ? <TransientControls s={s} store={store} dispatch={dispatch} viewer={viewer} /> : <Cmd
         dispatch={dispatch}
         cmd="view.animate"
         class="tbutton"
@@ -426,7 +407,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         title={s.playing ? 'pause' : `sweep ${what}`}
       >
         {s.playing ? '❚❚' : '▶'}
-      </Cmd>
+      </Cmd>}
       {sweeps ? (
         <input
           type="range"
@@ -465,6 +446,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
+      {s.transient?.catalogue.field === 'temperature' ? null : <>
       <span class="faint" title={exaggerationHelp(s.deformScale)}>
         exaggeration
       </span>
@@ -489,7 +471,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
-      </Cmd>
+      </Cmd></>}
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
         screenshot
       </Cmd>
@@ -501,6 +483,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
   const [broken, setBroken] = useState('');
+  useEffect(() => { setProbe(''); }, [s.transient?.generation, s.transient?.frame.index]);
   const results = s.viewMode === 'results' && s.result !== null;
   useEffect(() => {
     const el = canvas.current;
@@ -521,9 +504,11 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         return;
       }
       viewer.current = v;
+      v.setSelection(store.state.selection);
       viewer.onReady?.();
       v.onPick((p) => {
-        setProbe(probeLine(p));
+        const frame = store.state.transient?.frame;
+        setProbe(`${probeLine(p)}${p && frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
       addEventListener('resize', onResize);
@@ -544,7 +529,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch]);
+  }, [viewer, dispatch, store]);
+
+  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
@@ -590,7 +577,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       {stale ? (
         <div class="stale-banner" role="status">
           <span>
-            Result is stale — Model changed after journal line {s.result!.revision}.
+            Result is stale — Model changed after revision {s.result!.revision}.
             {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
           </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
@@ -727,11 +714,15 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
           </div>
         </div>
       ) : (
-        <Start s={s} dispatch={dispatch} />
+        <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
+          <Start s={s} dispatch={dispatch} />
+          {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+        </div>
       )}
       <Examples s={s} dispatch={dispatch} />
       <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
+      {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer

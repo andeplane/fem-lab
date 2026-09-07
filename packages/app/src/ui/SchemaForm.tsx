@@ -6,6 +6,7 @@ import type { JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
+import { PressurePreview } from './PressurePreview';
 import { SketchEditor } from './SketchEditor';
 import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
@@ -192,6 +193,9 @@ function FieldView(props: FieldProps) {
             />
           ))
         )}
+        {s.form?.cmd === 'load.pressure' && field.path.join('.') === 'value' ? (
+          <PressurePreview pressure={value} on={values['on']} context={`${s.model?.hash}:${s.revision}`} forceUnit={s.model?.units.force ?? 'N'} lengthUnit={s.model?.units.length ?? 'm'} idealisation={s.model?.idealisation ?? 'solid3d'} query={query} />
+        ) : null}
       </Row>
     );
   }
@@ -268,7 +272,9 @@ function FieldView(props: FieldProps) {
     // Only describe elements that this engine can actually produce. Order defaults to one.
     const linear = value === undefined || value === null || value === 1;
     const bendingWarning = s.form?.cmd === 'mesh.set' && field.path.join('.') === 'order' && linear
-      ? mesher === 'free'
+      ? values['simplices'] === true
+        ? 'Linear tetrahedra and triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
+        : mesher === 'free'
         ? 'Linear triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
         : ['lattice', 'mapped', 'sweep'].includes(String(mesher)) && values['formulation'] === 'full'
           ? 'Fully integrated linear quadrilaterals and hexahedra can lock in bending. Use quadratic elements and check mesh convergence.'

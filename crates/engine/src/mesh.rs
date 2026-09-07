@@ -6,8 +6,9 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    extrude, face_centroid_normal, free, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region,
-    revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
+    extrude, face_centroid_normal, free_sheet, lattice, mapped, nearest_boundary_face, resolve_face_set,
+    resolve_region, revolve, split_to_simplices, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox,
+    Shape, Solid,
 };
 
 use crate::command::ObjectKind;
@@ -86,9 +87,12 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
-        MesherSettings::Lattice { size, counts } => lattice_bodies(model, solids, dim, quadratic, *size, *counts)?,
+        MesherSettings::Lattice { size, counts } => {
+            lattice_bodies(model, solids, dim, quadratic, *size, *counts, settings.simplices)?
+        }
         m => {
             let (body, part, mesher) = planar_or_swept(model, m, quadratic)?;
+            let part = if settings.simplices { split_to_simplices(&part) } else { part };
             one_body(&body, part, dim, mesher)?
         }
     };
@@ -165,28 +169,33 @@ fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result
             Ok((body.clone(), part, "mapped"))
         }
         MesherSettings::Free { of, size, refine } => {
-            let sketch = match model.body(of).map(|b| &b.shape) {
-                Some(Shape::Sheet { sketch }) => sketch,
-                Some(_) => {
+            let shape = model
+                .body(of)
+                .map(|body| &body.shape)
+                .ok_or_else(|| Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"))?;
+            // Unwrap the Sheet before checking its sketch so transformed geometry retains
+            // located diagnostics, while non-Sheet Bodies keep the existing structured error.
+            let mut leaf = shape;
+            while let Shape::Named { shape, .. } | Shape::Transform { shape, .. } = leaf {
+                leaf = shape;
+            }
+            let sketch = match leaf {
+                Shape::Sheet { sketch } => sketch,
+                _ => {
                     return Err(Error::new(
                         ErrorCode::ModelIllPosed,
                         format!("body '{of}' is not a sheet, and the free mesher meshes a 2D sketch"),
                     )
                     .at("mesher.of")
-                    .suggest("geometry.add with a sheet shape, or mesh.set with the lattice mesher"))
-                }
-                None => {
-                    return Err(Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"));
+                    .suggest("geometry.add with a sheet shape, or mesh.set with the lattice mesher"));
                 }
             };
-            // A sketch the triangulator cannot take fails with the loop and segment it is at,
-            // rather than the size the user did not get wrong.
             sketch.check().map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.cause)
                     .at(format!("shape.sketch.{}", e.where_))
                     .suggest(e.suggestion)
             })?;
-            let part = free(sketch, *size, quadratic, refine).map_err(|e| {
+            let part = free_sheet(shape, *size, quadratic, refine).map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.0)
                     .at("mesher.size")
                     .suggest("mesh.set with a different element size, or a sketch whose holes lie inside it")
@@ -234,6 +243,7 @@ fn lattice_bodies(
     quadratic: bool,
     size: Option<f64>,
     counts: Option<[u32; 3]>,
+    simplices: bool,
 ) -> Result<Meshed, Error> {
     if model.bodies.is_empty() {
         return Err(Error::new(ErrorCode::ModelIllPosed, "the Model has no Body to mesh").suggest("geometry.add"));
@@ -263,6 +273,9 @@ fn lattice_bodies(
                 .at(format!("body '{}'", body.name))
                 .suggest("mesh.set with a smaller element size")
         })?;
+        // Convert before offsets and boundary rules are resolved, so every Body and face
+        // still points at the corresponding child elements.
+        let part = if simplices { split_to_simplices(&part) } else { part };
         let node_offset = (mesh.coords.len() / 3) as u32;
         let elem_offset = mesh.n_elems() as u32;
         let shift = |f: &Face| Face { elem: f.elem + elem_offset, local: f.local };

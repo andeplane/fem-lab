@@ -131,6 +131,13 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 ConstraintKind::Temperature { value } => {
                     Command::ConstraintTemperature { name, on, value: Q::new(*value, "K") }
                 }
+                ConstraintKind::Bonded { master, tol } => Command::ContactAdd {
+                    name,
+                    master: master.clone(),
+                    slave: on,
+                    kind: ContactKind::Bonded,
+                    tol: tol.map(length),
+                },
             }
         }
         ObjectKind::Load => {
@@ -159,6 +166,9 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                     h: Q::new(*h, "W/(m^2 K)"),
                     t_inf: Q::new(*t_inf, "K"),
                 },
+                LoadKind::Radiation { on, emissivity, t_inf } => {
+                    Command::LoadRadiation { name, on: on.clone(), emissivity: *emissivity, t_inf: Q::new(*t_inf, "K") }
+                }
                 LoadKind::HeatFlux { on, q } => Command::LoadHeatFlux { name, on: on.clone(), q: Q::new(*q, "W/m^2") },
                 LoadKind::HeatSource { bodies, q } => {
                     Command::LoadHeatSource { name, bodies: bodies.clone(), q: Q::new(*q, "W/m^3") }
@@ -182,6 +192,8 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 output_every: x.output_every,
                 dt_factor: x.dt_factor,
                 initial: x.initial.map(|v| Q::new(v, "K")),
+                nonlinear_tolerance: x.nonlinear_tolerance,
+                nonlinear_max_iterations: x.nonlinear_max_iterations,
                 amplitude: x.amplitude.as_ref().map(|a| match a {
                     Amplitude::Sine { amplitude, period } => {
                         AmplitudeSpec::Sine { amplitude: *amplitude, period: Q::new(*period, "s") }

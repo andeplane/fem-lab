@@ -3,9 +3,10 @@
 // convergence bars; Checks is what the Model is about to hand the solver, live and before any
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
-import { useEffect, useState } from 'preact/hooks';
-import { FIELD_CHOICES, dimensionOf, formatNumber } from '../fields';
-import type { UiState } from '../store';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
+import { verificationState, type UiState } from '../store';
+
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { blockers } from './schema';
@@ -193,14 +194,34 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [path, setPath] = useState<PathResult | null>(null);
   const [error, setError] = useState('');
-  const field = s.result?.extremes[0]?.field ?? 'vonMises';
+  const field = s.transient?.catalogue.field ?? s.result?.extremes[0]?.field ?? 'vonMises';
+  const choice = choiceOf(s.fieldKey);
+  const requested = useRef<{ probe: string[] | null; path: { from: string[]; to: string[] } | null }>({ probe: null, path: null });
+  const generation = useRef(0);
+  const sampledIdentity = useRef({ probe: '', path: '' });
+  const identity = `${s.result?.step}:${s.transient?.generation}:${s.transient?.frame.index}:${s.fieldKey}`;
+  const currentIdentity = useRef(identity);
+  if (currentIdentity.current !== identity) { currentIdentity.current = identity; generation.current++; }
+  const context = {
+    step: s.result?.step, field,
+    ...(s.transient ? { sample: { kind: 'frame', index: s.transient.frame.index }, ...(choice.component === null ? {} : { component: choice.component }) } : {}),
+  };
   const parse = (text: string): string[] => text.split(',').map((p) => p.trim());
   const run = (q: Record<string, unknown>, keep: (v: unknown) => void): void => {
+    const ticket = generation.current;
     setError('');
     query({ query: q['query'] as string, ...q })
-      .then(keep)
-      .catch((e: { cause?: string }) => setError(e.cause ?? 'the sample failed'));
+      .then((value) => { if (ticket === generation.current) keep(value); })
+      .catch((e: { cause?: string }) => { if (ticket === generation.current) setError(e.cause ?? 'the sample failed'); });
   };
+  const keepProbe = (value: unknown): void => { sampledIdentity.current.probe = identity; setProbe(value as ProbeResult); };
+  const keepPath = (value: unknown): void => { sampledIdentity.current.path = identity; setPath(value as PathResult); };
+  useEffect(() => {
+    setProbe(null); setPath(null);
+    if (requested.current.probe) run({ query: 'query.probe', ...context, at: requested.current.probe }, keepProbe);
+    if (requested.current.path) run({ query: 'query.path', ...context, ...requested.current.path, n: 24 }, keepPath);
+    return () => { generation.current++; };
+  }, [identity]);
   return (
     <div class="sample">
       <div class="section-label">Probe · path</div>
@@ -213,19 +234,26 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
         <input class="mono" data-field="path.to" value={to} onInput={(e) => setTo((e.target as HTMLInputElement).value)} />
       </label>
       <div class="row">
-        <Cmd dispatch={async () => undefined} cmd="query.probe" class="chip-add" onRun={() => run({ query: 'query.probe', field, at: parse(at) }, (v) => setProbe(v as ProbeResult))}>
+        <Cmd dispatch={async () => undefined} cmd="query.probe" class="chip-add" onRun={() => {
+          requested.current.probe = parse(at);
+          run({ query: 'query.probe', ...context, at: requested.current.probe }, keepProbe);
+        }}>
           probe
         </Cmd>
-        <Cmd dispatch={async () => undefined} cmd="query.path" class="chip-add" onRun={() => run({ query: 'query.path', field, from: parse(at), to: parse(to), n: 24 }, (v) => setPath(v as PathResult))}>
+        <Cmd dispatch={async () => undefined} cmd="query.path" class="chip-add" onRun={() => {
+          requested.current.path = { from: parse(at), to: parse(to) };
+          run({ query: 'query.path', ...context, ...requested.current.path, n: 24 }, keepPath);
+        }}>
           path
         </Cmd>
       </div>
-      {probe ? (
+      {probe && sampledIdentity.current.probe === identity ? (
         <div class="mono probe-out">
           {field} {formatNumber(probe.value.value)} {probe.value.unit} · element {probe.element}
+          {probe.sample ? ` · ${formatNumber(probe.sample.frame.time.value)} ${probe.sample.frame.time.unit}` : ''}
         </div>
       ) : null}
-      {path ? <PathPlot path={path} /> : null}
+      {path && sampledIdentity.current.path === identity ? <PathPlot path={path} /> : null}
       {error ? <div class="surface error mono">{error}</div> : null}
     </div>
   );
@@ -538,6 +566,17 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
       ) : (
         <div class="empty-note">The DOF and memory estimate appears once a Mesh and a Step exist.</div>
       )}
+
+      {s.assistantVerifications.length > 0 ? <>
+        <div class="section-label">Assistant-reported checks</div>
+        <div class="empty-note">Assistant observations, not independently verified engine measurements.</div>
+        {s.assistantVerifications.map((record, i) => <div class="assistant-check" key={i}>
+          <div class="empty-note">{record.model ?? 'No Model'} · {verificationState(record, s)}</div>
+          {record.rows.map((row, j) => <div class="check-row" key={j}>
+            <span class="mono code">{row.status}</span><span class="check-text">{row.what}</span><span class="mono">{row.value}</span>
+          </div>)}
+        </div>)}
+      </> : null}
 
       <div class="section-label">Assumption log</div>
       {s.assumptions.length === 0 ? (
