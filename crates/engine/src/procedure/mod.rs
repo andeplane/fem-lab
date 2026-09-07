@@ -191,8 +191,13 @@ pub enum Step {
         /// Frequencies evaluated, endpoints included; at least 2.
         points: usize,
         spacing: crate::command::SweepSpacing,
-        /// Constant modal damping ratio added to every mode.
+        /// Constant modal damping ratio added to every mode. Mutually exclusive with
+        /// `damping_ratios`.
         damping_ratio: Option<f64>,
+        /// Per-mode modal damping ratios `[ζ₁, ζ₂, …]`, added to the Rayleigh contribution
+        /// exactly like `damping_ratio`; a mode past the end of the list holds the last value.
+        /// Mutually exclusive with `damping_ratio`.
+        damping_ratios: Option<Vec<f64>>,
         /// `(alpha, beta)` of Rayleigh damping `C = alpha M + beta K`.
         rayleigh: (f64, f64),
         /// Keep one retained frequency every this many grid points.
@@ -383,19 +388,25 @@ pub async fn run(
             pool,
             progress,
         ),
-        Step::Harmonic { f_start, f_stop, points, spacing, damping_ratio, rayleigh, output_every } => harmonic::run(
-            p,
-            prev,
-            *f_start,
-            *f_stop,
-            *points,
-            *spacing,
-            *damping_ratio,
-            *rayleigh,
-            *output_every,
-            pool,
-            progress,
-        ),
+        Step::Harmonic { f_start, f_stop, points, spacing, damping_ratio, damping_ratios, rayleigh, output_every } => {
+            // The scalar is the length-one case of the per-mode list: every mode reads the
+            // same ratio, which `damping_ratios` (crate::procedure::modal) already implements
+            // by holding the last entry for modes past the end.
+            let ratio: Vec<f64> = damping_ratios.clone().or_else(|| damping_ratio.map(|z| vec![z])).unwrap_or_default();
+            harmonic::run(
+                p,
+                prev,
+                *f_start,
+                *f_stop,
+                *points,
+                *spacing,
+                &ratio,
+                *rayleigh,
+                *output_every,
+                pool,
+                progress,
+            )
+        }
         Step::Explicit { t_end, dt_factor, initial_velocity, output_every } => {
             explicit::run(p, *t_end, *dt_factor, initial_velocity.as_deref(), *output_every, pool, progress)
         }

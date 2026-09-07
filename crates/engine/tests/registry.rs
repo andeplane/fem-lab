@@ -6694,6 +6694,9 @@ fn harmonic_damping_is_validated_where_it_is_written() {
         (r#","dampingRatio":-0.1"#, "dampingRatio"),
         (r#","rayleighAlpha":"-1 Hz""#, "rayleighAlpha"),
         (r#","rayleighBeta":"-1 s""#, "rayleighBeta"),
+        (r#","dampingRatios":[0.02,1.0]"#, "dampingRatios"),
+        (r#","dampingRatios":[-0.1,0.02]"#, "dampingRatios"),
+        (r#","dampingRatio":0.02,"dampingRatios":[0.01,0.02]"#, "dampingRatios"),
     ];
     for (extra, field) in cases {
         let bad = err(
@@ -6732,6 +6735,14 @@ fn harmonic_damping_is_validated_where_it_is_written() {
             "after":"modes","fStart":"1 Hz","fStop":"2 Hz","points":2,"dampingRatio":0.0,
             "rayleighAlpha":"0 Hz","rayleighBeta":"0 s"}"#,
     );
+    // dampingRatios is the per-mode list, accepted on its own and solving cleanly end to end.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"per-mode","procedure":"harmonic","constraints":[],"loads":[],
+            "after":"modes","fStart":"1 Hz","fStop":"2 Hz","points":2,"dampingRatios":[0.01,0.02]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"per-mode"}"#);
 }
 
 #[test]

@@ -1143,6 +1143,7 @@ impl Engine {
                 points,
                 sweep,
                 damping_ratio,
+                damping_ratios,
                 alpha,
                 rayleigh_alpha,
                 rayleigh_beta,
@@ -1170,6 +1171,20 @@ impl Engine {
                         ))
                         .at("dampingRatio")
                         .suggest("step.add with dampingRatio 0.02"));
+                    }
+                }
+                if let Some(zetas) = damping_ratios {
+                    if damping_ratio.is_some() {
+                        return Err(Error::schema("dampingRatio and dampingRatios are mutually exclusive on one Step")
+                            .at("dampingRatios")
+                            .suggest("step.add with either dampingRatio 0.02 or dampingRatios [0.01, 0.02]"));
+                    }
+                    if let Some(zeta) = zetas.iter().find(|z| !(**z >= 0.0 && **z < 1.0)) {
+                        return Err(Error::schema(format!(
+                            "dampingRatios entries are a fraction of critical damping in [0, 1), got {zeta}"
+                        ))
+                        .at("dampingRatios")
+                        .suggest("step.add with dampingRatios [0.01, 0.02]"));
                     }
                 }
                 for c in constraints {
@@ -1216,6 +1231,7 @@ impl Engine {
                     points: *points,
                     sweep: *sweep,
                     damping_ratio: *damping_ratio,
+                    damping_ratios: damping_ratios.clone(),
                     alpha: *alpha,
                     rayleigh_alpha: non_negative(opt_si(rayleigh_alpha, "rayleighAlpha")?, "rayleighAlpha")?,
                     rayleigh_beta: non_negative(opt_si(rayleigh_beta, "rayleighBeta")?, "rayleighBeta")?,

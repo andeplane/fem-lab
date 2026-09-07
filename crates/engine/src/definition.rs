@@ -288,6 +288,7 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 points: x.points,
                 sweep: x.sweep,
                 damping_ratio: x.damping_ratio,
+                damping_ratios: x.damping_ratios.clone(),
                 alpha: x.alpha,
                 rayleigh_alpha: x.rayleigh_alpha.map(|v| Q::new(v, "Hz")),
                 rayleigh_beta: x.rayleigh_beta.map(|v| Q::new(v, "s")),
