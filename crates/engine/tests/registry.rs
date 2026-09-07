@@ -4393,6 +4393,7 @@ fn every_procedure_runs_the_well_posedness_checks_first() {
         (r#""heat-steady""#, "heat"),
         (r#""heat-transient","dt":"1 s","tEnd":"2 s""#, "transient"),
         (r#""explicit","tEnd":"1 ms""#, "explicit"),
+        (r#""static-nonlinear","increments":2"#, "nlgeom"),
     ];
     for (procedure, name) in cases {
         let mut e = engine();
@@ -5961,9 +5962,236 @@ fn convergence_studies_reject_modal_and_chained_steps_without_mutation() {
 }
 
 #[test]
+fn sections_are_named_assigned_removed_and_listed_like_materials() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"truss"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","0.1 m","0.1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"section.add","name":"bar","shape":{"kind":"circle","radius":"25 mm"}}"#);
+    // Re-issuing edits in place, exactly as material.add does.
+    let a = ok(&mut e, r#"{"cmd":"section.add","name":"bar","shape":{"kind":"circle","radius":"20 mm"}}"#);
+    assert_eq!(a.output, Output::Replaced { kind: ObjectKind::Section, name: "bar".into() });
+    assert_eq!(e.model().sections.len(), 1);
+    assert!((e.model().section("bar").unwrap().section.a - std::f64::consts::PI * 0.02 * 0.02).abs() < 1e-18);
+
+    let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Section]) }).unwrap() else {
+        panic!("objects")
+    };
+    assert_eq!(o.objects.len(), 1);
+    assert_eq!(o.objects[0].ref_, "section:bar");
+    assert!(o.objects[0].summary.contains("A = 0.001257 m^2"), "{}", o.objects[0].summary);
+
+    ok(&mut e, r#"{"cmd":"section.assign","section":"bar","bodies":["beam"]}"#);
+    assert_eq!(e.model().body("beam").unwrap().section.as_deref(), Some("bar"));
+    // A rename follows the assignment and leaves every other Section alone.
+    ok(&mut e, r#"{"cmd":"section.add","name":"keep","shape":{"kind":"circle","radius":"1 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"section","name":"bar","to":"rod"}"#);
+    assert_eq!(e.model().names(ObjectKind::Section), ["rod", "keep"]);
+    ok(&mut e, r#"{"cmd":"section.remove","name":"keep"}"#);
+    assert_eq!(e.model().body("beam").unwrap().section.as_deref(), Some("rod"));
+    let er = err(&mut e, r#"{"cmd":"section.remove","name":"rod"}"#);
+    assert_eq!(er.code, ErrorCode::InUse);
+    assert!(er.cause.contains("beam"), "{}", er.cause);
+
+    // Unknown names on either side are NotFound, and neither changes the Model.
+    let hash = e.model_hash();
+    assert_eq!(err(&mut e, r#"{"cmd":"section.remove","name":"ghost"}"#).code, ErrorCode::NotFound);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"section.assign","section":"ghost","bodies":["beam"]}"#).code,
+        ErrorCode::NotFound
+    );
+    let er = err(&mut e, r#"{"cmd":"section.assign","section":"rod","bodies":["ghost"]}"#);
+    assert_eq!(er.code, ErrorCode::NotFound);
+    assert!(er.suggestion.as_deref().unwrap().contains("beam"), "{er:?}");
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"section.add","name":"a.b","shape":{"kind":"circle","radius":"1 mm"}}"#).code,
+        ErrorCode::Schema
+    );
+    // A shape that cannot exist is refused at the Command boundary, located in the shape.
+    let er = err(&mut e, r#"{"cmd":"section.add","name":"flat","shape":{"kind":"circle","radius":"0 mm"}}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Schema, Some("shape.radius")));
+    assert_eq!(e.model_hash(), hash, "a refused Command changes nothing");
+
+    // A Section on a solid Body is carried through to the Problem and simply not used: the
+    // solid gets its cross-section from its own geometry.
+    let mut solid = engine();
+    cantilever(&mut solid);
+    ok(&mut solid, r#"{"cmd":"section.add","name":"rod","shape":{"kind":"circle","radius":"25 mm"}}"#);
+    ok(&mut solid, r#"{"cmd":"section.assign","section":"rod","bodies":["beam"]}"#);
+    ok(&mut solid, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = solid.query(Query::Result { result_id: None, step: None }).unwrap() else {
+        panic!("result")
+    };
+    assert!(!r.stale);
+
+    // Reassigning frees the first Section, which can then be removed.
+    ok(&mut e, r#"{"cmd":"section.add","name":"other","shape":{"kind":"rectangle","width":"1 mm","height":"2 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"other","bodies":["beam"]}"#);
+    ok(&mut e, r#"{"cmd":"section.remove","name":"rod"}"#);
+    assert_eq!(e.model().names(ObjectKind::Section), ["other"]);
+}
+
+fn truss_model(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"truss"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"kN"}}"#);
+    ok(
+        e,
+        r#"{"cmd":"geometry.addLine","name":"truss","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["0.5 m","0.5 m","0 m"]],"members":[[0,2],[1,2]],"divisions":2}"#,
+    );
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["truss"]}"#);
+    ok(e, r#"{"cmd":"section.add","name":"rod","shape":{"kind":"circle","radius":"20 mm"}}"#);
+    ok(e, r#"{"cmd":"section.assign","section":"rod","bodies":["truss"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+}
+
+#[test]
+fn a_line_body_meshes_into_members_with_a_node_set_per_joint() {
+    let mut e = engine();
+    truss_model(&mut e);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    // Two members of two elements each, five nodes, three of them the named joints.
+    assert_eq!((m.elements, m.nodes, m.dofs), (4, 5, 15));
+    assert_eq!(m.element_kind, "truss2");
+    let names: Vec<&str> = m.sets.iter().map(|s| s.name.as_str()).collect();
+    for joint in ["truss.p0", "truss.p1", "truss.p2"] {
+        assert!(names.contains(&joint), "{names:?}");
+    }
+    let p2 = m.sets.iter().find(|s| s.name == "truss.p2").expect("the apex joint");
+    assert_eq!(p2.kind, "node");
+    assert!(p2.summary.contains("1 "), "one node: {}", p2.summary);
+
+    // The Body row reports the total member length, and a line Body has no faces.
+    let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    let body = &model.bodies[0];
+    assert!(body.faces.is_empty(), "{:?}", body.faces);
+    let want = 2.0 * 1000.0 * f64::sqrt(0.5);
+    assert!((body.measure.value - want).abs() < 1e-9, "{:?} vs {want}", body.measure);
+    assert_eq!(body.measure.unit, "mm");
+    assert_eq!(body.mass, None, "a line Body's mass needs its Section, which the row does not read");
+
+    // Subdividing a member of a pin-jointed truss puts a hinge in the middle of it: the
+    // interior node carries no transverse stiffness and the model is a local mechanism. The
+    // well-posedness checks only look for *global* rigid motion, so this surfaces as a
+    // factorisation failure rather than a named check — a known limitation, not a surprise.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"plane","where":{"kind":"bbox","min":["-10 mm","-10 mm","-10 mm"],"max":["1010 mm","510 mm","10 mm"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"flat","on":"plane","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"truss.p0"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"right","on":"truss.p1"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"hang","on":"truss.p2","total":["0 kN","-10 kN","0 kN"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["flat","left","right"],"loads":["hang"],"output":["displacement","stress"]}"#,
+    );
+    let er = err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(er.code, ErrorCode::SolveNotPositiveDefinite);
+
+    // Undivided, the same truss is determinate and solves: two bars at 45 degrees carrying a
+    // 10 kN pull each take 10/sqrt(2) kN of it, and the supports carry the lot.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.addLine","name":"truss","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["0.5 m","0.5 m","0 m"]],"members":[[0,2],[1,2]],"divisions":1}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: None }).unwrap() else {
+        panic!("result")
+    };
+    assert!(!r.stale);
+    assert!(r.balance.abs() < 1e-9, "reactions balance the load: {}", r.balance);
+}
+
+#[test]
+fn geometry_add_line_refuses_geometry_it_cannot_mesh() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"truss"}"#);
+    // The shape checks come first, at the Command, naming the cause.
+    for (json, want) in [
+        (r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"]]}"#, "at least 2 points"),
+        (
+            r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"members":[[0,3]]}"#,
+            "references point 3",
+        ),
+        (r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["0 m","0 m","0 m"]]}"#, "zero length"),
+        (
+            r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"divisions":0}"#,
+            "divisions must be at least 1",
+        ),
+    ] {
+        let er = err(&mut e, json);
+        assert_eq!(er.where_.as_deref(), Some("shape"), "{json}");
+        assert!(er.cause.contains(want), "{json}: {}", er.cause);
+    }
+    // A wrong unit is located at the point and the component that carries it.
+    let er =
+        err(&mut e, r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","1 kg"]]}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::UnitDimension, Some("points[1][2]")));
+
+    // Line members need the 3D idealisation; the Mesh is where that is found out.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"bar","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let er = e.query(Query::Mesh {}).expect_err("a line body in a 2D model");
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert!(er.cause.contains("3D idealisation"), "{er:?}");
+}
+
+/// `import_file` installs a Model as it stands, so a hand-written or corrupted file can carry
+/// a line Body the mesher refuses; the failure names the Body rather than panicking.
+#[test]
+fn an_imported_line_body_the_mesher_refuses_names_itself() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"broken"}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let mut file = e.export_file();
+    file.model.bodies.push(femlab_engine::model::Body {
+        name: "collapsed".into(),
+        shape: femlab_geometry::Shape::Polyline {
+            points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+        },
+        material: None,
+        section: None,
+    });
+    e.import_file(file).unwrap();
+    let er = e.query(Query::Mesh {}).expect_err("a zero-length member");
+    assert_eq!(er.code, ErrorCode::MeshFailed);
+    assert_eq!(er.where_.as_deref(), Some("body 'collapsed'"));
+    assert!(er.cause.contains("zero length"), "{er:?}");
+}
+
+#[test]
+fn line_bodies_that_meet_at_a_joint_are_welded_into_one_node() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"chain"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"b","points":[["1 m","0 m","0 m"],["2 m","0 m","0 m"]]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    // Four joints, but the two at x = 1 m are the same point and become one node.
+    assert_eq!((m.elements, m.nodes), (2, 3));
+    let joint = m.sets.iter().find(|s| s.name == "a.p1").expect("a1");
+    let shared = m.sets.iter().find(|s| s.name == "b.p0").expect("b0");
+    assert_eq!(joint.summary, shared.summary, "the two names are the same single node");
+
+    // A Body that does not touch keeps its own nodes.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"c","points":[["0 m","1 m","0 m"],["1 m","1 m","0 m"]]}"#);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    assert_eq!((m.elements, m.nodes), (3, 5));
+}
+
+#[test]
 fn editable_definitions_preserve_every_public_object_variant() {
-    let cases: Vec<serde_json::Value> =
+    // Sections live in their own fixture: the app's Model tree has no Section group yet, and
+    // the app test walks only the fixture it can click through.
+    let mut cases: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("../../../tools/fixtures/editable-definitions.json")).unwrap();
+    cases.extend(
+        serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../../../tools/fixtures/editable-sections.json"))
+            .unwrap(),
+    );
     for case in cases {
         let mut e = engine();
         ok(&mut e, r#"{"cmd":"geometry.addBox","name":"base","size":["1 m","1 m","1 m"]}"#);
@@ -6014,7 +6242,12 @@ fn definitions_refuse_internal_imported_shapes_without_erasing_face_tags() {
     for shape in shapes {
         let mut e = engine();
         let mut file = e.export_file();
-        file.model.bodies.push(femlab_engine::model::Body { name: "imported".into(), shape, material: None });
+        file.model.bodies.push(femlab_engine::model::Body {
+            name: "imported".into(),
+            shape,
+            material: None,
+            section: None,
+        });
         e.import_file(file).unwrap();
         let before = e.model().clone();
         let error = e.query(Query::Definition { kind: ObjectKind::Body, name: "imported".into() }).unwrap_err();
@@ -8194,4 +8427,162 @@ fn an_import_that_is_not_a_solid_is_refused_without_touching_the_model() {
     assert_eq!(e.model(), &before);
     // a name a Body cannot have
     assert_eq!(err(&mut e, &import_cmd("a.b", open, "")).code, ErrorCode::Schema);
+}
+
+/// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
+///
+/// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at
+/// `0.9048889 L` along the beam and `0.3872578 L` across it (see
+/// `the_large_deflection_cantilever_follows_the_elastica`, which derives both by quadrature).
+fn elastica_beam(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"nlgeom"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"N"}}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","5 mm","5 mm"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":20,"ny":1,"nz":1}},"order":2}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#);
+    ok(e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-15.084505 N"]}"#);
+}
+
+fn tip_component(e: &mut Engine, component: u32) -> f64 {
+    let query: Query = serde_json::from_str(&format!(
+        r#"{{"query":"query.probe","field":"displacement","component":{component},"at":["1 m","2.5 mm","2.5 mm"]}}"#
+    ))
+    .expect("a probe Query");
+    let QueryResult::Probe(p) = e.query(query).expect("the probe lands in the beam") else { panic!("probe") };
+    p.value.value
+}
+
+/// A nonlinear Step through the registry, end to end: the load arrives in increments, the
+/// Result keeps the load–deflection curve, and a beam that bends this far comes out
+/// substantially stiffer than the linear Step says — by the amount the elastica predicts.
+#[test]
+fn a_static_nonlinear_step_reaches_the_elastica_and_keeps_its_load_deflection_curve() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(&mut e, r#"{"cmd":"step.add","name":"linear","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":5,"maxCutbacks":3,"nonlinearTolerance":1e-8,"nonlinearMaxIterations":12}"#,
+    );
+    // A 1:200 cantilever meshed with 10:1 elements is conditioned well past the direct solve's
+    // default acceptance, so the *linear* comparison Step asks for the accuracy it can have.
+    // The nonlinear Step needs no such thing: its corrections are inexact on purpose and its
+    // own residual criterion, not the linear solver's, decides when it has converged.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"linear","tolerance":1e-6}"#);
+    let linear = tip_component(&mut e, 2);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"large"}"#);
+    let (across, along) = (tip_component(&mut e, 2), tip_component(&mut e, 0));
+
+    // The elastica, in millimetres, and 2 % — refining to 40 elements moves the deflection
+    // from -381.7 to -385.3 mm, so what is left of the gap is the mesh, not the formulation.
+    assert!((across + 387.2578).abs() <= 0.02 * 387.2578, "tip deflection {across} mm");
+    assert!((along + 95.11107).abs() <= 0.05 * 95.11107, "tip shortening {along} mm");
+    // linear theory says PL³/3EI = 459.7 mm: the geometric stiffening is 16 %, not a rounding
+    assert!((linear + 459.7182).abs() <= 0.01 * 459.7182, "linear tip deflection {linear} mm");
+    assert!(across / linear < 0.87, "the nonlinear answer must be much stiffer: {across} vs {linear}");
+
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: Some("large".into()) }).unwrap() else {
+        panic!()
+    };
+    assert!(!r.stale && r.solver == "cpu-direct");
+    assert!(r.balance < 1e-9, "the reactions balance the applied load: {}", r.balance);
+    // one history row per converged increment, plus the origin, with the load factor as "time"
+    assert_eq!(r.history.len(), 6, "{:?}", r.history);
+    assert_eq!(r.history[0].time.value, 0.0);
+    assert_eq!(r.history[5].time.value, 1.0);
+    assert_eq!(r.history[0].min.value, 0.0);
+    assert!(r.history[5].min.value < r.history[4].min.value, "the curve is monotone in the load factor");
+    assert!(r.iterations > 5, "a nonlinear Step reports the Newton iterations it took: {}", r.iterations);
+    assert!(e.model().steps.iter().any(|s| s.increments == Some(5) && s.max_cutbacks == Some(3)));
+}
+
+/// Linear elements have no incompatible modes under finite deformation, so the Result warns
+/// that they will lock — and names the way out.
+#[test]
+fn a_nonlinear_step_warns_that_linear_elements_lock() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":20,"ny":1,"nz":1}},"order":1}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"large"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: Some("large".into()) }).unwrap() else {
+        panic!()
+    };
+    let w = r.warnings.first().expect("a linear element under finite deformation warns");
+    assert_eq!(w.code, "nlgeom.incompatibleModes");
+    assert!(w.text.contains("hex8") && w.text.contains("order 2"), "{}", w.text);
+    assert_eq!(w.where_.as_deref(), Some("formulation"));
+}
+
+/// A Step that cannot converge says which increment, at what load factor, with what residual,
+/// and what to change — rather than returning an answer nobody should trust.
+#[test]
+fn a_nonlinear_step_that_diverges_names_the_increment_and_the_way_out() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"hopeless","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":1,"maxCutbacks":0,"nonlinearMaxIterations":1}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"hopeless"}"#);
+    assert_eq!(bad.code, ErrorCode::NewtonDiverged);
+    assert!(bad.cause.contains("increment 1") && bad.cause.contains("load factor"), "{}", bad.cause);
+    assert_eq!(bad.where_.as_deref(), Some("step"));
+    assert!(bad.suggestion.expect("a way out").contains("increments"));
+
+    // The controls shared with an iterating heat Step are refused where they are written, by
+    // `step.add`; the ones only this procedure has are refused when it runs, because nothing
+    // above `procedure_step` knows which fields the procedure will read.
+    for (fields, field, at_add) in [
+        (r#""nonlinearMaxIterations":0"#, "nonlinearMaxIterations", true),
+        (r#""nonlinearTolerance":0"#, "nonlinearTolerance", true),
+        (r#""increments":0"#, "increments", false),
+        (r#""maxCutbacks":21"#, "maxCutbacks", false),
+        (r#""tEnd":"0 s""#, "tEnd", false),
+    ] {
+        let add = format!(
+            r#"{{"cmd":"step.add","name":"bad","procedure":"static-nonlinear","constraints":["root"],
+                "loads":["tip"],{fields}}}"#
+        );
+        let bad = if at_add {
+            err(&mut e, &add)
+        } else {
+            ok(&mut e, &add);
+            err(&mut e, r#"{"cmd":"solve.run","step":"bad"}"#)
+        };
+        assert_eq!(bad.code, ErrorCode::Schema, "{field}");
+        assert_eq!(bad.where_.as_deref(), Some(field));
+    }
+}
+
+/// `query.cost` counts a nonlinear Step's retained load–deflection curve before it is run, the
+/// same way it counts a transient's frames: one displacement field per increment, plus the
+/// origin. Reducing `increments` is the lever, so the note is reported and not enforced.
+#[test]
+fn the_cost_of_a_nonlinear_step_counts_the_curve_it_will_retain() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":5}"#,
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"linear","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    let QueryResult::Cost(nl) = e.query(Query::Cost { step: "large".into() }).unwrap() else { panic!() };
+    let QueryResult::Cost(lin) = e.query(Query::Cost { step: "linear".into() }).unwrap() else { panic!() };
+    assert_eq!(nl.dofs, lin.dofs);
+    assert_eq!(nl.retained_frames, 6, "the origin and five increments");
+    assert_eq!(lin.retained_frames, 0);
+    let nodes = nl.dofs / 3;
+    assert_eq!(nl.retained_bytes, 6 * (nodes * 3 + 1) * 8);
+    assert!(nl.bytes > lin.bytes);
+    assert_eq!(nl.feasible, None);
 }

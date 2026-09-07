@@ -6,9 +6,9 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    extrude, face_centroid_normal, free_sheet, lattice, mapped, nearest_boundary_face, resolve_face_set,
-    resolve_region, revolve, split_to_simplices, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox,
-    Shape, Solid,
+    extrude, face_centroid_normal, free_sheet, lattice, line, mapped, merge_coincident, nearest_boundary_face,
+    resolve_face_set, resolve_region, revolve, split_to_simplices, Curve, ElementBlock, ElementKind, Face, Mesh,
+    QuadBlock, RefineBox, Shape, Solid,
 };
 
 use crate::command::ObjectKind;
@@ -101,6 +101,15 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let mut sets: BTreeMap<String, ResolvedSet> = BTreeMap::new();
     for (name, faces) in &mesh.face_sets {
         sets.insert(name.clone(), face_set(&mesh, faces.clone()));
+    }
+    // A mesher may name nodes rather than faces — the line mesher names every joint — and those
+    // are Sets a Constraint or a Load can target like any other. Inert for the others, which
+    // produce no node sets at all.
+    for (name, nodes) in &mesh.node_sets {
+        sets.insert(
+            name.clone(),
+            ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: nodes.clone(), elems: Vec::new() },
+        );
     }
     for named in &model.sets {
         let (resolved, probe) = match &named.source {
@@ -258,7 +267,29 @@ fn lattice_bodies(
     };
     let mut body_of_block: Vec<String> = Vec::new();
     let mut body_faces: BTreeMap<String, Vec<Face>> = BTreeMap::new();
+    let mut has_lines = false;
     for body in &model.bodies {
+        // A line Body is its own geometry: no Solid, no faces, and its node sets carry the
+        // Body's name so `truss.p0` is the joint a Constraint targets.
+        if let Shape::Polyline { points, members, divisions } = &body.shape {
+            if dim != 3 {
+                return Err(Error::new(
+                    ErrorCode::ModelIllPosed,
+                    format!("body '{}' is made of line members, which need the 3D idealisation", body.name),
+                )
+                .at(format!("body '{}'", body.name))
+                .suggest("model.setIdealisation with solid3d"));
+            }
+            has_lines = true;
+            let part = line(points, members, *divisions, ElementKind::Truss2).map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at(format!("body '{}'", body.name))
+                    .suggest("geometry.addLine with joints that do not coincide")
+            })?;
+            append(&mut mesh, &part, &body.name, &mut body_of_block);
+            body_faces.insert(body.name.clone(), Vec::new());
+            continue;
+        }
         let solid = &solids[&body.name];
         if solid.dim() != dim {
             return Err(Error::new(
@@ -296,7 +327,35 @@ fn lattice_bodies(
         }
         body_faces.insert(body.name.clone(), part.boundary_faces().iter().map(shift).collect());
     }
+    // Only line Bodies arrive with joints meant to be shared; welding solids that merely touch
+    // would silently bond them, which is a modelling decision nobody made.
+    if has_lines {
+        let (lo, hi) = mesh.bbox();
+        let diagonal = libm::sqrt((0..3).map(|k| (hi[k] - lo[k]) * (hi[k] - lo[k])).sum::<f64>());
+        merge_coincident(&mut mesh, JOINT_TOL * diagonal);
+    }
     Ok((mesh, body_of_block, body_faces))
+}
+
+/// Two joints this close together, relative to the model's own size, are one joint.
+const JOINT_TOL: f64 = 1e-9;
+
+/// Concatenate one Body's mesh into the whole, renaming its node sets `<body>.<tag>`.
+fn append(mesh: &mut Mesh, part: &Mesh, body: &str, body_of_block: &mut Vec<String>) {
+    let node_offset = (mesh.coords.len() / 3) as u32;
+    let elem_offset = mesh.n_elems() as u32;
+    mesh.coords.extend_from_slice(&part.coords);
+    for blk in &part.blocks {
+        mesh.blocks.push(ElementBlock {
+            kind: blk.kind,
+            conn: blk.conn.iter().map(|n| n + node_offset).collect(),
+            first_elem: blk.first_elem + elem_offset,
+        });
+        body_of_block.push(body.to_string());
+    }
+    for (tag, nodes) in &part.node_sets {
+        mesh.node_sets.insert(format!("{body}.{tag}"), nodes.iter().map(|n| n + node_offset).collect());
+    }
 }
 
 /// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.

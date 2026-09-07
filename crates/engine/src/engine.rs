@@ -425,7 +425,8 @@ impl Engine {
     /// The derived Mesh with every Set resolved, built on demand (plan B §2.1).
     pub fn mesh(&mut self) -> Result<&crate::mesh::BuiltMesh, Error> {
         if self.mesh.is_none() {
-            let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+            let bodies: Vec<String> =
+                self.model.bodies.iter().filter(|b| b.shape.dim() > 1).map(|b| b.name.clone()).collect();
             for b in &bodies {
                 self.solid(b)?;
             }
@@ -440,8 +441,12 @@ impl Engine {
     }
 
     /// The Bodies' triangles and Sheet outlines, for a host before there is a Mesh.
+    ///
+    /// A line Body has neither, so it has no preview row; it appears once the Mesh is built,
+    /// as line elements in [`Engine::mesh_surface`].
     pub fn geometry_surface(&mut self) -> Result<Vec<GeometrySurface>, Error> {
-        let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+        let bodies: Vec<String> =
+            self.model.bodies.iter().filter(|b| b.shape.dim() > 1).map(|b| b.name.clone()).collect();
         let mut out = Vec::with_capacity(bodies.len());
         for b in bodies {
             let solid = self.solid(&b)?;
@@ -507,6 +512,21 @@ impl Engine {
             }
             Command::GeometryAdd { name, shape } => {
                 let shape = shape.to_si("shape")?;
+                self.add_body(name, shape)
+            }
+            Command::GeometryAddLine { name, points, members, divisions } => {
+                let mut joints = Vec::with_capacity(points.len());
+                for (i, p) in points.iter().enumerate() {
+                    let mut q = [0.0; 3];
+                    for (k, v) in p.iter().enumerate() {
+                        q[k] = v.si().map_err(|e| e.at(format!("points[{i}][{k}]")))?;
+                    }
+                    joints.push(q);
+                }
+                // The default wiring is the chain the points describe, which is what a single
+                // polyline member usually is; a truss names its own members.
+                let members = members.clone().unwrap_or_else(|| (1..joints.len() as u32).map(|i| [i - 1, i]).collect());
+                let shape = Shape::Polyline { points: joints, members, divisions: divisions.unwrap_or(1) };
                 self.add_body(name, shape)
             }
             Command::GeometrySubtract { name, from, shape } => {
@@ -638,6 +658,46 @@ impl Engine {
                     return Err(in_use("material", name, &users, "bodies"));
                 }
                 self.model.materials.retain(|m| m.name != *name);
+                Ok(Output::None)
+            }
+            Command::SectionAdd { name, shape } => {
+                check_name(name)?;
+                let section = crate::fem::section::properties(shape)?;
+                let named = crate::model::NamedSection { name: name.clone(), section };
+                Ok(upsert(&mut self.model.sections, named, |s| &s.name, ObjectKind::Section))
+            }
+            Command::SectionAssign { section, bodies } => {
+                self.model
+                    .section(section)
+                    .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
+                // A Section belongs to explicit line geometry; a mesher's implicit Body is a
+                // surface and gets its cross-section from the idealisation, so it is not listed.
+                let known: Vec<&str> = self.model.bodies.iter().map(|b| b.name.as_str()).collect();
+                for b in bodies {
+                    if !known.contains(&b.as_str()) {
+                        return Err(Error::not_found("body", b, &known));
+                    }
+                }
+                for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
+                    b.section = Some(section.clone());
+                }
+                Ok(Output::None)
+            }
+            Command::SectionRemove { name } => {
+                self.model
+                    .section(name)
+                    .ok_or_else(|| Error::not_found("section", name, &self.model.names(ObjectKind::Section)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .bodies
+                    .iter()
+                    .filter(|b| b.section.as_deref() == Some(name))
+                    .map(|b| b.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("section", name, &users, "bodies"));
+                }
+                self.model.sections.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
             Command::MeshSet { mesher, order, formulation, simplices } => {
@@ -870,6 +930,8 @@ impl Engine {
                 dt_factor,
                 amplitude,
                 initial,
+                increments,
+                max_cutbacks,
                 nonlinear_tolerance,
                 nonlinear_max_iterations,
             } => {
@@ -923,6 +985,8 @@ impl Engine {
                     dt_factor: *dt_factor,
                     amplitude: amplitude.as_ref().map(to_amplitude).transpose()?,
                     initial: opt_si(initial, "initial")?,
+                    increments: *increments,
+                    max_cutbacks: *max_cutbacks,
                     nonlinear_tolerance: *nonlinear_tolerance,
                     nonlinear_max_iterations: *nonlinear_max_iterations,
                 };
@@ -1043,10 +1107,19 @@ impl Engine {
         }
         shape.validate().map_err(|e| geom_error(e, "shape"))?;
         let dim = shape.dim();
-        let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
-            .map_err(|e| geom_error(e, "shape"))?;
-        let body =
-            Body { name: name.to_string(), shape, material: self.model.body(name).and_then(|b| b.material.clone()) };
+        // A line Body never becomes a Solid — the line mesher is its own geometry — so
+        // `validate` above is the whole of its geometric check.
+        if dim > 1 {
+            let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
+                .map_err(|e| geom_error(e, "shape"))?;
+        }
+        let old = self.model.body(name);
+        let body = Body {
+            name: name.to_string(),
+            shape,
+            material: old.and_then(|b| b.material.clone()),
+            section: old.and_then(|b| b.section.clone()),
+        };
         let _ = dim;
         self.invalidate_geometry();
         Ok(upsert(&mut self.model.bodies, body, |b| &b.name, ObjectKind::Body))
@@ -1290,6 +1363,18 @@ impl Engine {
                     m.mesher_material = Some(to.into());
                 }
             }
+            ObjectKind::Section => {
+                for sec in &mut m.sections {
+                    if sec.name == name {
+                        sec.name = to.into();
+                    }
+                }
+                for b in &mut m.bodies {
+                    if b.section.as_deref() == Some(name) {
+                        b.section = Some(to.into());
+                    }
+                }
+            }
             ObjectKind::Set => {
                 for s in &mut m.sets {
                     if s.name == name {
@@ -1399,6 +1484,11 @@ impl Engine {
                 let mut x = m.material(name).expect("checked").clone();
                 x.name = as_.into();
                 m.materials.push(x);
+            }
+            ObjectKind::Section => {
+                let mut x = m.section(name).expect("checked").clone();
+                x.name = as_.into();
+                m.sections.push(x);
             }
             ObjectKind::Set => {
                 let mut x = m.sets.iter().find(|s| s.name == name).expect("checked").clone();

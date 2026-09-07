@@ -1,0 +1,105 @@
+{
+  "id": "pressure-vessel",
+  "title": "Pressure vessel: the axisymmetric idealisation",
+  "minutes": 10,
+  "summary": "Model a thick cylinder under internal pressure by revolving a 2D slice instead of meshing the whole 3D vessel, then watch the pr/t shortcut everybody learns first come apart against Lamé's exact answer.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A thick steel cylinder under internal pressure — the oldest checkable problem in this tool (Lamé, 1852) and the first tutorial to leave plane stress and plane strain behind for a third 2D idealisation, built for exactly this shape.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "lame-cylinder-axisymmetric" }
+    },
+    {
+      "title": "Units",
+      "explain": "Metres, newtons, megapascals: a vessel measured in tens of centimetres, pressurised in tens of megapascals.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "m", "force": "N", "stress": "MPa" } }
+    },
+    {
+      "title": "The third 2D idealisation: axisymmetric",
+      "explain": "Plane stress and plane strain both flatten a 3D body by declaring one direction zero and throwing it away. Axisymmetric does something different: it keeps every direction, but notices that a body built by spinning a 2D profile around an axis — a cylinder, a cone, a sphere, this vessel — looks identical from every angle around that axis, so one radial slice from the axis outward tells you everything the other 359° would say too. `model.setIdealisation{axisymmetric}` solves that slice as a 2D mesh in (x, y) with x the radius r and y the position along the axis. The missing circumferential direction is not ignored — hoop strain is real and is exactly u_r / r, the radial displacement divided by how far out it is — it is just never meshed, because a mesh of it would be a copy of the slice you already have. A 2D mesh, a fully 3D answer, for the cost of one slice.",
+      "expect": { "cmd": "model.setIdealisation" },
+      "highlight": "model.setIdealisation",
+      "doIt": { "cmd": "model.setIdealisation", "idealisation": { "kind": "axisymmetric" } }
+    },
+    {
+      "title": "Material",
+      "explain": "Structural steel, the values Lamé's own case in `BENCHMARKS.md` (C2) uses, so the numbers at the end of this tutorial are the numbers that case checks.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "200 GPa", "nu": 0.3, "source": "Cornell SimCafe's pressure-vessel exercise, for the shape of the problem" }
+    },
+    {
+      "title": "Mesh the slice: radius across, axis up",
+      "explain": "One mapped block: the bore at x = 100 mm, the outside at x = 200 mm, 100 mm of axial length, 8 divisions each way at `order: 2`. Notice there are no arcs anywhere in this block, unlike the plane-strain version of the same vessel — in (r, z) coordinates the bore and the outside wall are just the straight vertical lines r = 100 mm and r = 200 mm. The curvature that a Cartesian idealisation has to mesh explicitly, axisymmetric never sees at all; it is folded into the element formulation instead. The wall is also exactly as thick as the bore is wide — t = b − a = 100 mm against a = 100 mm — which is the whole reason this vessel was chosen: hold that ratio in mind for the closing step.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "mapped",
+          "body": "tube",
+          "blocks": [
+            {
+              "corners": [["0.1 m", "0 m"], ["0.2 m", "0 m"], ["0.2 m", "0.1 m"], ["0.1 m", "0.1 m"]],
+              "n": [8, 8],
+              "tags": ["zmin", "outer", "zmax", "inner"]
+            }
+          ]
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Assign the material",
+      "explain": "One Material, one Body, same as ever.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["tube"] }
+    },
+    {
+      "title": "Hold one end against axial strain",
+      "explain": "`tube.zmin` and `tube.zmax` are the two flat faces of this 100 mm slice — not the vessel's real end caps, just where the model was cut short to keep the mesh small. `constraint.symmetry` there, normal to the axis (`y`), says the slice neither stretches nor shrinks along its own length: ε_z = 0, as if the vessel carried on identically past both cuts. That is the same assumption plane strain makes, which is why this model and the plane-strain version of the same vessel land on the same stresses.",
+      "expect": { "cmd": "constraint.symmetry", "match": { "name": "zmin" } },
+      "highlight": "constraint.symmetry",
+      "doIt": { "cmd": "constraint.symmetry", "name": "zmin", "on": "tube.zmin", "normal": "y" }
+    },
+    {
+      "title": "And the other",
+      "explain": "The far cut, held the same way. A vessel with genuinely free ends instead — capped, or open, rather than an infinite pipe — computes a slightly larger radial displacement here (5.90 × 10⁻⁵ m against the 5.72 × 10⁻⁵ m this constraint gives), but the *same* hoop and radial stress: Lamé's σ_rr and σ_θθ never depend on what the ends do, only u_r and σ_zz do.",
+      "expect": { "cmd": "constraint.symmetry", "match": { "name": "zmax" } },
+      "highlight": "constraint.symmetry",
+      "doIt": { "cmd": "constraint.symmetry", "name": "zmax", "on": "tube.zmax", "normal": "y" }
+    },
+    {
+      "title": "Pressurise the bore",
+      "explain": "60 MPa on `tube.inner`. Pressure is positive into the surface, and the inner face of a tube points inward, so this pushes the wall outward — an internal pressure, exactly as intended.",
+      "expect": { "cmd": "load.pressure", "match": { "name": "inside" } },
+      "highlight": "load.pressure",
+      "doIt": { "cmd": "load.pressure", "name": "inside", "on": "tube.inner", "value": "60 MPa" }
+    },
+    {
+      "title": "The Step",
+      "explain": "One static Step, both axial constraints, the one pressure load. Nothing restrains the radial direction at all — the mesh only spans one slice from bore to outer wall, and axisymmetry itself stands in for the missing 359° that would otherwise need restraining against rigid rotation.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["zmin", "zmax"], "loads": ["inside"] }
+    },
+    {
+      "title": "Solve, and probe the bore",
+      "explain": "Probe stress at x = 100 mm: the hoop component (θθ, third on the axisymmetric list, after r and z) comes out near 99.6 MPa, and the radial component (rr, first on the list) near −59.4 MPa. The radial one should be exactly −p at the loaded face; it reads a shade high because a probe samples the field at the nearest integration point, half an element in from the true boundary, not on it.",
+      "expect": { "cmd": "solve.run", "match": { "step": "static" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static" }
+    },
+    {
+      "title": "Lamé, and where pr/t stops working",
+      "explain": "One closed form from 1852, one shortcut from every strength-of-materials course, and the ratio that decides which one you are allowed to trust.",
+      "expect": null,
+      "theory": "Lamé's solution for a cylinder of bore $a$ and outside $b$ under internal pressure $p$ is\n$$\\sigma_{rr}(r) = A - \\frac{B}{r^2}, \\qquad \\sigma_{\\theta\\theta}(r) = A + \\frac{B}{r^2}, \\qquad A = \\frac{p\\,a^2}{b^2-a^2},\\;\\; B = \\frac{p\\,a^2 b^2}{b^2-a^2}.$$\nAt the bore ($r=a$) this gives $\\sigma_{\\theta\\theta}(a) = 100\\,\\mathrm{MPa}$ and $\\sigma_{rr}(a) = -p = -60\\,\\mathrm{MPa}$ exactly — the mesh above lands at 99.6 MPa and −59.4 MPa, both within 1 % of the closed form and confirming that the axisymmetric idealisation reproduces the 3D answer for the price of a 2D mesh.\n\n**Where the thin-wall shortcut breaks.** The formula taught first in almost every strength-of-materials course is $\\sigma_\\theta \\approx p\\,r_m/t$, the thin-wall approximation. Using the mean radius $r_m = (a+b)/2 = 150\\,\\mathrm{mm}$ and wall thickness $t = b-a = 100\\,\\mathrm{mm}$: $\\sigma_\\theta \\approx 60 \\times 150/100 = 90\\,\\mathrm{MPa}$ — already 10 % short of Lamé's exact 100 MPa. Use the bore radius instead of the mean, which people do without noticing which one they meant, and it is $60\\times100/100 = 60\\,\\mathrm{MPa}$: 40 % short. The thin-wall formula is the $t/a \\to 0$ limit of Lamé's solution, so it is only ever exact in that limit; a common rule of thumb is to trust it below $t/a \\approx 0.1$, a bore-to-wall-thickness ratio of about 10 : 1. This vessel has $t/a = 1$ — the wall is as thick as the bore is wide — which is exactly why it is the case to reach for the full Lamé solution on, and exactly where the shortcut visibly fails rather than merely drifting.\n\n(Modelled on the shape of Cornell's SimCafe pressure-vessel exercise, cited here as the source of the problem; Lamé's solution itself is from 1852 and belongs to nobody. See `BENCHMARKS.md` C2 for the full check, including the near-incompressible and free-ended variants.)"
+    }
+  ]
+}
