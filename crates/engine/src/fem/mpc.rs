@@ -196,7 +196,7 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
 /// The `constraint.dependent` error: a DOF that two couplings both eliminate, or that one
 /// eliminates while another leans on it. Either makes `T` rank-deficient.
 fn dependent(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize, what: &str) -> Error {
-    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let comp = p.dof_labels()[dof as usize % dpn];
     let (a, b) = (p.couplings[first].name(), p.couplings[second].name());
     Error::new(
         ErrorCode::ConstraintDependent,

@@ -12,7 +12,7 @@ use crate::engine::{display, Engine, OnProgress};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
-use crate::fem::loads::{face_set_area, Load};
+use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
 use crate::fem::problem::{Constraint, Coupling, PointMass, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{Axial, ConstraintKind, LoadKind, MeshSettings, Model, Step};
@@ -224,6 +224,10 @@ fn build_problem_with_temperature<'a>(
             LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
             LoadKind::HeatSource { bodies, q } => {
                 heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
+            }
+            LoadKind::Torque { on, total } => {
+                let j = face_set_polar_moment(&p, on)?;
+                loads.push(Load::Torque { faces: on.clone(), c: total / j });
             }
             LoadKind::ThermalContact { of, h } => heat_loads.push(HeatLoad::Contact { of: of.clone(), h: *h }),
         }
@@ -495,8 +499,13 @@ pub(crate) struct PlannedCost {
 
 /// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
 /// derive their step count from the same element-frequency bound as the integrator.
+///
+/// `dofs_per_node` is the idealisation's structural stride (`Idealisation::dofs_per_node`, not
+/// the mesh's geometric dimension), so a twisted axisymmetric Model's cost reflects its third
+/// DOF; the heat arms ignore it and always budget one unknown per node.
 pub(crate) fn planned_cost(
     mesh: &femlab_geometry::Mesh,
+    dofs_per_node: usize,
     explicit_problem: Option<&Problem<'_>>,
     step: &procedure::Step,
 ) -> Result<PlannedCost, Error> {
@@ -506,13 +515,13 @@ pub(crate) fn planned_cost(
         // are the full-field vectors alive while it retains.
         procedure::Step::Static { solver, dt, t_end, amplitude: Some(_), output_every } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
-            let base = crate::solve::cost_estimate(mesh, mesh.dim, solver.solver);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
         }
         procedure::Step::Static { solver, .. }
         | procedure::Step::Modal { solver, .. }
-        | procedure::Step::Buckling { solver, .. } => crate::solve::cost_estimate(mesh, mesh.dim, solver.solver),
+        | procedure::Step::Buckling { solver, .. } => crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver),
         // A nonlinear Step keeps one displacement field per converged increment — the
         // load–deflection curve — so its retained history is counted exactly as a transient's.
         // It is reported rather than enforced: `outputEvery`, which the budget error suggests,
@@ -549,9 +558,8 @@ pub(crate) fn planned_cost(
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
-            let components = p.dofs_per_node();
-            let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
         }
         // The state and its predictors (u, v, a, ũ, ṽ, w), the two full-length scratch
@@ -669,7 +677,7 @@ impl Engine {
                 // the suggested fix rather than a bigger mesh.
                 let frames = h.times.len();
                 let heat_step = step.after.as_deref().expect("chained_history only matches a Step with `after`");
-                let base = crate::solve::cost_estimate(p.mesh, p.mesh.dim, opts.solver);
+                let base = crate::solve::cost_estimate(p.mesh, p.dofs_per_node(), opts.solver);
                 // The predecessor retained exactly these frames of one value per node on this
                 // mesh, so the same count cannot overflow the accounting a second time.
                 let estimate = crate::solve::add_transient_cost(base, p.mesh.n_nodes(), 1, frames - 1, 1, 5)
@@ -694,7 +702,7 @@ impl Engine {
                         | procedure::Step::Harmonic { .. }
                         | procedure::Step::Static { amplitude: Some(_), .. }
                 ) {
-                    planned_cost(p.mesh, Some(&p), &proc_step)?
+                    planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
                         .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                         .enforce(&step.name)?;
                 }

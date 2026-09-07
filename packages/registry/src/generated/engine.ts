@@ -717,6 +717,20 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      /**
+       * A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
+       */
+      total:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.torque";
+    }
+  | {
+      name: string;
       of: string;
       /**
        * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
@@ -959,6 +973,7 @@ export type IdealisationSpec =
       kind: "planeStrain";
     }
   | {
+      twist?: boolean;
       kind: "axisymmetric";
     };
 /**
@@ -2991,6 +3006,20 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      /**
+       * A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
+       */
+      total:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.torque";
+    }
+  | {
+      name: string;
       of: string;
       /**
        * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
@@ -3614,6 +3643,14 @@ export type Idealisation =
       kind: "planeStrain";
     }
   | {
+      /**
+       * Adds a third degree of freedom, the circumferential displacement u_theta, so the
+       * section can carry torsion. With twist, the third component of a vector Command is
+       * the circumferential direction. Defaults to false, so every Journal and saved Model
+       * written before this field existed still loads, and an untwisted axisymmetric Model
+       * serialises byte-identically to before (`MeshSettings::simplices`'s convention).
+       */
+      twist?: boolean;
       kind: "axisymmetric";
     };
 /**
@@ -3939,6 +3976,11 @@ export type Load1 =
       bodies: string[];
       q: number;
       kind: "heatSource";
+    }
+  | {
+      on: string;
+      total: number;
+      kind: "torque";
     }
   | {
       of: string;

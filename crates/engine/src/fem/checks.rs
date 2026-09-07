@@ -53,7 +53,7 @@ fn tied_and_held(p: &Problem<'_>, mpc: &Mpc) -> Option<Error> {
     let (&(dof, _), &owner) =
         rc.fixed.iter().zip(&rc.owner).find(|(&(d, _), _)| mpc.slaves.binary_search(&d).is_ok())?;
     let row = &mpc.rows[mpc.slaves.binary_search(&dof).expect("the row that matched")];
-    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let comp = p.dof_labels()[dof as usize % dpn];
     let (c, tie) = (&p.constraints[owner].name, p.couplings[row.owner].name());
     Some(
         Error::new(
@@ -235,10 +235,14 @@ fn inverted(mesh: &Mesh) -> Option<Error> {
     )
 }
 
-/// A rigid motion: a translation along an axis, or an infinitesimal rotation about one.
+/// A rigid motion: a translation along an axis, an infinitesimal rotation about one, or the
+/// axisymmetric twist idealisation's rigid rotation about its axis.
 enum Rigid {
     Translate(usize),
     Rotate(usize),
+    /// `u_theta = r`, measured from the axis (`x = 0`), not the bounding-box centre: the only
+    /// zero-energy motion the twist DOF adds.
+    AxisTwist,
 }
 
 /// The rigid motions an idealisation actually has.
@@ -248,7 +252,13 @@ enum Rigid {
 /// not free and demanding a constraint against it would be a false alarm.
 fn rigid_list(id: &Idealisation) -> Vec<(&'static str, Rigid)> {
     match id {
-        Idealisation::Axisymmetric => vec![("translation y", Rigid::Translate(1))],
+        Idealisation::Axisymmetric { twist: false } => vec![("translation y", Rigid::Translate(1))],
+        // Every zero-energy motion twist adds is the same rotation about the axis, u_theta = r:
+        // a rigid axial translation still strains nothing, and this is the only additional one
+        // that strains nothing either.
+        Idealisation::Axisymmetric { twist: true } => {
+            vec![("translation y", Rigid::Translate(1)), ("rotation about the axis", Rigid::AxisTwist)]
+        }
         Idealisation::Solid3d => vec![
             ("translation x", Rigid::Translate(0)),
             ("translation y", Rigid::Translate(1)),
@@ -267,8 +277,7 @@ fn rigid_list(id: &Idealisation) -> Vec<(&'static str, Rigid)> {
 
 /// The rigid modes of the mesh as DOF vectors, each unit-normalised over *every* DOF so that a
 /// rotation (which scales with the model) and a translation (which does not) are comparable.
-fn rigid_basis(mesh: &Mesh, id: &Idealisation) -> Vec<(&'static str, Vec<f64>)> {
-    let dpn = mesh.dim;
+fn rigid_basis(mesh: &Mesh, id: &Idealisation, dpn: usize) -> Vec<(&'static str, Vec<f64>)> {
     let (lo, hi) = mesh.bbox();
     let centre = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])];
     let n_nodes = mesh.n_nodes();
@@ -290,6 +299,7 @@ fn rigid_basis(mesh: &Mesh, id: &Idealisation) -> Vec<(&'static str, Vec<f64>)> 
                     if a == 2 { r[0] } else { 0.0 } - if a == 0 { r[2] } else { 0.0 },
                     if a == 0 { r[1] } else { 0.0 } - if a == 1 { r[0] } else { 0.0 },
                 ],
+                Rigid::AxisTwist => [0.0, 0.0, x[0]],
             };
             for c in 0..dpn {
                 v[node * dpn + c] = w[c];
@@ -318,7 +328,7 @@ fn rigid_modes(p: &Problem<'_>, mpc: &Mpc) -> Option<Error> {
     let held: Vec<usize> = rc.fixed.iter().map(|&(d, _)| d as usize).collect();
     let mut basis: Vec<Vec<f64>> = Vec::new();
     let mut free: Vec<&str> = Vec::new();
-    for (name, mode) in rigid_basis(p.mesh, &p.idealisation) {
+    for (name, mode) in rigid_basis(p.mesh, &p.idealisation, p.dofs_per_node()) {
         let mut col: Vec<f64> =
             held.iter()
                 .map(|&d| mode[d])

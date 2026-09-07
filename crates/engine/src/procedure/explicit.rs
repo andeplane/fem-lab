@@ -84,7 +84,7 @@ pub fn run(
     for (dof, &m) in mass.iter().enumerate() {
         if !held[dof] && (!m.is_finite() || m <= 0.0) {
             let node = dof / dpn;
-            let component = ["ux", "uy", "uz"][dof % dpn];
+            let component = p.dof_labels()[dof % dpn];
             return Err(Error::new(
                 ErrorCode::ModelIllPosed,
                 format!(
@@ -95,7 +95,7 @@ pub fn run(
             .suggest("material.add with rho, then material.assign to every dynamic Body"));
         }
     }
-    validate_frequency_bound(omega_max, massless_free, dpn)?;
+    validate_frequency_bound(omega_max, massless_free, dpn, p.dof_labels())?;
     let (dt_crit, max_dt) = step_bounds(omega_max, dt_factor);
     let (n_steps, dt) = time_grid(max_dt, t_end)?;
     let every = output_every.max(1);
@@ -235,10 +235,15 @@ fn lumped_mass_and_omega(p: &Problem<'_>, held: &[bool], retain_mass: bool) -> R
     Ok((mass, omega, massless_free))
 }
 
-fn validate_frequency_bound(omega_max: f64, massless_free: Option<(u32, usize)>, dpn: usize) -> Result<(), Error> {
+fn validate_frequency_bound(
+    omega_max: f64,
+    massless_free: Option<(u32, usize)>,
+    dpn: usize,
+    labels: [&'static str; 3],
+) -> Result<(), Error> {
     if let Some((elem, dof)) = massless_free {
         let node = dof / dpn;
-        let component = ["ux", "uy", "uz"][dof % dpn];
+        let component = labels[dof % dpn];
         return Err(Error::new(
             ErrorCode::ModelIllPosed,
             format!(
@@ -268,7 +273,7 @@ pub(crate) fn retention_grid(p: &Problem<'_>, t_end: f64, dt_factor: f64) -> Res
         held[dof as usize] = true;
     }
     let (_, omega_max, massless_free) = lumped_mass_and_omega(p, &held, false)?;
-    validate_frequency_bound(omega_max, massless_free, p.dofs_per_node())?;
+    validate_frequency_bound(omega_max, massless_free, p.dofs_per_node(), p.dof_labels())?;
     let (_, max_dt) = step_bounds(omega_max, dt_factor);
     time_grid(max_dt, t_end)
 }

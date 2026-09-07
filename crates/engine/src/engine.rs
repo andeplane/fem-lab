@@ -495,7 +495,7 @@ impl Engine {
                         Idealisation::PlaneStress { thickness: t }
                     }
                     IdealisationSpec::PlaneStrain => Idealisation::PlaneStrain,
-                    IdealisationSpec::Axisymmetric => Idealisation::Axisymmetric,
+                    IdealisationSpec::Axisymmetric { twist } => Idealisation::Axisymmetric { twist: *twist },
                 };
                 Ok(Output::None)
             }
@@ -1020,6 +1020,18 @@ impl Engine {
                 let l = Load { name: name.clone(), kind: LoadKind::HeatSource { bodies: bodies.clone(), q: v } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
+            Command::LoadTorque { name, on, total } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                if !matches!(self.model.idealisation, Idealisation::Axisymmetric { twist: true }) {
+                    return Err(Error::unsupported("load.torque outside the axisymmetric idealisation with twist")
+                        .at("on")
+                        .suggest("model.setIdealisation { idealisation: { kind: \"axisymmetric\", twist: true } }"));
+                }
+                let t = total.si().map_err(|e| e.at("total"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::Torque { on: on.clone(), total: t } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
             Command::ContactThermal { name, of, conductance } => {
                 check_name(name)?;
                 let c = self
@@ -1490,7 +1502,8 @@ impl Engine {
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
                         | LoadKind::Radiation { on, .. }
-                        | LoadKind::HeatFlux { on, .. } => *on = rename_set_ref(on, name, to),
+                        | LoadKind::HeatFlux { on, .. }
+                        | LoadKind::Torque { on, .. } => *on = rename_set_ref(on, name, to),
                         LoadKind::Temperature { bodies, .. } | LoadKind::HeatSource { bodies, .. } => {
                             for b in bodies {
                                 if b == name {
@@ -1565,7 +1578,8 @@ impl Engine {
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
                         | LoadKind::Radiation { on, .. }
-                        | LoadKind::HeatFlux { on, .. } => {
+                        | LoadKind::HeatFlux { on, .. }
+                        | LoadKind::Torque { on, .. } => {
                             if on == name {
                                 *on = to.into();
                             }

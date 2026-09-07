@@ -360,6 +360,13 @@ export interface Fem {
      */
     heatSource(args: Omit<Extract<Command, { cmd: 'load.heatSource' }>, 'cmd'>): Promise<Ack>;
     /**
+     * A torsional load on a face Set of an axisymmetric Model with twist: a circumferential
+     * traction `t_theta = c r` at every Gauss point, with `c` chosen so the net torque about
+     * the axis equals `total` exactly, curved faces included. Outside the axisymmetric
+     * idealisation with twist this is `unsupported`; enable it with model.setIdealisation.
+     */
+    torque(args: Omit<Extract<Command, { cmd: 'load.torque' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
      * first. Removing a load makes existing Results of that Step stale.
      */

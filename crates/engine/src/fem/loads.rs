@@ -32,13 +32,16 @@ pub enum Load {
     NodalForce { nodes: String, f: [f64; 3] },
     /// Gravity: `ρ g` over every element whose material has a density.
     Gravity { g: [f64; 3] },
+    /// Circumferential traction `t_theta = c r` on a face Set, `c` chosen so the total torque
+    /// delivered is exactly what `load.torque` asked for.
+    Torque { faces: String, c: f64 },
 }
 
 impl Load {
     /// The Set this Load acts on, if any.
     pub fn set(&self) -> Option<&str> {
         match self {
-            Load::Pressure { faces, .. } | Load::Traction { faces, .. } => Some(faces),
+            Load::Pressure { faces, .. } | Load::Traction { faces, .. } | Load::Torque { faces, .. } => Some(faces),
             Load::NodalForce { nodes, .. } => Some(nodes),
             Load::Gravity { .. } => None,
         }
@@ -79,6 +82,18 @@ pub fn face_set_area(p: &Problem<'_>, faces: &str) -> Result<f64, Error> {
     Ok(area)
 }
 
+/// `∫ r² dS` over a face Set, the sibling of [`face_set_area`] a `load.torque` divides its
+/// requested total by: `T = ∫ r t_theta dS = c ∫ r² dS`, so `c = T / face_set_polar_moment`
+/// delivers exactly the torque asked for, curved faces included.
+pub fn face_set_polar_moment(p: &Problem<'_>, faces: &str) -> Result<f64, Error> {
+    let set = p.set(faces)?;
+    let mut moment = 0.0;
+    for &face in &set.faces {
+        moment += crate::fem::element::face_polar_moment(p.mesh, face, &p.idealisation);
+    }
+    Ok(moment)
+}
+
 /// Add every Load's consistent nodal forces into `f` and report the total applied force.
 pub fn assemble_loads(p: &Problem<'_>, f: &mut [f64]) -> Result<LoadTotals, Error> {
     assemble(p, f, None)
@@ -98,6 +113,7 @@ fn assemble(p: &Problem<'_>, f: &mut [f64], mass: Option<&[f64]>) -> Result<Load
         match load {
             Load::Pressure { faces, p: value } => face_load(p, faces, FaceLoad::Pressure(*value), f, &mut totals)?,
             Load::Traction { faces, t } => face_load(p, faces, FaceLoad::Traction(*t), f, &mut totals)?,
+            Load::Torque { faces, c } => face_load(p, faces, FaceLoad::Torque(*c), f, &mut totals)?,
             Load::NodalForce { nodes, f: force } => {
                 for &node in &p.set(nodes)?.nodes {
                     for c in 0..dpn {

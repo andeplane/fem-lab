@@ -136,18 +136,27 @@ pub struct Problem<'a> {
 }
 
 impl Problem<'_> {
-    /// Unknowns per node: one temperature for a heat Step, else 3 displacements in 3D and 2 in
-    /// every 2D idealisation.
+    /// Unknowns per node: one temperature for a heat Step, else whatever the idealisation
+    /// carries (3 displacements in 3D, 2 in a plane idealisation, 3 under axisymmetric twist).
+    /// Every element kernel and assembly path takes its DOF stride from here, so a new
+    /// idealisation with more (or fewer) unknowns per node needs no change anywhere else.
     pub fn dofs_per_node(&self) -> usize {
         if self.heat {
             1
         } else {
-            self.mesh.dim
+            self.idealisation.dofs_per_node()
         }
     }
 
     pub fn n_dofs(&self) -> usize {
         self.mesh.n_nodes() * self.dofs_per_node()
+    }
+
+    /// The component names an error names a DOF by, indexed the same way `dofs_per_node`
+    /// counts them: `ur`/`uz`/`utheta` under axisymmetric (the third only ever reached with
+    /// twist), `ux`/`uy`/`uz` everywhere else.
+    pub fn dof_labels(&self) -> [&'static str; 3] {
+        dof_labels(&self.idealisation)
     }
 
     /// The material of an element, or the `model.no-material` error naming its Body.
@@ -212,4 +221,13 @@ pub fn empty_set(name: &str) -> Error {
     Error::new(ErrorCode::SetEmpty, format!("set '{name}' resolves to nothing on this mesh"))
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace")
+}
+
+/// The DOF component names an error message quotes, indexed `dof % dofs_per_node`: `ur`/`uz`
+/// (and, with twist, `utheta`) under axisymmetric, `ux`/`uy`/`uz` everywhere else.
+pub fn dof_labels(id: &Idealisation) -> [&'static str; 3] {
+    match id {
+        Idealisation::Axisymmetric { .. } => ["ur", "uz", "utheta"],
+        _ => ["ux", "uy", "uz"],
+    }
 }

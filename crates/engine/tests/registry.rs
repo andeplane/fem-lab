@@ -5360,6 +5360,140 @@ fn the_revolved_lame_ring_reproduces_the_plane_strain_answer() {
     assert!(rel(sig_3d, 100.0) < 0.02, "sigma_theta(a) = {sig_3d} MPa against 100 MPa");
 }
 
+// ---------------------------------------------------------------- twisted axisymmetric shaft (#82)
+
+/// A shaft clamped at z = 0 (its axial and circumferential DOFs held) and torqued at z = L,
+/// solid when `b` is `None`. Returns `u_theta(a, L)` and `tau_theta_z(a, L/2)`.
+fn twisted_shaft(a: f64, l: f64, b: Option<f64>, nr: usize, nz: usize, total_nm: f64) -> (f64, f64) {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shaft"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"Pa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric","twist":true}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    let r0 = b.unwrap_or(0.0);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"shaft","blocks":[{{
+               "corners":[["{r0} m","0 m"],["{a} m","0 m"],["{a} m","{l} m"],["{r0} m","{l} m"]],
+               "n":[{nr},{nz}],"tags":["zmin","outer","zmax","inner"]}}]}},"order":1}}"#
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#);
+    // "uy" is the axial DOF, "uz" the third (circumferential) one twist adds.
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"clamp","on":"shaft.zmin","dofs":["uy","uz"]}"#);
+    ok(&mut e, &format!(r#"{{"cmd":"load.torque","name":"torque","on":"shaft.zmax","total":"{total_nm} N*m"}}"#));
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":["torque"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let (ra, rl, rlh) = (format!("{a} m"), format!("{l} m"), format!("{} m", l / 2.0));
+    let u_theta = probe_value(&mut e, Field::Displacement, 2, [&ra, &rl, "0 m"]);
+    let tau = probe_value(&mut e, Field::Stress, 5, [&ra, &rlh, "0 m"]);
+    (u_theta, tau)
+}
+
+/// B14: `u_theta = T r z / (G J)`, `tau_theta_z = T r / J`, `J = pi a^4 / 2`. This field is
+/// bilinear (r and z each vary with one parametric coordinate on this axis-aligned mesh), so
+/// quad4 must reproduce it to machine precision on any mesh — a patch test as much as a
+/// Benchmark — which is why the gate is 1e-9, not 1 %.
+#[test]
+fn a_twisted_axisymmetric_shaft_matches_the_closed_form_on_two_meshes() {
+    let (a, l, t): (f64, f64, f64) = (0.025, 0.1, 100.0);
+    let g = 200e9 / (2.0 * 1.3);
+    let j = std::f64::consts::PI * a.powi(4) / 2.0;
+    let want_u_theta = t * l * a / (g * j);
+    let want_tau = t * a / j;
+    for (nr, nz) in [(2, 3), (5, 9)] {
+        let (u_theta, tau) = twisted_shaft(a, l, None, nr, nz, t);
+        assert!(rel(u_theta, want_u_theta) < 1e-9, "{nr}x{nz}: u_theta {u_theta} vs {want_u_theta}");
+        assert!(rel(tau, want_tau) < 1e-8, "{nr}x{nz}: tau {tau} vs {want_tau}");
+    }
+}
+
+/// B15: the hollow shaft, `J = pi (a^4 - b^4) / 2`.
+#[test]
+fn a_hollow_twisted_shaft_matches_its_closed_form() {
+    let (a, b, l, t): (f64, f64, f64, f64) = (0.025, 0.015, 0.1, 100.0);
+    let g = 200e9 / (2.0 * 1.3);
+    let j = std::f64::consts::PI * (a.powi(4) - b.powi(4)) / 2.0;
+    let want_u_theta = t * l * a / (g * j);
+    let want_tau = t * a / j;
+    let (u_theta, tau) = twisted_shaft(a, l, Some(b), 4, 8, t);
+    assert!(rel(u_theta, want_u_theta) < 1e-9, "{u_theta} vs {want_u_theta}");
+    assert!(rel(tau, want_tau) < 1e-8, "{tau} vs {want_tau}");
+}
+
+/// Internal pressure and torque in one Step equal the sum of the two Steps run separately, to
+/// 1e-10: the twist DOF does not couple into the four in-plane Voigt rows, and nothing in the
+/// in-plane rows leaks into it either. Three Steps on one Model share one mesh and one node
+/// numbering, so the same physical point can be compared pointwise across them.
+#[test]
+fn torque_and_pressure_do_not_couple_under_axisymmetric_twist() {
+    let (a, l, p, t) = (0.025, 0.1, 5.0e6, 100.0);
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shaft-super"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"Pa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric","twist":true}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"shaft","blocks":[{{
+               "corners":[["0 m","0 m"],["{a} m","0 m"],["{a} m","{l} m"],["0 m","{l} m"]],
+               "n":[3,6],"tags":["zmin","outer","zmax","inner"]}}]}},"order":1}}"#
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"clamp","on":"shaft.zmin","dofs":["uy","uz"]}"#);
+    ok(&mut e, &format!(r#"{{"cmd":"load.pressure","name":"squeeze","on":"shaft.outer","value":"{p} Pa"}}"#));
+    ok(&mut e, &format!(r#"{{"cmd":"load.torque","name":"twist","on":"shaft.zmax","total":"{t} N*m"}}"#));
+    let steps = [("both", r#"["squeeze","twist"]"#), ("pressure", r#"["squeeze"]"#), ("torque", r#"["twist"]"#)];
+    // Every Step is defined before any is solved: `step.add` changes the Model, and a Result's
+    // validity is checked against the *current* Model state, so solving "both" and only then
+    // adding "pressure" would make "both"'s own Result stale by the time it is compared.
+    for (name, loads) in steps {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"{name}","procedure":"static","constraints":["clamp"],"loads":{loads}}}"#
+            ),
+        );
+    }
+    for (name, _) in steps {
+        ok(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{name}"}}"#));
+    }
+    let (ra, rlh) = (format!("{a} m"), format!("{} m", l / 2.0));
+    let probe = |e: &mut Engine, step: &str, field: Field, component: u8| -> f64 {
+        let q = Query::Probe {
+            result_id: None,
+            sample: None,
+            step: Some(step.into()),
+            field,
+            component: Some(component),
+            at: [Q::text(&ra), Q::text(&rlh), Q::text("0 m")],
+        };
+        let QueryResult::Probe(res) = e.query(q).unwrap_or_else(|err| panic!("{err:?}")) else { panic!("a probe") };
+        res.value.value
+    };
+    for (field, component) in
+        [(Field::Displacement, 0), (Field::Displacement, 2), (Field::Stress, 0), (Field::Stress, 5)]
+    {
+        let both = probe(&mut e, "both", field, component);
+        let pressure_only = probe(&mut e, "pressure", field, component);
+        let torque_only = probe(&mut e, "torque", field, component);
+        let sum = pressure_only + torque_only;
+        let scale = both.abs().max(sum.abs()).max(1.0);
+        assert!(
+            (both - sum).abs() <= 1e-10 * scale,
+            "{field:?}[{component}]: {both} vs {pressure_only}+{torque_only}={sum}"
+        );
+    }
+    // The oracle behind the superposition: pressure alone drives no twist at all, and torque
+    // alone drives no radial expansion — not approximately zero, exactly, since the rows share
+    // no material coupling.
+    assert!(probe(&mut e, "pressure", Field::Displacement, 2).abs() <= 1e-9, "pressure alone must not twist");
+    assert!(probe(&mut e, "torque", Field::Stress, 0).abs() <= 1e-3, "torque alone must not pressurise");
+}
+
 // ---------------------------------------------------------------- D6/D7 free tet: Lamé as CSG
 
 /// The Lamé rectangle revolved 90° as CSG (`geometry.add`), tagged `tube.zmin/outer/zmax/inner`
@@ -9360,6 +9494,129 @@ fn load_radiation_validates_its_emissivity_and_its_absolute_temperature() {
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
     assert_eq!(m.loads.iter().find(|l| l.name == "space").expect("still there").on.as_deref(), Some("rod.xmax"));
+}
+
+/// `load.torque` requires the axisymmetric idealisation with twist — everywhere else, including
+/// plain axisymmetric, it is `unsupported` and names the fix. `Q<Torque>` shares energy's
+/// dimension, `[2,1,-2,0]`, so a schema mismatch is what catches a plain force in its place.
+#[test]
+fn load_torque_requires_axisymmetric_twist_and_a_torque_quantity() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let outside_solid3d = err(&mut e, r#"{"cmd":"load.torque","name":"t","on":"beam.xmax","total":"10 N*m"}"#);
+    assert_eq!(outside_solid3d.code, ErrorCode::Unsupported);
+    assert!(outside_solid3d.suggestion.expect("a fix").contains("model.setIdealisation"));
+
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric"}}"#);
+    let outside_twist = err(&mut e, r#"{"cmd":"load.torque","name":"t","on":"beam.xmax","total":"10 N*m"}"#);
+    assert_eq!(outside_twist.code, ErrorCode::Unsupported, "axisymmetric without twist is still unsupported");
+
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric","twist":true}}"#);
+    let wrong_dim = err(&mut e, r#"{"cmd":"load.torque","name":"t","on":"beam.xmax","total":"10 N"}"#);
+    assert_eq!(wrong_dim.code, ErrorCode::UnitDimension);
+    assert_eq!(wrong_dim.where_.as_deref(), Some("total"));
+    let unknown_set = err(&mut e, r#"{"cmd":"load.torque","name":"t","on":"nowhere","total":"10 N*m"}"#);
+    assert_eq!(unknown_set.code, ErrorCode::NotFound);
+    let unnamed = err(&mut e, r#"{"cmd":"load.torque","name":"","on":"beam.xmax","total":"10 N*m"}"#);
+    assert_eq!((unnamed.code, unnamed.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+
+    ok(&mut e, r#"{"cmd":"load.torque","name":"t","on":"beam.xmax","total":"10 N*m"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    let row = m.loads.iter().find(|l| l.name == "t").expect("the Load is listed");
+    assert_eq!(row.kind, "torque");
+    assert!(row.summary.contains("10"), "{}", row.summary);
+    // Its editable definition is the Command itself, and replaying it changes nothing.
+    let before = e.model().clone();
+    let QueryResult::Definition(def) = e.query(Query::Definition { kind: ObjectKind::Load, name: "t".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+    assert_eq!(e.model(), &before, "replaying the definition changes nothing");
+    // Renaming the Body the Set belongs to follows the Load, like every other face Load.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"beam","to":"shaft"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "t").expect("still there").on.as_deref(), Some("shaft.xmax"));
+    // So does renaming a named Set, and only the Load on that Set moves.
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"rim","of":"shaft","where":{"kind":"normal","normal":[1,0,0]}}"#);
+    ok(&mut e, r#"{"cmd":"load.torque","name":"t2","on":"rim","total":"5 N*m"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"rim","to":"lip"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "t2").expect("still there").on.as_deref(), Some("lip"));
+    assert_eq!(m.loads.iter().find(|l| l.name == "t").expect("still there").on.as_deref(), Some("shaft.xmax"));
+    ok(&mut e, r#"{"cmd":"load.remove","name":"t"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.loads.iter().all(|l| l.name != "t"));
+}
+
+/// `query.mesh` and `query.cost` count degrees of freedom from the idealisation, not the mesh's
+/// geometric dimension: a twisted axisymmetric Model has 3 per node like a 3D solid, even
+/// though its mesh is 2D.
+#[test]
+fn twist_counts_a_third_degree_of_freedom_in_mesh_and_cost_queries() {
+    let mesh = r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"shaft","blocks":[{
+       "corners":[["0 m","0 m"],["0.025 m","0 m"],["0.025 m","0.1 m"],["0 m","0.1 m"]],
+       "n":[2,3],"tags":["zmin","outer","zmax","inner"]}]},"order":1}"#;
+    let mut plain = engine();
+    ok(&mut plain, r#"{"cmd":"model.new","name":"shaft"}"#);
+    ok(&mut plain, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric"}}"#);
+    ok(&mut plain, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(&mut plain, mesh);
+    ok(&mut plain, r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#);
+    ok(&mut plain, r#"{"cmd":"constraint.fix","name":"clamp","on":"shaft.zmin"}"#);
+    ok(&mut plain, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":[]}"#);
+    let QueryResult::Mesh(m_plain) = plain.query(Query::Mesh {}).unwrap() else { panic!() };
+    assert_eq!(m_plain.dofs, 2 * m_plain.nodes);
+    let QueryResult::Cost(c_plain) = plain.query(Query::Cost { step: "static".into() }).unwrap() else { panic!() };
+    assert_eq!(c_plain.dofs, 2 * m_plain.nodes as u64);
+
+    let mut twisted = engine();
+    ok(&mut twisted, r#"{"cmd":"model.new","name":"shaft"}"#);
+    ok(&mut twisted, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric","twist":true}}"#);
+    ok(&mut twisted, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(&mut twisted, mesh);
+    ok(&mut twisted, r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#);
+    ok(&mut twisted, r#"{"cmd":"constraint.fix","name":"clamp","on":"shaft.zmin"}"#);
+    ok(&mut twisted, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":[]}"#);
+    let QueryResult::Mesh(m_twist) = twisted.query(Query::Mesh {}).unwrap() else { panic!() };
+    assert_eq!(m_twist.nodes, m_plain.nodes, "same mesh, only the idealisation changed");
+    assert_eq!(m_twist.dofs, 3 * m_twist.nodes);
+    let QueryResult::Cost(c_twist) = twisted.query(Query::Cost { step: "static".into() }).unwrap() else { panic!() };
+    assert_eq!(c_twist.dofs, 3 * m_twist.nodes as u64);
+    assert!(c_twist.dofs > c_plain.dofs, "twist must not be reported at the plain axisymmetric count");
+}
+
+/// `checks::rigid_basis`, `reactions_per_constraint` and `vector_field` all take their DOF
+/// stride from the resolved Problem, so a reaction on the twist DOF lands in the third slot,
+/// not the second (`mesh.dim`) or overflowing into the next node.
+#[test]
+fn a_reaction_on_the_twist_dof_lands_in_its_own_component() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shaft"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric","twist":true}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"shaft","blocks":[{
+           "corners":[["0 m","0 m"],["0.025 m","0 m"],["0.025 m","0.1 m"],["0 m","0.1 m"]],
+           "n":[2,3],"tags":["zmin","outer","zmax","inner"]}]},"order":1}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"clamp","on":"shaft.zmin","dofs":["uy","uz"]}"#);
+    ok(&mut e, r#"{"cmd":"load.torque","name":"torque","on":"shaft.zmax","total":"100 N*m"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":["torque"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: None }).unwrap() else { panic!() };
+    let clamp = r.reactions.iter().find(|row| row.constraint == "clamp").expect("the clamp reaction");
+    // The reaction torque about the axis must balance the 100 N*m applied at the free end; the
+    // axial (component 1) reaction stays at zero because nothing pulls the shaft axially.
+    assert!(clamp.total[1].value.abs() <= 1e-6, "{:?}", clamp.total);
+    assert!(clamp.total[2].value.abs() > 1.0, "the twist reaction landed in its own component: {:?}", clamp.total);
+    // A torque on a face the Mesh never made is `set.empty` when the Step builds its Problem,
+    // where the requested total is divided by the face Set's polar moment.
+    ok(&mut e, r#"{"cmd":"load.torque","name":"lost","on":"shaft.side","total":"1 N*m"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"nowhere","procedure":"static","constraints":["clamp"],"loads":["lost"]}"#);
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"nowhere"}"#), ErrorCode::SetEmpty);
 }
 
 /// The two convergence fields are validated at dispatch and reach the procedure: a budget of one

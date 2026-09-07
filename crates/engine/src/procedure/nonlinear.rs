@@ -201,7 +201,7 @@ fn supported(idealisation: &Idealisation) -> Result<(), Error> {
     let what = match idealisation {
         Idealisation::Solid3d | Idealisation::PlaneStrain => return Ok(()),
         Idealisation::PlaneStress { .. } => "plane stress",
-        Idealisation::Axisymmetric => "axisymmetric",
+        Idealisation::Axisymmetric { .. } => "axisymmetric",
     };
     Err(Error::new(
         ErrorCode::Unsupported,

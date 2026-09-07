@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::Error;
 use crate::units::{
     Acceleration, Area, Conductivity, Density, Dimensionless, Force, Frequency, HeatFlux, HeatSource, HeatTransfer,
-    Length, Mass, SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Velocity, Q,
+    Length, Mass, SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, Torque, UnitSet, Velocity,
+    Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -300,8 +301,14 @@ pub enum IdealisationSpec {
     PlaneStress { thickness: Q<Length> },
     /// Long 2D body in the xy plane with zero z strain.
     PlaneStrain,
-    /// Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.
-    Axisymmetric,
+    /// Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution. `twist` adds a
+    /// third degree of freedom, the circumferential displacement, so the section can carry
+    /// torsion. With twist, the third component of a vector Command is the circumferential
+    /// direction.
+    Axisymmetric {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        twist: bool,
+    },
 }
 
 /// A cross-section for line members (trusses and frames). The library turns the shape into the
@@ -1417,6 +1424,13 @@ pub enum Command {
     /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
+
+    /// A torsional load on a face Set of an axisymmetric Model with twist: a circumferential
+    /// traction `t_theta = c r` at every Gauss point, with `c` chosen so the net torque about
+    /// the axis equals `total` exactly, curved faces included. Outside the axisymmetric
+    /// idealisation with twist this is `unsupported`; enable it with model.setIdealisation.
+    #[serde(rename = "load.torque", rename_all = "camelCase")]
+    LoadTorque { name: String, on: SetRef, total: Q<Torque> },
 
     /// A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
     /// interface per unit area, so the two sides are no longer at the same temperature.

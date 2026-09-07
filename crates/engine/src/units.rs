@@ -158,6 +158,9 @@ dims! {
     Area, "area", "2000 mm^2", [2,0,0,0];
     SecondMoment, "second_moment", "1.7e6 mm^4", [4,0,0,0];
     Dimensionless, "dimensionless", "0.3", [0,0,0,0];
+    // Same dimension as energy (force times length); a separate marker so a schema mismatch
+    // between a torque and a plain force is caught even though the SI unit is the same.
+    Torque, "torque", "100 N m", [2,1,-2,0];
 }
 
 /// A [`Quantity`] whose dimension is fixed by the schema. Serialises exactly like `Quantity`.

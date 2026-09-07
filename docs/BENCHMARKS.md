@@ -275,6 +275,8 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B11 | Determinate three-legged space truss (tripod), skew members | N = −P L / (3 H) from statics; δ = P L³ / (3 H² E A) by virtual work | 1e-10 rel | 3D direction cosines | green |
 | B12 | Bar held at both ends, ΔT = 100 K | σ = −E α ΔT = −240 MPa; reaction σA = 240 kN | 1e-12 rel | the thermal load and the restrained-stress path on a line element | green |
 | B13 | Fixed–free bar's axial modes, 4/8/16 truss elements, consistent mass | f_n = (2n−1)/(4L)·√(E/ρ) | 1 % at 16 elements, observed rate > 1.9, every discrete frequency above the exact one | consistent mass and modal convergence of the line element | engine test |
+| B14 | Twisted axisymmetric shaft, solid, St Venant torsion | u_θ(a,L) = TLa/(GJ) = 5.296676506098277e-6 m, τ_θz(a) = Ta/J = 4074366.54315252 Pa, J = πa⁴/2 | 1e-9 (u_θ) and 1e-8 (τ) on two meshes | axisymmetric twist DOF, its two new Voigt rows, the rotation-about-the-axis rigid mode | engine test + green |
+| B15 | Twisted axisymmetric shaft, hollow | same closed form with J = π(a⁴−b⁴)/2: u_θ(a,L) = 6.085336059395998e-6 m, τ_θz(a) = 4681027.737996921 Pa | 1e-9 (u_θ), 1e-8 (τ) | the hollow-section case; superposition against a separate internal-pressure Step to 1e-10 | engine test + green |
 | B20 | Section library: A, I_y, I_z, J of every `section.add` shape | closed forms (Roark for the rectangle's J), and the I-section against the IPE 200 datasheet A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴ | exact against the closed forms (1e-12 rel); within 6 % *below* the datasheet | the section library a line member integrates with | engine test |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
@@ -321,6 +323,25 @@ B7, because the rate needs three meshes of one bar rather than one Model. With E
 the exact frequencies are (2n−1)/4 Hz; the consistent mass gives 0.644 %, 0.161 % and 0.0402 %
 error in the first mode at 4, 8 and 16 elements, an observed rate of 2.00, and every discrete
 frequency above the continuum's, which is what a conforming displacement element must do.
+
+**B14/B15: the twist DOF is a patch test, not just a Benchmark.** `u_θ = T r z / (G J)` is exactly
+bilinear in the meridional (r, z) plane, and on the axis-aligned rectangular mesh both cases use,
+r and z each vary with one parametric coordinate only — so quad4's bilinear shape functions
+reproduce the field, and every strain derived from it, to machine precision regardless of mesh
+size. `a_twisted_axisymmetric_shaft_matches_the_closed_form_on_two_meshes` in `tests/registry.rs`
+solves the solid shaft (a = 25 mm, L = 100 mm, steel, T = 100 N·m) at 2×3 and 6×10 and gates the
+tip twist at 1e-9 relative and the surface shear at 1e-8 on both — the two meshes agreeing is the
+patch-test half of the claim, and the closed form is the Benchmark half.
+`a_hollow_twisted_shaft_matches_its_closed_form` repeats it with a 15 mm bore, J = π(a⁴−b⁴)/2.
+`torque_and_pressure_do_not_couple_under_axisymmetric_twist` solves internal pressure and torque
+together in one Step and separately in two, on the same mesh so the same physical point can be
+compared pointwise: the combined Step's fields equal the sum of the separate ones to 1e-10, and
+pressure alone drives no twist while torque alone drives no radial expansion at all — the proof
+that the new Voigt rows (r-θ, θ-z) share no material coupling with the four original ones. The
+element-level companion, `axisymmetric_twist_is_symmetric_psd_and_reproduces_pure_twist_strain_exactly`
+in `tests/fem.rs`, checks the same exactness and the stiffness's symmetry, positive
+semi-definiteness and rigid-mode annihilation (`u_θ = r`, the rotation about the axis) directly
+against the element kernel, both formulations.
 
 B20 (`section_properties_match_their_closed_forms_and_a_datasheet`) checks every
 `SectionSpec` arm against an oracle written from the geometry rather than from the

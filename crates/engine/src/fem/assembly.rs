@@ -419,6 +419,10 @@ pub fn resolve(p: &Problem<'_>) -> Result<ResolvedConstraints, Error> {
     for (i, c) in p.constraints.iter().enumerate() {
         let set = p.set(&c.nodes)?;
         for &node in &set.nodes {
+            // ponytail: `Constraint::dofs` is `[bool; 3]`, so `dofs_per_node` up to 3 (every
+            // idealisation through axisymmetric twist) is fully representable and `take(dpn)`
+            // only ever drops trailing `false`s. A `dofs_per_node` above 3 would silently drop
+            // a real request instead; that needs a named `constraint.fix` error, not this take.
             for (d, on) in c.dofs.iter().enumerate().take(dpn) {
                 if *on {
                     all.push((node * dpn as u32 + d as u32, c.value, i));
@@ -447,7 +451,7 @@ pub fn resolve(p: &Problem<'_>) -> Result<ResolvedConstraints, Error> {
 
 /// The `constraint.conflict` error: which node, which component, which two Constraints.
 fn conflict(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize, a: f64, b: f64) -> Error {
-    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let comp = p.dof_labels()[dof as usize % dpn];
     let (n1, n2) = (&p.constraints[first].name, &p.constraints[second].name);
     Error::new(
         ErrorCode::ConstraintConflict,

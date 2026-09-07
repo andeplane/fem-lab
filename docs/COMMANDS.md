@@ -47,6 +47,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [load.radiation](#commands-load-radiation)
 - [load.remove](#commands-load-remove)
 - [load.temperature](#commands-load-temperature)
+- [load.torque](#commands-load-torque)
 - [load.traction](#commands-load-traction)
 - [material.add](#commands-material-add)
 - [material.assign](#commands-material-assign)
@@ -592,6 +593,22 @@ references still apply, with 293.15 K on Bodies without a temperature Load.
 | value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
 | reference | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"load.temperature"}</code> |  |
+
+<a id="commands-load-torque"></a>
+
+### load.torque
+
+A torsional load on a face Set of an axisymmetric Model with twist: a circumferential
+traction `t_theta = c r` at every Gauss point, with `c` chosen so the net torque about
+the axis equals `total` exactly, curved faces included. Outside the axisymmetric
+idealisation with twist this is `unsupported`; enable it with model.setIdealisation.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| on | yes | <code>{"type":"string"}</code> |  |
+| total | yes | <code>{"$ref":"#/$defs/Q_torque"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"load.torque"}</code> |  |
 
 <a id="commands-load-traction"></a>
 
@@ -1565,9 +1582,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.",
+      "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution. `twist` adds a\nthird degree of freedom, the circumferential displacement, so the section can carry\ntorsion. With twist, the third component of a vector Command is the circumferential\ndirection.",
       "type": "object",
       "properties": {
+        "twist": {
+          "type": "boolean"
+        },
         "kind": {
           "type": "string",
           "const": "axisymmetric"
@@ -2358,6 +2378,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "time"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_torque</summary>
+
+```json
+{
+  "description": "A torque with unit, e.g. \"100 N m\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "torque"
 }
 ```
 
@@ -5170,6 +5203,31 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "A torsional load on a face Set of an axisymmetric Model with twist: a circumferential\ntraction `t_theta = c r` at every Gauss point, with `c` chosen so the net torque about\nthe axis equals `total` exactly, curved faces included. Outside the axisymmetric\nidealisation with twist this is `unsupported`; enable it with model.setIdealisation.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "total": {
+          "$ref": "#/$defs/Q_torque"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "load.torque"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "on",
+        "total"
+      ]
+    },
+    {
       "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
       "type": "object",
       "properties": {
@@ -6238,9 +6296,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.",
+      "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution. `twist` adds a\nthird degree of freedom, the circumferential displacement, so the section can carry\ntorsion. With twist, the third component of a vector Command is the circumferential\ndirection.",
       "type": "object",
       "properties": {
+        "twist": {
+          "type": "boolean"
+        },
         "kind": {
           "type": "string",
           "const": "axisymmetric"
@@ -7084,6 +7145,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "time"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_torque</summary>
+
+```json
+{
+  "description": "A torque with unit, e.g. \"100 N m\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "torque"
 }
 ```
 
