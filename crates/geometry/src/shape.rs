@@ -474,6 +474,63 @@ mod tests {
         assert!(Shape::Named { name: "n".into(), shape: Box::new(bad.clone()) }.contains([0.0; 3]).is_err());
     }
 
+    /// The unit cube as a triangle soup, wound counter-clockwise seen from outside.
+    fn cube_soup() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let quads: [[u32; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+        (positions, quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect())
+    }
+
+    #[test]
+    fn an_imported_mesh_validates_its_soup_and_has_no_analytic_containment() {
+        let (positions, triangles) = cube_soup();
+        let cube = Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: None,
+            simplify_below: None,
+        };
+        assert_eq!(cube.dim(), 3);
+        assert!(cube.validate().is_ok());
+        assert!(cube.contains([0.5; 3]).unwrap_err().0.contains("evaluated Solid"));
+        let with = |p: Vec<[f64; 3]>, t: Vec<[u32; 3]>, angle: Option<f64>, simplify: Option<f64>| {
+            Shape::Mesh { positions: p, triangles: t, feature_angle: angle, simplify_below: simplify }
+                .validate()
+                .unwrap_err()
+                .0
+        };
+        assert!(with(positions.clone(), triangles[..3].to_vec(), None, None).contains("at least 4 triangles"));
+        assert!(with(positions.clone(), vec![[0, 1, 2]; MAX_TRIANGLES + 1], None, None).contains("limited to"));
+        let mut nan = positions.clone();
+        nan[2][1] = f64::NAN;
+        assert!(with(nan, triangles.clone(), None, None).contains("vertex 2 has a non-finite coordinate"));
+        let mut oob = triangles.clone();
+        oob[5][2] = 99;
+        assert!(with(positions.clone(), oob, None, None).contains("triangle 5 refers to vertex 99"));
+        let mut flat = triangles.clone();
+        flat[7] = [1, 1, 2];
+        assert!(with(positions.clone(), flat, None, None).contains("triangle 7 has zero or non-finite area"));
+        let huge = vec![[0.0; 3], [1e300, 0.0, 0.0], [0.0, 1e300, 0.0], [0.0, 0.0, 1.0]];
+        let big = vec![[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]];
+        assert!(with(huge, big, None, None).contains("triangle 0 has zero or non-finite area"));
+        assert!(with(positions.clone(), triangles.clone(), Some(0.0), None).contains("featureAngle"));
+        assert!(with(positions.clone(), triangles.clone(), Some(180.0), None).contains("featureAngle"));
+        assert!(with(positions.clone(), triangles.clone(), None, Some(-1.0)).contains("simplifyBelow"));
+        assert!(with(positions.clone(), triangles.clone(), None, Some(f64::NAN)).contains("simplifyBelow"));
+        let good = Shape::Mesh { positions, triangles, feature_angle: Some(45.0), simplify_below: Some(0.0) };
+        assert!(good.validate().is_ok());
+        assert!(serde_json::to_string(&good).unwrap().starts_with(r#"{"kind":"mesh","positions":"#));
+    }
+
     #[test]
     fn validation() {
         assert!(Shape::Box { size: [1.0, 0.0, 1.0] }.validate().unwrap_err().0.contains("size[1]"));

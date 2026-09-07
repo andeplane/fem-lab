@@ -773,6 +773,62 @@ mod tests {
     }
 
     #[test]
+    fn an_imported_mesh_evaluates_to_a_solid_with_patch_faces() {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let quads: [[u32; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+        let triangles: Vec<[u32; 3]> = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
+        let shape = Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: None,
+            simplify_below: None,
+        };
+        let s = Solid::evaluate(&shape).unwrap();
+        assert!((s.volume() - 1.0).abs() < 1e-12);
+        assert!((s.area() - 6.0).abs() < 1e-12);
+        assert_eq!(s.genus(), 0);
+        assert_eq!(s.tags(), ["face0", "face1", "face2", "face3", "face4", "face5"]);
+        // containment falls through the shape tree's error to the ray cast
+        assert!(s.contains([0.5; 3]) && !s.contains([2.0, 0.5, 0.5]));
+        assert!(format!("{s:?}").contains("MeshIndex(12 triangles)"));
+        // a feature angle wide enough to weld the whole cube into one patch
+        let welded = Solid::evaluate(&Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: Some(91.0),
+            simplify_below: None,
+        })
+        .unwrap();
+        assert_eq!(welded.tags(), ["face0"]);
+        // and one that swallows the body entirely
+        let gone = Solid::evaluate(&Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: None,
+            simplify_below: Some(100.0),
+        });
+        assert!(gone.unwrap_err().0.contains("simplifies away to nothing"));
+        // an open surface is not a solid
+        let open: Vec<[u32; 3]> = triangles.iter().copied().filter(|t| !t.contains(&6)).collect();
+        let err =
+            Solid::evaluate(&Shape::Mesh { positions, triangles: open, feature_angle: None, simplify_below: None });
+        assert!(err.unwrap_err().0.contains("Not Closed"));
+        // a sheet keeps the analytic answer and never reaches the ray cast
+        let sheet = Solid::evaluate(&Shape::Sheet { sketch: Sketch::rect(1.0, 1.0) }).unwrap();
+        assert_eq!(sheet.genus(), 0);
+        assert!(sheet.contains([0.5, 0.5, 0.0]));
+    }
+
+    #[test]
     fn errors_and_edge_cases() {
         assert!(Solid::evaluate(&Shape::Box { size: [0.0; 3] }).is_err());
         let gone =

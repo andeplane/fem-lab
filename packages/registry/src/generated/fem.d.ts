@@ -66,6 +66,21 @@ export interface Fem {
      */
     subtract(args: Omit<Extract<Command, { cmd: 'geometry.subtract' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command
+     * as `data`, so a Journal replays with no external file, no network and no file system,
+     * on any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`
+     * for a part drawn in millimetres). The mesh is welded into a watertight solid, so
+     * volume, mass, booleans and meshing all work on it; its faces are patches of triangles
+     * that meet more smoothly than `featureAngle` (30 degrees by default), auto-named
+     * `<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the
+     * file changes, so for anything you will re-import, name the faces you need with
+     * geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
+     * remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
+     * given length, which is the honest half of defeaturing; there is no fillet, chamfer or
+     * shell. Give `sha256` to have the engine verify the data is the file you meant.
+     */
+    import(args: Omit<Extract<Command, { cmd: 'geometry.import' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
      * of those) so constraints and loads can target it. Rules are re-evaluated after every
      * remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
