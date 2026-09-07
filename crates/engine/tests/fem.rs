@@ -1557,8 +1557,9 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
 // ==================================================================================
 
 use femlab_engine::io::msh::gmsh_permutation;
-use femlab_engine::io::{read_msh, write_inp, write_msh, write_stl, write_stl_mesh};
-use femlab_geometry::{elliptic_annulus, split_to_simplices, ElementBlock, Face, Shape, Solid, TriMesh};
+use femlab_engine::io::vtu::base64;
+use femlab_engine::io::{base64_decode, read_msh, read_stl, write_inp, write_msh, write_stl, write_stl_mesh};
+use femlab_geometry::{elliptic_annulus, split_to_simplices, ElementBlock, Face, Shape, Sketch, Solid, TriMesh};
 
 // ---------------------------------------------------------------- msh: gmsh_permutation
 
@@ -6413,6 +6414,47 @@ fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
     assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
 }
 
+// ---------------------------------------------------------------- STL reading (#350)
+
+/// The same triangles as `write_stl` writes, packed as a binary STL.
+fn binary_stl(positions: &[[f64; 3]], triangles: &[[u32; 3]]) -> Vec<u8> {
+    let mut out = vec![0u8; 80];
+    out.extend_from_slice(&(triangles.len() as u32).to_le_bytes());
+    for t in triangles {
+        out.extend_from_slice(&[0u8; 12]); // facet normal: ignored on the way back in
+        for v in t {
+            for c in positions[*v as usize] {
+                out.extend_from_slice(&(c as f32).to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&[0u8; 2]); // attribute byte count
+    }
+    out
+}
+
+#[test]
+fn stl_reads_back_exactly_what_it_wrote_for_every_primitive() {
+    let shapes = [
+        Shape::Box { size: [1.0, 2.0, 3.0] },
+        Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(32) },
+        Shape::Sphere { radius: 1.0, segments: Some(16) },
+        Shape::Revolve { sketch: Sketch::rect(1.0, 2.0), angle: 360.0, segments: Some(24) },
+    ];
+    for shape in shapes {
+        let solid = Solid::evaluate(&shape).unwrap();
+        let tri = solid.triangles();
+        let (positions, triangles) = read_stl(write_stl(tri, "part").as_bytes()).unwrap();
+        // the writer prints f64 losslessly and the reader welds on exact bits, so the mesh
+        // comes back with the same vertices and the same connectivity, only renumbered
+        assert_eq!(positions.len(), tri.positions.len(), "{shape:?}");
+        assert_eq!(triangles.len(), tri.triangles.len(), "{shape:?}");
+        let same = |t: &[u32; 3], p: &[[f64; 3]]| [p[t[0] as usize], p[t[1] as usize], p[t[2] as usize]];
+        for (a, b) in triangles.iter().zip(&tri.triangles) {
+            assert_eq!(same(a, &positions), same(b, &tri.positions), "{shape:?}");
+        }
+    }
+}
+
 // ------------------------------------------- geometric nonlinearity (issue #59, plan G)
 
 /// `det` of a 3×3, written out here so the oracle does not borrow the kernel's own.
@@ -6602,6 +6644,84 @@ fn the_finite_deformation_patch_test_passes_for_every_kind() {
             assert_eq!(res.solver.solver, "cpu-direct");
         }
     }
+}
+
+#[test]
+fn stl_reads_binary_by_its_declared_facet_count() {
+    let solid = Solid::evaluate(&Shape::Box { size: [1.0, 2.0, 3.0] }).unwrap();
+    let tri = solid.triangles();
+    let bytes = binary_stl(&tri.positions, &tri.triangles);
+    assert_eq!(bytes.len(), 84 + 50 * 12);
+    let (positions, triangles) = read_stl(&bytes).unwrap();
+    assert_eq!(positions.len(), 8);
+    assert_eq!(triangles.len(), 12);
+    // f32 coordinates, so the box is exact only because 1, 2 and 3 are exact in f32
+    let (lo, hi) = positions.iter().fold(([f64::MAX; 3], [f64::MIN; 3]), |(mut lo, mut hi), p| {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+        (lo, hi)
+    });
+    assert_eq!((lo, hi), ([0.0; 3], [1.0, 2.0, 3.0]));
+    // a header whose facet count does not match the length is read as text and refused
+    let mut lying = bytes.clone();
+    lying[80] = 99;
+    assert!(read_stl(&lying).unwrap_err().cause.contains("neither a binary STL"));
+}
+
+#[test]
+fn stl_welds_repeated_vertices_and_treats_minus_zero_as_zero() {
+    let text = "solid t\n\
+        facet normal 0 0 0 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet\n\
+        facet normal 0 0 0 outer loop vertex -0.0 -0.0 -0.0 vertex 1 0 0 vertex 0 0 1 endloop endfacet\n\
+        facet normal 0 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\n\
+        facet normal 0 0 0 outer loop vertex 1 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\n\
+        endsolid t\n";
+    let (positions, triangles) = read_stl(text.as_bytes()).unwrap();
+    assert_eq!(positions.len(), 4, "{positions:?}");
+    assert_eq!(triangles.len(), 4);
+    assert_eq!(positions[0], [0.0; 3]);
+    // and VERTEX in any case is still a vertex
+    let (upper, _) = read_stl(text.to_uppercase().as_bytes()).unwrap();
+    assert_eq!(upper.len(), 4);
+}
+
+#[test]
+fn stl_refuses_every_way_a_file_can_be_broken() {
+    let cause = |bytes: &[u8]| read_stl(bytes).unwrap_err().cause;
+    assert_eq!(read_stl(b"").unwrap_err().code, ErrorCode::Schema);
+    assert!(cause(b"").contains("holds no triangles"));
+    assert!(cause(b"solid empty\nendsolid empty\n").contains("holds no triangles"));
+    assert!(cause(b"vertex 0 0 0 vertex 1 0 0").contains("ends in the middle of a facet"));
+    assert!(cause(b"vertex 0 0").contains("ends before its three coordinates"));
+    assert!(cause(b"vertex 0 0 nope").contains("'nope' is not a number (vertex coordinate 2)"));
+    // not UTF-8 and not a binary STL either
+    assert!(cause(&[0xff, 0xfe, 0x00, 0x01]).contains("neither a binary STL"));
+    let err = read_stl(b"solid x\n").unwrap_err();
+    assert_eq!(err.where_.as_deref(), Some("data"));
+    assert!(err.suggestion.is_some());
+}
+
+#[test]
+fn base64_round_trips_and_refuses_what_is_not_base64() {
+    for n in 0..8usize {
+        let bytes: Vec<u8> = (0..n).map(|i| (i * 37 + 11) as u8).collect();
+        let text = base64(&bytes);
+        assert_eq!(text.len() % 4, 0);
+        assert_eq!(base64_decode(&text).unwrap(), bytes, "{n} bytes");
+    }
+    assert_eq!(base64_decode("QUJD").unwrap(), b"ABC");
+    // whitespace is skipped, so a wrapped payload still reads
+    assert_eq!(base64_decode("QU\nJD\n").unwrap(), b"ABC");
+    assert_eq!(base64_decode("QQ==").unwrap(), b"A");
+    assert_eq!(base64_decode("QUI=").unwrap(), b"AB");
+    assert_eq!(base64_decode(""), Some(vec![]));
+    assert_eq!(base64_decode("QUJ$"), None, "a character outside the alphabet");
+    assert_eq!(base64_decode("Q"), None, "one leftover character is not a byte");
+    assert_eq!(base64_decode("QQ=A"), None, "data after the padding");
+    assert_eq!(base64_decode("QUJD="), None, "padding that does not complete a quantum");
+    assert_eq!(base64_decode("QQ==="), None, "three pad characters");
 }
 
 /// N4: a rigid-body motion leaves no strain, no stress and no internal force, at any rotation

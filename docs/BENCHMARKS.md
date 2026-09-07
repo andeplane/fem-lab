@@ -56,6 +56,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
+| imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
 | lame-3d-revolve-hex20 | green | 5/5 | 99.816731 | 100 | 0.18 % |
 | lame-axisymmetric | green | 4/4 | 99.588311 | 100 | 0.41 % |
@@ -230,7 +231,7 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B3 | MacNeal–Harder twisted beam (90° twist, 12 elements) | 0.005424 in (in-plane), 0.001754 in (out-of-plane) — **verify against the paper** | 2 % | warped elements | |
 | B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
-| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | green as **I2** (end force). The end-moment half needs a moment load, which no Command applies; filed separately |
+| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | green as **K2** (end force). The end-moment half needs a moment load, which no Command applies; filed separately |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 
@@ -601,7 +602,45 @@ payload caches on every Solve Ack even when that hash is unchanged.
 | H2 | J2 plasticity as TS, WGSL and wasm (C and Fortran-via-f2c) Plugins | identical to built-in J2 to 1e-12 (TS/wasm) and f32 rounding (WGSL) | three languages, one law |
 | H3 | Plugin hash mismatch on load | refused with message | reproducibility |
 
-## I. Geometric nonlinearity (phase 6)
+## J. Imported geometry (#350)
+
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| J1 | Regular 32-gon prism as an ASCII STL, imported by `geometry.import` | V = (n/2) R² sin(2π/n) h = 6.2428903045 mm³, mass 4.9006688890e-5 kg, bbox 1 mm × 2 mm | 1e-12 rel | a tessellated import is welded into a solid whose volume, mass and extent are exactly the polyhedron's; patches are named; a plane rule resolves on its lattice mesh | green |
+
+J1's oracle owes nothing to the importer: a regular n-gon of circumradius R has area
+(n/2) R² sin(2π/n), so the prism of height h holds (n/2) R² sin(2π/n) h and its side is n
+chords of 2R sin(π/n) by h. The mesh *is* the polyhedron, so these are matched to 1e-12
+relative rather than approached, and `unitLength: "1 mm"` is what turns the file's unitless
+1 and 2 into millimetres — an STL records no units, so getting that wrong is the one way an
+import silently gives a body a thousand times the mass it should have.
+
+The rest of the import is checked in the two crates' test binaries rather than as Benchmark
+rows, because their oracles are the geometry itself:
+
+- **Round trip.** Our own `write_stl` output for a box, a 64-facet cylinder, a 32-facet sphere
+  and a revolve is read back by `read_stl` and re-evaluated; volume, area and bounding box agree
+  with the shape it came from to 1e-9, and the patch counts are 6, 3, 1 and 3.
+- **Topology.** `genus` is the oracle a volume cannot be: 0 for an imported cube, 1 for an
+  imported torus, 1 for a plate with a through bore — and the bore's wall comes back as one
+  smooth patch of exactly n·2R sin(π/n)·h, with the two faces it pierces still whole.
+- **Feature angle.** An imported octagonal prism turns 45° per facet, so at 30° it has 8 + 2
+  patches, at 50° three, and at 91° one.
+- **Meshing.** A lattice over an imported cube gives 64 hexes of total volume 1 and six face
+  Sets of 16 faces each; a `geometry.nameFace` plane rule keeps its Set across a re-import at
+  four times the tessellation, which is why the doc string steers at predicates and not at
+  `face7`.
+- **Never panics.** A proptest sends random triangle soups through `Solid::evaluate`, the ray
+  cast and the lattice mesher; any `Err` is a pass and a panic is the failure, the same rule
+  the free mesher's sketches live under.
+
+## I. Cross-solver checks (phase 3, manual, documented)
+
+| # | Case | Method |
+|---|---|---|
+| I1 | Export B1, C5, D1 as Abaqus `.inp`, run in CalculiX, compare nodal displacements | within 1e-6 relative for identical mesh and element type; documented run, not CI |
+
+## K. Geometric nonlinearity (phase 6)
 
 Total Lagrangian, Newton–Raphson, load stepping (`procedure: static-nonlinear`, issue #59).
 Green–Lagrange strain and second Piola–Kirchhoff stress go through the *existing* linear
@@ -611,17 +650,17 @@ idealisations only.
 
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
-| I1 | Uniaxial St Venant–Kirchhoff bar, ν = 0, stretched 10 % | exact: E₁₁ = (λ²−1)/2 = 0.105, Cauchy σ₁₁ = λE·E₁₁ = 24255 MPa, root reaction λS₁₁A₀ = 242.55 MN | 1e-9 rel | the strain measure, the stress measure and the push-forward, against closed form; a small-strain formulation misses σ by 13 % | green |
-| I2 | Large-deflection cantilever, fixed-direction tip force, hex20, α = PL²/EI = 1.3791547 | exact elastica by quadrature of its own first integral: x_tip = 0.90488893 L, y_tip = 0.38725775 L | 2 % across, 5 % along | the whole loop under a 39 % tip deflection; linear theory is 19 % out | green |
-| I3 | The same cantilever at 1/1000 of B1's load, `static-nonlinear` against `static` | B1's own hex20 answer, 0.1904070 mm | 1e-5 rel | the finite-strain kernel degenerates to the linear one exactly | green |
-| I4 | Finite-deformation patch test: triaxial stretch, simple shear, a 0.4 rad rotation and a general `F`, on a distorted mesh, every element kind | exact constant `E` and Cauchy `σ` from the same `F` | 1e-9 rel on displacement, 1e-8·E on stress | `B_L`, the geometric stiffness and the assembly, on all eight kinds | engine test |
-| I5 | Rigid-body motion of one element: rotations of 0.37, π/2, π rad and a general 3D rotation, plus a translation | zero strain, zero stress, zero internal force | 1e-12 strain, 1e-9·E stress | total Lagrangian outright — a small-strain formulation fails this at any angle | engine test |
-| I6 | Consistent tangent against the central difference of the internal force, every kind | `K_T v = d f_int/du · v` | 1e-6 rel | the tangent is the derivative, which is what makes Newton quadratic (ADR 0007: calculus, not a second implementation) | engine test |
-| I7 | Beam-column: cantilever under a tip load *and* an axial compression at `u = L√(P/EI)` = 0.5, 1.0, 1.4 | `δ(P)/δ(0) = 3(tan u/u − 1)/u²`, exact, running away at `u = π/2` — the cantilever Euler load | 2 % | the geometric stiffness alone (the ratio cancels the discretisation), up to 79 % of the critical load | engine test |
-| I8 | Determinism: I2's beam at 1 and 4 threads | bit-identical displacement, stress, reaction and every scalar | exact | the scatter, the norms and therefore every convergence decision are fixed-order (ADR 0013) | engine test |
-| I9 | A beam cut in two and bonded back together, at I2's deflection | the single-Body beam's own answer | 1e-6 rel | the multipoint elimination happens *inside* the Newton loop: `TᵀK_T T` and `Tᵀr` per iteration, the correction recovered onto the slaves, and the tie force kept out of the support reactions | engine test |
+| K1 | Uniaxial St Venant–Kirchhoff bar, ν = 0, stretched 10 % | exact: E₁₁ = (λ²−1)/2 = 0.105, Cauchy σ₁₁ = λE·E₁₁ = 24255 MPa, root reaction λS₁₁A₀ = 242.55 MN | 1e-9 rel | the strain measure, the stress measure and the push-forward, against closed form; a small-strain formulation misses σ by 13 % | green |
+| K2 | Large-deflection cantilever, fixed-direction tip force, hex20, α = PL²/EI = 1.3791547 | exact elastica by quadrature of its own first integral: x_tip = 0.90488893 L, y_tip = 0.38725775 L | 2 % across, 5 % along | the whole loop under a 39 % tip deflection; linear theory is 19 % out | green |
+| K3 | The same cantilever at 1/1000 of B1's load, `static-nonlinear` against `static` | B1's own hex20 answer, 0.1904070 mm | 1e-5 rel | the finite-strain kernel degenerates to the linear one exactly | green |
+| K4 | Finite-deformation patch test: triaxial stretch, simple shear, a 0.4 rad rotation and a general `F`, on a distorted mesh, every element kind | exact constant `E` and Cauchy `σ` from the same `F` | 1e-9 rel on displacement, 1e-8·E on stress | `B_L`, the geometric stiffness and the assembly, on all eight kinds | engine test |
+| K5 | Rigid-body motion of one element: rotations of 0.37, π/2, π rad and a general 3D rotation, plus a translation | zero strain, zero stress, zero internal force | 1e-12 strain, 1e-9·E stress | total Lagrangian outright — a small-strain formulation fails this at any angle | engine test |
+| K6 | Consistent tangent against the central difference of the internal force, every kind | `K_T v = d f_int/du · v` | 1e-6 rel | the tangent is the derivative, which is what makes Newton quadratic (ADR 0007: calculus, not a second implementation) | engine test |
+| K7 | Beam-column: cantilever under a tip load *and* an axial compression at `u = L√(P/EI)` = 0.5, 1.0, 1.4 | `δ(P)/δ(0) = 3(tan u/u − 1)/u²`, exact, running away at `u = π/2` — the cantilever Euler load | 2 % | the geometric stiffness alone (the ratio cancels the discretisation), up to 79 % of the critical load | engine test |
+| K8 | Determinism: K2's beam at 1 and 4 threads | bit-identical displacement, stress, reaction and every scalar | exact | the scatter, the norms and therefore every convergence decision are fixed-order (ADR 0013) | engine test |
+| K9 | A beam cut in two and bonded back together, at K2's deflection | the single-Body beam's own answer | 1e-6 rel | the multipoint elimination happens *inside* the Newton loop: `TᵀK_T T` and `Tᵀr` per iteration, the correction recovered onto the slaves, and the tie force kept out of the support reactions | engine test |
 
-I2's reference is derived, not transcribed. `EI θ'' = −P cos θ` with `θ(0) = 0` and `θ'(L) = 0`
+K2's reference is derived, not transcribed. `EI θ'' = −P cos θ` with `θ(0) = 0` and `θ'(L) = 0`
 integrates once to `θ' = √(2P/EI)·√(sin θ_L − sin θ)`, so a chosen tip slope `θ_L` fixes the load
 parameter and the tip position as three integrals of one integrand;
 `the_large_deflection_cantilever_follows_the_elastica` evaluates them and checks that the same
@@ -629,7 +668,7 @@ quadrature reduces to `θ_L = α/2` and `y = αL/3` as `α → 0`, which is Eule
 & Drucker (1945) tabulate the same curve and their published values stay **resolve** until the
 paper is on hand; no row here depends on them.
 
-I2 is gated at 2 % on 20 elements because that is where the mesh is, not the formulation:
+K2 is gated at 2 % on 20 elements because that is where the mesh is, not the formulation:
 refining to 40 elements moves the tip deflection from −382.2 mm to −385.3 mm against the
 elastica's −387.3 mm, so the error falls from 1.31 % to 0.49 %. The cheap mesh keeps the case
 fast; the engine test in `crates/engine/tests/fem.rs` runs the same beam at both slopes.
@@ -639,14 +678,8 @@ so a pressure keeps the direction and the area it had on the reference mesh. Lin
 only robustness measure is halving cutback, which every row above converges with; snap-through
 needs arc-length control (#75). Plane stress and axisymmetry: the finite-strain kernel has
 `F₃₃ = 1`, and both are refused by name rather than approximated. B5's pinned Euler column stays
-#58's linear-buckling job; I7 measures the same critical load through the beam-column solution,
+#58's linear-buckling job; K7 measures the same critical load through the beam-column solution,
 whose end conditions a three-dimensional solid can reproduce without ambiguity.
-
-## J. Cross-solver checks (phase 3, manual, documented)
-
-| # | Case | Method |
-|---|---|---|
-| J1 | Export B1, C5, D1 as Abaqus `.inp`, run in CalculiX, compare nodal displacements | within 1e-6 relative for identical mesh and element type; documented run, not CI |
 
 ## Substituted cases
 
@@ -739,6 +772,82 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Immutable solve records (#280)
+
+`retained_cases` uses independent Fourier conduction `T(x)=273.15+q*x/k` on a one-metre
+bar at 2, 4 and 8 divisions with conductivity 45, 90 and 180 W/(m K). The same engine retains
+each solve, changes the live mesh and display units, then reads every old nodal field, probe
+and path against its own analytical solution and saved Celsius metadata. Exact mesh counts
+and numeric payload dimensions prevent attaching an old array to a newer mesh.
+
+A second three-mesh series uses `rho*cp*dT/dt=q`, giving uniform `T=300+2*t` K with
+rho=10 kg/m³, cp=2 J/(kg K), q=40 W/m³ and a matching prescribed-temperature ramp.
+Every retained index and exact physical-time selection carries the same solve identity,
+mesh and temperature, including Celsius scientific probes after the live Model switches to
+Kelvin. These fields are exactly representable on all three meshes, so no mesh-dependent
+reference is substituted for the conservation law.
+
+Lifecycle checks retain equal-input solves as distinct instances, verify FIFO eviction at
+eight records, reject absent or mismatched selectors, preserve records on failed solves,
+and prove Model new/import/replay do not recycle old ids or change Journal hashes.
+
+## Cost-query memory benchmark (#122)
+
+The estimator is tested against every small element-family assembly pattern at one, two and
+three DOFs per node, including shared nodes and unused nodes. Its mandatory-storage lower
+bound equals the actual lengths of two CSR arrays, element slots and their offsets, and one
+RHS; it makes no claim about unknown factor fill or solver workspace.
+
+A synthetic 50 × 50 × 100 Hex8 grid (250,000 elements) has exactly
+`9 × (3×50+1) × (3×50+1) × (3×100+1) = 61,767,909` directed scalar matrix entries at three
+DOFs per node. The independent tensor-neighbour graph formula checks the count while a
+per-thread allocator measures peak live scratch **after** mesh construction: at most 16 MiB,
+compared with 576 MB for element slots alone. A 750,000-element repeated overlapping-clique
+mesh forces the bounded fallback; its known graph count lies within the returned interval,
+the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
+1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
+These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+
+### Transient retention and peak phases (#244)
+
+For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame
+count is exactly `1 + floor(S/E) + (S mod E != 0)`: the initial state, every requested stride,
+and one final endpoint only when the endpoint is not already a stride. Tests cover divisible and
+non-divisible schedules, `outputEvery` beyond the step count, zero's established normalization,
+and checked count/byte overflow. The logical retained payload matches `query.frames`:
+`8 × frames × (1 + nodes × storedComponents)` bytes for f64 times and raw primary values.
+Vec headers, spare capacity and allocator overhead are deliberately separate; History reserves
+the exact outer frame count and remains the only full-series allocation.
+
+The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
+the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
+vectors are charged at the full nodal length; the five-field allowance covers the temporary old
+and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
+normalized numeric payloads alive at once: the current JSON path's parsed source and structured
+clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
+reported known numeric staging is therefore at least `48 × nodes` bytes. Rust/JavaScript strings,
+array/object headers and engine-specific number storage remain value- and runtime-dependent; the
+schema marks the WASM staging estimate incomplete and `bytes` remains a counted conservative
+estimate rather than a complete host-memory claim. #245 measures those copies when it changes the browser route. Solver
+factor fill/workspace, final derived fields, the resident Mesh/Model and allocator overhead also
+remain excluded, so a counted peak below the fixed 1.5 GiB planning budget is still feasibility
+unknown.
+
+An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
+`query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
+`solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
+Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+An explicit regression independently checks that the pre-solve count equals the history rows
+produced by its element-frequency-derived integration schedule.
+
+Retained-Result budget checks (#280) run 2-, 4- and 8-division conduction meshes through
+nine successful solves. After each solve, `query.cost` includes every live record's numeric
+field and Mesh payload, plus the new Mesh snapshot. At the eight-record limit the oldest
+record remains charged during preparation; reads and rejected solves cannot advance eviction.
+These are payload accounting checks, not estimates of allocator or serialized Model overhead.
 
 ### Loaded boundary area (Properties pressure preview)
 
@@ -845,6 +954,11 @@ with one fully fixed end and one single-component force at the opposite end.
 Other geometries and boundary conditions explicitly report no applicable
 automatic reference; their verification belongs to a dedicated Benchmark.
 
+The retained thermal-reaction case (#280 with #120) applies 900 W/m² over 0.01 m²:
+all retained SI reaction values sum to 9 W, and each cold corner carries 2.25 W at
+2, 4 and 8 axial divisions. After the live Model changes to kW and a different mesh,
+explicit Result fields, summaries, probes and paths still use the solved watt convention.
+
 ## Cost-query memory benchmark (#122)
 
 The estimator is tested against every small element-family assembly pattern at one, two and
@@ -895,3 +1009,4 @@ An end-to-end heat regression first stores a valid Result, then requests 1,000,0
 Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
 An explicit regression independently checks that the pre-solve count equals the history rows
 produced by its element-frequency-derived integration schedule.
+
