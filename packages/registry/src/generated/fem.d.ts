@@ -164,7 +164,8 @@ export interface Fem {
   load: {
     /**
      * Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-     * The total force is the pressure times the face area and is reported by query.model.
+     * Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+     * force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
      */
     pressure(args: Omit<Extract<Command, { cmd: 'load.pressure' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -341,8 +342,10 @@ export interface Fem {
      */
     mesh(): Promise<MeshSummary>;
     /**
-     * What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-     * and centroid. Use it to verify a predicate selected what you meant.
+     * What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+     * and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+     * including thickness or radial weighting (plane strain: one metre of depth). Pressure
+     * times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
      */
     set(args: Omit<Extract<Query, { query: 'query.set' }>, 'query'>): Promise<SetInfo>;
     /**
