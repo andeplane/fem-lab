@@ -2,12 +2,14 @@
 //!
 //! `Step::Static` is the linear static procedure ([`static_`]); [`nonlinear`] is its
 //! finite-deformation counterpart; [`modal`] finds natural frequencies by subspace iteration,
+//! [`buckling`] the load factors that make the static stress state cancel the stiffness,
 //! [`harmonic`] superposes those modes into a frequency response,
 //! [`heat`] solves steady and transient conduction, [`explicit`] integrates the equations of
 //! motion by central differences and [`implicit`] by the HHT-α method. Each one takes the same
 //! resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every host read
 //! one shape whatever the physics.
 
+pub mod buckling;
 pub mod explicit;
 pub mod harmonic;
 pub mod heat;
@@ -161,6 +163,8 @@ pub enum Step {
     StaticNonlinear(nonlinear::Options),
     /// Natural frequencies and mode shapes by subspace iteration (plan A §6).
     Modal { n_modes: usize, shift: Option<f64>, solver: SolveOptions },
+    /// Linear buckling: the static state, then the load factors of `K φ = λ(−K_σ)φ`.
+    Buckling { n_modes: usize, solver: SolveOptions },
     /// Steady conduction with convection, flux and radiation boundaries: `(K + H) T = f`,
     /// iterated when a radiating face makes `H` depend on `T`.
     HeatSteady { solver: SolveOptions, control: NonlinearControl },
@@ -229,6 +233,7 @@ impl Step {
             Step::Static { .. } => "static",
             Step::StaticNonlinear(..) => "static-nonlinear",
             Step::Modal { .. } => "modal",
+            Step::Buckling { .. } => "buckling",
             Step::HeatSteady { .. } => "heat-steady",
             Step::HeatTransient { .. } => "heat-transient",
             Step::Harmonic { .. } => "harmonic",
@@ -324,9 +329,14 @@ pub struct StepResult {
     pub reactions: Vec<(String, [f64; 3])>,
     /// Natural frequencies in Hz, ascending; empty unless the Step was modal.
     pub frequencies: Vec<f64>,
-    /// Mode shapes as three-component nodal displacements, parallel to `frequencies` and
-    /// normalised so `φᵀ M φ = 1`. Mode `k` is `modes[k - 1]`, which hosts reach as the field
-    /// name `mode:k`; `Field::Displacement` is mode 1, so a VTU export shows the first mode.
+    /// Buckling load factors, `|λ|` ascending; empty unless the Step was a buckling one. The
+    /// Step's Loads times `λ` is the critical load, and a negative factor means the *reversed*
+    /// load buckles the structure. Shape `k` is `modes[k - 1]`, as for a modal Step.
+    pub buckling_factors: Vec<f64>,
+    /// Mode shapes as three-component nodal displacements, parallel to `frequencies` (modal) or
+    /// `buckling_factors` (buckling). A modal shape is normalised so `φᵀ M φ = 1`, a buckling
+    /// shape to unit peak. Mode `k` is `modes[k - 1]`, which hosts reach as the field name
+    /// `mode:k`.
     pub modes: Vec<FieldData>,
     /// Times and fields a transient Step kept.
     pub history: Option<History>,
@@ -358,6 +368,7 @@ pub async fn run(
         }
         Step::StaticNonlinear(options) => nonlinear::run(p, options, pool, gpu, progress).await,
         Step::Modal { n_modes, shift, solver } => modal::run(p, *n_modes, *shift, solver, pool, progress),
+        Step::Buckling { n_modes, solver } => buckling::run(p, *n_modes, solver, pool, gpu, progress).await,
         Step::HeatSteady { solver, control } => heat::steady(p, solver, control, pool, gpu, progress).await,
         Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver, control } => heat::transient(
             p,
@@ -445,6 +456,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         extremes: Vec::new(),
         reactions: Vec::new(),
         frequencies: Vec::new(),
+        buckling_factors: Vec::new(),
         modes: Vec::new(),
         history: None,
         sweep: None,

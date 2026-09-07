@@ -117,6 +117,16 @@ pub trait Element: Send + Sync {
     fn face_load(&self, c: &ElementCtx<'_>, local_face: u8, load: FaceLoad, out: &mut [f64]) -> Result<(), Error>;
     /// Total strain and stress at the Gauss points, `VOIGT` each: `stress.len() == n_gp * 6`.
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error>;
+    /// `K_sigma = integral of (dN_a/dx_i) sigma_ij (dN_b/dx_j) delta_kl dV`, row-major
+    /// `n_dof x n_dof`: the stress stiffening of the state `u` puts this element in, which a
+    /// linear buckling Step scales by the load factor. The stress is this element's own
+    /// Gauss-point stress, recomputed from `u` through [`Element::recover`] itself — the
+    /// integral wants the unaveraged values, and a nodal average is a different, smoothed field.
+    ///
+    /// This is the *small-strain* stress stiffening, which is what a linear buckling Step
+    /// multiplies. [`Element::tangent_and_force`] builds its own geometric term from the second
+    /// Piola-Kirchhoff stress for the finite-deformation path; the two agree at small strain.
+    fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error>;
     /// The finite-deformation counterpart of [`Element::stiffness`] and [`Element::recover`]
     /// in one pass: the consistent tangent `K_T`, the internal force `f_int`, the Cauchy
     /// stress and Green–Lagrange strain at the Gauss points, and the advanced per-point state,
@@ -862,6 +872,64 @@ fn face_load_of(
     }
 }
 
+/// The `unsupported` error an axisymmetric geometric stiffness answers with.
+///
+/// A ring element's stress stiffening carries a hoop term `sigma_theta N_a N_b / r^2` on the
+/// radial degree of freedom that the Cartesian gradient form below does not contain.
+/// Integrating the Cartesian part alone would silently under-stiffen the ring, so this refuses.
+fn no_axisymmetric_geometric() -> Error {
+    Error::new(
+        ErrorCode::Unsupported,
+        "linear buckling has no axisymmetric geometric stiffness: its hoop term sigma_theta N_a N_b / r^2 is not integrated",
+    )
+    .at("idealisation")
+    .suggest("model.setIdealisation with solid3d, planeStress or planeStrain")
+}
+
+/// `K_sigma`, row-major, node-major columns.
+///
+/// The `delta_kl` is why one scalar per node pair fills `dim` diagonal entries of the
+/// `dim x dim` block: stress stiffening couples each displacement component to itself. In 2D
+/// the gradients have no out-of-plane part, so `sigma_33` cannot contribute — which is right,
+/// because there is no out-of-plane degree of freedom for it to stiffen.
+///
+/// The incompatible modes are deliberately absent: `K_sigma` is built from the compatible
+/// gradients alone, so the internal bubbles stiffen `K` but never `K_sigma`.
+///
+/// ponytail: `recover_of` recomputes the kinematics this already holds, so an element is walked
+/// twice on the buckling path. Sharing them would mean splitting `recover_of` in two; one extra
+/// shape-function pass per element is not worth that until a profile says so.
+fn geometric_of(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
+    if let Idealisation::Axisymmetric { .. } = c.idealisation {
+        return Err(no_axisymmetric_geometric());
+    }
+    let kin = kinematics(kind, c)?;
+    let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
+    let n = kin.n_gp * VOIGT;
+    let (mut sig, mut eps) = (vec![0.0; n], vec![0.0; n]);
+    // The very stress `recover` reports, so the two can never disagree.
+    recover_of(kind, c, u, &mut sig, &mut eps)?;
+    kg.fill(0.0);
+    for g in 0..kin.n_gp {
+        let sigma = voigt_3x3(&sig[g * VOIGT..(g + 1) * VOIGT]);
+        let grad = &kin.grad[g * nn..(g + 1) * nn];
+        for a in 0..nn {
+            // `sigma grad(N_a)`, so the inner pair below is one dot product rather than dim^2.
+            let mut sga = [0.0; 3];
+            for (j, v) in sga.iter_mut().enumerate().take(dim) {
+                *v = (0..dim).map(|i| grad[a][i] * sigma[i][j]).sum();
+            }
+            for b in 0..nn {
+                let v = kin.w[g] * (0..dim).map(|j| sga[j] * grad[b][j]).sum::<f64>();
+                for k in 0..dim {
+                    kg[(dim * a + k) * nd + dim * b + k] += v;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn recover_of(
     kind: ElementKind,
     c: &ElementCtx<'_>,
@@ -1197,6 +1265,9 @@ impl<R: RefElement> Element for Iso<R> {
     }
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         recover_of(R::KIND, c, u, stress, strain)
+    }
+    fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
+        geometric_of(R::KIND, c, u, kg)
     }
     fn tangent_and_force(
         &self,
