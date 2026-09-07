@@ -412,6 +412,16 @@ pub struct QualitySummary {
     pub max_aspect: f64,
     /// Smallest angle at any element corner, in degrees.
     pub min_angle_deg: f64,
+    /// Smallest interior angle between two faces meeting at an element edge, in degrees. Absent
+    /// for a 2D mesh. This is the number that judges a tetrahedral mesh: `minDetJRatio` is
+    /// identically 1 for a simplex whatever its shape. The free tet mesher holds it inside
+    /// [10.7, 164.8]; below about 10 degrees the element stiffness is badly conditioned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_dihedral_deg: Option<f64>,
+    /// Largest interior angle between two faces meeting at an element edge, in degrees. Absent
+    /// for a 2D mesh; 180 is a flat sliver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_dihedral_deg: Option<f64>,
     pub worst: Vec<QualityRow>,
 }
 

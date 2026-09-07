@@ -7,9 +7,10 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{
     extrude, face_centroid_normal, free_sheet, lattice, mapped, nearest_boundary_face, resolve_face_set,
-    resolve_region, revolve, split_to_simplices, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox,
-    Shape, Solid,
+    resolve_region, revolve, split_to_simplices, tet, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock,
+    RefineBox, Shape, Solid,
 };
+use femlab_geometry::GeomError;
 
 use crate::command::ObjectKind;
 use crate::command::{CurveSpec, LatticeSize, MesherSpec, QuadBlockSpec, SweepSpec};
@@ -88,7 +89,12 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let quadratic = settings.order == 2;
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
         MesherSettings::Lattice { size, counts } => {
-            lattice_bodies(model, solids, dim, quadratic, *size, *counts, settings.simplices)?
+            bodies(model, solids, dim, settings.simplices, &|solid| lattice(solid, *size, *counts, quadratic))?
+        }
+        // A tet mesh is already simplices, so `simplices` is a no-op here rather than a second
+        // split of elements that have no quads or hexes to split.
+        MesherSettings::Tet { size, max_elements } => {
+            bodies(model, solids, dim, false, &|solid| tet(solid, *size, quadratic, *max_elements as usize))?
         }
         m => {
             let (body, part, mesher) = planar_or_swept(model, m, quadratic)?;
@@ -153,9 +159,9 @@ type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
 /// swept mesh is the base's.
 fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
     match m {
-        MesherSettings::Lattice { .. } => Err(Error::new(
+        MesherSettings::Lattice { .. } | MesherSettings::Tet { .. } => Err(Error::new(
             ErrorCode::MeshFailed,
-            "a sweep needs a 2D base mesher, and the lattice mesher meshes whole Bodies",
+            "a sweep needs a 2D base mesher, and the lattice and tet meshers mesh whole Bodies",
         )
         .at("mesher.base")
         .suggest("mesh.set with a mapped base")),
@@ -235,15 +241,17 @@ fn one_body(body: &str, part: Mesh, dim: usize, mesher: &str) -> Result<Meshed, 
     Ok((mesh, vec![body.to_string(); blocks], BTreeMap::from([(body.to_string(), faces)])))
 }
 
-/// One lattice per Body of the Model, merged into one Mesh.
-fn lattice_bodies(
+/// One mesh per Body of the Model, merged into one Mesh.
+///
+/// `part` is the whole-Body mesher — the lattice or the free tet mesher — and everything after
+/// it (the node and element offsets, the `simplices` split, the `<body>.<tag>` face Set naming)
+/// is the same either way, which is why there is one copy of it.
+fn bodies(
     model: &Model,
     solids: &BTreeMap<String, Solid>,
     dim: usize,
-    quadratic: bool,
-    size: Option<f64>,
-    counts: Option<[u32; 3]>,
     simplices: bool,
+    part: &dyn Fn(&Solid) -> Result<Mesh, GeomError>,
 ) -> Result<Meshed, Error> {
     if model.bodies.is_empty() {
         return Err(Error::new(ErrorCode::ModelIllPosed, "the Model has no Body to mesh").suggest("geometry.add"));
@@ -268,7 +276,7 @@ fn lattice_bodies(
             .at(format!("body '{}'", body.name))
             .suggest("model.setIdealisation, or give the Body a shape of the right dimension"));
         }
-        let part = lattice(solid, size, counts, quadratic).map_err(|e| {
+        let part = part(solid).map_err(|e| {
             Error::new(ErrorCode::MeshFailed, e.0)
                 .at(format!("body '{}'", body.name))
                 .suggest("mesh.set with a smaller element size")
@@ -353,8 +361,23 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
         MesherSpec::Sweep { base, sweep } => {
             Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })
         }
+        MesherSpec::Tet { size, max_elements } => {
+            let s = size.si().map_err(|e| e.at("mesher.size"))?;
+            if s <= 0.0 {
+                return Err(Error::schema("element size must be positive").at("mesher.size"));
+            }
+            let max = max_elements.unwrap_or(DEFAULT_MAX_ELEMENTS);
+            if max == 0 {
+                return Err(Error::schema("maxElements must be at least 1").at("mesher.maxElements"));
+            }
+            Ok(MesherSettings::Tet { size: s, max_elements: max })
+        }
     }
 }
+
+/// Background tetrahedra the free tet mesher builds before it refuses, when `maxElements` is not
+/// given: about a minute of meshing, and a model a browser tab can still solve.
+const DEFAULT_MAX_ELEMENTS: u32 = 500_000;
 
 /// The same mesher asked for element size `h`, for one row of a `study.converge` (plan B §2.2).
 ///
@@ -374,6 +397,7 @@ pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
         MesherSettings::Free { of, refine, .. } => {
             MesherSettings::Free { of: of.clone(), size: h, refine: refine.clone() }
         }
+        MesherSettings::Tet { max_elements, .. } => MesherSettings::Tet { size: h, max_elements: *max_elements },
         MesherSettings::Mapped { body, blocks } => MesherSettings::Mapped {
             body: body.clone(),
             blocks: blocks.iter().map(|b| QuadBlock { n: [k(b.n[0]), k(b.n[1])], ..b.clone() }).collect(),

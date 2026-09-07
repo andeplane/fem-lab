@@ -295,6 +295,20 @@ pub enum MesherSpec {
     /// idealisation must be 3D, and the base must make quadrilaterals, so it is the mapped
     /// mesher: sweeping free triangles would need wedge elements, which the engine has not got.
     Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
+    /// Unstructured tetrahedra filling every 3D Body, at about `size`. The only mesher that
+    /// meshes curved CSG solids without stair-stepping: it cuts a body-centred lattice against
+    /// the exact solid, so boundary nodes lie on the true surface, a cylinder comes out round,
+    /// and every named CSG face becomes the face Set `<body>.<tag>` as it does for the lattice.
+    /// `order: 2` gives tet10 with the mid-edge nodes projected onto curved faces; order 1 gives
+    /// constant-strain tet4, which is stiff in bending. A sharp CSG edge that falls between two
+    /// lattice crossings is chamfered by up to `size`, so prefer the mapped or sweep mesher when
+    /// the geometry is prismatic, because those are exact. `maxElements` caps the background
+    /// lattice (500 000 by default) and is checked before anything is allocated.
+    Tet {
+        size: Q<Length>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_elements: Option<u32>,
+    },
 }
 
 /// A file format `mesh.export` writes.
@@ -841,9 +855,10 @@ pub enum Command {
     /// Use model.rename to change an implicit Body name while preserving its references.
     /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
     /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
-    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
-    /// has no effect when `simplices` is true, because simplex elements have no incompatible
-    /// modes.
+    /// geometry: the selected mesher still determines the boundary approximation, and the `tet`
+    /// mesher is the one that meshes a curved solid freely. `formulation` has no effect when
+    /// `simplices` is true, or under the `tet` mesher, because simplex elements have no
+    /// incompatible modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,

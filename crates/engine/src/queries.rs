@@ -384,6 +384,8 @@ impl Engine {
                 min_det_j_ratio: q.min_det_j_ratio,
                 max_aspect: q.max_aspect,
                 min_angle_deg: q.min_angle_deg,
+                min_dihedral_deg: q.min_dihedral_deg,
+                max_dihedral_deg: q.max_dihedral_deg,
                 worst: q.worst.iter().map(|&(element, value)| QualityRow { element, value }).collect(),
             }),
         })
