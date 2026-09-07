@@ -644,6 +644,14 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F10 | Impulse: a free hex8 pushed at one corner by `F` for `τ` | `p = F(τ + Δt/2)` (half-step velocity), mass centre at `Fτ²/2M`, transverse momentum zero | 1e-10 relative | `Δp = ∫F dt` while the block deforms; `Ku` sums to zero over a rigid mode | engine test |
 | F11 | Cross-solver: modal frequencies against the spectrum of an explicit free vibration, fixed-free rod of 20 hex8, modes 1–3 | consistent chain `ω² = (6c²/h²)(1 − cos kh)/(2 + cos kh)` for modal, lumped chain `ω = (2c/h) sin(kh/2)` with the F5 dispersion for explicit, `k = (2j−1)π/2L`; the two solvers differ by exactly the gap between those closed forms (0.08 % at mode 1) | 1e-6 (modal), 1e-4 (explicit), 1e-4 on the gap | two integrators, two mass matrices, one spectrum | engine test |
 
+The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
+10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
+for hex8 and hex20, each cut's `ymin`/`ymax` Set must cover the full rectangle:
+`(width / size)²` faces and `width²` area (1e-12 m² absolute tolerance), with the same
+count and bounding box as both the core's face and an explicit plane-predicate Set.
+Both a full-width cut and a cut inset by 10 mm are checked. This catches missing
+interface faces before they can leave a bonded contact partially constrained.
+
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
 and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
