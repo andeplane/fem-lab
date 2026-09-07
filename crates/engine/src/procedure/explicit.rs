@@ -38,6 +38,17 @@ pub fn run(
     pool: &Pool,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
+    // Central differences divide by the lumped mass, and `TᵀMT` of a diagonal is not diagonal:
+    // a multipoint constraint would turn every step into a solve, which is the one thing this
+    // procedure exists not to do.
+    if let Some(c) = p.couplings.first() {
+        return Err(Error::unsupported(&format!(
+            "explicit dynamics with a multipoint constraint ('{}' ties two parts)",
+            c.name()
+        ))
+        .at("step.procedure")
+        .suggest("step.add with procedure 'static', or constraint.remove the contact"));
+    }
     // A free body is what F1 integrates, so an unconstrained model is not an error here.
     if let Some(e) = checks::all(p).into_iter().find(|e| e.code != ErrorCode::ConstraintRigidModes) {
         return Err(e);

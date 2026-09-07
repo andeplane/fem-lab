@@ -174,6 +174,7 @@ export interface HostContext {
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
     stop(): void;
     setSource(code: string, append?: boolean): void;
+    setEditing(editing: boolean): void;
   };
   chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void | Promise<void>; clear(): void };
   skills(): Skill[];
@@ -408,6 +409,7 @@ export const HOST_COMMANDS: HostDef[] = [
   }, false),
   def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
+  def('script.setEditing', 'Show the editable Script draft or the live Script generated from the Journal. Leaving edit mode retains the draft so the person can compare it with the Journal and resume it later.', z.object({ editing: z.boolean() }), ({ editing }, ctx) => ctx.script.setEditing(editing)),
   def('chat.send', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
   def('chat.insertMention', 'Insert an `@kind:name` chip into the chat input, as a viewer or tree click does while the chat is focused. Not a tool; the AI receives chips, it does not type them.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
   def('chat.clear', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
