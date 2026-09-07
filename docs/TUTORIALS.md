@@ -29,6 +29,7 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`journal-as-program`](../packages/app/tutorials/journal-as-program.json) | 8 | The `cantilever` example again, then exported, edited and replayed as a script instead of clicked. | L³ scaling of a doubled beam, and the CLI `--verify` check against the committed fixture |
 | [`pressure-vessel`](../packages/app/tutorials/pressure-vessel.json) | 10 | A thick cylinder revolved into an axisymmetric slice instead of meshed as a 3D solid (the `lame-cylinder-axisymmetric` example). | Lamé's σθθ(a) = 100 MPa, σrr(a) = −60 MPa against the pr/t thin-wall shortcut, which breaks at this vessel's t/a = 1 |
 | [`composite-block-shear`](../packages/app/tutorials/composite-block-shear.json) | 12 | A steel-faced, aluminium-cored sandwich panel in pure shear: `geometry.subtract` for the cavity, a second Body for the core, `constraint.prescribe` for the shear, `contact.add` to bond the two. | The Reuss/Voigt series and parallel bounds, and why a finite specimen falls just outside them |
+| [`solve-cost-and-solvers`](../packages/app/tutorials/solve-cost-and-solvers.json) | 8 | The cantilever at two mesh sizes, `query.cost` before each solve, `cpu-direct` and `cpu-pcg` forced on the same model. | The auto solver threshold (200 000 / 100 000 dofs), and `solve.stalled` on issue #3's 780 300-dof case |
 
 The first four are the phase-1 set. The rest each own one procedure, one idealisation or one
 piece of method that the Commands alone do not explain.
