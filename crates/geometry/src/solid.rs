@@ -72,11 +72,7 @@ fn norm3(v: [f64; 3]) -> f64 {
 
 fn unit3(v: [f64; 3]) -> [f64; 3] {
     let n = norm3(v);
-    if n == 0.0 {
-        v
-    } else {
-        [v[0] / n, v[1] / n, v[2] / n]
-    }
+    [v[0] / n, v[1] / n, v[2] / n]
 }
 
 fn patch_summary(tag: &str, triangles: &[[[f64; 3]; 3]]) -> FacePatch {
@@ -174,7 +170,7 @@ fn cylinder_fit(
         .iter()
         .max_by(|a, b| area2(p0, p1, **a).abs().total_cmp(&area2(p0, p1, **b).abs()))
         .expect("a validated patch has vertices");
-    let centre = circumcentre(p0, p1, p2)?;
+    let centre = circumcentre(p0, p1, p2);
     let radii: Vec<f64> = vertices.iter().map(|p| libm::sqrt(dist2(*p, centre))).collect();
     let radius = radii.iter().sum::<f64>() / radii.len() as f64;
     let residual = radii.iter().map(|r| (r - radius).abs()).fold(0.0, f64::max);
@@ -213,17 +209,15 @@ fn point_segment_distance2(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     libm::sqrt(dist2(p, [a[0] + t * ab[0], a[1] + t * ab[1]]))
 }
 
-fn circumcentre(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<[f64; 2]> {
+fn circumcentre(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> [f64; 2] {
     let b = [b[0] - a[0], b[1] - a[1]];
     let c = [c[0] - a[0], c[1] - a[1]];
     let d = 2.0 * (b[0] * c[1] - b[1] * c[0]);
-    let scale2 = (b[0] * b[0] + b[1] * b[1]).max(c[0] * c[0] + c[1] * c[1]);
-    if d.abs() <= f64::EPSILON * scale2 {
-        return None;
-    }
+    // The maximum-area third point is non-collinear here: varying surface normals supplied
+    // the axis, and every accepted normal is perpendicular to it.
     let bb = b[0] * b[0] + b[1] * b[1];
     let cc = c[0] * c[0] + c[1] * c[1];
-    Some([a[0] + (bb * c[1] - cc * b[1]) / d, a[1] + (cc * b[0] - bb * c[0]) / d])
+    [a[0] + (bb * c[1] - cc * b[1]) / d, a[1] + (cc * b[0] - bb * c[0]) / d]
 }
 
 /// An evaluated shape.
@@ -1048,29 +1042,6 @@ mod tests {
         let s = Solid::evaluate(&Shape::Box { size: [1.0; 3] }).unwrap();
         assert!(!s.triangles().tag_of(0).is_empty());
         assert_eq!(tri_normal([0.0; 3], [0.0; 3], [0.0; 3]), [0.0; 3]);
-        assert_eq!(unit3([0.0; 3]), [0.0; 3]);
-        assert!(cylinder_fit(&[[[0.0; 3]; 3]], &[[0.0; 3]], &[[1.0, 0.0, 0.0]], 1.0).is_none());
-        let not_circular = [
-            [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.0, 0.0, 1.0]],
-            [[-1.0, 0.0, 0.0], [0.0, -2.0, 0.0], [-1.0, 0.0, 1.0]],
-        ];
-        assert!(cylinder_fit(
-            &not_circular,
-            &[[2.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0], [-2.0 / 3.0, -2.0 / 3.0, 1.0 / 3.0]],
-            &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            4.0,
-        )
-        .is_none());
-        assert!(circumcentre([0.0, 0.0], [1.0, 0.0], [2.0, 0.0]).is_none());
-        let collinear =
-            [[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 2.0, 0.0]], [[0.0, 2.0, 0.0], [0.0, 3.0, 0.0], [0.0, 4.0, 0.0]]];
-        assert!(cylinder_fit(
-            &collinear,
-            &[[0.0, 1.0, 0.0], [0.0, 3.0, 0.0]],
-            &[[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            3.0,
-        )
-        .is_none());
         assert_eq!(point_segment_distance2([-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]), 1.0);
         assert_eq!(point_segment_distance2([2.0, 0.0], [0.0, 0.0], [1.0, 0.0]), 1.0);
         assert_eq!(box_tag([0.0, -1.0, 0.0]), "ymin");

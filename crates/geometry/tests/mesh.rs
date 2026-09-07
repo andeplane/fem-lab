@@ -2043,6 +2043,35 @@ fn imported_patch_summaries_have_independent_geometric_oracles() {
     let sphere_patches = sphere.triangles().face_patches();
     assert_eq!(sphere_patches.len(), 1);
     assert_eq!(predicate_kind(&sphere_patches[0].suggested_predicate), "bbox");
+
+    let shallow = femlab_geometry::TriMesh {
+        positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.1]],
+        triangles: vec![[0, 1, 2], [0, 1, 3]],
+        tags: vec![0, 0],
+        tag_names: vec!["shallow".into()],
+    };
+    assert_eq!(predicate_kind(&shallow.face_patches()[0].suggested_predicate), "bbox");
+
+    let n = 16;
+    let mut positions = Vec::new();
+    for z in [0.0, 1.0] {
+        for i in 0..n {
+            let angle = 2.0 * PI * i as f64 / n as f64;
+            positions.push([2.0 * libm::cos(angle), libm::sin(angle), z]);
+        }
+    }
+    let mut triangles = Vec::new();
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        triangles.extend([[i, j, n as u32 + j], [i, n as u32 + j, n as u32 + i]]);
+    }
+    let ellipse = femlab_geometry::TriMesh {
+        tags: vec![0; triangles.len()],
+        tag_names: vec!["ellipse".into()],
+        positions,
+        triangles,
+    };
+    assert_eq!(predicate_kind(&ellipse.face_patches()[0].suggested_predicate), "bbox");
 }
 
 #[test]
