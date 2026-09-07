@@ -121,6 +121,17 @@ export interface Fem {
      * unrelated explicit geometry and Materials.
      */
     remove(args: Omit<Extract<Command, { cmd: 'geometry.remove' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing
+     * else. It contributes to the mass matrix (so it changes modal frequencies) and to gravity
+     * (m·g at that point), and has no stiffness whatever, so it must be attached to the model
+     * with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
+     * The point is also a node Set of the same name, so constraint.couple, constraint.fix,
+     * load.force and query.set target it by name. Re-issuing with an existing name replaces
+     * it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
+     * so it models a compact mass, not a flywheel.
+     */
+    addMass(args: Omit<Extract<Command, { cmd: 'geometry.addMass' }>, 'cmd'>): Promise<Ack>;
   };
   material: {
     /**
@@ -229,6 +240,20 @@ export interface Fem {
      * Command. Refused in an explicit Step, like a bonded contact.
      */
     cyclic(args: Omit<Extract<Command, { cmd: 'constraint.cyclic' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a
+     * load introduction is idealised. `distributed` makes the point follow the face's weighted
+     * mean displacement and adds no stiffness at all, so a force at the point spreads over the
+     * face in exactly the weights a uniform traction would produce, and a mass at the point
+     * loads the face the same way; that is the one to reach for. `rigid` is the opposite:
+     * every node of the face takes the point's displacement, so the face cannot deform and the
+     * part around it is stiffer than the real one. Nodes carry translations only, so **neither
+     * kind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling
+     * does not rotate its face — it translates it. It is a linear multipoint constraint inside
+     * the same operator, needs no iteration, is listed in a Step's `constraints` like any
+     * other Constraint, and is removed with constraint.remove.
+     */
+    couple(args: Omit<Extract<Command, { cmd: 'constraint.couple' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
      * it first. Removing a constraint makes existing Results of that Step stale.

@@ -68,6 +68,8 @@ pub struct BuiltMesh {
     pub body_of_block: Vec<String>,
     /// Auto face Sets (`beam.xmin`, `hole.side`) and named Sets alike.
     pub sets: BTreeMap<String, ResolvedSet>,
+    /// The node each of the Model's point masses was given, in Model order.
+    pub points: Vec<u32>,
 }
 
 impl BuiltMesh {
@@ -149,7 +151,20 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         }
         sets.insert(named.name.clone(), resolved);
     }
-    Ok(BuiltMesh { mesh, body_of_block, sets })
+    // Points come last, after every predicate has been resolved, so a point mass never joins a
+    // region Set it merely happens to sit inside: it is only ever in the Set of its own name.
+    let mut points = Vec::with_capacity(model.points.len());
+    for pt in &model.points {
+        let node = mesh.n_nodes() as u32;
+        mesh.coords.extend_from_slice(&pt.at);
+        mesh.node_sets.insert(pt.name.clone(), vec![node]);
+        sets.insert(
+            pt.name.clone(),
+            ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() },
+        );
+        points.push(node);
+    }
+    Ok(BuiltMesh { mesh, body_of_block, sets, points })
 }
 
 /// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces

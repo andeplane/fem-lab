@@ -24,10 +24,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use femlab_geometry::mesh::{Face, FaceKind};
 use femlab_geometry::Mesh;
 
+use crate::command::CoupleKind;
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::assembly::Csr;
+use crate::fem::heat::face_integrals;
 use crate::fem::problem::{Coupling, Problem};
 use crate::fem::shape::{face_dshape_of, face_shape_of};
+use crate::mesh::ResolvedSet;
 use crate::par;
 
 /// Gauss–Newton steps taken to project a node onto a face. A planar face converges in one; six
@@ -109,6 +112,9 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
             Coupling::Cyclic { name, from, to, axis, through, angle, tol } => {
                 cyclic_rows(p, name, from, to, *axis, *through, *angle, *tol, owner, &mut rows)?;
             }
+            Coupling::Couple { name, node, faces, kind, .. } => {
+                couple_rows(p, name, *node, faces, *kind, owner, &mut rows)?;
+            }
         }
     }
     rows.sort_by_key(|r| r.slave);
@@ -141,7 +147,7 @@ fn dependent(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize,
         ErrorCode::ConstraintDependent,
         format!("{comp} of node {} {what}: '{a}' and '{b}' both constrain it", dof as usize / dpn),
     )
-    .at(format!("contact '{b}'"))
+    .at(format!("{} '{b}'", p.couplings[second].label()))
     .suggest("constraint.remove one of them, or tie faces that do not overlap")
 }
 
@@ -313,6 +319,57 @@ fn cyclic_rows(
     Ok(())
 }
 
+/// The rows of one point coupling.
+///
+/// `distributed` eliminates the point: `u_point = Σ (a_i / A) u_i` over the face's nodes, with
+/// `a_i = ∫ N_i dS` the face's own lumped areas and `A` their sum. The point's row of `K` is
+/// empty, so `TᵀKT` adds no stiffness anywhere — the face is free to deform exactly as it was —
+/// while `Tᵀf` spreads a force at the point over the face in precisely the weights a uniform
+/// traction of the same total would assemble, because that traction's consistent nodal force is
+/// `t a_i` and this one is `(a_i / A)(t A)`.
+///
+/// `rigid` is the transpose: every DOF of the face is eliminated onto the point's matching
+/// component, so the whole face takes one displacement and cannot deform at all.
+///
+/// A node carries translations only, so neither kind transmits a moment: there is no rotational
+/// DOF at the point to apply one to, and a rigid face translates rather than rotates.
+fn couple_rows(
+    p: &Problem<'_>,
+    name: &str,
+    node: u32,
+    faces: &str,
+    kind: CoupleKind,
+    owner: usize,
+    out: &mut Vec<Row>,
+) -> Result<(), Error> {
+    let at = || format!("coupling '{name}'");
+    let set = p.set(faces).map_err(|e| e.at(at()))?;
+    if set.faces.is_empty() {
+        return Err(Error::schema(format!("coupling '{name}' is on set '{faces}', which has no faces"))
+            .at(at())
+            .suggest("constraint.couple to a face Set, from geometry.nameFace or an auto face"));
+    }
+    let dpn = p.dofs_per_node() as u32;
+    match kind {
+        CoupleKind::Rigid => {
+            for &n in &set.nodes {
+                for c in 0..dpn {
+                    out.push(Row { slave: n * dpn + c, masters: vec![(node * dpn + c, 1.0)], owner });
+                }
+            }
+        }
+        CoupleKind::Distributed => {
+            let area = lumped_areas(p, set)?;
+            let total: f64 = area.values().sum();
+            for c in 0..dpn {
+                let masters = area.iter().map(|(&n, &a)| (n * dpn + c, a / total)).collect();
+                out.push(Row { slave: node * dpn + c, masters, owner });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `dpn × dpn` block of the rotation by `angle` about coordinate axis `axis` (0 = x, 1 = y,
 /// 2 = z) that a cyclic tie's DOFs use. A heat Problem's single scalar DOF has no orientation,
 /// so `dpn == 1` is the 1×1 identity rather than the top-left corner of the 3×3 matrix — the
@@ -345,6 +402,35 @@ fn rotate_point(x: [f64; 3], axis: usize, through: [f64; 3], angle: f64) -> [f64
 fn dot3_sub(a: [f64; 3], b: [f64; 3]) -> f64 {
     let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     dot3(d, d)
+}
+
+/// `∫ N_i dS` per node of a face Set: the lumped areas the heat kernel's face integral already
+/// produces, so a coupling weights a face exactly as a convection boundary does.
+fn lumped_areas(p: &Problem<'_>, set: &ResolvedSet) -> Result<BTreeMap<u32, f64>, Error> {
+    let mut area: BTreeMap<u32, f64> = BTreeMap::new();
+    let mut coords = Vec::new();
+    let mut mat = Vec::new();
+    let mut w = Vec::new();
+    let mut t = Vec::new();
+    for &face in &set.faces {
+        let kind = p.mesh.kind_of(face.elem);
+        let nn = kind.n_nodes();
+        coords.resize(nn * 3, 0.0);
+        p.mesh.elem_coords(face.elem, &mut coords);
+        t.resize(nn, 0.0);
+        p.gather_temperature(face.elem, &mut t);
+        mat.clear();
+        mat.resize(nn * nn, 0.0);
+        w.clear();
+        w.resize(nn, 0.0);
+        // One `?`: a face integral is pure geometry, so it fails only where the context does.
+        p.ctx(face.elem, &coords, &t).and_then(|c| face_integrals(kind, &c, face.local, &mut mat, &mut w))?;
+        let conn = p.mesh.elem_nodes(face.elem);
+        for &a in kind.face_nodes(face.local as usize) {
+            *area.entry(conn[a as usize]).or_insert(0.0) += w[a as usize];
+        }
+    }
+    Ok(area)
 }
 
 /// The face of `faces` nearest `x`: its gap, the face, and the face coordinates of the closest

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::Mesh;
 
-use crate::command::Formulation;
+use crate::command::{CoupleKind, Formulation};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::{ElementCtx, Material};
 use crate::fem::heat::HeatLoad;
@@ -50,13 +50,26 @@ pub enum Coupling {
     /// `through`. The zero-harmonic condition (plan B §4): a structural DOF mixes its
     /// components under the rotation, a heat DOF (one per node) does not.
     Cyclic { name: String, from: String, to: String, axis: usize, through: [f64; 3], angle: f64, tol: f64 },
+    /// A point mass attached to the face Set `faces`: `distributed` eliminates the point onto
+    /// the face's weighted mean, `rigid` eliminates every face node onto the point. `node` is
+    /// the point's own mesh node, resolved with the Mesh so the numerics never look a name up.
+    Couple { name: String, point: String, node: u32, faces: String, kind: CoupleKind },
 }
 
 impl Coupling {
     /// The name the Command gave it, which every error and warning quotes.
     pub fn name(&self) -> &str {
         match self {
-            Coupling::Bonded { name, .. } | Coupling::Cyclic { name, .. } => name,
+            Coupling::Bonded { name, .. } | Coupling::Cyclic { name, .. } | Coupling::Couple { name, .. } => name,
+        }
+    }
+
+    /// What an error calls it: a tie between Bodies is a contact, a point attachment a coupling.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Coupling::Bonded { .. } => "contact",
+            Coupling::Cyclic { .. } => "cyclic",
+            Coupling::Couple { .. } => "coupling",
         }
     }
 
@@ -65,8 +78,27 @@ impl Coupling {
         match self {
             Coupling::Bonded { master, slave, .. } => [master, slave],
             Coupling::Cyclic { from, to, .. } => [from, to],
+            Coupling::Couple { point, faces, .. } => [faces, point],
         }
     }
+
+    /// The point mass it attaches, if it attaches one.
+    pub fn point(&self) -> Option<&str> {
+        match self {
+            Coupling::Bonded { .. } | Coupling::Cyclic { .. } => None,
+            Coupling::Couple { point, .. } => Some(point),
+        }
+    }
+}
+
+/// One resolved point mass: the Set name it owns, the node the Mesh builder gave it, and its
+/// mass in kilograms. It has no element, so it reaches the numerics only through the mass
+/// matrix, gravity, and whatever [`Coupling::Couple`] attaches it to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointMass {
+    pub name: String,
+    pub node: u32,
+    pub mass: f64,
 }
 
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
@@ -89,6 +121,8 @@ pub struct Problem<'a> {
     pub constraints: Vec<Constraint>,
     /// Bonded contacts and the other multipoint constraints, in Step order.
     pub couplings: Vec<Coupling>,
+    /// Lumped point masses, one node each, in Model order.
+    pub points: Vec<PointMass>,
     pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
     /// Registry Loads with different Body references use increments with a zero reference.

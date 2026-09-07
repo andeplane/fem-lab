@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Area, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SecondMoment,
+    Acceleration, Area, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, Mass, SecondMoment,
     SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Q,
 };
 
@@ -24,6 +24,20 @@ pub enum ContactKind {
     /// Glued: the two faces never separate and never slide, so the assembly behaves as one
     /// part. Linear, and the only kind there is today.
     Bonded,
+}
+
+/// How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
+/// transmits a moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CoupleKind {
+    /// The point follows the face's weighted mean displacement and adds no stiffness, so a
+    /// force or a mass at the point spreads over the face in exactly the weights a uniform
+    /// traction would produce. How a bearing or a load introduction is idealised.
+    Distributed,
+    /// Every node of the face takes the point's displacement, so the face translates as one
+    /// and cannot deform at all. Stiffer than the real part around a real attachment.
+    Rigid,
 }
 
 /// A displacement component.
@@ -933,6 +947,17 @@ pub enum Command {
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
     GeometryRemove { name: String },
 
+    /// Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing
+    /// else. It contributes to the mass matrix (so it changes modal frequencies) and to gravity
+    /// (m·g at that point), and has no stiffness whatever, so it must be attached to the model
+    /// with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
+    /// The point is also a node Set of the same name, so constraint.couple, constraint.fix,
+    /// load.force and query.set target it by name. Re-issuing with an existing name replaces
+    /// it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
+    /// so it models a compact mass, not a flywheel.
+    #[serde(rename = "geometry.addMass", rename_all = "camelCase")]
+    GeometryAddMass { name: String, at: [Q<Length>; 3], mass: Q<Mass> },
+
     /// Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio
     /// `nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for
     /// thermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came
@@ -1096,6 +1121,19 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<Q<Length>>,
     },
+    /// Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a
+    /// load introduction is idealised. `distributed` makes the point follow the face's weighted
+    /// mean displacement and adds no stiffness at all, so a force at the point spreads over the
+    /// face in exactly the weights a uniform traction would produce, and a mass at the point
+    /// loads the face the same way; that is the one to reach for. `rigid` is the opposite:
+    /// every node of the face takes the point's displacement, so the face cannot deform and the
+    /// part around it is stiffer than the real one. Nodes carry translations only, so **neither
+    /// kind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling
+    /// does not rotate its face — it translates it. It is a linear multipoint constraint inside
+    /// the same operator, needs no iteration, is listed in a Step's `constraints` like any
+    /// other Constraint, and is removed with constraint.remove.
+    #[serde(rename = "constraint.couple", rename_all = "camelCase")]
+    ConstraintCouple { name: String, point: String, on: SetRef, kind: CoupleKind },
 
     /// Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
     /// it first. Removing a constraint makes existing Results of that Step stale.
