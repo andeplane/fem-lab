@@ -17,6 +17,12 @@ export interface Fem {
      */
     setUnits(args: Omit<Extract<Command, { cmd: 'model.setUnits' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Change the Model's display name without resetting geometry, history or solved Results.
+     * A name-only edit is undoable and changes the full Model/Journal identity, but does not
+     * change the Result-validity fingerprint. Whitespace-only names are rejected.
+     */
+    setName(args: Omit<Extract<Command, { cmd: 'model.setName' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
      * or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
      * solid bodies; mixing them makes the Model ill-posed.
@@ -119,7 +125,9 @@ export interface Fem {
      * Use model.rename to change an implicit Body name while preserving its references.
      * `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
      * (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
-     * geometry: the selected mesher still determines the boundary approximation.
+     * geometry: the selected mesher still determines the boundary approximation. `formulation`
+     * has no effect when `simplices` is true, because simplex elements have no incompatible
+     * modes.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -164,10 +172,26 @@ export interface Fem {
      */
     remove(args: Omit<Extract<Command, { cmd: 'constraint.remove' }>, 'cmd'>): Promise<Ack>;
   };
+  contact: {
+    /**
+     * Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+     * point it projects onto in `master`, in every displacement component. It is a linear
+     * constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+     * bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+     * slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+     * gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+     * master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+     * so the two parts are in perfect thermal contact. A tie is listed in a Step's
+     * `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+     * between Bodies that share no element, which query.cost does not count.
+     */
+    add(args: Omit<Extract<Command, { cmd: 'contact.add' }>, 'cmd'>): Promise<Ack>;
+  };
   load: {
     /**
      * Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-     * The total force is the pressure times the face area and is reported by query.model.
+     * Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+     * force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
      */
     pressure(args: Omit<Extract<Command, { cmd: 'load.pressure' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -343,8 +367,10 @@ export interface Fem {
      */
     mesh(): Promise<MeshSummary>;
     /**
-     * What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-     * and centroid. Use it to verify a predicate selected what you meant.
+     * What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+     * and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+     * including thickness or radial weighting (plane strain: one metre of depth). Pressure
+     * times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
      */
     set(args: Omit<Extract<Query, { query: 'query.set' }>, 'query'>): Promise<SetInfo>;
     /**

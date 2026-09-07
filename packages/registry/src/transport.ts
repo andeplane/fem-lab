@@ -1,6 +1,9 @@
 import type { Ack, Command, EngineError, Field, ModelFile, Query, QueryResult } from './generated/engine';
 import { FemError } from './error';
 
+/** Import completion and its normalized Journal, captured atomically at the import boundary. */
+export interface ImportAck extends Ack { journal: ModelFile['journal'] }
+
 export interface Progress {
   phase: string;
   fraction?: number;
@@ -51,7 +54,7 @@ export interface EngineTransport {
   field(step: string, field: Field, component?: number): Promise<FieldData>;
   export(spec: ExportSpec): Promise<ExportedFile>;
   exportFile(): Promise<ModelFile>;
-  importFile(file: ModelFile): Promise<Ack>;
+  importFile(file: ModelFile): Promise<ImportAck>;
   cancel(): Promise<void>;
 }
 

@@ -12,6 +12,16 @@ import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 import type { TransientState } from './transient';
 
+/** Content identity, independent of JSON object-key order and view-only state. */
+export function journalIdentity(entries: JournalDump['entries']): string {
+  return JSON.stringify(entries, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value);
+}
+
+export function unsaved(s: UiState): boolean {
+  return s.journal !== null && s.journal.entries.length > 0 && journalIdentity(s.journal.entries) !== s.savedJournal;
+}
+
 export type ViewMode = 'geometry' | 'mesh' | 'results';
 export { TABS, type Tab } from './ui/tabs';
 export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
@@ -83,6 +93,8 @@ export interface UiState {
   ready: boolean;
   model: ModelSummary | null;
   journal: JournalDump | null;
+  /** Exact normalized Journal of the last successful explicit open/save; autosave is separate. */
+  savedJournal: string | null;
   script: string;
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
@@ -111,8 +123,10 @@ export interface UiState {
   journalWho: Record<number, { who: 'you' | 'ai'; at: number }>;
   /** What the caller of `dispatch` currently counts as; the script host flips it to `ai`. */
   source: 'you' | 'ai';
-  /** `null` while the Script tab shows the Journal; a string once it is being edited. */
+  /** An intentional draft survives switching back to the live Journal script. */
   scriptDraft: string | null;
+  /** Whether the Script tab is showing the draft editor or the live Journal script. */
+  scriptEditing: boolean;
   scriptOut: string[];
   scriptRunning: boolean;
   hostCaps: HostCaps | null;
@@ -208,6 +222,7 @@ export const initialState: UiState = {
   ready: false,
   model: null,
   journal: null,
+  savedJournal: null,
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
@@ -241,6 +256,7 @@ export const initialState: UiState = {
   journalWho: {},
   source: 'you',
   scriptDraft: null,
+  scriptEditing: false,
   scriptOut: [],
   scriptRunning: false,
   hostCaps: null,
@@ -377,6 +393,10 @@ export class Store {
 
   resizePanel(panel: ResizablePanel, size: number): void {
     this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
+  }
+
+  markSaved(journal: { entries: JournalDump['entries'] }): void {
+    this.set({ savedJournal: journalIdentity(journal.entries) });
   }
 
   fail(e: unknown): void {

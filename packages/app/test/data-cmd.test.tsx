@@ -327,6 +327,34 @@ describe('the shell', () => {
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
   });
 
+  it('keeps an intentional Script draft while showing the live Journal script', async () => {
+    const { registry, store } = mount({ tab: 'script' });
+    await registry.dispatch({ cmd: 'script.setSource', code: '// draft' });
+    expect(store.state).toMatchObject({ tab: 'script', scriptDraft: '// draft', scriptEditing: true });
+    await registry.dispatch({ cmd: 'script.setSource', code: '\n// inserted Journal', append: true });
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+
+    store.set({ script: '// live Journal' });
+    await registry.dispatch({ cmd: 'script.setEditing', editing: false });
+    expect(store.state.scriptEditing).toBe(false);
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+    expect(store.state.script).toBe('// live Journal');
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(store.state).toMatchObject({ tab: 'script', scriptEditing: true, scriptDraft: '// draft\n// inserted Journal' });
+  });
+
+  it('recognises the fields that own editing shortcuts', () => {
+    const { root } = mount();
+    const input = root.querySelector<HTMLInputElement>('input')!;
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    const token = document.createElement('span');
+    editor.append(token);
+    expect(isEditableTarget(input)).toBe(true);
+    expect(isEditableTarget(token)).toBe(true);
+    expect(isEditableTarget(root)).toBe(false);
+  });
+
   // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
   // reading `data-opens`, so that attribute is under the same invariant as `data-cmd`.
   it('names only Commands the registry has on every data-opens, and puts it only on form.open', () => {
@@ -570,15 +598,16 @@ describe('the shell', () => {
     ]);
   });
 
-  it('puts the project name and its saved state in the top bar, and Projects reopens the list', () => {
+  it('keeps the Model name distinct from browser-project autosave status', () => {
     const at = new Date('2026-09-06T12:04:00Z').getTime();
     const { root } = mount({ project: { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null, saving: false, autosave: true } });
     const field = root.querySelector<HTMLInputElement>('input.model-name')!;
-    expect(field.value).toBe('corbel-ULS');
-    expect(field.getAttribute('data-cmd')).toBe('project.rename');
+    expect(field.value).toBe('demo');
+    expect(root.querySelector('.saved-chip')!.getAttribute('title')).toContain('corbel-ULS');
+    expect(field.getAttribute('data-cmd')).toBe('model.setName');
     expect(root.querySelector('.saved-chip')!.textContent).toContain('saved');
     const bar = [...root.querySelectorAll('.topbar [data-cmd]')].map((el) => el.getAttribute('data-cmd'));
-    expect(bar).toContain('project.rename');
+    expect(bar).toContain('model.setName');
     expect(bar).toContain('project.save');
     expect(bar).toContain('file.save');
   });
@@ -588,7 +617,7 @@ describe('the shell', () => {
     const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
     expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
     await cleanupShells();
-    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
+    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('autosave off');
   });
 
   // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.

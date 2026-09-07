@@ -153,6 +153,10 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
         let mut count = 0;
         for node in 0..mesh.n_nodes() {
             let tag = node as u32 + 1;
+            // Every node owns its diagonal whether or not an element touches it, exactly as
+            // `assembly::pattern` seeds it; marking it first also keeps it counted once.
+            marked[node] = tag;
+            count += 1;
             for &elem in adj.of(node) {
                 for &other in mesh.elem_nodes(elem) {
                     if marked[other as usize] != tag {
@@ -175,7 +179,9 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
             let unique = first.iter().enumerate().filter(|(i, n)| !first[..*i].contains(n)).count() as u64;
             lower = lower.max(unique * unique);
         }
-        (lower, upper.min(nodes.saturating_mul(nodes)))
+        // Plus one diagonal per node, which the element cliques do not cover for a node no
+        // element touches.
+        (lower, upper.saturating_add(nodes).min(nodes.saturating_mul(nodes)))
     }
 }
 
@@ -185,6 +191,11 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
 /// an assembled CSR and one RHS. It excludes the resident mesh/model, local element buffers,
 /// reduction, solver vectors, direct-factor fill/workspace and procedure-specific history.
 /// Therefore fitting this lower bound never establishes feasibility, on any host.
+///
+/// It reads the element pattern and nothing else, so it does **not** see the fill-in a
+/// multipoint constraint adds: a `contact.add` couples nodes of two Bodies that share no
+/// element, and `mpc::transform` builds those entries outside `pattern`. A tied model's `nnz`
+/// and `bytes` are therefore under-reported by the size of the interface coupling.
 pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate {
     let dofs = (mesh.n_nodes() as u64).saturating_mul(dofs_per_node as u64);
     let block_size = (dofs_per_node as u64).saturating_mul(dofs_per_node as u64);
