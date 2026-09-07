@@ -2415,15 +2415,23 @@ fn affine_coords(kind: ElementKind) -> Vec<f64> {
     v
 }
 
-/// The measure `affine` maps one reference element onto: `|det M|` times the reference measure,
+/// The eight isoparametric kinds a geometric stiffness is defined for, each with the measure of
+/// its own reference element. A line member is not here: it has its own closed form, and its
+/// reference measure would be a length rather than a volume.
+const AFFINE_KINDS: [(ElementKind, f64); 8] = [
+    (ElementKind::Hex8, 8.0),
+    (ElementKind::Hex20, 8.0),
+    (ElementKind::Quad4, 4.0),
+    (ElementKind::Quad8, 4.0),
+    (ElementKind::Tet4, 1.0 / 6.0),
+    (ElementKind::Tet10, 1.0 / 6.0),
+    (ElementKind::Tri3, 0.5),
+    (ElementKind::Tri6, 0.5),
+];
+
+/// The measure `affine` maps one reference element onto: `|det M|` times that reference measure,
 /// both written out by hand from the coefficients above.
-fn affine_measure(kind: ElementKind) -> f64 {
-    let reference = match kind {
-        ElementKind::Hex8 | ElementKind::Hex20 => 8.0,
-        ElementKind::Quad4 | ElementKind::Quad8 => 4.0,
-        ElementKind::Tet4 | ElementKind::Tet10 => 1.0 / 6.0,
-        ElementKind::Tri3 | ElementKind::Tri6 => 0.5,
-    };
+fn affine_measure(kind: ElementKind, reference: f64) -> f64 {
     let det = if kind.dim() == 3 {
         1.3 * (1.1 * 0.9 - 0.2 * 0.05) - 0.2 * (0.15 * 0.9 - 0.2 * 0.1) + 0.1 * (0.15 * 0.05 - 1.1 * 0.1)
     } else {
@@ -2464,7 +2472,7 @@ fn linear_strain(dim: usize) -> [f64; VOIGT] {
 
 /// `½ V σ_ij (AᵀA)_ij`: the geometric strain energy of a uniform stress state under a linear
 /// displacement field, from closed forms alone.
-fn geometric_energy_closed_form(id: &Idealisation, kind: ElementKind) -> f64 {
+fn geometric_energy_closed_form(id: &Idealisation, kind: ElementKind, reference: f64) -> f64 {
     let dim = kind.dim();
     let s = expected_stress(id, &linear_strain(dim));
     let sigma = [[s[0], s[3], s[4]], [s[3], s[1], s[5]], [s[4], s[5], s[2]]];
@@ -2476,7 +2484,7 @@ fn geometric_energy_closed_form(id: &Idealisation, kind: ElementKind) -> f64 {
         }
     }
     // The axisymmetric idealisation never reaches here, so Pappus' radius is never read.
-    0.5 * weighted(id, affine_measure(kind), 0.0) * sum
+    0.5 * weighted(id, affine_measure(kind, reference), 0.0) * sum
 }
 
 /// The idealisations a geometric stiffness exists for: every one but the axisymmetric ring.
@@ -2501,7 +2509,7 @@ fn kg_times(kg: &[f64], v: &[f64], nd: usize) -> Vec<f64> {
 #[test]
 fn the_geometric_stiffness_matches_its_closed_form_for_every_kind() {
     let mat = steel();
-    for kind in ALL_KINDS {
+    for (kind, reference) in AFFINE_KINDS {
         let coords = affine_coords(kind);
         let (nn, dim) = (kind.n_nodes(), kind.dim());
         let nd = nn * dim;
@@ -2524,7 +2532,7 @@ fn the_geometric_stiffness_matches_its_closed_form_for_every_kind() {
                 assert!(row <= 1e-9 * scale, "{kind:?} {id:?}: translation {comp} is not in the null space ({row})");
             }
             let energy = 0.5 * u.iter().zip(kg_times(&kg, &u, nd)).map(|(a, b)| a * b).sum::<f64>();
-            let want = geometric_energy_closed_form(&id, kind);
+            let want = geometric_energy_closed_form(&id, kind, reference);
             let error = (energy - want).abs() / want.abs();
             assert!(error <= 1e-10, "{kind:?} {id:?}: energy {energy}, closed form {want} ({error:e})");
             // Doubling the displacement doubles the stress, and a linear kernel doubles with it.
@@ -6782,6 +6790,7 @@ fn the_truss_maps_points_onto_its_own_axis_and_stops_at_its_ends() {
             el.body_load(&c, &|_x| [0.0, 0.0, -1.0], &mut out).expect_err("no axis").code,
             ErrorCode::MeshInverted
         );
+        assert_eq!(el.geometric(&c, &[0.0; 6], &mut out).expect_err("no axis").code, ErrorCode::MeshInverted);
     }
 }
 
@@ -6808,6 +6817,7 @@ fn a_truss_refuses_a_face_load_and_a_missing_section() {
         el.mass(&bare, &mut big, false).expect_err("no section").code,
         el.body_load(&bare, &|_x| [0.0; 3], &mut big).expect_err("no section").code,
         el.thermal_load(&bare_hot, &mut big).expect_err("no section").code,
+        el.geometric(&bare, &[0.0; 6], &mut big).expect_err("no section").code,
     ] {
         assert_eq!(code, ErrorCode::ModelNoSection);
     }
@@ -6831,6 +6841,7 @@ fn a_truss_reports_a_material_props_mismatch_from_every_integral_that_calls_the_
         el.thermal_load(&c, &mut v).err(),
         el.recover(&c, &[0.0; 6], &mut sig, &mut eps).err(),
         el.omega_max(&c).err(),
+        el.geometric(&c, &[0.0; 6], &mut k).err(),
     ];
     for e in fails {
         let e = e.expect("a props mismatch must fail");
@@ -6944,6 +6955,121 @@ fn truss_axial_modes_converge_to_the_closed_form_bar_frequency() {
 
 /// A generic section of unit area, so `E = rho = A = L = 1` makes every closed form a round
 /// number.
+/// Benchmark B5c: a two-bar (von Mises) truss buckles when its geometric stiffness cancels its
+/// axial stiffness, at a load this test derives rather than quotes.
+///
+/// A truss column cannot be a Benchmark here: a straight chain of members has *no* transverse
+/// stiffness at all, so its `K` is singular across the axis and there is no eigenproblem to
+/// pose. A braced joint is the smallest truss assembly that does have one.
+///
+/// Two bars run from pinned supports at `(±a, 0)` up to an apex at `(0, h)` carrying a downward
+/// force `P`; the apex is held out of plane and free in the plane, so the model has exactly two
+/// degrees of freedom and the closed form is exact rather than converged.
+///
+/// Vertical equilibrium at the apex gives each bar `N = −P L / (2h)`, with `L = √(a² + h²)`.
+/// Summing `(EA/L) e⊗e` over the two bars gives the apex stiffness `diag(2EAa²/L³, 2EAh²/L³)`,
+/// and each bar contributes `N/L` to both directions, so `K + λ K_σ` is singular when
+/// `2EAh²/L³ = λ P/h` — that is, at `λ_y = 2EAh³/(P L³)` — and the horizontal mode follows at
+/// `λ_x = 2EAa²h/(P L³)`. A truss deeper than it is wide would buckle sideways first; this one
+/// is shallow (`a > h`), so the vertical snap is critical and `λ_x/λ_y = a²/h²` separates them
+/// by more than a factor of ten.
+#[test]
+fn a_two_bar_truss_buckles_where_its_axial_stiffness_and_its_axial_force_cancel() {
+    let (a, h, force) = (1.0, 0.3, 1.0e5);
+    let mesh = femlab_geometry::line(
+        &[[-a, 0.0, 0.0], [0.0, h, 0.0], [a, 0.0, 0.0]],
+        &[[0, 1], [1, 2]],
+        1,
+        ElementKind::Truss2,
+    )
+    .expect("two straight members");
+    let node_set = |nodes: Vec<u32>| ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes, elems: Vec::new() };
+    let sets =
+        BTreeMap::from([("supports".to_string(), node_set(vec![0, 2])), ("apex".to_string(), node_set(vec![1]))]);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![
+            fix("pins", "supports", [true, true, true], 0.0),
+            // The apex is free in the plane of the truss and held out of it, which is what
+            // leaves the two degrees of freedom the closed form is written for.
+            fix("planar", "apex", [false, false, true], 0.0),
+        ],
+    );
+    p.sections = vec![truss_section()];
+    p.section_of_block = vec![Some(0), Some(0)];
+    p.loads = vec![Load::NodalForce { nodes: "apex".into(), f: [0.0, -force, 0.0] }];
+    let res = run_step(&p, &Step::Buckling { n_modes: 1, solver: SolveOptions::default() })
+        .expect("a compressed two-bar truss buckles");
+    let length = libm::sqrt(a * a + h * h);
+    let want = 2.0 * YOUNG * TRUSS_AREA * h * h * h / (force * length.powi(3));
+    let got = res.buckling_factors[0];
+    assert!((got - want).abs() <= 1e-6 * want, "factor {got}, closed form {want}");
+    // The critical mode is the vertical snap, not the sideways one: its shape moves the apex
+    // in y, and unit peak means that component is exactly 1.
+    let shape = &res.modes[0];
+    let apex = |c: usize| libm::fabs(shape.component(c)[1]);
+    assert!((apex(1) - 1.0).abs() <= 1e-12, "the apex moves vertically: {}", apex(1));
+    assert!(apex(0) <= 1e-9, "and not sideways: {}", apex(0));
+}
+
+/// The truss geometric stiffness against its own closed form: `(N/L)[[I, −I], [−I, I]]`, with
+/// the axial force `N = EA·Δ/L` computed here from the stretch alone. Symmetry and the
+/// rigid-translation null space come from the same matrix, as they do for the solids.
+#[test]
+fn the_truss_geometric_stiffness_is_the_axial_force_over_the_length() {
+    let coords = truss_coords();
+    let (mat, sec) = (steel(), truss_section());
+    let c = truss_ctx(&coords, &mat, Some(&sec), None);
+    let el = element_for(ElementKind::Truss2);
+    // Pull the far node a known distance along the member's own axis: the stretch is that
+    // distance, so `N = EA Δ / L` needs nothing from the element.
+    let stretch = 1e-4;
+    let mut u = [0.0; 6];
+    for i in 0..3 {
+        u[3 + i] = stretch * TRUSS_DIR[i];
+    }
+    let mut kg = vec![0.0; 36];
+    el.geometric(&c, &u, &mut kg).expect("a stretched member has an axial force");
+    let n_l = YOUNG * TRUSS_AREA * (stretch / TRUSS_LENGTH) / TRUSS_LENGTH;
+    let scale = kg.iter().fold(0.0f64, |m, v| m.max(libm::fabs(*v)));
+    for row in 0..6 {
+        for col in 0..6 {
+            let same_node = (row / 3) == (col / 3);
+            let want = if row % 3 == col % 3 {
+                if same_node {
+                    n_l
+                } else {
+                    -n_l
+                }
+            } else {
+                0.0
+            };
+            assert!((kg[row * 6 + col] - want).abs() <= 1e-9 * n_l, "({row}, {col}) is {}", kg[row * 6 + col]);
+            assert!((kg[row * 6 + col] - kg[col * 6 + row]).abs() <= 1e-12 * scale, "not symmetric");
+        }
+    }
+    // A rigid translation carries no axial force, so it is in the null space.
+    for comp in 0..3 {
+        let t: Vec<f64> = (0..6).map(|i| if i % 3 == comp { 1.0 } else { 0.0 }).collect();
+        for row in 0..6 {
+            let sum: f64 = (0..6).map(|col| kg[row * 6 + col] * t[col]).sum();
+            assert!(libm::fabs(sum) <= 1e-9 * scale, "translation {comp} moves row {row}");
+        }
+    }
+    // Compression reverses it, which is the sign a buckling factor turns on.
+    let mut pushed = vec![0.0; 36];
+    let squashed: Vec<f64> = u.iter().map(|v| -v).collect();
+    el.geometric(&c, &squashed, &mut pushed).expect("a compressed member too");
+    for (a, b) in pushed.iter().zip(&kg) {
+        assert!((a + b).abs() <= 1e-9 * n_l, "compression is not the negative of tension");
+    }
+}
+
 fn unit_section() -> Section {
     properties(&SectionSpec::Generic {
         a: Q::new(1.0, "m^2"),

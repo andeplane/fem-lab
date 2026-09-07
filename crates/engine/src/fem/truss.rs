@@ -196,6 +196,36 @@ impl Element for Truss2 {
         Ok(())
     }
 
+    /// `(N/L) [[I, -I], [-I, I]]` with `N = sigma * A` the axial force: tension stiffens a member
+    /// across its own axis and compression softens it, which is the whole of how a truss
+    /// assembly buckles.
+    ///
+    /// It is the same `integral of grad(N_a) sigma grad(N_b) delta_kl dV` the solid elements
+    /// integrate. Only `sigma_11` is nonzero and both shape gradients lie along the axis, so the
+    /// block comes out a full identity — axial term included — rather than the transverse-only
+    /// form some texts reduce it to. That axial term is smaller than the `EA/L` already in `K`
+    /// by exactly the axial strain, so dropping it or keeping it is the same answer to the
+    /// order a linear buckling Step is accurate to; keeping it is what makes a truss and a solid
+    /// bar in one Model report the same geometric stiffness.
+    fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
+        let (_, half) = axis(c.coords).ok_or_else(inverted)?;
+        let area = section_of(c)?.a;
+        let (mut stress, mut strain) = ([0.0; VOIGT], [0.0; VOIGT]);
+        // The member's own axial stress, recovered exactly as `recover` reports it.
+        self.recover(c, u, &mut stress, &mut strain)?;
+        let n_l = stress[0] * area / (2.0 * half);
+        kg.fill(0.0);
+        for a in 0..2 {
+            for b in 0..2 {
+                let v = if a == b { n_l } else { -n_l };
+                for i in 0..3 {
+                    kg[(3 * a + i) * N_DOF + 3 * b + i] = v;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn gp_xi(&self, i: usize) -> [f64; 3] {
         rule_of(ElementKind::Truss2).points[i]
     }
