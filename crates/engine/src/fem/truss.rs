@@ -196,6 +196,22 @@ impl Element for Truss2 {
         Ok(())
     }
 
+    /// A pin-jointed member has no finite-strain kernel yet: the total Lagrangian formulation
+    /// of #59 is written for continuum elements, and a Green–Lagrange axial strain plus its
+    /// cable-like geometric stiffness is its own piece of work. Refused by name rather than
+    /// approximated with the linear member.
+    fn tangent_and_force(
+        &self,
+        _c: &ElementCtx<'_>,
+        _u: &[f64],
+        _state_in: &[f64],
+        _out: super::element::TangentOut<'_>,
+    ) -> Result<f64, Error> {
+        Err(Error::new(ErrorCode::Unsupported, "a line member has no finite-strain kernel")
+            .at("element")
+            .suggest("step.add with procedure 'static', or mesh the member as a solid"))
+    }
+
     fn gp_xi(&self, i: usize) -> [f64; 3] {
         rule_of(ElementKind::Truss2).points[i]
     }
