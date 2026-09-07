@@ -7420,6 +7420,25 @@ fn a_coupling_refuses_a_set_that_is_not_a_face() {
     assert_eq!(twice.where_.as_deref(), Some("coupling 'b'"));
 }
 
+/// A distributed coupling integrates its face, so it needs that Body's material like any other
+/// integral, and reports the same `model.no-material` when it is missing. A rigid coupling reads
+/// only the node list, so it does not.
+#[test]
+fn a_distributed_coupling_needs_the_material_of_the_face_it_weights() {
+    let (mesh, node) = lugged([1, 1, 1], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.material_of_block = vec![None];
+    p.points = lug(node, 1.0);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Distributed)];
+    let e = mpc::build(&p).expect_err("the face integral has no material to read");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
+    assert!(e.cause.contains("body 'bar'"), "{}", e.cause);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Rigid)];
+    assert!(mpc::build(&p).is_ok(), "a rigid coupling reads node numbers, not the material");
+}
+
 /// The weights a distributed coupling uses are the face's own `∫ N dS`: a partition of unity,
 /// and on a flat linear face the quarter-cell areas each node owns.
 #[test]

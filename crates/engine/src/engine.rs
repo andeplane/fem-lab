@@ -1262,13 +1262,7 @@ impl Engine {
             return Ok(Output::None);
         }
         if m.points.iter().any(|p| p.name == name) {
-            let users: Vec<String> = m
-                .constraints
-                .iter()
-                .filter(|c| c.sets().contains(&name))
-                .map(|c| format!("constraint '{}'", c.name))
-                .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
-                .collect();
+            let users = set_users(m, name);
             if !users.is_empty() {
                 let u: Vec<&str> = users.iter().map(String::as_str).collect();
                 return Err(in_use("point mass", name, &u, "objects"));
@@ -1278,13 +1272,7 @@ impl Engine {
             return Ok(Output::None);
         }
         if m.sets.iter().any(|s| s.name == name) {
-            let users: Vec<String> = m
-                .constraints
-                .iter()
-                .filter(|c| c.sets().contains(&name))
-                .map(|c| format!("constraint '{}'", c.name))
-                .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
-                .collect();
+            let users = set_users(m, name);
             if !users.is_empty() {
                 let u: Vec<&str> = users.iter().map(String::as_str).collect();
                 return Err(in_use("set", name, &u, "objects"));
@@ -1600,6 +1588,17 @@ fn check_name(name: &str) -> Result<(), Error> {
         .at("name"));
     }
     Ok(())
+}
+
+/// The Constraints and Loads that name a Set by that exact name. A point mass owns a Set of its
+/// own name, so removing either asks the same question and both ask it here.
+fn set_users(m: &Model, name: &str) -> Vec<String> {
+    m.constraints
+        .iter()
+        .filter(|c| c.sets().contains(&name))
+        .map(|c| format!("constraint '{}'", c.name))
+        .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
+        .collect()
 }
 
 fn in_use(kind: &str, name: &str, users: &[&str], what: &str) -> Error {

@@ -7923,6 +7923,17 @@ fn a_point_mass_is_a_node_and_a_set_of_its_own_name() {
     assert_eq!(s.centroid[0], Valued { value: 1.0, unit: "m".into() });
     let QueryResult::Mesh(mesh) = e.query(Query::Mesh {}).unwrap() else { panic!() };
     let with = mesh.nodes;
+    // A Load on the point holds it in use, exactly as one on a named Set holds that Set.
+    ok(&mut e, r#"{"cmd":"load.force","name":"pull","on":"lug","total":["1 kN","0 N","0 N"]}"#);
+    let held = err(&mut e, r#"{"cmd":"geometry.remove","name":"lug"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+    assert!(held.cause.contains("load 'pull'"), "{}", held.cause);
+    // An unknown name lists the point masses that do exist, beside the bodies, cuts and Sets.
+    let ghost = err(&mut e, r#"{"cmd":"geometry.remove","name":"ghost"}"#);
+    assert_eq!(ghost.code, ErrorCode::NotFound);
+    assert!(ghost.suggestion.as_deref().is_some_and(|k| k.contains("lug")), "{:?}", ghost.suggestion);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"pull"}"#);
+
     ok(&mut e, r#"{"cmd":"geometry.remove","name":"lug"}"#);
     let QueryResult::Mesh(mesh) = e.query(Query::Mesh {}).unwrap() else { panic!() };
     assert_eq!(with, mesh.nodes + 1, "the point is one node of the Mesh");
@@ -7952,7 +7963,7 @@ fn add_mass_refuses_a_bad_name_unit_or_mass() {
         &mut e,
         r#"{"cmd":"geometry.nameRegion","name":"corner","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["1 m","1 m","1 m"]}}"#,
     );
-    let cases: [(&str, ErrorCode, &str); 6] = [
+    let cases: [(&str, ErrorCode, &str); 7] = [
         (
             r#"{"cmd":"geometry.addMass","name":"a.b","at":["0 m","0 m","0 m"],"mass":"1 kg"}"#,
             ErrorCode::Schema,
@@ -7970,6 +7981,11 @@ fn add_mass_refuses_a_bad_name_unit_or_mass() {
         ),
         (
             r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"-2 kg"}"#,
+            ErrorCode::Schema,
+            "mass",
+        ),
+        (
+            r#"{"cmd":"geometry.addMass","name":"lug","at":["0 m","0 m","0 m"],"mass":"1e400 kg"}"#,
             ErrorCode::Schema,
             "mass",
         ),
