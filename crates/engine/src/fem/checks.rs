@@ -301,8 +301,14 @@ fn rigid_basis(mesh: &Mesh, id: &Idealisation, dpn: usize) -> Vec<(&'static str,
                 ],
                 Rigid::AxisTwist => [0.0, 0.0, x[0]],
             };
-            for c in 0..dpn {
+            for c in 0..dpn.min(3) {
                 v[node * dpn + c] = w[c];
+            }
+            // A rigid rotation turns every beam joint by the same unit angle about the axis;
+            // the inert rotations of the other nodes get it too and restrict nothing, because
+            // `resolve` never lists them as held.
+            if let (Rigid::Rotate(a), true) = (&motion, dpn > 3) {
+                v[node * dpn + 3 + a] = 1.0;
             }
         }
         let norm = v.iter().map(|x| x * x).sum::<f64>().sqrt();

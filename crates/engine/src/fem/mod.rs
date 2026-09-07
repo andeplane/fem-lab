@@ -8,6 +8,7 @@
 //! built-in route.
 
 pub mod assembly;
+pub mod beam;
 pub mod checks;
 pub mod element;
 pub mod heat;

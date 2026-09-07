@@ -67,20 +67,41 @@ derived object, never edited by hand.
 _Avoid_: grid, discretisation
 
 **Element**:
-One finite element: a connectivity and a type (hex8, tet4, tet10, ...).
+One finite element: a connectivity and a type (hex8, tet4, tet10, ...). A line Body's
+elements are members: a truss (`truss2`, axial force only) or a beam.
 _Avoid_: cell, zone
+
+**Beam**:
+A two-node Timoshenko member (`beam2`): axial force, shear, bending about two axes and St
+Venant torsion, so its joints carry three rotations `rx, ry, rz` as well as the three
+displacements. A Mesh with a beam Body has six unknowns per node; on nodes no beam reaches the
+rotations are *inert* (no stiffness, no mass, dropped from the free set) so a solid next to a
+beam answers exactly as it does alone. The section's local z (its height) follows the
+`orientation` axis of `section.assign` or the default rule (global Z, global X for a
+vertical member); local y closes the right-handed triad.
+_Avoid_: frame element, bar (that is a truss), B31
+
+**Section force**:
+The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`
+field) and `T, M_y, M_z` (`sectionMoment`), in the member's local axes, positive as the far side
+of the cut acts on the near side, right-handed about the local axes. Per element node, never
+averaged across a joint.
+_Avoid_: internal force, stress resultant, BMD/SFD
 
 **Material**:
 A named constitutive description with SI properties (density, Young's modulus, ...).
 _Avoid_: mat, property card
 
 **Constraint**:
-A prescribed kinematic condition on a Set: fixed, roller, prescribed displacement, tie.
-_Avoid_: BC, boundary condition, support, fixture, restraint
+A prescribed kinematic condition on a Set: fixed, roller, prescribed displacement, tie. On a
+beam joint a *clamp* (`constraint.fix` with no rotation named) holds all six DOFs and a *pin*
+(`constraint.pin`) the three displacements only; a symmetry plane holds its normal displacement
+and the two rotations in the plane.
+_Avoid_: BC, boundary condition, support, fixture, restraint, encastre
 
 **Load**:
-A prescribed force-like condition on a Set: pressure, traction, point force, body force,
-gravity, thermal load.
+A prescribed force-like condition on a Set: pressure, traction, point force, moment (on beam
+joints), body force, gravity, thermal load.
 _Avoid_: BC, forcing, excitation
 
 **Step**:

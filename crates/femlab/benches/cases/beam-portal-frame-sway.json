@@ -1,0 +1,218 @@
+{
+  "name": "beam-portal-frame-sway",
+  "reference": "Benchmark B24: a fixed-base portal frame, columns 3 m and beam 4 m of one section, swayed by 100 kN at a top joint. Slope-deflection with axially rigid, shear-rigid members gives Delta = H h^3 (2 + 3k) / (12 EI (1 + 6k)) with k = (EI/L)/(EI/h) = 0.75: 8.6932 mm, the joint rotation 3 Delta / (h (2 + 3k)) and the column moments (2EI/h)(theta - 3 Delta/h) at the base and (2EI/h)(2 theta - 3 Delta/h) at the top. The generic section (A = 1 m^2, I = 1e-4 m^4, kappa = 1) makes the axial and shear flexibility the closed form neglects a 1e-4 effect, which is what the 1e-3 tolerance allows for.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "beam-portal-frame-sway"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "frame",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "0 m",
+          "0 m",
+          "3 m"
+        ],
+        [
+          "4 m",
+          "0 m",
+          "3 m"
+        ],
+        [
+          "4 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "kind": "beam"
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "round numbers, so the closed forms are exact in floating point"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "frame"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "stiff",
+      "shape": {
+        "kind": "generic",
+        "a": "1 m^2",
+        "iY": "1e-4 m^4",
+        "iZ": "1e-4 m^4",
+        "j": "1e-4 m^4",
+        "kY": 1.0,
+        "kZ": 1.0
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "stiff",
+      "bodies": [
+        "frame"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "baseA",
+      "on": "frame.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "baseD",
+      "on": "frame.p3"
+    },
+    {
+      "cmd": "load.force",
+      "name": "sway",
+      "on": "frame.p1",
+      "total": [
+        "100 kN",
+        "0 kN",
+        "0 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "baseA",
+        "baseD"
+      ],
+      "loads": [
+        "sway"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0 m",
+          "0 m",
+          "3 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 8.693181818181818,
+      "tol": 0.001,
+      "note": "sway Delta = H h^3 (2 + 3k) / (12 EI (1 + 6k)), k = (EI/L)/(EI/h) = 0.75, slope-deflection with rigid axial and shear response",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "4 m",
+          "0 m",
+          "3 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 8.693181818181818,
+      "tol": 0.001,
+      "note": "the beam translates as one: the same sway at the other joint",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "rotation",
+        "component": 1,
+        "at": [
+          "0 m",
+          "0 m",
+          "3 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0020454545454545456,
+      "tol": 0.001,
+      "note": "joint rotation theta = 3 Delta / (h (2 + 3k)), right-handed about +y as the columns lean along +x",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/1",
+      "expect": -88636.36363636365,
+      "tol": 0.001,
+      "note": "column base moment M_AB = (2EI/h)(theta - 3 Delta/h) = -88.6 kN m: at end 1 the section moment is minus the nodal moment on the element, which is slope-deflection's own sign",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/4",
+      "expect": 61363.63636363637,
+      "tol": 0.001,
+      "note": "column top moment: at end 2 the section moment is the nodal moment itself, so it carries -M_BA = -(2EI/h)(2 theta - 3 Delta/h)",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the supports carry the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

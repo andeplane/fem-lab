@@ -144,8 +144,17 @@ pub enum Shape {
     /// Straight line members between joints: a truss or a frame. `points` are the joints,
     /// `members` index pairs into them, and each member is cut into `divisions` elements. It
     /// has no volume and no surface, so it never becomes a [`crate::Solid`]; the line mesher
-    /// is its own geometry. Its node sets are `p0 … pN`, one per joint.
-    Polyline { points: Vec<[f64; 3]>, members: Vec<[u32; 2]>, divisions: u32 },
+    /// is its own geometry. Its node sets are `p0 … pN`, one per joint. `beam` makes the
+    /// members Timoshenko beams (`Beam2`) instead of pin-jointed bars (`Truss2`); it defaults
+    /// to false and is left out of the serialised form then, so every Model written before it
+    /// existed still loads as the truss it was.
+    Polyline {
+        points: Vec<[f64; 3]>,
+        members: Vec<[u32; 2]>,
+        divisions: u32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beam: bool,
+    },
     /// A triangle mesh read from a file (`geometry.import`), welded into a solid by the
     /// geometry kernel. Its faces are patches of triangles that meet more smoothly than
     /// `feature_angle`, tagged `face0`, `face1`, … largest area first.
@@ -270,7 +279,9 @@ impl Shape {
                 }
                 shape.validate()
             }
-            Shape::Polyline { points, members, divisions } => crate::mesher::line::check(points, members, *divisions),
+            Shape::Polyline { points, members, divisions, .. } => {
+                crate::mesher::line::check(points, members, *divisions)
+            }
             Shape::Mesh { positions, triangles, feature_angle, simplify_below } => {
                 if triangles.len() < 4 {
                     return Err(GeomError(format!(
@@ -479,7 +490,12 @@ mod tests {
         assert_eq!(named.dim(), 3);
         assert!(named.contains([0.5, 0.5, 0.5]).unwrap());
         // A line body is a curve: dimension 1, with no interior for a point to be inside of.
-        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 2 };
+        let line = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 2,
+            beam: false,
+        };
         assert_eq!(line.dim(), 1);
         assert!(!line.contains([0.5, 0.0, 0.0]).unwrap());
         assert_eq!(Shape::Union { shapes: vec![] }.dim(), 3);
@@ -561,9 +577,25 @@ mod tests {
     fn validation() {
         assert!(Shape::Box { size: [1.0, 0.0, 1.0] }.validate().unwrap_err().0.contains("size[1]"));
         // A Polyline's validation is the line mesher's, so both name the same cause.
-        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 1 };
+        let line = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+            beam: true,
+        };
         assert!(line.validate().is_ok());
-        let short = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1 };
+        // `beam: false` is the truss every earlier Model meant, and it serialises without the flag.
+        let truss = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+            beam: false,
+        };
+        let json = serde_json::to_string(&truss).unwrap();
+        assert!(!json.contains("beam"), "{json}");
+        assert_eq!(serde_json::from_str::<Shape>(&json).unwrap(), truss);
+        assert!(serde_json::to_string(&line).unwrap().contains("\"beam\":true"));
+        let short = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1, beam: false };
         assert!(short.validate().unwrap_err().0.contains("at least 2 points"));
         assert!(Shape::Cylinder { radius: -1.0, height: 1.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 0.0, segments: None }.validate().is_err());

@@ -72,6 +72,12 @@ pub struct ElementCtx<'a> {
     pub formulation: Formulation,
     /// The cross-section of a line member; `None` for a solid, which has its own geometry.
     pub section: Option<&'a Section>,
+    /// The reference vector a beam's local z-axis is taken from; `None` is the default rule
+    /// (`section.assign`). Ignored by every other element.
+    pub orientation: Option<[f64; 3]>,
+    /// The acceleration every gravity Load of the Step adds up to, so a beam can subtract its
+    /// own fixed-end forces when it recovers section forces. Zero without gravity.
+    pub gravity: [f64; 3],
     /// Nodal temperature; `None` → no thermal strain.
     pub temperature: Option<&'a [f64]>,
     pub t_ref: f64,
@@ -1052,6 +1058,8 @@ fn tangent_and_force_of(
         formulation: Formulation::Full,
         temperature: c.temperature,
         t_ref: c.t_ref,
+        orientation: c.orientation,
+        gravity: c.gravity,
         section: c.section,
     };
     let kin = kinematics(kind, &full)?;
@@ -1123,7 +1131,7 @@ fn tangent_and_force_of(
 pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
     // A line member is embedded in the mesh's space, so its Jacobian is the length of
     // `dx/dξ` rather than a determinant of the coordinate directions.
-    if kind == ElementKind::Truss2 {
+    if kind.dim() == 1 {
         return crate::fem::truss::axis(coords).map(|(_, half)| half);
     }
     let (nn, dim) = (kind.n_nodes(), kind.dim());
@@ -1299,6 +1307,7 @@ impl<R: RefElement> Element for Iso<R> {
 }
 
 static TRUSS2: crate::fem::truss::Truss2 = crate::fem::truss::Truss2;
+static BEAM2: crate::fem::beam::Beam2 = crate::fem::beam::Beam2;
 static ISO_HEX8: Iso<Hex8> = Iso(PhantomData);
 static ISO_HEX20: Iso<Hex20> = Iso(PhantomData);
 static ISO_TET4: Iso<Tet4> = Iso(PhantomData);
@@ -1320,5 +1329,6 @@ pub fn element_for(kind: ElementKind) -> &'static dyn Element {
         ElementKind::Tri3 => &ISO_TRI3,
         ElementKind::Tri6 => &ISO_TRI6,
         ElementKind::Truss2 => &TRUSS2,
+        ElementKind::Beam2 => &BEAM2,
     }
 }

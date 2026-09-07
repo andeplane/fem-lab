@@ -71,6 +71,9 @@ pub fn run(
         held[dof as usize] = true;
         u[dof as usize] = value;
     }
+    for &dof in &rc.inert {
+        held[dof as usize] = true;
+    }
     // One `?`: the mass, the stiffness and the loads fail on exactly the same materials and the
     // same Sets, so only the first of them is an arm a test can take.
     let (a, mass, omega_max, massless_free, f) = pool.install(|| {
@@ -202,7 +205,8 @@ fn lumped_mass_and_omega(p: &Problem<'_>, held: &[bool], retain_mass: bool) -> R
     let t = [0.0; 0];
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
-        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * dpn);
+        let ldpn = p.node_dofs(blk.kind);
+        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * ldpn);
         for i in 0..blk.n_elems() {
             let elem = blk.first_elem + i as u32;
             coords.resize(nn * 3, 0.0);
@@ -219,14 +223,14 @@ fn lumped_mass_and_omega(p: &Problem<'_>, held: &[bool], retain_mass: bool) -> R
                 omega = omega.max(element.omega_max(&c).map_err(|e| e.at(format!("element {elem}")))?);
             } else {
                 let unsupported = p.mesh.elem_nodes(elem).iter().find_map(|&node| {
-                    (0..dpn).map(|k| node as usize * dpn + k).find(|&dof| !held[dof]).map(|dof| (elem, dof))
+                    (0..ldpn).map(|k| node as usize * dpn + k).find(|&dof| !held[dof]).map(|dof| (elem, dof))
                 });
                 massless_free = massless_free.or(unsupported);
             }
             if retain_mass {
                 for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
-                    for k in 0..dpn {
-                        mass[node as usize * dpn + k] += me[(a * dpn + k) * nd + a * dpn + k];
+                    for k in 0..ldpn {
+                        mass[node as usize * dpn + k] += me[(a * ldpn + k) * nd + a * ldpn + k];
                     }
                 }
             }
@@ -239,7 +243,7 @@ fn validate_frequency_bound(
     omega_max: f64,
     massless_free: Option<(u32, usize)>,
     dpn: usize,
-    labels: [&'static str; 3],
+    labels: [&'static str; crate::fem::problem::NODE_DOFS_MAX],
 ) -> Result<(), Error> {
     if let Some((elem, dof)) = massless_free {
         let node = dof / dpn;
@@ -293,10 +297,10 @@ fn energy(k: &crate::fem::assembly::Csr, mass: &[f64], u: &[f64], v: &[f64], ku:
     kinetic + strain
 }
 
-/// `Σ m v` per direction.
+/// `Σ m v` per direction; a beam joint's angular momentum is not a linear one and is left out.
 fn momentum(mass: &[f64], v: &[f64], dpn: usize) -> [f64; 3] {
     let mut p = [0.0; 3];
-    for (i, (m, vi)) in mass.iter().zip(v).enumerate() {
+    for (i, (m, vi)) in mass.iter().zip(v).enumerate().filter(|(i, _)| i % dpn < 3) {
         p[i % dpn] += m * vi;
     }
     p

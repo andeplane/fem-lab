@@ -52,7 +52,7 @@ pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr
     let t = [0.0; 0];
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
-        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * dpn);
+        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * p.node_dofs(blk.kind));
         for i in 0..blk.n_elems() {
             let elem = blk.first_elem + i as u32;
             coords.resize(nn * 3, 0.0);
@@ -69,8 +69,9 @@ pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr
             }
         }
     }
+    // A point mass has no rotational inertia: it loads the three displacements only.
     for pm in &p.points {
-        for c in 0..dpn {
+        for c in 0..dpn.min(3) {
             let r = pm.node as usize * dpn + c;
             let (lo, hi) = (m.row_ptr[r] as usize, m.row_ptr[r + 1] as usize);
             let at = m.col_idx[lo..hi].binary_search(&(r as u32)).expect("the pattern seeds every node's diagonal");

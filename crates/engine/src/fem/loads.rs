@@ -12,7 +12,8 @@
 //! subtracts `α ΔT` from the total strain before the material law sees it, so it enters
 //! through the stiffness integral, not through the load vector.
 
-use crate::error::Error;
+use crate::error::{Error, ErrorCode};
+use crate::fem::assembly::scatter_add;
 use crate::fem::element::{element_for, FaceLoad};
 use crate::fem::problem::Problem;
 use crate::par;
@@ -30,6 +31,8 @@ pub enum Load {
     Traction { faces: String, t: [f64; 3] },
     /// A force on *each* node of a Set.
     NodalForce { nodes: String, f: [f64; 3] },
+    /// A moment about the global axes on *each* node of a Set, on its rotational DOFs.
+    NodalMoment { nodes: String, m: [f64; 3] },
     /// Gravity: `ρ g` over every element whose material has a density.
     Gravity { g: [f64; 3] },
     /// Circumferential traction `t_theta = c r` on a face Set, `c` chosen so the total torque
@@ -42,7 +45,7 @@ impl Load {
     pub fn set(&self) -> Option<&str> {
         match self {
             Load::Pressure { faces, .. } | Load::Traction { faces, .. } | Load::Torque { faces, .. } => Some(faces),
-            Load::NodalForce { nodes, .. } => Some(nodes),
+            Load::NodalForce { nodes, .. } | Load::NodalMoment { nodes, .. } => Some(nodes),
             Load::Gravity { .. } => None,
         }
     }
@@ -61,23 +64,23 @@ pub struct LoadTotals {
 /// and assembling the result back reproduces the total exactly, curved faces included.
 pub fn face_set_area(p: &Problem<'_>, faces: &str) -> Result<f64, Error> {
     let set = p.set(faces)?;
-    let dpn = p.dofs_per_node();
     let mut area = 0.0;
     let mut coords = Vec::new();
     let mut out = Vec::new();
     let mut t = Vec::new();
     for &face in &set.faces {
         let kind = p.mesh.kind_of(face.elem);
+        let ldpn = p.node_dofs(kind);
         coords.resize(kind.n_nodes() * 3, 0.0);
         out.clear();
-        out.resize(kind.n_nodes() * dpn, 0.0);
+        out.resize(kind.n_nodes() * ldpn, 0.0);
         t.resize(kind.n_nodes(), 0.0);
         p.mesh.elem_coords(face.elem, &mut coords);
         p.gather_temperature(face.elem, &mut t);
         // One `?`: a face integral is pure geometry, so it fails only where the context does.
         p.ctx(face.elem, &coords, &t)
             .and_then(|c| element_for(kind).face_load(&c, face.local, FaceLoad::Traction([1.0, 0.0, 0.0]), &mut out))?;
-        area += out.iter().step_by(dpn).sum::<f64>();
+        area += out.iter().step_by(ldpn).sum::<f64>();
     }
     Ok(area)
 }
@@ -116,15 +119,18 @@ fn assemble(p: &Problem<'_>, f: &mut [f64], mass: Option<&[f64]>) -> Result<Load
             Load::Torque { faces, c } => face_load(p, faces, FaceLoad::Torque(*c), f, &mut totals)?,
             Load::NodalForce { nodes, f: force } => {
                 for &node in &p.set(nodes)?.nodes {
-                    for c in 0..dpn {
+                    for c in 0..dpn.min(3) {
                         f[node as usize * dpn + c] += force[c];
                         totals[c] += force[c];
                     }
                 }
             }
+            Load::NodalMoment { nodes, m } => nodal_moment(p, nodes, *m, f)?,
             Load::Gravity { g } => match mass {
                 Some(mass) => {
-                    for (i, (force, m)) in f.iter_mut().zip(mass).enumerate() {
+                    // A lumped rotational inertia carries no weight: gravity pulls on the
+                    // translations alone.
+                    for (i, (force, m)) in f.iter_mut().zip(mass).enumerate().filter(|(i, _)| i % dpn < 3) {
                         let value = m * g[i % dpn];
                         *force += value;
                         totals[i % dpn] += value;
@@ -140,13 +146,35 @@ fn assemble(p: &Problem<'_>, f: &mut [f64], mass: Option<&[f64]>) -> Result<Load
     Ok(LoadTotals { force: totals })
 }
 
+/// A moment on every node of a Set, into its rotational DOFs. Only a beam joint has any, so
+/// a Set with a node no beam reaches is `model.ill-posed`: the moment would fall on an inert
+/// DOF and silently vanish.
+fn nodal_moment(p: &Problem<'_>, nodes: &str, m: [f64; 3], f: &mut [f64]) -> Result<(), Error> {
+    let dpn = p.dofs_per_node();
+    let rotational = if dpn > 3 { p.rotational_nodes() } else { Vec::new() };
+    for &node in &p.set(nodes)?.nodes {
+        if !rotational.get(node as usize).copied().unwrap_or(false) {
+            return Err(Error::new(
+                ErrorCode::ModelIllPosed,
+                format!("load.moment on set '{nodes}' reaches node {node}, which has no rotation to turn"),
+            )
+            .at(format!("set '{nodes}'"))
+            .suggest("load.moment on the joints of a beam Body (geometry.addLine with kind beam)"));
+        }
+        for c in 0..3 {
+            f[node as usize * dpn + 3 + c] += m[c];
+        }
+    }
+    Ok(())
+}
+
 /// `m g` at every point mass. A lumped mass has no volume to integrate, so gravity reaches it
 /// as a nodal force at its own node, and travels on into the structure through whatever
 /// `constraint.couple` attached it to.
 fn point_load(p: &Problem<'_>, g: [f64; 3], f: &mut [f64], totals: &mut [f64; 3]) {
     let dpn = p.dofs_per_node();
     for pm in &p.points {
-        for c in 0..dpn {
+        for c in 0..dpn.min(3) {
             f[pm.node as usize * dpn + c] += pm.mass * g[c];
             totals[c] += pm.mass * g[c];
         }
@@ -156,21 +184,21 @@ fn point_load(p: &Problem<'_>, g: [f64; 3], f: &mut [f64], totals: &mut [f64; 3]
 /// Consistent nodal forces of a pressure or traction over a face Set, face by face in the
 /// Set's sorted order.
 fn face_load(p: &Problem<'_>, faces: &str, load: FaceLoad, f: &mut [f64], totals: &mut [f64; 3]) -> Result<(), Error> {
-    let dpn = p.dofs_per_node();
     let set = p.set(faces)?;
     let mut coords = Vec::new();
     let mut out = Vec::new();
     let mut t = Vec::new();
     for &face in &set.faces {
         let kind = p.mesh.kind_of(face.elem);
+        let ldpn = p.node_dofs(kind);
         coords.resize(kind.n_nodes() * 3, 0.0);
         out.clear();
-        out.resize(kind.n_nodes() * dpn, 0.0);
+        out.resize(kind.n_nodes() * ldpn, 0.0);
         t.resize(kind.n_nodes(), 0.0);
         p.mesh.elem_coords(face.elem, &mut coords);
         p.gather_temperature(face.elem, &mut t);
         p.ctx(face.elem, &coords, &t).and_then(|c| element_for(kind).face_load(&c, face.local, load, &mut out))?;
-        scatter(p, face.elem, &out, dpn, f, totals);
+        scatter(p, face.elem, &out, ldpn, f, totals);
     }
     Ok(())
 }
@@ -178,10 +206,10 @@ fn face_load(p: &Problem<'_>, faces: &str, load: FaceLoad, f: &mut [f64], totals
 /// `∫ Nᵀ ρ g dV` over every element, in chunks: parallel inside a chunk, added in element
 /// order, exactly like the stiffness assembly and for the same reason.
 fn body_load(p: &Problem<'_>, g: [f64; 3], f: &mut [f64], totals: &mut [f64; 3]) -> Result<(), Error> {
-    let dpn = p.dofs_per_node();
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
-        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * dpn);
+        let ldpn = p.node_dofs(blk.kind);
+        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * ldpn);
         for lo in (0..blk.n_elems()).step_by(CHUNK) {
             let hi = (lo + CHUNK).min(blk.n_elems());
             let parts = par::map_collect(hi - lo, |i| {
@@ -198,19 +226,22 @@ fn body_load(p: &Problem<'_>, g: [f64; 3], f: &mut [f64], totals: &mut [f64; 3])
                 Ok::<_, Error>(fe)
             });
             for (i, part) in parts.into_iter().enumerate() {
-                scatter(p, blk.first_elem + (lo + i) as u32, &part?, dpn, f, totals);
+                scatter(p, blk.first_elem + (lo + i) as u32, &part?, ldpn, f, totals);
             }
         }
     }
     Ok(())
 }
 
-/// Add one element's nodal forces into the global vector and into the applied total.
-fn scatter(p: &Problem<'_>, elem: u32, fe: &[f64], dpn: usize, f: &mut [f64], totals: &mut [f64; 3]) {
-    for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
-        for c in 0..dpn {
-            f[node as usize * dpn + c] += fe[a * dpn + c];
-            totals[c] += fe[a * dpn + c];
+/// Add one element's nodal forces into the global vector and into the applied total. `ldpn`
+/// is the element's own stride; only its force components (the first three) count as applied
+/// force, a beam's fixed-end moments being the load's own statics rather than more of it.
+fn scatter(p: &Problem<'_>, elem: u32, fe: &[f64], ldpn: usize, f: &mut [f64], totals: &mut [f64; 3]) {
+    let nodes = p.mesh.elem_nodes(elem);
+    scatter_add(fe, nodes, ldpn, p.dofs_per_node(), f);
+    for a in 0..nodes.len() {
+        for c in 0..ldpn.min(3) {
+            totals[c] += fe[a * ldpn + c];
         }
     }
 }

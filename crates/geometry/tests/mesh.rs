@@ -1735,15 +1735,22 @@ fn truss(points: &[[f64; 3]], members: &[[u32; 2]], divisions: u32) -> Mesh {
 }
 
 #[test]
-fn truss2_tables_describe_a_two_node_line_member() {
-    let k = ElementKind::Truss2;
-    assert_eq!((k.n_nodes(), k.n_corners(), k.dim(), k.n_faces()), (2, 2, 1, 0));
-    assert_eq!(k.edges(), &[[0, 1]]);
-    // A member has no face, so no face table entry and no face load can name one.
-    assert!(k.face_nodes(0).is_empty());
-    assert_eq!(k.face_kind(), FaceKind::Line2);
-    assert_eq!(serde_json::to_string(&k).unwrap(), "\"truss2\"");
-    assert_eq!(serde_json::from_str::<ElementKind>("\"truss2\"").unwrap(), k);
+fn truss2_and_beam2_tables_describe_a_two_node_line_member() {
+    for (k, name) in [(ElementKind::Truss2, "\"truss2\""), (ElementKind::Beam2, "\"beam2\"")] {
+        assert_eq!((k.n_nodes(), k.n_corners(), k.dim(), k.n_faces()), (2, 2, 1, 0));
+        assert_eq!(k.edges(), &[[0, 1]]);
+        // A member has no face, so no face table entry and no face load can name one.
+        assert!(k.face_nodes(0).is_empty());
+        assert_eq!(k.face_kind(), FaceKind::Line2);
+        assert_eq!(serde_json::to_string(&k).unwrap(), name);
+        assert_eq!(serde_json::from_str::<ElementKind>(name).unwrap(), k);
+    }
+    // The line mesher builds a beam block exactly as it builds a truss block: only the kind differs.
+    let pts = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    let beam = line_mesher(&pts, &[[0, 1]], 2, ElementKind::Beam2).expect("a valid line body");
+    beam.validate().unwrap();
+    assert_eq!(beam.blocks[0].kind, ElementKind::Beam2);
+    assert_eq!(beam.blocks[0].conn, truss(&pts, &[[0, 1]], 2).blocks[0].conn);
 }
 
 #[test]
@@ -1803,7 +1810,12 @@ fn the_line_mesher_rejects_every_ill_formed_body() {
 
 #[test]
 fn a_polyline_shape_has_no_interior_and_no_solid() {
-    let shape = Shape::Polyline { points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 2 };
+    let shape = Shape::Polyline {
+        points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        members: vec![[0, 1]],
+        divisions: 2,
+        beam: false,
+    };
     assert_eq!(shape.dim(), 1);
     shape.validate().expect("a straight member");
     // A curve has no volume for a point to be inside of, not even a point on it.
@@ -1812,7 +1824,7 @@ fn a_polyline_shape_has_no_interior_and_no_solid() {
     let e = Solid::evaluate(&shape).unwrap_err();
     assert!(e.0.contains("no volume"), "{}", e.0);
     // Its validation is the line mesher's, so the Shape and the mesher agree on the cause.
-    let bad = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1 };
+    let bad = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1, beam: false };
     assert!(bad.validate().unwrap_err().0.contains("at least 2 points"));
     // A boolean cannot mix dimensions, and the message says all three.
     let mixed = Shape::Union { shapes: vec![shape.clone(), Shape::Box { size: [1.0; 3] }] };

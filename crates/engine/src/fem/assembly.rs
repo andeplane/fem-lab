@@ -17,7 +17,7 @@ use femlab_geometry::Mesh;
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::{element_for, TangentOut};
 use crate::fem::material::VOIGT;
-use crate::fem::problem::Problem;
+use crate::fem::problem::{local_dofs, Problem};
 use crate::fem::state::GpState;
 use crate::par;
 use crate::post::{FieldData, Per};
@@ -113,10 +113,31 @@ pub struct Pattern {
     pub slot_ptr: Vec<u32>,
 }
 
+/// Copy one element's DOFs out of a global vector: the element's own stride `ldpn` per node
+/// ([`local_dofs`]) from the global stride `dpn`. The two differ only for a solid or a truss
+/// in a six-DOF (beam) Problem, whose rotational slots the element never reads.
+pub(crate) fn gather(u: &[f64], nodes: &[u32], ldpn: usize, dpn: usize, out: &mut [f64]) {
+    for (a, &node) in nodes.iter().enumerate() {
+        let at = node as usize * dpn;
+        out[a * ldpn..(a + 1) * ldpn].copy_from_slice(&u[at..at + ldpn]);
+    }
+}
+
+/// Add one element's vector into the global one, the inverse of [`gather`].
+pub(crate) fn scatter_add(fe: &[f64], nodes: &[u32], ldpn: usize, dpn: usize, f: &mut [f64]) {
+    for (a, &node) in nodes.iter().enumerate() {
+        for c in 0..ldpn {
+            f[node as usize * dpn + c] += fe[a * ldpn + c];
+        }
+    }
+}
+
 /// The sparsity of `K` for `dofs_per_node` unknowns per node, and the slot map into it.
 ///
 /// Two nodes are coupled when they share an element, so the pattern is the node adjacency
-/// blown up by `dofs_per_node`; rows come out sorted because the neighbour lists are.
+/// blown up by `dofs_per_node`; rows come out sorted because the neighbour lists are. An
+/// element's slot map covers its own [`local_dofs`] per node, so in a six-DOF Problem a solid's
+/// rotational rows are seeded (every node owns a full diagonal block) but never written to.
 pub fn pattern(mesh: &Mesh, dofs_per_node: usize) -> Pattern {
     pattern_coupled(mesh, dofs_per_node, &[])
 }
@@ -173,26 +194,28 @@ pub fn pattern_coupled(mesh: &Mesh, dofs_per_node: usize, extra: &[[u32; 2]]) ->
 
     let mut slot_ptr = vec![0u32; mesh.n_elems() + 1];
     for e in 0..mesh.n_elems() as u32 {
-        let nd = (mesh.kind_of(e).n_nodes() * dofs_per_node) as u32;
+        let kind = mesh.kind_of(e);
+        let nd = (kind.n_nodes() * local_dofs(kind, dofs_per_node)) as u32;
         slot_ptr[e as usize + 1] = slot_ptr[e as usize] + nd * nd;
     }
     let mut slot = vec![0u32; *slot_ptr.last().expect("n_elems + 1 entries") as usize];
     for blk in &mesh.blocks {
-        let nd = blk.kind.n_nodes() * dofs_per_node;
+        let ldpn = local_dofs(blk.kind, dofs_per_node);
+        let nd = blk.kind.n_nodes() * ldpn;
         let lo = slot_ptr[blk.first_elem as usize] as usize;
         let part = &mut slot[lo..lo + blk.n_elems() * nd * nd];
         par::for_each_chunk_mut(part, nd * nd, |i, out| {
             let conn = &blk.conn[i * blk.kind.n_nodes()..(i + 1) * blk.kind.n_nodes()];
             for (a, &na) in conn.iter().enumerate() {
-                for ca in 0..dofs_per_node {
+                for ca in 0..ldpn {
                     let row = na as usize * dofs_per_node + ca;
                     let (rlo, rhi) = (row_ptr[row] as usize, row_ptr[row + 1] as usize);
                     let cols = &col_idx[rlo..rhi];
                     for (b, &nb) in conn.iter().enumerate() {
-                        for cb in 0..dofs_per_node {
+                        for cb in 0..ldpn {
                             let col = (nb as usize * dofs_per_node + cb) as u32;
                             let at = cols.binary_search(&col).expect("the pattern holds every element coupling");
-                            out[(a * dofs_per_node + ca) * nd + b * dofs_per_node + cb] = (rlo + at) as u32;
+                            out[(a * ldpn + ca) * nd + b * ldpn + cb] = (rlo + at) as u32;
                         }
                     }
                 }
@@ -277,7 +300,8 @@ pub fn assemble_tangent(p: &Problem<'_>, pat: &Pattern, nl: Option<NlInput<'_>>)
     let (mut stress, mut strain) = (Vec::new(), Vec::new());
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
-        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * dpn);
+        let ldpn = p.node_dofs(blk.kind);
+        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * ldpn);
         let n_gp = element.n_gp();
         let step = chunk_elems(nd);
         for lo in (0..blk.n_elems()).step_by(step) {
@@ -309,10 +333,7 @@ pub fn assemble_tangent(p: &Problem<'_>, pat: &Pattern, nl: Option<NlInput<'_>>)
                     }),
                     Some(nl) => {
                         let mut ue = vec![0.0; nd];
-                        for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
-                            let at = node as usize * dpn;
-                            ue[a * dpn..(a + 1) * dpn].copy_from_slice(&nl.u[at..at + dpn]);
-                        }
+                        gather(nl.u, p.mesh.elem_nodes(elem), ldpn, dpn, &mut ue);
                         e.stress = vec![0.0; n_gp * VOIGT];
                         e.strain = vec![0.0; n_gp * VOIGT];
                         e.state = vec![0.0; n_gp * c.material.law.n_state()];
@@ -337,12 +358,7 @@ pub fn assemble_tangent(p: &Problem<'_>, pat: &Pattern, nl: Option<NlInput<'_>>)
                 for (s, v) in slot.iter().zip(e.ke.iter()) {
                     k.vals[*s as usize] += v;
                 }
-                let conn = p.mesh.elem_nodes(elem);
-                for (a, &node) in conn.iter().enumerate() {
-                    for c in 0..dpn {
-                        f_out[node as usize * dpn + c] += e.fe[a * dpn + c];
-                    }
-                }
+                scatter_add(&e.fe, p.mesh.elem_nodes(elem), ldpn, dpn, &mut f_out);
                 stress.extend_from_slice(&e.stress);
                 strain.extend_from_slice(&e.strain);
                 if let Some(st) = &mut state {
@@ -409,22 +425,30 @@ pub struct ResolvedConstraints {
     pub fixed: Vec<(u32, f64)>,
     /// Index into `Problem::constraints`, parallel to `fixed`.
     pub owner: Vec<usize>,
+    /// The rotational DOFs of nodes no beam reaches, ascending ([`Problem::inert_dofs`]).
+    /// They have no stiffness, no mass, no Constraint and no reaction: [`reduce`] drops them
+    /// from the free set as it drops a multipoint slave, and nothing else ever names them.
+    pub inert: Vec<u32>,
 }
 
 /// Resolve every Constraint against the Mesh's Sets. Two Constraints that prescribe different
 /// values on one DOF are a `constraint.conflict`; the same value twice is not.
+///
+/// A Constraint's rotational components apply only where a rotation exists — the joints beam
+/// elements reach. On every other node they are skipped rather than recorded, so a
+/// `constraint.fix` on a solid's face holds three DOFs per node exactly as it did before beams
+/// existed, and `checks::rigid_modes` never counts an inert rotation as a restraint.
 pub fn resolve(p: &Problem<'_>) -> Result<ResolvedConstraints, Error> {
     let dpn = p.dofs_per_node();
+    let rotational = if dpn > 3 { p.rotational_nodes() } else { Vec::new() };
     let mut all: Vec<(u32, f64, usize)> = Vec::new();
     for (i, c) in p.constraints.iter().enumerate() {
         let set = p.set(&c.nodes)?;
         for &node in &set.nodes {
-            // ponytail: `Constraint::dofs` is `[bool; 3]`, so `dofs_per_node` up to 3 (every
-            // idealisation through axisymmetric twist) is fully representable and `take(dpn)`
-            // only ever drops trailing `false`s. A `dofs_per_node` above 3 would silently drop
-            // a real request instead; that needs a named `constraint.fix` error, not this take.
+            // Components past the stride are trailing `false`s under every idealisation (the
+            // mask is six wide and the widest stride is six), so `take(dpn)` drops nothing real.
             for (d, on) in c.dofs.iter().enumerate().take(dpn) {
-                if *on {
+                if *on && (d < 3 || rotational[node as usize]) {
                     all.push((node * dpn as u32 + d as u32, c.value, i));
                 }
             }
@@ -446,7 +470,7 @@ pub fn resolve(p: &Problem<'_>) -> Result<ResolvedConstraints, Error> {
             }
         }
     }
-    Ok(ResolvedConstraints { fixed, owner })
+    Ok(ResolvedConstraints { fixed, owner, inert: p.inert_dofs() })
 }
 
 /// The `constraint.conflict` error: which node, which component, which two Constraints.
@@ -482,16 +506,17 @@ pub struct Reduced {
 /// `eliminated` are DOFs that are not unknowns either but carry no prescribed value: the slaves
 /// of a multipoint constraint, whose row and column `mpc::transform` has already emptied. They
 /// leave the free set exactly like a DOF fixed at zero, which is exact because their columns
-/// are exactly zero, and `mpc::recover` fills them in after `expand`.
+/// are exactly zero, and `mpc::recover` fills them in after `expand`. The inert rotations of
+/// `rc` leave it the same way, and stay zero.
 pub fn reduce(k: &Csr, f: &[f64], rc: &ResolvedConstraints, eliminated: &[u32]) -> Reduced {
     let mut map = vec![0i64; k.n];
     for &(d, _) in &rc.fixed {
         map[d as usize] = -1;
     }
-    for &d in eliminated {
+    for &d in eliminated.iter().chain(&rc.inert) {
         map[d as usize] = -1;
     }
-    let mut free = Vec::with_capacity(k.n - rc.fixed.len());
+    let mut free = Vec::with_capacity(k.n - rc.fixed.len() - rc.inert.len());
     let mut u_full = vec![0.0; k.n];
     for &(d, v) in &rc.fixed {
         u_full[d as usize] = v;

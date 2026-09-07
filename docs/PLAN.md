@@ -263,7 +263,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 
 | # | Task | Job |
 |---|---|---|
-| 8.1 | Shell (MITC4) and beam (Timoshenko) elements with sections | J2.9, J3.5; Scordelis–Lo, pinched cylinder, hemispherical shell |
+| 8.1 | Shell (MITC4) and beam (Timoshenko) elements with sections — the beam half landed with #65 (B21–B27: `beam2`, six DOFs per node, `constraint.pin`, `load.moment`, section forces); shells remain (#64) | J2.9, J3.5; Scordelis–Lo, pinched cylinder, hemispherical shell |
 | 8.2 | `study.sweep` (one parameter), `study.doe` (grid/LHS), response plots; runs in the Worker with a queue | J10.1, J10.2 |
 | 8.3 | Simple optimisation (scalar objective, bounds; Nelder–Mead / golden section) | J10.3 (topology optimisation: out of scope) |
 | 8.4 | Material library as data (S355, S235, 6061-T6, C30/37, ABS, PLA, wood classes) with sources; user library in IndexedDB | J3.1, J12.3 |

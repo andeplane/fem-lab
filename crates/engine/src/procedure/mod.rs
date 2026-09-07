@@ -484,6 +484,18 @@ pub(crate) fn vector_field(v: &[f64], dofs_per_node: usize) -> FieldData {
     FieldData::new(crate::post::Per::Node, 3, data)
 }
 
+/// The rotations of a six-DOF vector as a three-component nodal field: components 3, 4 and 5
+/// of every node, which only a Problem with beams has.
+pub(crate) fn rotation_field(v: &[f64]) -> FieldData {
+    let dpn = crate::fem::problem::NODE_DOFS_MAX;
+    let n = v.len() / dpn;
+    let mut data = vec![0.0; n * 3];
+    for node in 0..n {
+        data[node * 3..node * 3 + 3].copy_from_slice(&v[node * dpn + 3..node * dpn + 6]);
+    }
+    FieldData::new(crate::post::Per::Node, 3, data)
+}
+
 /// Report progress and turn a `false` from the host into `Cancelled`.
 pub(crate) fn report(
     progress: &mut OnProgress<'_>,

@@ -20,6 +20,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [constraint.couple](#commands-constraint-couple)
 - [constraint.cyclic](#commands-constraint-cyclic)
 - [constraint.fix](#commands-constraint-fix)
+- [constraint.pin](#commands-constraint-pin)
 - [constraint.prescribe](#commands-constraint-prescribe)
 - [constraint.remove](#commands-constraint-remove)
 - [constraint.symmetry](#commands-constraint-symmetry)
@@ -43,6 +44,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [load.gravity](#commands-load-gravity)
 - [load.heatFlux](#commands-load-heatFlux)
 - [load.heatSource](#commands-load-heatSource)
+- [load.moment](#commands-load-moment)
 - [load.pressure](#commands-load-pressure)
 - [load.radiation](#commands-load-radiation)
 - [load.remove](#commands-load-remove)
@@ -125,9 +127,13 @@ Command. Refused in an explicit Step, like a bonded contact.
 
 ### constraint.fix
 
-Fix displacement components to zero on a Set (default: all components, a clamped
-support). For a roller give only the normal component. Fixing every node of a Body
-makes the solve trivial; fix faces, not bodies.
+Fix degrees of freedom to zero on a Set (default: all displacement components, a
+clamped support). A fix that holds all three displacements and names no rotation is a
+clamp: on a beam joint it holds the three rotations rx, ry, rz as well, so a beam's
+fixed end is what `constraint.fix` without `dofs` means. For a pinned beam support use
+constraint.pin; for a roller give only the normal component; name rx, ry or rz to hold
+a rotation on its own. Rotations are inert on every node that is not a beam joint.
+Fixing every node of a Body makes the solve trivial; fix faces, not bodies.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -135,6 +141,21 @@ makes the solve trivial; fix faces, not bodies.
 | on | yes | <code>{"type":"string"}</code> |  |
 | dofs | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Dof"}}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"constraint.fix"}</code> |  |
+
+<a id="commands-constraint-pin"></a>
+
+### constraint.pin
+
+Pin a Set: fix its three displacements and leave every rotation free. On a beam joint
+this is the pinned support of a simply supported beam or a portal frame's base hinge;
+the only difference from constraint.fix is the rotational restraint. On a solid's
+nodes it is the same as constraint.fix, because those carry no rotation.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| on | yes | <code>{"type":"string"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"constraint.pin"}</code> |  |
 
 <a id="commands-constraint-prescribe"></a>
 
@@ -168,8 +189,9 @@ it first. Removing a constraint makes existing Results of that Step stale.
 ### constraint.symmetry
 
 Symmetry plane: fixes the displacement component along `normal` on the Set (the cut
-face of a half or quarter model). Model a half and say so in the report; loads on the
-symmetry plane itself must be halved by you.
+face of a half or quarter model), and on beam joints the two rotations about the axes
+in the plane. Model a half and say so in the report; loads on the symmetry plane
+itself must be halved by you.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -272,16 +294,20 @@ the replacement without changing the Model.
 
 ### geometry.addLine
 
-Add a Body made of straight line members: a truss. `points` are the joints, in order,
-and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
-Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
-becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
-and joints of different line Bodies that sit at the same point are welded into one node
-when the Mesh is built. A member carries axial force only, so give the Body a Section
-with section.assign as well as a Material, and hold enough joints that none of them can
-drift sideways — an under-braced truss is singular and fails in the solver, not here.
-Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
-Replacing a Body that has cuts therefore fails without changing the Model.
+Add a Body made of straight line members: a truss or a frame. `points` are the joints,
+in order, and `members` are index pairs into them; the default is a chain 0-1, 1-2, and
+so on. Each member is cut into `divisions` elements of equal length (default 1). Joint
+`i` becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force
+targets, and joints of different line Bodies that sit at the same point are welded into
+one node when the Mesh is built. `kind` is `truss` (the default: pin-jointed bars that
+carry axial force only, so hold enough joints that none can drift sideways — an
+under-braced truss is singular and fails in the solver, not here) or `beam` (Timoshenko
+beams carrying axial force, shear, bending and torsion; every joint then has three
+rotations rx, ry, rz as well as ux, uy, uz, so constraint.fix clamps it and
+constraint.pin pins it, and load.moment can act on it). Either way give the Body a
+Section with section.assign as well as a Material. Line Bodies need the 3D
+idealisation and are not cut, meshed or previewed as solids. Replacing a Body that has
+cuts therefore fails without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -289,6 +315,7 @@ Replacing a Body that has cuts therefore fails without changing the Model.
 | points | yes | <code>{"type":"array","items":{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}}</code> |  |
 | members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> |  |
 | divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| kind | no | <code>{"anyOf":[{"$ref":"#/$defs/LineKind"},{"type":"null"}]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> |  |
 
 <a id="commands-geometry-addMass"></a>
@@ -522,6 +549,23 @@ for a plane-stress Sheet, the volume includes its specified thickness.
 | bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
 | q | yes | <code>{"$ref":"#/$defs/Q_heat_source"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"load.heatSource"}</code> |  |
+
+<a id="commands-load-moment"></a>
+
+### load.moment
+
+A concentrated moment, as a total vector about the global axes, split equally over the
+nodes of a node Set. It acts on the rotational degrees of freedom, which only the
+joints of beam Bodies have: on any other node it has nothing to act on and the Step
+fails with model.ill-posed naming the Load. Right-handed about each axis, in the
+Model's torque unit ("5 kN m").
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| on | yes | <code>{"type":"string"}</code> |  |
+| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_torque"},"minItems":3,"maxItems":3}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"load.moment"}</code> |  |
 
 <a id="commands-load-pressure"></a>
 
@@ -846,12 +890,20 @@ edits the section in place. Assign it to Bodies with section.assign.
 Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
 one without it is reported by query.model warnings and blocks solve.run with
 model.no-section. A Section on a solid or sheet Body is carried but never used: those
-Bodies get their cross-section from their geometry.
+Bodies get their cross-section from their geometry. `orientation` names the global
+axis the section's local z (its `height` direction, the one `iY` resists bending along)
+follows for the beams of these Bodies: local z is that axis made perpendicular to each
+member, and local y completes the right-handed triad (y = z × x). It may not lie along
+a member. Without it the rule is: local z follows global Z, so a horizontal beam has
+its height vertical; a member within 1e-6 of vertical follows global X instead, so a
+column's local z points along +X. `iZ` then resists bending along local y. Trusses
+ignore it.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | section | yes | <code>{"type":"string"}</code> |  |
 | bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Axis"},{"type":"null"}]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"section.assign"}</code> |  |
 
 <a id="commands-section-remove"></a>
@@ -1259,12 +1311,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "A displacement component.",
+  "description": "A nodal degree of freedom: a displacement component, or a rotation about a global axis.\nRotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);\non every other node they are inert, so holding them there changes nothing.",
   "type": "string",
   "enum": [
     "ux",
     "uy",
-    "uz"
+    "uz",
+    "rx",
+    "ry",
+    "rz"
   ]
 }
 ```
@@ -1491,7 +1546,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
   "type": "string",
   "enum": [
     "displacement",
@@ -1501,7 +1556,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "principal",
     "strain",
     "reaction",
-    "temperature"
+    "temperature",
+    "rotation",
+    "sectionForce",
+    "sectionMoment"
   ]
 }
 ```
@@ -1666,6 +1724,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "ny",
         "nz"
       ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>LineKind</summary>
+
+```json
+{
+  "description": "What the members of a line Body are.",
+  "oneOf": [
+    {
+      "description": "Pin-jointed bars carrying axial force only (the default).",
+      "type": "string",
+      "const": "truss"
+    },
+    {
+      "description": "Timoshenko beams carrying axial force, shear, bending and torsion; their joints gain\nthree rotational degrees of freedom.",
+      "type": "string",
+      "const": "beam"
     }
   ]
 }
@@ -4186,7 +4267,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.\nReplacing a Body that has cuts therefore fails without changing the Model.",
+      "description": "Add a Body made of straight line members: a truss or a frame. `points` are the joints,\nin order, and `members` are index pairs into them; the default is a chain 0-1, 1-2, and\nso on. Each member is cut into `divisions` elements of equal length (default 1). Joint\n`i` becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force\ntargets, and joints of different line Bodies that sit at the same point are welded into\none node when the Mesh is built. `kind` is `truss` (the default: pin-jointed bars that\ncarry axial force only, so hold enough joints that none can drift sideways — an\nunder-braced truss is singular and fails in the solver, not here) or `beam` (Timoshenko\nbeams carrying axial force, shear, bending and torsion; every joint then has three\nrotations rx, ry, rz as well as ux, uy, uz, so constraint.fix clamps it and\nconstraint.pin pins it, and load.moment can act on it). Either way give the Body a\nSection with section.assign as well as a Material. Line Bodies need the 3D\nidealisation and are not cut, meshed or previewed as solids. Replacing a Body that has\ncuts therefore fails without changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -4226,6 +4307,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cmd": {
           "type": "string",
@@ -4607,7 +4698,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry.",
+      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
       "type": "object",
       "properties": {
         "section": {
@@ -4618,6 +4709,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "items": {
             "type": "string"
           }
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Axis"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cmd": {
           "type": "string",
@@ -4717,7 +4818,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Fix displacement components to zero on a Set (default: all components, a clamped\nsupport). For a roller give only the normal component. Fixing every node of a Body\nmakes the solve trivial; fix faces, not bodies.",
+      "description": "Fix degrees of freedom to zero on a Set (default: all displacement components, a\nclamped support). A fix that holds all three displacements and names no rotation is a\nclamp: on a beam joint it holds the three rotations rx, ry, rz as well, so a beam's\nfixed end is what `constraint.fix` without `dofs` means. For a pinned beam support use\nconstraint.pin; for a roller give only the normal component; name rx, ry or rz to hold\na rotation on its own. Rotations are inert on every node that is not a beam joint.\nFixing every node of a Body makes the solve trivial; fix faces, not bodies.",
       "type": "object",
       "properties": {
         "name": {
@@ -4738,6 +4839,28 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd": {
           "type": "string",
           "const": "constraint.fix"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "on"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
+      "description": "Pin a Set: fix its three displacements and leave every rotation free. On a beam joint\nthis is the pinned support of a simply supported beam or a portal frame's base hinge;\nthe only difference from constraint.fix is the rotational restraint. On a solid's\nnodes it is the same as constraint.fix, because those carry no rotation.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "constraint.pin"
         }
       },
       "required": [
@@ -4778,7 +4901,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Symmetry plane: fixes the displacement component along `normal` on the Set (the cut\nface of a half or quarter model). Model a half and say so in the report; loads on the\nsymmetry plane itself must be halved by you.",
+      "description": "Symmetry plane: fixes the displacement component along `normal` on the Set (the cut\nface of a half or quarter model), and on beam joints the two rotations about the axes\nin the plane. Model a half and say so in the report; loads on the symmetry plane\nitself must be halved by you.",
       "type": "object",
       "properties": {
         "name": {
@@ -5051,6 +5174,37 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd": {
           "type": "string",
           "const": "load.force"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "on",
+        "total"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
+      "description": "A concentrated moment, as a total vector about the global axes, split equally over the\nnodes of a node Set. It acts on the rotational degrees of freedom, which only the\njoints of beam Bodies have: on any other node it has nothing to act on and the Step\nfails with model.ill-posed naming the Load. Right-handed about each axis, in the\nModel's torque unit (\"5 kN m\").",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "total": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_torque"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "cmd": {
+          "type": "string",
+          "const": "load.moment"
         }
       },
       "required": [
@@ -5974,12 +6128,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "A displacement component.",
+  "description": "A nodal degree of freedom: a displacement component, or a rotation about a global axis.\nRotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);\non every other node they are inert, so holding them there changes nothing.",
   "type": "string",
   "enum": [
     "ux",
     "uy",
-    "uz"
+    "uz",
+    "rx",
+    "ry",
+    "rz"
   ]
 }
 ```
@@ -6206,7 +6363,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
   "type": "string",
   "enum": [
     "displacement",
@@ -6216,7 +6373,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "principal",
     "strain",
     "reaction",
-    "temperature"
+    "temperature",
+    "rotation",
+    "sectionForce",
+    "sectionMoment"
   ]
 }
 ```
@@ -6485,6 +6645,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "ny",
         "nz"
       ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>LineKind</summary>
+
+```json
+{
+  "description": "What the members of a line Body are.",
+  "oneOf": [
+    {
+      "description": "Pin-jointed bars carrying axial force only (the default).",
+      "type": "string",
+      "const": "truss"
+    },
+    {
+      "description": "Timoshenko beams carrying axial force, shear, bending and torsion; their joints gain\nthree rotational degrees of freedom.",
+      "type": "string",
+      "const": "beam"
     }
   ]
 }

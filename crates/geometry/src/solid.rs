@@ -914,7 +914,12 @@ mod tests {
 
     #[test]
     fn a_line_body_never_becomes_a_solid() {
-        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 1 };
+        let line = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+            beam: false,
+        };
         let e = Solid::evaluate(&line).unwrap_err();
         assert!(e.0.contains("no volume"), "{}", e.0);
     }

@@ -15,6 +15,7 @@ export const SI_UNIT: Record<string, string> = {
   power: 'W',
   stress: 'Pa',
   temperature: 'K',
+  torque: 'N m',
   dimensionless: '',
 };
 
@@ -27,6 +28,9 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   principal: 'stress',
   strain: 'dimensionless',
   temperature: 'temperature',
+  rotation: 'dimensionless',
+  sectionForce: 'force',
+  sectionMoment: 'torque',
 };
 
 /** `mode:3` is a displacement; a safety factor and a utilisation are pure numbers. */

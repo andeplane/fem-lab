@@ -539,7 +539,7 @@ impl Engine {
                 let shape = shape.to_si("shape")?;
                 self.add_body(name, shape)
             }
-            Command::GeometryAddLine { name, points, members, divisions } => {
+            Command::GeometryAddLine { name, points, members, divisions, kind } => {
                 let mut joints = Vec::with_capacity(points.len());
                 for (i, p) in points.iter().enumerate() {
                     let mut q = [0.0; 3];
@@ -551,7 +551,12 @@ impl Engine {
                 // The default wiring is the chain the points describe, which is what a single
                 // polyline member usually is; a truss names its own members.
                 let members = members.clone().unwrap_or_else(|| (1..joints.len() as u32).map(|i| [i - 1, i]).collect());
-                let shape = Shape::Polyline { points: joints, members, divisions: divisions.unwrap_or(1) };
+                let shape = Shape::Polyline {
+                    points: joints,
+                    members,
+                    divisions: divisions.unwrap_or(1),
+                    beam: kind.unwrap_or_default() == crate::command::LineKind::Beam,
+                };
                 self.add_body(name, shape)
             }
             Command::GeometrySubtract { name, from, shape } => {
@@ -749,7 +754,7 @@ impl Engine {
                 let named = crate::model::NamedSection { name: name.clone(), section };
                 Ok(upsert(&mut self.model.sections, named, |s| &s.name, ObjectKind::Section))
             }
-            Command::SectionAssign { section, bodies } => {
+            Command::SectionAssign { section, bodies, orientation } => {
                 self.model
                     .section(section)
                     .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
@@ -763,6 +768,7 @@ impl Engine {
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.section = Some(section.clone());
+                    b.orientation = *orientation;
                 }
                 Ok(Output::None)
             }
@@ -834,9 +840,20 @@ impl Engine {
                 let c = Constraint { name: name.clone(), on: on.clone(), kind: ConstraintKind::Fix { dofs: d } };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
+            Command::ConstraintPin { name, on } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                let c = Constraint { name: name.clone(), on: on.clone(), kind: ConstraintKind::Pin };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
             Command::ConstraintPrescribe { name, on, dof, value } => {
                 check_name(name)?;
                 self.check_set(on)?;
+                if dof.index() >= 3 {
+                    return Err(Error::unsupported("constraint.prescribe of a rotation").at("dof").suggest(
+                        "constraint.fix with the rotation in dofs to hold it at zero, or load.moment to turn it",
+                    ));
+                }
                 let v = value.si().map_err(|e| e.at("value"))?;
                 let c = Constraint {
                     name: name.clone(),
@@ -971,6 +988,16 @@ impl Engine {
                 self.check_set(on)?;
                 let t = si3_force(total)?;
                 let l = Load { name: name.clone(), kind: LoadKind::Force { on: on.clone(), total: t } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
+            Command::LoadMoment { name, on, total } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                let mut t = [0.0; 3];
+                for (k, q) in total.iter().enumerate() {
+                    t[k] = q.si().map_err(|e| e.at(format!("total[{k}]")))?;
+                }
+                let l = Load { name: name.clone(), kind: LoadKind::Moment { on: on.clone(), total: t } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
             Command::LoadGravity { name, g } => {
@@ -1311,6 +1338,7 @@ impl Engine {
             shape,
             material: old.and_then(|b| b.material.clone()),
             section: old.and_then(|b| b.section.clone()),
+            orientation: old.and_then(|b| b.orientation),
         };
         // An upsert keeps the Body's existing cuts, so validate the effective replacement
         // before committing it. This catches both an empty result and a dimensionality change
@@ -1524,6 +1552,7 @@ impl Engine {
                         LoadKind::Pressure { on, .. }
                         | LoadKind::Traction { on, .. }
                         | LoadKind::Force { on, .. }
+                        | LoadKind::Moment { on, .. }
                         | LoadKind::Convection { on, .. }
                         | LoadKind::Radiation { on, .. }
                         | LoadKind::HeatFlux { on, .. }
@@ -1600,6 +1629,7 @@ impl Engine {
                         LoadKind::Pressure { on, .. }
                         | LoadKind::Traction { on, .. }
                         | LoadKind::Force { on, .. }
+                        | LoadKind::Moment { on, .. }
                         | LoadKind::Convection { on, .. }
                         | LoadKind::Radiation { on, .. }
                         | LoadKind::HeatFlux { on, .. }

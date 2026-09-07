@@ -85,9 +85,9 @@ pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
 /// belongs to the first one that claimed the DOF, which is what `resolve` recorded.
 ///
 /// `reactions` is the Result's own three-component nodal field, so a host that has a
-/// `StepResult` can regroup the reactions without re-deriving the DOF numbering.
-// ponytail: `[f64; 3]` is exactly `dofs_per_node`'s ceiling today (twist's third DOF fills the
-// last slot); widen to `Vec<f64>` sized `dofs_per_node` if a future idealisation carries more.
+/// `StepResult` can regroup the reactions without re-deriving the DOF numbering. The three
+/// components are forces; a clamped beam joint's reaction *moment* is not summed here (it is
+/// the member's own end moment, in the `sectionMoment` field) so the totals stay one dimension.
 pub fn reactions_per_constraint(
     p: &Problem<'_>,
     rc: &ResolvedConstraints,
@@ -97,7 +97,9 @@ pub fn reactions_per_constraint(
     let mut totals = vec![[0.0; 3]; p.constraints.len()];
     for (&(dof, _), &owner) in rc.fixed.iter().zip(&rc.owner) {
         let (node, comp) = (dof as usize / dpn, dof as usize % dpn);
-        totals[owner][comp] += reactions.data[node * reactions.comps + comp];
+        if comp < 3 {
+            totals[owner][comp] += reactions.data[node * reactions.comps + comp];
+        }
     }
     p.constraints.iter().map(|c| c.name.clone()).zip(totals).collect()
 }

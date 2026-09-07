@@ -234,8 +234,11 @@ pub fn run(
     }
     // The unknown is the acceleration, which is zero on every held DOF, so both reductions run
     // against zero prescribed values; the prescribed displacements enter through `K ũ`.
-    let rc0 =
-        ResolvedConstraints { fixed: rc.fixed.iter().map(|&(dof, _)| (dof, 0.0)).collect(), owner: rc.owner.clone() };
+    let rc0 = ResolvedConstraints {
+        fixed: rc.fixed.iter().map(|&(dof, _)| (dof, 0.0)).collect(),
+        owner: rc.owner.clone(),
+        inert: rc.inert.clone(),
+    };
     let zeros = vec![0.0; n];
     let red = reduce(&k_eff, &zeros, &rc0, &[]);
     drop(k_eff);
@@ -330,7 +333,9 @@ pub fn run(
     let mut totals = [0.0; 3];
     for (i, fe) in f_eff.iter_mut().enumerate() {
         *fe = load_scale * f[i] - *fe + s.alpha * q[i];
-        totals[i % dpn] += *fe;
+        if i % dpn < 3 {
+            totals[i % dpn] += *fe;
+        }
     }
     drop(q);
     let r = assembly::reactions(&a.k, &st.u, &f_eff, &red_fixed(&rc), &Mpc::none());

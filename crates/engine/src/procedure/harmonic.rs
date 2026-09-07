@@ -99,7 +99,7 @@ fn dof_vector(shape: &crate::post::FieldData, dpn: usize) -> Vec<f64> {
     let nodes = shape.data.len() / 3;
     let mut out = vec![0.0; nodes * dpn];
     for node in 0..nodes {
-        for c in 0..dpn {
+        for c in 0..dpn.min(3) {
             out[node * dpn + c] = shape.data[node * 3 + c];
         }
     }

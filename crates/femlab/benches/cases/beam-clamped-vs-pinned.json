@@ -1,0 +1,254 @@
+{
+  "name": "beam-clamped-vs-pinned",
+  "reference": "Benchmark B23: the beam of B22 twice, once clamped at both ends and once pinned, under the same self-weight. The two Bodies differ only in the rotational restraint (constraint.fix against constraint.pin): the clamped midspan deflection is w L^4 / 384EI + w L^2 / (8 kappa G A), the pinned one five times the bending term, and the clamped ends carry w L^2 / 12 while the pins carry nothing.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "beam-clamped-vs-pinned"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "clamped",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "4 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 8,
+      "kind": "beam"
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "pinned",
+      "points": [
+        [
+          "0 m",
+          "1 m",
+          "0 m"
+        ],
+        [
+          "4 m",
+          "1 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 8,
+      "kind": "beam"
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "round numbers, so the closed forms are exact in floating point"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "clamped",
+        "pinned"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "rect",
+      "shape": {
+        "kind": "rectangle",
+        "width": "100 mm",
+        "height": "200 mm"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "rect",
+      "bodies": [
+        "clamped",
+        "pinned"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "cleft",
+      "on": "clamped.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "cright",
+      "on": "clamped.p1"
+    },
+    {
+      "cmd": "constraint.pin",
+      "name": "pleft",
+      "on": "pinned.p0"
+    },
+    {
+      "cmd": "constraint.pin",
+      "name": "pright",
+      "on": "pinned.p1"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "ptwist",
+      "on": "pinned.p0",
+      "dofs": [
+        "rx"
+      ]
+    },
+    {
+      "cmd": "load.gravity",
+      "name": "weight",
+      "g": [
+        "0 m/s^2",
+        "0 m/s^2",
+        "-10 m/s^2"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "cleft",
+        "cright",
+        "pleft",
+        "pright",
+        "ptwist"
+      ],
+      "loads": [
+        "weight"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.0809492,
+      "tol": 1e-09,
+      "note": "clamped midspan: w L^4 / 384EI + w L^2 / (8 kappa G A)",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "2 m",
+          "1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.39494919999999994,
+      "tol": 1e-09,
+      "note": "pinned midspan: 5 w L^4 / 384EI + w L^2 / (8 kappa G A); only the rotational restraint differs",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "rotation",
+        "component": 1,
+        "at": [
+          "0 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "the clamp holds the rotation"
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/1",
+      "expect": 2093.3333333333335,
+      "tol": 1e-09,
+      "note": "clamped end M_y = +w L^2 / 12 = 2093.3 N m, hogging",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/22",
+      "expect": -1046.6666666666667,
+      "tol": 1e-09,
+      "note": "clamped midspan M_y = -w L^2 / 24, sagging",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/49",
+      "expect": 0.0,
+      "tol": 1e-06,
+      "note": "the pinned end carries no moment"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the supports carry the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

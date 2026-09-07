@@ -357,6 +357,7 @@ impl Engine {
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
                     ),
+                    ConstraintKind::Pin => "pin".to_string(),
                     ConstraintKind::Prescribe { dof, value } => {
                         let v = display(m, *value, Length::DIM);
                         format!("{} = {} {}", format!("{dof:?}").to_lowercase(), units::fmt_sig(v.value, 4), v.unit)
@@ -381,6 +382,9 @@ impl Engine {
                     }
                     LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM))),
                     LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM))),
+                    LoadKind::Moment { total, .. } => {
+                        ("moment", format!("total {}", vec3(m, *total, crate::units::Torque::DIM)))
+                    }
                     LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM))),
                     LoadKind::Convection { h, t_inf, .. } => {
                         let hv = display(m, *h, HeatTransfer::DIM);
@@ -504,7 +508,7 @@ impl Engine {
             nodes: mesh.n_nodes() as u32,
             elements: mesh.n_elems() as u32,
             element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
-            dofs: (mesh.n_nodes() * m.idealisation.dofs_per_node()) as u32,
+            dofs: (mesh.n_nodes() * crate::fem::problem::mesh_dofs_per_node(mesh, &m.idealisation)) as u32,
             bbox: bbox6(m, lo, hi),
             min_edge: display(m, min_edge, Length::DIM),
             max_edge: display(m, max_edge, Length::DIM),
@@ -676,7 +680,7 @@ impl Engine {
         let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
-        let dofs_per_node = self.model.idealisation.dofs_per_node();
+        let dofs_per_node = crate::fem::problem::mesh_dofs_per_node(&built.mesh, &self.model.idealisation);
         if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
             Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure)?

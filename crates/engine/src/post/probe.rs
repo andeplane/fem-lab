@@ -128,9 +128,12 @@ fn in_bbox(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> bool {
         return true;
     }
     let (lo, hi) = match kind {
-        ElementKind::Hex8 | ElementKind::Tet4 | ElementKind::Quad4 | ElementKind::Tri3 | ElementKind::Truss2 => {
-            nodal_bounds(coords)
-        }
+        ElementKind::Hex8
+        | ElementKind::Tet4
+        | ElementKind::Quad4
+        | ElementKind::Tri3
+        | ElementKind::Truss2
+        | ElementKind::Beam2 => nodal_bounds(coords),
         ElementKind::Tet10 | ElementKind::Tri6 => simplex_control_bounds(kind, coords),
         ElementKind::Hex20 | ElementKind::Quad8 => tensor_control_bounds(kind, coords),
     };
