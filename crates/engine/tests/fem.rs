@@ -9887,7 +9887,7 @@ fn a_unit_flux_on_a_warms_b_as_much_as_a_unit_flux_on_b_warms_a() {
         let mut solve_with = |set: &str| {
             let film = HeatLoad::Convection { faces: "ymin".into(), h: 30.0, t_inf: 0.0 };
             p.heat_loads = vec![film, HeatLoad::Flux { faces: set.into(), q: 1.0 }];
-            let f = heat::assemble(&p, &pat).expect("assembles").f;
+            let f = heat::assemble(&p, &pat, &Mpc::none()).expect("assembles").f;
             (f, temperature_of(&run_step(&p, &steady()).expect("conducts")))
         };
         let ((fa, ta), (fb, tb)) = (solve_with("A"), solve_with("B"));
@@ -10362,7 +10362,7 @@ fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: b
         .collect();
     let k = if heat {
         let p = heat_problem(mesh, &sets, &bodies, id.clone(), steel(), Vec::new(), Vec::new());
-        heat::assemble(&p, &pattern(mesh, 1)).expect("conductivity assembles").k
+        heat::assemble(&p, &pattern(mesh, 1), &Mpc::none()).expect("conductivity assembles").k
     } else {
         let p = problem(mesh, &sets, &bodies, id.clone(), form, Vec::new());
         assemble_stiffness(&p, &pattern(mesh, mesh.dim)).expect("stiffness assembles").k
