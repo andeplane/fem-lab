@@ -1,6 +1,6 @@
 {
   "name": "beam-torsion-shaft",
-  "reference": "Benchmark B25: a circular shaft of radius 50 mm and length 1 m clamped at one end and twisted by 1 kN m at the other (load.moment), three elements. St Venant torsion gives phi = T L / (G J) with J = pi r^4 / 2 and G = E / 2(1 + nu) = 76.923 GPa: 1.32417e-3 rad, linear along the shaft, and the torque is 1 kN m in every element.",
+  "reference": "Benchmark B25: a circular shaft of radius 50 mm and length 1 m clamped at one end and twisted by 1 kN m at the other (load.moment), three elements. St Venant torsion gives phi = T L / (G J) with J = pi r^4 / 2 and G = E / 2(1 + nu) = 76.923 GPa: 1.32417e-3 rad, linear along the shaft, and the torque is 1 kN m in every element. A second Step applies the same 1 kN m about y instead: delta = M L^2 / 2EI and theta = M L / EI, pure bending with no shear term, which is the linear half of the end-moment benchmark #345 asks for (the large-deflection elastica stays with #59).",
   "journal": [
     {
       "cmd": "model.new",
@@ -100,8 +100,37 @@
       ]
     },
     {
+      "cmd": "load.moment",
+      "name": "bend",
+      "on": "shaft.p1",
+      "total": [
+        "0 kN m",
+        "1 kN m",
+        "0 kN m"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "bend",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "bend"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
       "cmd": "solve.run",
       "step": "static"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "bend"
     }
   ],
   "checks": [
@@ -114,7 +143,8 @@
           "1 m",
           "0 m",
           "0 m"
-        ]
+        ],
+        "step": "static"
       },
       "path": "/value/value",
       "expect": 0.001324169126524569,
@@ -131,7 +161,8 @@
           "333.333333333333 mm",
           "0 m",
           "0 m"
-        ]
+        ],
+        "step": "static"
       },
       "path": "/value/value",
       "expect": 0.000441389708841523,
@@ -148,7 +179,8 @@
           "1 m",
           "0 m",
           "0 m"
-        ]
+        ],
+        "step": "static"
       },
       "path": "/value/value",
       "expect": 0.0,
@@ -158,7 +190,8 @@
     {
       "query": {
         "query": "query.field",
-        "field": "sectionMoment"
+        "field": "sectionMoment",
+        "step": "static"
       },
       "path": "/values/0",
       "expect": 1000.0,
@@ -169,7 +202,8 @@
     {
       "query": {
         "query": "query.field",
-        "field": "sectionMoment"
+        "field": "sectionMoment",
+        "step": "static"
       },
       "path": "/values/15",
       "expect": 1000.0,
@@ -179,7 +213,84 @@
     },
     {
       "query": {
-        "query": "query.result"
+        "query": "query.probe",
+        "step": "bend",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.509295817894065,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "a tip moment about +y: delta = -M L^2 / 2EI, I = pi r^4 / 4, the circular-arc deflection linearised"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "step": "bend",
+        "field": "rotation",
+        "component": 1,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.00101859163578813,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "and theta_y = M L / EI: pure bending, no shear term"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "step": "bend",
+        "field": "rotation",
+        "component": 1,
+        "at": [
+          "500 mm",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.000509295817894065,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "the rotation is linear under a constant moment"
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "step": "bend",
+        "field": "sectionMoment"
+      },
+      "path": "/values/13",
+      "expect": 1000.0,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "M_y = 1 kN m at the tip end of the last element"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "bend"
+      },
+      "path": "/reactions/0/total/2/value",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "a pure moment leaves no net force at the root (the reaction balance itself is 0/0 here, see the issue filed with #65)"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "static"
       },
       "path": "/balance",
       "expect": 0.0,
@@ -188,7 +299,8 @@
     },
     {
       "query": {
-        "query": "query.result"
+        "query": "query.result",
+        "step": "static"
       },
       "path": "/stale",
       "expect": false

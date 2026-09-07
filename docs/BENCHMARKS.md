@@ -51,7 +51,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | beam-clamped-vs-pinned | green | 8/8 | -0.080949 | -0.080949 | 0.00 % |
 | beam-portal-frame-sway | green | 7/7 | 8.696404 | 8.693182 | 0.04 % |
 | beam-simply-supported-udl | green | 8/8 | -0.394949 | -0.394949 | 0.00 % |
-| beam-torsion-shaft | green | 7/7 | 0.001324 | 0.001324 | 0.00 % |
+| beam-torsion-shaft | green | 12/12 | 0.001324 | 0.001324 | 0.00 % |
 | buckling-plate-uniaxial-hex20 | green | 3/3 | 74.486975 | 75.92 | 1.89 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -290,7 +290,7 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B22 | Simply supported beam under self-weight, eight elements (`beam-simply-supported-udl`) | δ = 5wL⁴/384EI + wL²/8κGA = 0.394949 mm, w = ρgA = 1570 N/m, L = 4 m; θ_end = wL³/24EI; M_mid = wL²/8; V_end = wL/2 | 1e-9 rel | `constraint.pin`, gravity through the fixed-end loads `qL/2, qL²/12`, the `rotation` field | green |
 | B23 | The same beam clamped and pinned, side by side (`beam-clamped-vs-pinned`) | clamped δ = wL⁴/384EI + wL²/8κGA = 0.0809492 mm against the pinned 0.394949 mm; clamped end M = wL²/12, midspan wL²/24 | 1e-9 rel | `constraint.fix` as a clamp against `constraint.pin`: the difference is exactly the rotational restraint | green |
 | B24 | Fixed-base portal frame, sway load (`beam-portal-frame-sway`) | Δ = H h³ (2 + 3k) / (12 EI (1 + 6k)), k = (EI/L)/(EI/h) = 0.75: 8.6932 mm for h = 3 m, L = 4 m, H = 100 kN; joint θ = 3Δ/(h(2 + 3k)); column moments (2EI/h)(θ − 3Δ/h) and (2EI/h)(2θ − 3Δ/h) | 1e-3 rel (measured 3.7e-4 in Δ, 3.4e-4 in θ, 8.7e-5 in M_AB) | a frame of columns and a beam, the vertical-member orientation rule, joint equilibrium | green |
-| B25 | Circular shaft, clamped, end torque by `load.moment` (`beam-torsion-shaft`) | φ = TL/GJ, J = πr⁴/2: 1.32417e-3 rad for r = 50 mm, L = 1 m, T = 1 kN·m; linear along the shaft; T uniform | 1e-10 rel | St Venant torsion `GJ/L`, `load.moment`, the `rotation` field | green |
+| B25 | Circular shaft, clamped, end torque by `load.moment`; then the same moment about y (`beam-torsion-shaft`) | φ = TL/GJ, J = πr⁴/2: 1.32417e-3 rad for r = 50 mm, L = 1 m, T = 1 kN·m, linear along the shaft, T uniform; δ = ML²/2EI = 0.509296 mm and θ = ML/EI under the end moment | 1e-10 rel | St Venant torsion `GJ/L`, `load.moment`, the `rotation` field; the linear end-moment half of #345 | green |
 | B26 | Clamped–free beam bending modes, 1/2/4/8 elements; and a stubby beam | f_n = (β_nL)²/(2πL²) √(EI/ρA), β_nL = 1.8751, 4.6941 | mode 1 error 4.75e-3, 4.83e-4, 3.27e-5, 2.03e-6; observed rate 3.95; a beam with r_g/L = 0.1 comes out 5.2 % below Euler–Bernoulli | the Hermitian consistent mass, modal convergence at fourth order, shear softening | engine test |
 | B27 | A beam element's zero-energy modes | exactly six: `K v = 0` for three translations and three rotations (`u = ω × r, θ = ω`), and `K` plus their projector is positive definite | 1e-9 of ‖K‖ | no spurious mechanism, no missing rigid mode | engine test |
 | B20 | Section library: A, I_y, I_z, J of every `section.add` shape | closed forms (Roark for the rectangle's J), and the I-section against the IPE 200 datasheet A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴ | exact against the closed forms (1e-12 rel); within 6 % *below* the datasheet | the section library a line member integrates with | engine test |
