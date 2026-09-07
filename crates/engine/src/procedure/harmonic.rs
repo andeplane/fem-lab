@@ -14,8 +14,9 @@
 //! assembled, because the modal Step already reduced them to `ω_k` and `φ_k`.
 //!
 //! Accuracy is bounded by the modal basis: what `nModes` left out is missing from the answer.
-//! The Benchmarks gate both ends — F5 is one degree of freedom, where the basis is complete and
-//! superposition is exact, and F6 puts a cantilever's peak on an independent beam frequency.
+//! The Benchmarks gate both ends — F12 is one degree of freedom, where the basis is complete
+//! and superposition is exact, and F13 puts a cantilever's peak on an independent beam
+//! frequency.
 
 use crate::command::{Field, SweepSpacing};
 use crate::engine::OnProgress;

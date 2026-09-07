@@ -14,7 +14,9 @@ use femlab_engine::fem::assembly::{
     ResolvedConstraints,
 };
 use femlab_engine::fem::checks;
-use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, InverseMap, Iso, Material};
+use femlab_engine::fem::element::{
+    element_for, min_det_j, Element, ElementCtx, FaceLoad, InverseMap, Iso, Material, TangentOut,
+};
 use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
@@ -32,12 +34,14 @@ use femlab_engine::fem::shape::{
     Hex8, Line2, Line3, Quad4, Quad4F, Quad8, Quad8F, RefElement, RefFace, Tet10, Tet4, Tri3, Tri3F, Tri6, Tri6F,
     LINE_2, LINE_3,
 };
+use femlab_engine::fem::state::GpState;
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::post::convergence::{observed_rate, richardson};
 use femlab_engine::post::probe::{path, probe, probe_checked};
 use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
+use femlab_engine::procedure::nonlinear::{self, Converge as NlConverge, Options as NlOptions};
 use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
 use femlab_engine::units::{Length, Q};
@@ -1405,6 +1409,15 @@ impl Element for LegacyInverseMap {
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         self.inner.recover(c, u, stress, strain)
     }
+    fn tangent_and_force(
+        &self,
+        c: &ElementCtx<'_>,
+        u: &[f64],
+        state_in: &[f64],
+        out: TangentOut<'_>,
+    ) -> Result<f64, Error> {
+        self.inner.tangent_and_force(c, u, state_in, out)
+    }
     fn gp_xi(&self, i: usize) -> [f64; 3] {
         self.inner.gp_xi(i)
     }
@@ -1425,6 +1438,19 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
     assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Inside([0.25, -0.5, 0.75]));
     let legacy = LegacyInverseMap { inner: element_for(ElementKind::Hex8), mapped: None };
     assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Failed);
+    // every other method is the inner element's, the finite-strain one included
+    let (coords, mat) = (distorted(ElementKind::Hex8), steel());
+    let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+    let u: Vec<f64> = (0..legacy.n_dof()).map(|i| 1e-3 * (i as f64 + 1.0)).collect();
+    let (nd, n_gp) = (legacy.n_dof(), legacy.n_gp());
+    let (mut k, mut f) = (vec![0.0; nd * nd], vec![0.0; nd]);
+    let (mut stress, mut strain) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+    let mut state = Vec::new();
+    let out = TangentOut { k: &mut k, f: &mut f, stress: &mut stress, strain: &mut strain, state: &mut state };
+    legacy.tangent_and_force(&c, &u, &[], out).expect("the wrapper forwards");
+    let (k_inner, f_inner, s_inner, e_inner) =
+        element_tangent(ElementKind::Hex8, &c, &u).expect("the inner element answers");
+    assert_eq!((k, f, stress, strain), (k_inner, f_inner, s_inner, e_inner));
 
     for kind in ALL_KINDS {
         let el = element_for(kind);
@@ -1630,6 +1656,9 @@ fn a_folded_element_is_a_mesh_inverted_error() {
             el.body_load(&c, &|_x| [0.0; 3], &mut v).err(),
             el.thermal_load(&c, &mut v).err(),
             el.recover(&c, &u, &mut sig, &mut eps).err(),
+            // the finite-strain kernel refuses a folded *reference* element as flatly as the
+            // linear ones do, before any deformation gradient is formed
+            element_tangent(kind, &c, &u).err(),
             el.omega_max(&c).err(),
         ];
         for e in fails {
@@ -3104,6 +3133,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     let opts = SolveOptions::default();
     let names: Vec<&str> = [
         static_step(opts),
+        Step::StaticNonlinear(nl_options(1)),
         Step::Modal { n_modes: 3, shift: None, solver: opts },
         Step::HeatSteady { solver: opts, control: NonlinearControl::default() },
         Step::HeatTransient {
@@ -3122,7 +3152,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     .iter()
     .map(Step::name)
     .collect();
-    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit", "harmonic"]);
+    assert_eq!(names, ["static", "static-nonlinear", "modal", "heat-steady", "heat-transient", "explicit", "harmonic"]);
 }
 
 /// The checks pass but the material does not: a law given the wrong number of properties
@@ -5209,6 +5239,381 @@ fn the_critical_time_step_separates_a_ringing_beam_from_a_diverging_one() {
     assert!(e.cause.contains("diverged at step"), "{}", e.cause);
 }
 
+// ------------------------------------------------------ F5–F10: dynamics verification (#396)
+//
+// A time integrator with a sign error, an off-by-one in the start-up or a wrong mass scaling
+// still produces smooth, plausible curves. Every gate below is chosen to tell a right
+// integrator from a nearly-right one: each compares against a closed form derived in the
+// test, and the strongest compare the integrator's *own* error against what theory predicts.
+
+/// A rod-like Material: ν = 0, so the wave speed is exactly `√(E/ρ)` and a hex8 corner's
+/// diagonal stiffness is a closed form. Structural Steps never read `k` or `cp`.
+fn rod_material(e: f64, rho: f64) -> Material {
+    Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![e, 0.0],
+        rho,
+        alpha: 0.0,
+        k: 45.0,
+        cp: 460.0,
+    }
+}
+
+const SDOF_E: f64 = 225e9;
+const SDOF_RHO: f64 = 8000.0;
+const SDOF_SIDE: f64 = 0.1;
+const SDOF_V0: f64 = 1.0;
+
+/// One hex8 cube with every DOF held except `ux` of the corner at `(a, a, a)`: a single
+/// degree of freedom whose stiffness and mass are closed forms. With ν = 0 the corner's
+/// diagonal stiffness is `∫ E (∂N/∂x)² + G (∂N/∂y)² + G (∂N/∂z)² dV = a (E + 2G)/9 = 2Ea/9`
+/// (the integrand is quadratic per direction, so 2×2×2 Gauss is exact) and its HRZ mass is
+/// `ρa³/8`, so `ω = (4/3) √(E/ρ) / a`. Both are asserted against the assembly once.
+struct Sdof {
+    mesh: Mesh,
+    sets: BTreeMap<String, ResolvedSet>,
+    bodies: Vec<String>,
+    dof: usize,
+    k: f64,
+    m: f64,
+    omega: f64,
+}
+
+fn sdof() -> Sdof {
+    let a = SDOF_SIDE;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([a; 3]);
+    let sets = sets_of(&mesh);
+    let corner = node_at(&mesh, [a; 3]) as usize;
+    let (k, m) = (2.0 * SDOF_E * a / 9.0, SDOF_RHO * a * a * a / 8.0);
+    let s = Sdof { mesh, sets, bodies: one_body(), dof: corner * 3, k, m, omega: (k / m).sqrt() };
+    let p = sdof_problem(&s);
+    let (pat, a) = assemble(&p);
+    let lumped = femlab_engine::procedure::modal::assemble_mass(&p, &pat, true).expect("a lumped mass").diag();
+    assert!((a.k.diag()[s.dof] - k).abs() <= 1e-12 * k, "corner stiffness {} vs closed form {k}", a.k.diag()[s.dof]);
+    assert!((lumped[s.dof] - m).abs() <= 1e-12 * m, "corner mass {} vs closed form {m}", lumped[s.dof]);
+    s
+}
+
+fn sdof_problem(s: &Sdof) -> Problem<'_> {
+    let constraints = vec![
+        fix("x0", "xmin", [true; 3], 0.0),
+        fix("y0", "ymin", [true; 3], 0.0),
+        fix("z0", "zmin", [true; 3], 0.0),
+        fix("axial", "xmax", [false, true, true], 0.0),
+    ];
+    let mut p = problem(&s.mesh, &s.sets, &s.bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    p.materials = vec![rod_material(SDOF_E, SDOF_RHO)];
+    p
+}
+
+/// Integrate the oscillator from `u = 0, v = V0` until `t_end` at `ωΔt` as close to `x` as the
+/// endpoint allows, every step retained. Returns the step actually taken, the times and the
+/// free DOF's history.
+fn sdof_run(s: &Sdof, x: f64, t_end: f64) -> Result<(f64, Vec<f64>, Vec<f64>), Error> {
+    let p = sdof_problem(s);
+    let dt_factor = x / s.omega / critical_step(&p);
+    let mut v0 = vec![0.0; s.mesh.n_nodes() * 3];
+    v0[s.dof] = SDOF_V0;
+    let step = Step::Explicit { t_end, dt_factor, initial_velocity: Some(v0), output_every: 1 };
+    let res = run_step(&p, &step)?;
+    let h = res.history.expect("every step is retained");
+    let u = h.values.iter().map(|frame| frame[s.dof]).collect();
+    Ok((res.scalars["dt"], h.times, u))
+}
+
+/// The mean period between the upward zero crossings of a sampled oscillation, each crossing
+/// placed by linear interpolation. A sinusoid has no curvature at its zeros, so the placement
+/// error is third order in the sample spacing — `(ωΔt)²Δt/16` per crossing — and is amortised
+/// over every cycle in the record: below 1e-4 of the period at `ωΔt = 1` over a hundred cycles.
+fn zero_crossing_period(times: &[f64], u: &[f64]) -> f64 {
+    let crossings: Vec<f64> = (1..u.len())
+        .filter(|&i| u[i - 1] < 0.0 && u[i] >= 0.0)
+        .map(|i| times[i - 1] + (times[i] - times[i - 1]) * u[i - 1] / (u[i - 1] - u[i]))
+        .collect();
+    assert!(crossings.len() >= 2, "not enough cycles: {} crossings", crossings.len());
+    (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64
+}
+
+/// The least-squares line through `(x, y)`: `(slope, intercept)`.
+fn line_fit(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len() as f64;
+    let (mx, my) = (x.iter().sum::<f64>() / n, y.iter().sum::<f64>() / n);
+    let sxy: f64 = x.iter().zip(y).map(|(a, b)| (a - mx) * (b - my)).sum();
+    let sxx: f64 = x.iter().map(|a| (a - mx).powi(2)).sum();
+    let slope = sxy / sxx;
+    (slope, my - slope * mx)
+}
+
+/// Benchmark F5: the integrator's own period error, predicted exactly. Central differences on
+/// `ü = −ω²u` obey `sin(ω̃Δt/2) = ωΔt/2`, so the period is *shorter* than `2π/ω` by
+/// `(ωΔt)²/24` to leading order (the trapezoidal rule lengthens it by twice that). The period
+/// measured over a hundred cycles must match the dispersion relation at each of three steps,
+/// and the coefficient fitted from the three must be −1/24. A start-up kick of the wrong
+/// half-step, a velocity update lagging one step, or a mass off by a factor all keep a clean
+/// sinusoid and fail here.
+#[test]
+fn central_differences_shorten_the_period_by_omega_dt_squared_over_24() {
+    let s = sdof();
+    let cycles = 100.0 * 2.0 * PI / s.omega;
+    let (mut xx, mut yy) = (Vec::new(), Vec::new());
+    for x in [0.25, 0.5, 1.0] {
+        let (dt, times, u) = sdof_run(&s, x, cycles).expect("a stable oscillator");
+        let x = s.omega * dt;
+        let period = zero_crossing_period(&times, &u);
+        let dispersion = PI * dt / libm::asin(0.5 * x);
+        assert!((period - dispersion).abs() <= 1e-4 * dispersion, "ωΔt = {x}: T = {period}, theory {dispersion}");
+        xx.push(x * x);
+        yy.push((period * s.omega / (2.0 * PI) - 1.0) / (x * x));
+    }
+    // ΔT/T ÷ (ωΔt)² = c + d (ωΔt)² + …: the intercept of the fitted line is the coefficient.
+    let (_, c) = line_fit(&xx, &yy);
+    let want = -1.0 / 24.0;
+    assert!((c - want).abs() <= 0.01 * want.abs(), "ΔT/T = c (ωΔt)² with c = {c}; theory {want}");
+    println!("F5 period coefficient: measured {c:.6}, theory {want:.6}, ratio {}", c / want);
+}
+
+/// Benchmark F6: central differences conserve a discrete energy *exactly* for a linear
+/// system. `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}` is the same number at every step, to
+/// round-off (the integrator's own `½vᵀMv + ½uᵀKu` monitor oscillates by O(Δt²) and is only
+/// bounded, which is why it is not the gate). The oscillator starts at `½ m v₀²` and keeps
+/// exactly that for a hundred cycles at `ωΔt = 1`; the F2 cantilever with a random initial
+/// velocity keeps its own, computed from the retained frames and the assembled `K` and `M`.
+#[test]
+fn central_differences_conserve_the_discrete_energy_to_round_off() {
+    let s = sdof();
+    let (dt, _, u) = sdof_run(&s, 1.0, 100.0 * 2.0 * PI / s.omega).expect("stable at ωΔt = 1");
+    let q0 = 0.5 * s.m * SDOF_V0 * SDOF_V0;
+    let worst = u
+        .windows(2)
+        .map(|w| {
+            let v = (w[1] - w[0]) / dt;
+            (0.5 * s.m * v * v + 0.5 * s.k * w[0] * w[1] - q0).abs()
+        })
+        .fold(0.0, f64::max);
+    assert!(worst <= 1e-12 * q0, "the discrete energy wanders by {worst} of {q0}");
+
+    let mesh = cantilever_mesh([8, 2, 2], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let root = vec![fix("root", "xmin", [true; 3], 0.0)];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root);
+    let (pat, a) = assemble(&p);
+    let mass = femlab_engine::procedure::modal::assemble_mass(&p, &pat, true).expect("a lumped mass").diag();
+    let v0 = lcg_vec(mesh.n_nodes() * 3, 396);
+    let dt = 0.9 * critical_step(&p);
+    let step = Step::Explicit { t_end: 500.0 * dt, dt_factor: 0.9, initial_velocity: Some(v0), output_every: 1 };
+    let res = run_step(&p, &step).expect("a ringing beam");
+    let (dt, h) = (res.scalars["dt"], res.history.expect("frames"));
+    let mut ku = vec![0.0; a.k.n];
+    let q: Vec<f64> = h
+        .values
+        .windows(2)
+        .map(|w| {
+            a.k.spmv(&w[1], &mut ku);
+            let strain: f64 = w[0].iter().zip(&ku).map(|(u, ku)| 0.5 * u * ku).sum();
+            let kinetic: f64 =
+                mass.iter().zip(w[0].iter().zip(&w[1])).map(|(m, (u0, u1))| 0.5 * m * ((u1 - u0) / dt).powi(2)).sum();
+            strain + kinetic
+        })
+        .collect();
+    let (lo, hi) = q.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &e| (lo.min(e), hi.max(e)));
+    assert!(hi - lo <= 1e-10 * q[0], "the beam's discrete energy spans [{lo}, {hi}]");
+    println!("F6 discrete energy: SDOF wander {:.2e}, beam wander {:.2e}", worst / q0, (hi - lo) / q[0]);
+}
+
+/// Benchmark F7: the stability boundary is sharp at `ωΔt = 2`. Two per cent below it the
+/// oscillator is bounded and its sampled amplitude is the closed form
+/// `v₀ / (ω √(1 − (ωΔt/2)²))`, which is already five times the continuum amplitude; two per
+/// cent above it the integration diverges and the Step says `explicit.unstable`. F2 checks
+/// the estimator on a beam at 0.9 and 1.25; this checks the integrator against the number.
+#[test]
+fn the_stability_boundary_is_sharp_at_omega_dt_two() {
+    let s = sdof();
+    let steps = 1000.0;
+    let (dt, _, u) = sdof_run(&s, 1.96, steps * 1.96 / s.omega).expect("bounded below the boundary");
+    let x = s.omega * dt;
+    assert!(x > 1.95 && x < 2.0, "ωΔt = {x}");
+    let amplitude = SDOF_V0 / (s.omega * (1.0 - 0.25 * x * x).sqrt());
+    let peak = u.iter().fold(0.0, |m: f64, v| m.max(v.abs()));
+    assert!(peak <= amplitude * (1.0 + 1e-9), "sampled peak {peak} exceeds the closed form {amplitude}");
+    assert!(peak >= 0.99 * amplitude, "sampled peak {peak} never reaches the closed form {amplitude}");
+    let e = sdof_run(&s, 2.04, steps * 2.04 / s.omega).expect_err("diverges above the boundary");
+    assert_eq!(e.code, ErrorCode::ExplicitUnstable);
+    println!("F7 stability: ωΔt = {x} peak/closed-form = {}, ωΔt = 2.04 → {}", peak / amplitude, e.code);
+}
+
+/// Benchmark F8: second order in Δt. Against the exact `u = (v₀/ω) sin ωt` at `t = 5⅛ T`,
+/// where the phase error is what shows, halving the step from `ωΔt = 0.2` to `0.05` must
+/// quarter the error: the observed rate is gated above 1.9. A first-order start-up (a missing
+/// half-step kick) shows here as a rate near one.
+#[test]
+fn explicit_dynamics_converges_at_second_order_in_dt() {
+    let s = sdof();
+    let t_end = 5.125 * 2.0 * PI / s.omega;
+    let exact = SDOF_V0 / s.omega * libm::sin(s.omega * t_end);
+    let (mut dts, mut errs) = (Vec::new(), Vec::new());
+    for x in [0.2, 0.1, 0.05] {
+        let (dt, _, u) = sdof_run(&s, x, t_end).expect("a stable oscillator");
+        dts.push(dt);
+        errs.push((u[u.len() - 1] - exact).abs());
+    }
+    let rate = observed_rate(&dts, &errs);
+    assert!(rate >= 1.9, "observed rate {rate} from errors {errs:?}");
+    println!("F8 convergence in Δt: rate {rate:.4}, errors {errs:?}");
+}
+
+const ROD_E: f64 = 200e9;
+const ROD_RHO: f64 = 8000.0;
+
+/// A bar of `n` hex8 along x with ν = 0 and every lateral DOF held is exactly the 1-D rod
+/// `ρü = Eu''` with `c = √(E/ρ) = 5000 m/s`: uniform-over-the-section motion strains only
+/// `ε_xx`, and each section's four nodes carry a quarter of the rod's force and mass.
+fn rod_mesh(n: usize, length: f64) -> (Mesh, BTreeMap<String, ResolvedSet>) {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [n, 1, 1] }.box_([length, 0.05, 0.05]);
+    let sets = sets_of(&mesh);
+    (mesh, sets)
+}
+
+fn rod_problem<'a>(mesh: &'a Mesh, sets: &'a BTreeMap<String, ResolvedSet>, bodies: &'a [String]) -> Problem<'a> {
+    let held = vec![fix("root", "xmin", [true; 3], 0.0), fix("lateral", "all", [false, true, true], 0.0)];
+    let mut p = problem(mesh, sets, bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.materials = vec![rod_material(ROD_E, ROD_RHO)];
+    p
+}
+
+/// Benchmark F9: an elastic wave arrives when the theory says. A step traction `σ₀` on the
+/// free end of a fixed-free rod sends a front toward the root at `c = √(E/ρ)`; behind it the
+/// material moves at `σ₀/(ρc)`. At mid-length the front arrives at `L/2c` and the reflection
+/// from the root returns at `3L/2c`, so a line fitted to the ramp between them gives the
+/// arrival time (its zero) and the wave speed (its slope); both are gated on two meshes.
+/// Nothing may move before the front: lumped-mass central differences have no precursor.
+#[test]
+fn a_step_front_arrives_at_l_over_c_and_ramps_at_sigma_over_rho_c() {
+    let (length, sigma) = (1.0, 200e6);
+    let c = (ROD_E / ROD_RHO).sqrt();
+    let transit = length / c;
+    let particle = sigma / (ROD_RHO * c);
+    for n in [100usize, 200] {
+        let (mesh, sets) = rod_mesh(n, length);
+        let bodies = one_body();
+        let mut p = rod_problem(&mesh, &sets, &bodies);
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [sigma, 0.0, 0.0] }];
+        let step = Step::Explicit { t_end: 1.5 * transit, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+        let h = run_step(&p, &step).expect("a bar rings").history.expect("frames");
+        let mid = node_at(&mesh, [0.5 * length, 0.0, 0.0]) as usize * 3;
+        let u: Vec<f64> = h.values.iter().map(|f| f[mid]).collect();
+        let (t, w): (Vec<f64>, Vec<f64>) =
+            h.times.iter().zip(&u).filter(|(t, _)| (0.75 * transit..=1.25 * transit).contains(*t)).unzip();
+        let (slope, intercept) = line_fit(&t, &w);
+        let arrival = -intercept / slope;
+        assert!(
+            (arrival - 0.5 * transit).abs() <= 0.005 * 0.5 * transit,
+            "n = {n}: arrival {arrival} vs {}",
+            0.5 * transit
+        );
+        assert!((slope - particle).abs() <= 0.005 * particle, "n = {n}: particle velocity {slope} vs {particle}");
+        let quiet =
+            h.times.iter().zip(&u).filter(|(t, _)| **t <= 0.4 * transit).fold(0.0, |m: f64, (_, u)| m.max(u.abs()));
+        assert!(quiet <= 1e-6 * particle * transit, "n = {n}: {quiet} m moved before the front");
+        println!(
+            "F9 wave n = {n}: arrival {:.5} L/c (theory 0.5), c from slope {:.2} m/s (theory {c}), precursor {quiet:.1e} m",
+            arrival / transit,
+            sigma / (ROD_RHO * slope)
+        );
+    }
+}
+
+/// Cross-solver: the modal frequencies equal the spectrum of a free-vibration history. The
+/// modal Step (consistent mass, shifted inverse iteration) and the explicit Step (lumped
+/// mass, central differences) discretise the rod differently, and the j-th fixed-free mode
+/// `sin kx`, `k = (2j−1)π/2L`, is an exact eigenvector of both chains: consistent
+/// `ω² = (6c²/h²)(1 − cos kh)/(2 + cos kh)`, lumped `ω = (2c/h) sin(kh/2)`, then shortened by
+/// the F5 dispersion. Each is gated against its own closed form and the two against each
+/// other to the gap those closed forms predict. A modal solver in rad/s, or an explicit
+/// integrator with its mass scaled wrongly, disagrees with the other by far more.
+#[test]
+fn modal_frequencies_equal_the_spectrum_of_an_explicit_free_vibration() {
+    let (n, length) = (20usize, 1.0);
+    let (mesh, sets) = rod_mesh(n, length);
+    let bodies = one_body();
+    let p = rod_problem(&mesh, &sets, &bodies);
+    let (c, h) = ((ROD_E / ROD_RHO).sqrt(), length / n as f64);
+    let modal = Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default() };
+    let modal = run_step(&p, &modal).expect("three rod modes");
+    let tip = node_at(&mesh, [length, 0.0, 0.0]) as usize * 3;
+    for j in 0..3 {
+        let k = (2 * j + 1) as f64 * PI / (2.0 * length);
+        let ck = libm::cos(k * h);
+        let w_consistent = c / h * (6.0 * (1.0 - ck) / (2.0 + ck)).sqrt();
+        let w_lumped = 2.0 * c / h * libm::sin(0.5 * k * h);
+        let w_modal = 2.0 * PI * modal.frequencies[j];
+        assert!((w_modal - w_consistent).abs() <= 1e-6 * w_consistent, "mode {j}: modal {w_modal} vs {w_consistent}");
+        let mut v0 = vec![0.0; mesh.n_nodes() * 3];
+        for node in 0..mesh.n_nodes() {
+            v0[node * 3] = libm::sin(k * mesh.node(node as u32)[0]);
+        }
+        let t_end = 20.0 * 2.0 * PI / w_lumped;
+        let step = Step::Explicit { t_end, dt_factor: 0.9, initial_velocity: Some(v0), output_every: 1 };
+        let res = run_step(&p, &step).expect("a rod rings in one mode");
+        let (dt, hist) = (res.scalars["dt"], res.history.expect("frames"));
+        let u: Vec<f64> = hist.values.iter().map(|f| f[tip]).collect();
+        let w_explicit = 2.0 * PI / zero_crossing_period(&hist.times, &u);
+        let w_discrete = 2.0 / dt * libm::asin(0.5 * w_lumped * dt);
+        assert!(
+            (w_explicit - w_discrete).abs() <= 1e-4 * w_discrete,
+            "mode {j}: explicit {w_explicit} vs {w_discrete}"
+        );
+        let (gap, got) = ((w_consistent - w_discrete).abs(), (w_modal - w_explicit).abs());
+        assert!((got - gap).abs() <= 1e-4 * w_lumped, "mode {j}: solvers differ by {got}, the closed forms by {gap}");
+        println!(
+            "F11 mode {}: modal {:.4} Hz, explicit {:.4} Hz, continuum {:.4} Hz, gap {:.2e} (theory {:.2e})",
+            j + 1,
+            modal.frequencies[j],
+            w_explicit / (2.0 * PI),
+            c * k / (2.0 * PI),
+            got / w_lumped,
+            gap / w_lumped
+        );
+    }
+}
+
+/// Benchmark F10: impulse. A free hex8 pushed at one corner by a constant force `F` for a
+/// time `τ` carries momentum `Δp = ∫F dt = F(τ + Δt/2)` (the reported velocity is the
+/// half-step one) and its mass centre has moved `Fτ²/2M`, both to round-off, while the block
+/// itself deforms. Both hold because `Ku` sums to zero over a rigid translation; a stiffness
+/// that does not annihilate translation, or a nodal load scattered against the wrong mass,
+/// breaks them.
+#[test]
+fn a_short_push_transfers_exactly_the_impulse() {
+    let (a, force) = (0.1, 1e6);
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([a; 3]);
+    let mut sets = sets_of(&mesh);
+    let corner = node_at(&mesh, [a; 3]);
+    sets.insert(
+        "corner".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![corner], elems: Vec::new() },
+    );
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.loads = vec![Load::NodalForce { nodes: "corner".into(), f: [force, 0.0, 0.0] }];
+    let tau = 500.0 * 0.9 * critical_step(&p);
+    let step = Step::Explicit { t_end: tau, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let res = run_step(&p, &step).expect("a free block");
+    let impulse = force * (tau + 0.5 * res.scalars["dt"]);
+    let got = res.scalars["momentum_x"];
+    assert!((got - impulse).abs() <= 1e-10 * impulse, "p = {got}, ∫F dt = {impulse}");
+    assert!(res.scalars["momentum_y"].abs() <= 1e-12 * impulse && res.scalars["momentum_z"].abs() <= 1e-12 * impulse);
+    let mass = DENSITY * a * a * a;
+    let centre = res.fields[&Field::Displacement].component(0).iter().sum::<f64>() / 8.0;
+    let want = force * tau * tau / (2.0 * mass);
+    assert!((centre - want).abs() <= 1e-10 * want, "mass centre moved {centre}, Fτ²/2M = {want}");
+    println!(
+        "F10 impulse: p/∫F dt − 1 = {:.2e}, centre/(Fτ²/2M) − 1 = {:.2e}",
+        got / impulse - 1.0,
+        centre / want - 1.0
+    );
+}
+
 /// An explicit Step with no clock is a schema error naming the field.
 #[test]
 fn an_explicit_step_needs_a_positive_end_time() {
@@ -6394,6 +6799,16 @@ fn a_truss_refuses_a_face_load_and_a_missing_section() {
     assert_eq!(e.code, ErrorCode::Unsupported);
     assert!(e.suggestion.as_deref().unwrap().contains("load.force"), "{e:?}");
 
+    // nor a finite-strain kernel: static-nonlinear is written for continuum elements, and a
+    // member says so rather than answering with its linear stiffness
+    let (mut k, mut f) = (vec![0.0; 36], vec![0.0; 6]);
+    let (mut sig, mut eps) = (vec![0.0; VOIGT], vec![0.0; VOIGT]);
+    let mut state = Vec::new();
+    let nl = TangentOut { k: &mut k, f: &mut f, stress: &mut sig, strain: &mut eps, state: &mut state };
+    let e = el.tangent_and_force(&c, &[0.0; 6], &[], nl).expect_err("no finite-strain kernel");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.suggestion.as_deref().unwrap().contains("procedure 'static'"), "{e:?}");
+
     let bare = truss_ctx(&coords, &mat, None, None);
     let t = [10.0; 2];
     let bare_hot = truss_ctx(&coords, &mat, None, Some(&t));
@@ -7032,7 +7447,7 @@ fn participations(p: &Problem<'_>, modes: &[FieldData]) -> Vec<f64> {
         .collect()
 }
 
-/// Benchmark F5. A single-degree-of-freedom magnification curve is exact for mode
+/// Benchmark F12. A single-degree-of-freedom magnification curve is exact for mode
 /// superposition, so it is gated at roundoff rather than at an engineering tolerance: any
 /// looser and a real error in the complex denominator, the phase convention or the modal
 /// participation would pass unnoticed.
@@ -8073,6 +8488,197 @@ fn stl_reads_back_exactly_what_it_wrote_for_every_primitive() {
     }
 }
 
+// ------------------------------------------- geometric nonlinearity (issue #59, plan G)
+
+/// `det` of a 3×3, written out here so the oracle does not borrow the kernel's own.
+fn det3x3(f: [[f64; 3]; 3]) -> f64 {
+    f[0][0] * (f[1][1] * f[2][2] - f[1][2] * f[2][1]) - f[0][1] * (f[1][0] * f[2][2] - f[1][2] * f[2][0])
+        + f[0][2] * (f[1][0] * f[2][1] - f[1][1] * f[2][0])
+}
+
+fn matmul3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut c = [[0.0; 3]; 3];
+    for (i, row) in c.iter_mut().enumerate() {
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    c
+}
+
+fn rot_z(a: f64) -> [[f64; 3]; 3] {
+    [[libm::cos(a), -libm::sin(a), 0.0], [libm::sin(a), libm::cos(a), 0.0], [0.0, 0.0, 1.0]]
+}
+
+fn rot_x(a: f64) -> [[f64; 3]; 3] {
+    [[1.0, 0.0, 0.0], [0.0, libm::cos(a), -libm::sin(a)], [0.0, libm::sin(a), libm::cos(a)]]
+}
+
+/// What a St Venant–Kirchhoff material answers a homogeneous deformation `F` with: the
+/// Green–Lagrange strain, the second Piola–Kirchhoff stress, and the Cauchy stress they push
+/// forward to. `E = ½(FᵀF − I)` and `σ = F S Fᵀ / det F` are definitions, so this is the
+/// closed form of the whole finite-strain chain and not a second implementation of it.
+fn svk(f: [[f64; 3]; 3]) -> ([f64; VOIGT], [f64; VOIGT]) {
+    let c = |i: usize, j: usize| (0..3).map(|k| f[k][i] * f[k][j]).sum::<f64>();
+    let e = [0.5 * (c(0, 0) - 1.0), 0.5 * (c(1, 1) - 1.0), 0.5 * (c(2, 2) - 1.0), c(0, 1), c(0, 2), c(1, 2)];
+    let d = isotropic_d(YOUNG, POISSON);
+    let mut s = [0.0; VOIGT];
+    for (i, si) in s.iter_mut().enumerate() {
+        *si = (0..VOIGT).map(|j| d[i][j] * e[j]).sum();
+    }
+    let s3 = [[s[0], s[3], s[4]], [s[3], s[1], s[5]], [s[4], s[5], s[2]]];
+    let det = det3x3(f);
+    let mut sigma = [0.0; VOIGT];
+    for (slot, (i, j)) in [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)].into_iter().enumerate() {
+        sigma[slot] = (0..3).map(|k| (0..3).map(|l| f[i][k] * s3[k][l] * f[j][l]).sum::<f64>()).sum::<f64>() / det;
+    }
+    (e, sigma)
+}
+
+/// `u = (F − I)·X` at every node: a homogeneous deformation as a nodal displacement field.
+fn homogeneous_field(mesh: &Mesh, f: [[f64; 3]; 3]) -> Vec<f64> {
+    let mut v = vec![0.0; mesh.n_nodes() * mesh.dim];
+    for n in 0..mesh.n_nodes() {
+        let x = mesh.node(n as u32);
+        for i in 0..mesh.dim {
+            v[n * mesh.dim + i] = (0..3).map(|j| f[i][j] * x[j]).sum::<f64>() - x[i];
+        }
+    }
+    v
+}
+
+/// A triaxial stretch, a simple shear, a finite rotation and — in 3D — a general deformation
+/// with all nine components populated.
+fn homogeneous_deformations(dim: usize) -> Vec<[[f64; 3]; 3]> {
+    let mut all = vec![
+        [[1.2, 0.0, 0.0], [0.0, 0.95, 0.0], [0.0, 0.0, 1.0]],
+        [[1.0, 0.15, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        rot_z(0.4),
+    ];
+    if dim == 3 {
+        all.push([[1.05, 0.1, 0.03], [0.0, 0.9, 0.08], [0.02, 0.0, 1.1]]);
+    }
+    all
+}
+
+/// Every boundary node prescribed to an exact field, as one Constraint per node and component.
+/// A Set-based Constraint carries one value, so a field that varies with position needs one
+/// Set per node — which is also what makes this exercise `resolve` and the reaction grouping.
+fn prescribe_field(mesh: &Mesh, sets: &mut BTreeMap<String, ResolvedSet>, exact: &[f64]) -> Vec<Constraint> {
+    let mut nodes: Vec<u32> = mesh.boundary_faces().iter().flat_map(|&f| mesh.face_nodes(f)).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    let mut constraints = Vec::new();
+    for &n in &nodes {
+        let set = format!("node{n}");
+        sets.insert(
+            set.clone(),
+            ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![n], elems: Vec::new() },
+        );
+        for c in 0..mesh.dim {
+            let mut dofs = [false; 3];
+            dofs[c] = true;
+            constraints.push(Constraint {
+                name: format!("{set}.{c}"),
+                nodes: set.clone(),
+                dofs,
+                value: exact[n as usize * mesh.dim + c],
+            });
+        }
+    }
+    constraints
+}
+
+fn nl_options(increments: usize) -> NlOptions {
+    NlOptions {
+        increments,
+        converge: NlConverge { tolerance: 1e-8, max_newton: 20 },
+        max_cutbacks: 5,
+        t_end: 1.0,
+        amplitude: None,
+        solver: SolveOptions::default(),
+    }
+}
+
+fn run_nonlinear(p: &Problem<'_>, o: NlOptions, progress: OnProgress<'_>) -> Result<StepResult, Error> {
+    let step = Step::StaticNonlinear(o);
+    pollster::block_on(procedure::run(p, &step, &Pool::new(2), None, None, progress))
+}
+
+/// The idealisation `static-nonlinear` runs a kind under: 3D solids as themselves, sheets as
+/// plane strain, which is the one two-dimensional idealisation whose `F₃₃ = 1` this kernel has.
+fn nl_idealisation(kind: ElementKind) -> Idealisation {
+    if kind.dim() == 3 {
+        Idealisation::Solid3d
+    } else {
+        Idealisation::PlaneStrain
+    }
+}
+
+/// The tangent, internal force, Cauchy stress and Green–Lagrange strain of one element.
+type ElementAnswer = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
+/// One element's finite-strain answer at a nodal displacement.
+fn element_tangent(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64]) -> Result<ElementAnswer, Error> {
+    let el = element_for(kind);
+    let (nd, n_gp) = (el.n_dof(), el.n_gp());
+    let (mut k, mut f) = (vec![0.0; nd * nd], vec![0.0; nd]);
+    let (mut stress, mut strain) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+    let mut state = vec![0.0; n_gp * c.material.law.n_state()];
+    let out = TangentOut { k: &mut k, f: &mut f, stress: &mut stress, strain: &mut strain, state: &mut state };
+    el.tangent_and_force(c, u, &vec![0.0; n_gp * c.material.law.n_state()], out)?;
+    Ok((k, f, stress, strain))
+}
+
+/// N3: every element kind reproduces a homogeneous finite deformation exactly on a distorted
+/// mesh — the interior displacements, the Green–Lagrange strain and the Cauchy stress. A
+/// formulation that dropped any term of `B_L` or of the geometric stiffness fails this.
+#[test]
+fn the_finite_deformation_patch_test_passes_for_every_kind() {
+    for kind in ALL_KINDS {
+        let mesh = patch_mesh(kind);
+        let bodies = vec!["patch".to_string()];
+        for f in homogeneous_deformations(kind.dim()) {
+            let mut sets = sets_of(&mesh);
+            let exact = homogeneous_field(&mesh, f);
+            let constraints = prescribe_field(&mesh, &mut sets, &exact);
+            let p = problem(&mesh, &sets, &bodies, nl_idealisation(kind), Formulation::IncompatibleModes, constraints);
+            let res = run_nonlinear(&p, nl_options(2), &mut nop).expect("the finite-strain patch converges");
+            let (e, sigma) = svk(f);
+            let scale = exact.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+            let u = &res.fields[&Field::Displacement];
+            let stress = &res.fields[&Field::Stress];
+            let strain = &res.fields[&Field::Strain];
+            for n in 0..mesh.n_nodes() {
+                for c in 0..mesh.dim {
+                    let (got, want) = (u.data[n * 3 + c], exact[n * mesh.dim + c]);
+                    assert!((got - want).abs() <= 1e-9 * scale, "{kind:?} node {n} component {c}: {got} vs {want}");
+                }
+                for i in 0..VOIGT {
+                    let got = stress.data[n * VOIGT + i];
+                    assert!(
+                        (got - sigma[i]).abs() <= 1e-8 * YOUNG,
+                        "{kind:?} node {n} Cauchy component {i}: {got} vs {}",
+                        sigma[i]
+                    );
+                    let got = strain.data[n * VOIGT + i];
+                    assert!((got - e[i]).abs() <= 1e-11, "{kind:?} node {n} strain component {i}: {got} vs {}", e[i]);
+                }
+            }
+            // Enhanced modes are switched off under finite deformation, and the Result says so
+            // for exactly the two kinds that would otherwise have used them.
+            let locks = matches!(kind, ElementKind::Hex8 | ElementKind::Quad4);
+            assert_eq!(res.warnings.len(), usize::from(locks), "{kind:?}: {:?}", res.warnings);
+            // A finite rotation applied as a linear ramp squashes the body at half a turn, and
+            // St Venant–Kirchhoff softens under that much compression — so some of these
+            // deformations are reached by cutting back, which is the point of the cutback.
+            assert!(res.scalars["increments_taken"] >= 2.0, "{kind:?} {:?}", res.scalars);
+            assert_eq!(res.scalars["load_factor"], 1.0);
+            assert_eq!(res.solver.solver, "cpu-direct");
+        }
+    }
+}
+
 #[test]
 fn stl_reads_binary_by_its_declared_facet_count() {
     let solid = Solid::evaluate(&Shape::Box { size: [1.0, 2.0, 3.0] }).unwrap();
@@ -8149,4 +8755,653 @@ fn base64_round_trips_and_refuses_what_is_not_base64() {
     assert_eq!(base64_decode("QQ=A"), None, "data after the padding");
     assert_eq!(base64_decode("QUJD="), None, "padding that does not complete a quantum");
     assert_eq!(base64_decode("QQ==="), None, "three pad characters");
+}
+
+/// N4: a rigid-body motion leaves no strain, no stress and no internal force, at any rotation
+/// angle. A small-strain formulation fails this outright, so it is the sharpest single check
+/// that the kernels really are total Lagrangian.
+#[test]
+fn a_rigid_body_motion_leaves_no_stress_and_no_internal_force() {
+    for kind in ALL_KINDS {
+        let coords = distorted(kind);
+        let mat = steel();
+        let dim = kind.dim();
+        let cx = ctx(&coords, &mat, nl_idealisation(kind), Formulation::IncompatibleModes);
+        let mut motions = vec![rot_z(0.5 * PI), rot_z(PI), rot_z(0.37)];
+        if dim == 3 {
+            motions.push(matmul3(rot_z(1.1), rot_x(2.0)));
+        }
+        for r in motions {
+            let t = [0.3, -0.2, if dim == 3 { 0.45 } else { 0.0 }];
+            let mut u = vec![0.0; kind.n_nodes() * dim];
+            for a in 0..kind.n_nodes() {
+                let x = [coords[3 * a], coords[3 * a + 1], coords[3 * a + 2]];
+                for i in 0..dim {
+                    u[dim * a + i] = (0..3).map(|j| r[i][j] * x[j]).sum::<f64>() + t[i] - x[i];
+                }
+            }
+            let (_, f, stress, strain) =
+                element_tangent(kind, &cx, &u).expect("a rigid motion never inverts an element");
+            for v in &strain {
+                assert!(v.abs() <= 1e-12, "{kind:?}: Green–Lagrange strain {v} under a rigid motion");
+            }
+            for v in &stress {
+                assert!(v.abs() <= 1e-9 * YOUNG, "{kind:?}: Cauchy stress {v} under a rigid motion");
+            }
+            for v in &f {
+                assert!(v.abs() <= 1e-9 * YOUNG, "{kind:?}: internal force {v} under a rigid motion");
+            }
+        }
+    }
+}
+
+/// The consistent tangent is the derivative of the internal force: `K_T v` reproduces the
+/// central difference of `f_int` along `v`. That is calculus applied to the kernels rather than
+/// a second implementation of them (ADR 0007), and it is what makes Newton quadratic.
+#[test]
+fn the_finite_strain_tangent_is_the_derivative_of_the_internal_force() {
+    for kind in ALL_KINDS {
+        let coords = distorted(kind);
+        let mat = steel();
+        let cx = ctx(&coords, &mat, nl_idealisation(kind), Formulation::Full);
+        let nd = element_for(kind).n_dof();
+        let u0: Vec<f64> = lcg_vec(nd, 11).iter().map(|x| 0.01 * x).collect();
+        let v = lcg_vec(nd, 23);
+        let (k, _, _, _) = element_tangent(kind, &cx, &u0).expect("a mild displacement keeps det F positive");
+        let h = 1e-6;
+        let shift = |sign: f64| -> Vec<f64> { u0.iter().zip(&v).map(|(a, b)| a + sign * h * b).collect() };
+        let (_, plus, _, _) = element_tangent(kind, &cx, &shift(1.0)).expect("perturbs");
+        let (_, minus, _, _) = element_tangent(kind, &cx, &shift(-1.0)).expect("perturbs");
+        let want: Vec<f64> = plus.iter().zip(&minus).map(|(a, b)| (a - b) / (2.0 * h)).collect();
+        let scale = want.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        for (i, w) in want.iter().enumerate() {
+            let got: f64 = (0..nd).map(|j| k[i * nd + j] * v[j]).sum();
+            assert!((got - w).abs() <= 1e-6 * scale, "{kind:?} row {i}: tangent {got} vs difference {w}");
+        }
+    }
+}
+
+/// At zero displacement the finite-strain tangent *is* the linear stiffness: `F = I` makes
+/// `B_L` the small-strain `B` and leaves no initial stress for the geometric term.
+#[test]
+fn the_tangent_at_zero_displacement_is_the_linear_stiffness() {
+    for kind in [ElementKind::Hex20, ElementKind::Tet4, ElementKind::Quad8] {
+        let mesh = cantilever_mesh([3, 2, 2], kind);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["bar".to_string()];
+        let p = problem(&mesh, &sets, &bodies, nl_idealisation(kind), Formulation::Full, Vec::new());
+        let pat = pattern(&mesh, mesh.dim);
+        let linear = assemble_stiffness(&p, &pat).expect("assembles");
+        let state = GpState::new(&p).expect("steel has no state");
+        let nl = nonlinear::tangent(&p, &pat, &vec![0.0; p.n_dofs()], &state).expect("assembles");
+        let scale = linear.k.vals.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        for (a, b) in linear.k.vals.iter().zip(&nl.k.vals) {
+            assert!((a - b).abs() <= 1e-12 * scale, "{kind:?}: {a} vs {b}");
+        }
+        // The internal force at zero displacement is zero, and the linear arm reports none.
+        assert!(linear.f_int.is_empty() && linear.stress_gp.is_empty() && linear.state.values.is_empty());
+        assert!(nl.f_thermal.is_empty());
+        assert!(nl.f_int.iter().all(|x| x.abs() <= 1e-6));
+        assert_eq!(nl.stress_gp.len(), mesh.n_elems() * element_for(kind).n_gp());
+        // and the tangent is symmetric at a deformed state, as `K_mat + K_geo` must be
+        let u = lcg_vec(p.n_dofs(), 5).iter().map(|x| 1e-3 * x).collect::<Vec<f64>>();
+        let bent = nonlinear::tangent(&p, &pat, &u, &state).expect("assembles");
+        let scale = bent.k.vals.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        for r in 0..bent.k.n {
+            for e in bent.k.row_ptr[r] as usize..bent.k.row_ptr[r + 1] as usize {
+                let c = bent.k.col_idx[e] as usize;
+                let lo = bent.k.row_ptr[c] as usize;
+                let at = bent.k.col_idx[lo..bent.k.row_ptr[c + 1] as usize]
+                    .binary_search(&(r as u32))
+                    .expect("a structurally symmetric pattern");
+                assert!((bent.k.vals[e] - bent.k.vals[lo + at]).abs() <= 1e-9 * scale, "{kind:?} ({r},{c})");
+            }
+        }
+    }
+}
+
+/// A law that remembers: `n_state = 1`, and the state it advances to is the point's own first
+/// strain component. Nothing physical — it is the smallest law that fails if the per-point
+/// state is not threaded from the converged buffer, through the element, and back.
+struct Remember;
+
+impl MaterialLaw for Remember {
+    fn id(&self) -> &str {
+        "remember"
+    }
+    fn n_props(&self) -> usize {
+        2
+    }
+    fn n_state(&self) -> usize {
+        1
+    }
+    fn prop_names(&self) -> &[&str] {
+        &["E", "nu"]
+    }
+    fn evaluate(&self, b: MaterialBatch<'_>, out: MaterialOut<'_>) -> Result<(), Error> {
+        check_batch(self, &b, &out)?;
+        let d = isotropic_d(b.props[0], b.props[1]);
+        for p in 0..b.n {
+            for (i, row) in d.iter().enumerate() {
+                out.stress[p * VOIGT + i] = (0..VOIGT).map(|j| row[j] * b.strain[p * VOIGT + j]).sum();
+                out.tangent[p * VOIGT * VOIGT + i * VOIGT..p * VOIGT * VOIGT + (i + 1) * VOIGT].copy_from_slice(row);
+            }
+            out.state_out[p] = b.state_in[p] + b.strain[p * VOIGT];
+        }
+        Ok(())
+    }
+}
+
+static REMEMBER: Remember = Remember;
+
+fn remembering() -> Material {
+    Material { law: &REMEMBER, props: vec![YOUNG, POISSON], rho: DENSITY, alpha: EXPANSION, k: 45.0, cp: 460.0 }
+}
+
+/// The per-Gauss-point state buffer: sized from the law, read by the element, written back in
+/// element order, and empty for every material that has no history to keep.
+#[test]
+fn the_gauss_point_state_is_sized_read_and_written_back() {
+    let kind = ElementKind::Hex8;
+    let mesh = cantilever_mesh([2, 1, 1], kind);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let n_gp = element_for(kind).n_gp();
+
+    // A stateless Problem allocates nothing but the offsets.
+    let plain = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let empty = GpState::new(&plain).expect("steel has no state");
+    assert_eq!(empty.offsets, vec![0; mesh.n_elems() + 1]);
+    assert!(empty.values.is_empty() && empty.of(0).is_empty());
+
+    // A stateful one gets `n_gp` values per element, and the element advances every one.
+    let mut stateful = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    stateful.materials = vec![remembering()];
+    let mut state = GpState::new(&stateful).expect("the law names its state");
+    assert_eq!(state.offsets, vec![0, n_gp, 2 * n_gp]);
+    assert_eq!(state.values.len(), 2 * n_gp);
+    state.set(1, &vec![7.0; n_gp]);
+    assert_eq!(state.of(1), vec![7.0; n_gp]);
+    assert_eq!(state.of(0), vec![0.0; n_gp]);
+
+    let pat = pattern(&mesh, mesh.dim);
+    let u = homogeneous_field(&mesh, [[1.1, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    let advanced = nonlinear::tangent(&stateful, &pat, &u, &state).expect("assembles");
+    // E₁₁ of a 10 % stretch is 0.105, added to whatever each element carried in.
+    for (elem, carried) in [(0u32, 0.0), (1, 7.0)] {
+        for v in advanced.state.of(elem) {
+            assert!((v - (carried + 0.105)).abs() < 1e-12, "element {elem}: {v}");
+        }
+    }
+
+    // and a Body without a material is the same error every other integral over it gives —
+    // reported before a single element is touched, because the state buffer is sized first
+    let mut bare = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    bare.material_of_block = vec![None; mesh.blocks.len()];
+    assert_eq!(GpState::new(&bare).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    let sized = nonlinear::tangent(&bare, &pat, &vec![0.0; bare.n_dofs()], &state).expect_err("no material");
+    assert_eq!(sized.code, ErrorCode::ModelNoMaterial);
+    // and the well-posedness checks run before anything is assembled at all
+    let refused = run_nonlinear(&bare, nl_options(1), &mut nop).expect_err("an ill-posed Problem");
+    assert_eq!(refused.code, ErrorCode::ModelNoMaterial);
+}
+
+/// The reference load is the Step's external force at load factor 1, and it reports the Set it
+/// cannot find rather than assembling a silently empty one.
+#[test]
+fn the_reference_load_is_the_external_force_at_load_factor_one() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -PRESSURE] }];
+    let (f, applied) = nonlinear::reference_load(&p).expect("the Set is there");
+    assert!((applied.force[2] + PRESSURE * 0.1 * 0.1).abs() <= 1e-9 * PRESSURE);
+    assert!((nonlinear::norm_inf(&f) - f.iter().fold(0.0f64, |m, x| m.max(x.abs()))).abs() == 0.0);
+    p.loads = vec![Load::Traction { faces: "nowhere".into(), t: [1.0, 0.0, 0.0] }];
+    assert_eq!(nonlinear::reference_load(&p).expect_err("no such Set").code, ErrorCode::SetEmpty);
+}
+
+/// N5: at a thousandth of the load, `static-nonlinear` and `static` are the same analysis, and
+/// a temperature field reaches the finite-strain element the same way it reaches the linear one.
+#[test]
+fn a_small_strain_nonlinear_step_reproduces_the_linear_one() {
+    let mesh = cantilever_mesh([4, 1, 1], ElementKind::Hex20);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    for temperature in [None, Some((vec![20.1; mesh.n_nodes()], 20.0))] {
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![fix("root", "xmin", [true, true, true], 0.0)],
+        );
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e2] }];
+        p.temperature = temperature.clone();
+        let linear = run_static(&p, &mut nop).expect("the linear cantilever solves");
+        let nl = run_nonlinear(&p, nl_options(2), &mut nop).expect("and so does the nonlinear one");
+        let (a, b) = (&linear.fields[&Field::Displacement], &nl.fields[&Field::Displacement]);
+        let scale = a.data.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        assert!(scale > 0.0);
+        for (i, (x, y)) in a.data.iter().zip(&b.data).enumerate() {
+            assert!((x - y).abs() <= 1e-6 * scale, "dof {i}: linear {x}, nonlinear {y}");
+        }
+        let (a, b) = (&linear.fields[&Field::VonMises], &nl.fields[&Field::VonMises]);
+        let scale = a.data.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        for (i, (x, y)) in a.data.iter().zip(&b.data).enumerate() {
+            assert!((x - y).abs() <= 1e-4 * scale, "node {i}: linear {x}, nonlinear {y}");
+        }
+        // the load–deflection history is one row per converged increment, plus the origin
+        let history = nl.history.as_ref().expect("a nonlinear Step keeps its load–deflection curve");
+        assert_eq!(history.field, Field::Displacement);
+        assert_eq!(history.times, vec![0.0, 0.5, 1.0]);
+        assert_eq!(history.values.len(), 3);
+        assert!(history.values[0].iter().all(|x| *x == 0.0));
+        reaction_balance(&nl, [0.0, 0.0, -1e2 * 0.01], 1e2 * 0.01);
+    }
+}
+
+/// The exact Euler elastica of a cantilever under a fixed-direction transverse tip force, by
+/// quadrature of its own first integral rather than from a table.
+///
+/// With `EI θ'' = −P cos θ`, `θ(0) = 0` and `θ'(L) = 0`, the first integral is
+/// `θ' = √(2P/EI) √(sin θ_L − sin θ)`, so for a chosen tip slope `θ_L` the load parameter
+/// `α = P L²/EI` and the tip position are three integrals of one integrand. The substitution
+/// `θ = θ_L − w²` removes its inverse-square-root endpoint and leaves an analytic function of
+/// `w`, which a midpoint rule resolves far past any tolerance this is gated at. Returns
+/// `(α, x_tip/L, y_tip/L)`; at small `α` it reduces to `θ_L = α/2` and `y/L = α/3`, which is
+/// Euler–Bernoulli.
+fn elastica(theta_l: f64) -> (f64, f64, f64) {
+    let n = 20_000;
+    let h = theta_l.sqrt() / n as f64;
+    let (mut i0, mut i1, mut i2) = (0.0, 0.0, 0.0);
+    for j in 0..n {
+        let w = (j as f64 + 0.5) * h;
+        let theta = theta_l - w * w;
+        let g = 2.0 * w / (libm::sin(theta_l) - libm::sin(theta)).sqrt();
+        i0 += g;
+        i1 += g * libm::cos(theta);
+        i2 += g * libm::sin(theta);
+    }
+    (0.5 * (i0 * h) * (i0 * h), i1 / i0, i2 / i0)
+}
+
+/// The node of a mesh nearest a point, for probing a Result without the Query machinery.
+fn nearest_node(mesh: &Mesh, x: [f64; 3]) -> usize {
+    (0..mesh.n_nodes())
+        .min_by(|&a, &b| {
+            let d = |n: usize| {
+                let p = mesh.node(n as u32);
+                (0..3).map(|i| (p[i] - x[i]) * (p[i] - x[i])).sum::<f64>()
+            };
+            d(a).total_cmp(&d(b))
+        })
+        .expect("a mesh has nodes")
+}
+
+/// A slender steel beam of square section, `n` quadratic elements along it.
+fn slender_beam(length: f64, side: f64, n: usize) -> Mesh {
+    Structured { kind: ElementKind::Hex20, n: [n, 1, 1] }.box_([length, side, side])
+}
+
+/// N1: the large-deflection cantilever against the exact elastica. Geometric stiffening is the
+/// whole effect — at this load the linear answer is more than half again too large.
+#[test]
+fn the_large_deflection_cantilever_follows_the_elastica() {
+    let (length, side, n) = (1.0, 0.005, 20);
+    let (e, i, area) = (YOUNG, side * side * side * side / 12.0, side * side);
+    for theta_l in [0.3, 0.6] {
+        let (alpha, x_tip, y_tip) = elastica(theta_l);
+        let load = alpha * e * i / (length * length);
+        let mesh = slender_beam(length, side, n);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["beam".to_string()];
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![fix("root", "xmin", [true, true, true], 0.0)],
+        );
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -load / area] }];
+        let res = run_nonlinear(&p, nl_options(5), &mut nop).expect("the elastica converges");
+        let tip = nearest_node(&mesh, [length, 0.5 * side, 0.5 * side]);
+        let u = &res.fields[&Field::Displacement];
+        let (got_x, got_z) = (u.data[tip * 3] / length, u.data[tip * 3 + 2] / length);
+        let (want_x, want_z) = (x_tip - 1.0, -y_tip);
+        eprintln!("ELASTICA theta={theta_l} alpha={alpha} load={load} x_tip={x_tip} y_tip={y_tip} got_x={got_x} got_z={got_z} ratio_z={} ratio_x={}", got_z/want_z, got_x/want_x);
+        assert!(
+            (got_z - want_z).abs() <= 0.015 * want_z.abs(),
+            "θ_L = {theta_l}, α = {alpha}: tip deflection {got_z} L vs elastica {want_z} L"
+        );
+        assert!(
+            (got_x - want_x).abs() <= 0.04 * want_x.abs(),
+            "θ_L = {theta_l}, α = {alpha}: tip shortening {got_x} L vs elastica {want_x} L"
+        );
+        // and the effect is real: linear theory would say αL/3, which is much further
+        let linear = -alpha / 3.0;
+        assert!(want_z / linear < 1.0, "α = {alpha}: the elastica must be stiffer than αL/3");
+        reaction_balance(&res, [0.0, 0.0, -load], load);
+    }
+}
+
+/// N2: a cantilever under a transverse tip load *and* an axial compression deflects further
+/// than linear theory says, by exactly the beam-column factor `3(tan u / u − 1)/u²` with
+/// `u = L√(P/EI)`, which runs away at `u = π/2` — the Euler load of a cantilever.
+///
+/// The gate is the ratio to the same model's own deflection at `P = 0`, so the element's
+/// discretisation error cancels and what is left is the geometric stiffness alone. The exact
+/// beam-column solution `δ = (Q/P)(tan(u)/(u/L) − L)` comes from `EI w'' = Q(L−x) + P(δ−w)`
+/// with `w(0) = w'(0) = 0`; expanding `tan` recovers `QL³/3EI` as `P → 0`.
+#[test]
+fn axial_compression_amplifies_a_cantilever_by_the_beam_column_factor() {
+    let (length, side, n) = (1.0, 0.005, 40);
+    let (i, area) = (side * side * side * side / 12.0, side * side);
+    let stiffness = YOUNG * i;
+    // A tip load that deflects the beam by 2e-4 L on its own, so that even amplified fivefold
+    // the deflection stays small and the closed form's own second-order terms do not enter.
+    let tip = 2e-4 * length * 3.0 * stiffness / (length * length * length);
+    let mesh = slender_beam(length, side, n);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let probe = nearest_node(&mesh, [length, 0.5 * side, 0.5 * side]);
+    let deflection = |axial: f64| -> f64 {
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![fix("root", "xmin", [true, true, true], 0.0)],
+        );
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [-axial / area, 0.0, -tip / area] }];
+        let res = run_nonlinear(&p, nl_options(4), &mut nop).expect("well below the critical load");
+        res.fields[&Field::Displacement].data[probe * 3 + 2]
+    };
+    let free = deflection(0.0);
+    assert!((free / length + 2e-4).abs() <= 0.02 * 2e-4, "the unloaded tip deflection is QL³/3EI: {free}");
+    for u in [0.5, 1.0, 1.4] {
+        let axial = u * u * stiffness / (length * length);
+        let want = 3.0 * (libm::tan(u) / u - 1.0) / (u * u);
+        let got = deflection(axial) / free;
+        assert!(
+            (got - want).abs() <= 0.02 * want,
+            "u = {u} (P/P_cr = {}): amplification {got} vs the beam-column factor {want}",
+            u * u / (0.25 * PI * PI)
+        );
+    }
+}
+
+/// One way to make a nonlinear Step's controls unusable.
+type BreakOption = fn(&mut NlOptions);
+
+/// The controls a nonlinear Step cannot run with, each naming its own field.
+#[test]
+fn a_nonlinear_step_refuses_controls_it_cannot_run_with() {
+    let mesh = cantilever_mesh([1, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    let cases: [(BreakOption, &str); 6] = [
+        (|o| o.increments = 0, "increments"),
+        (|o| o.converge.max_newton = 0, "nonlinearMaxIterations"),
+        (|o| o.converge.tolerance = 0.0, "nonlinearTolerance"),
+        (|o| o.converge.tolerance = f64::NAN, "nonlinearTolerance"),
+        (|o| o.t_end = 0.0, "tEnd"),
+        (|o| o.max_cutbacks = 21, "maxCutbacks"),
+    ];
+    for (break_it, field) in cases {
+        let mut o = nl_options(2);
+        break_it(&mut o);
+        let e = run_nonlinear(&p, o, &mut nop).expect_err("a Step that cannot run");
+        assert_eq!(e.code, ErrorCode::Schema, "{field}");
+        assert_eq!(e.where_.as_deref(), Some(field));
+        assert!(e.suggestion.is_some(), "{field}");
+    }
+}
+
+/// The two idealisations whose finite-strain kernel is not written yet say so, and name
+/// themselves, rather than integrating a wrong `F₃₃`.
+#[test]
+fn a_nonlinear_step_refuses_the_idealisations_it_has_no_kernel_for() {
+    let mesh = cantilever_mesh([1, 1, 1], ElementKind::Quad4);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["sheet".to_string()];
+    for (id, what) in [
+        (Idealisation::PlaneStress { thickness: THICKNESS }, "plane stress"),
+        (Idealisation::Axisymmetric, "axisymmetric"),
+    ] {
+        let p =
+            problem(&mesh, &sets, &bodies, id, Formulation::Full, vec![fix("root", "xmin", [true, true, false], 0.0)]);
+        let e = run_nonlinear(&p, nl_options(1), &mut nop).expect_err("no kernel for it");
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert!(e.cause.contains(what), "{}", e.cause);
+        assert_eq!(e.where_.as_deref(), Some("idealisation"));
+    }
+}
+
+/// A law that answers every strain with an infinite stress: the smallest way to make a residual
+/// non-finite without folding an element, which is the other reason to cut an increment back.
+struct Boom;
+
+impl MaterialLaw for Boom {
+    fn id(&self) -> &str {
+        "boom"
+    }
+    fn n_props(&self) -> usize {
+        2
+    }
+    fn n_state(&self) -> usize {
+        0
+    }
+    fn prop_names(&self) -> &[&str] {
+        &["E", "nu"]
+    }
+    fn evaluate(&self, b: MaterialBatch<'_>, out: MaterialOut<'_>) -> Result<(), Error> {
+        check_batch(self, &b, &out)?;
+        let d = isotropic_d(b.props[0], b.props[1]);
+        for p in 0..b.n {
+            for (i, row) in d.iter().enumerate() {
+                out.stress[p * VOIGT + i] = f64::INFINITY;
+                out.tangent[p * VOIGT * VOIGT + i * VOIGT..p * VOIGT * VOIGT + (i + 1) * VOIGT].copy_from_slice(row);
+            }
+        }
+        Ok(())
+    }
+}
+
+static BOOM: Boom = Boom;
+
+/// Every way an increment can fail ends in one `newton.diverged` that names the increment, the
+/// load factor and the residual — and every one of them is retried at half the increment first.
+#[test]
+fn an_increment_that_will_not_converge_is_cut_back_and_then_named() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let base = |constraints: Vec<Constraint>| {
+        problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints)
+    };
+    let root = || fix("root", "xmin", [true, true, true], 0.0);
+
+    // 1. the iterations run out: one iteration is never enough for a finite deformation
+    let mut p = base(vec![root(), fix("pull", "xmax", [true, false, false], 0.2)]);
+    let mut o = nl_options(1);
+    o.converge.max_newton = 1;
+    o.max_cutbacks = 0;
+    let e = run_nonlinear(&p, o, &mut nop).expect_err("one iteration is not enough");
+    assert_eq!(e.code, ErrorCode::NewtonDiverged);
+    assert!(e.cause.contains("increment 1") && e.cause.contains("load factor"), "{}", e.cause);
+    assert!(e.suggestion.is_some() && e.where_.as_deref() == Some("step"));
+
+    // 2. and with the cutbacks it is allowed, the same deformation arrives in smaller pieces
+    //    and the Step finishes: each halving buys back about one Newton iteration
+    let stretch = [[1.2, 0.0, 0.0], [0.0, 0.95, 0.0], [0.0, 0.0, 1.0]];
+    let patch = patch_mesh(ElementKind::Hex8);
+    let mut patch_sets = sets_of(&patch);
+    let exact = homogeneous_field(&patch, stretch);
+    let held = prescribe_field(&patch, &mut patch_sets, &exact);
+    let squeezed = problem(&patch, &patch_sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    let mut o = nl_options(1);
+    o.converge.max_newton = 4;
+    o.max_cutbacks = 3;
+    let res = run_nonlinear(&squeezed, o, &mut nop).expect("halving the increment gets there");
+    assert!(res.scalars["cutbacks"] >= 1.0, "{:?}", res.scalars);
+    assert!(res.scalars["increments_taken"] > 1.0);
+    assert_eq!(res.scalars["load_factor"], 1.0);
+
+    // 3. a folded deformed element: squashing the bar past zero length inverts it
+    let squashed = base(vec![root(), fix("pull", "xmax", [true, false, false], -1.5)]);
+    let mut o = nl_options(1);
+    o.max_cutbacks = 0;
+    let e = run_nonlinear(&squashed, o, &mut nop).expect_err("a folded element");
+    assert_eq!(e.code, ErrorCode::NewtonDiverged);
+
+    // 4. a non-finite residual, from a law that answers with one
+    p.materials = vec![Material { law: &BOOM, ..steel() }];
+    let mut o = nl_options(1);
+    o.max_cutbacks = 0;
+    let e = run_nonlinear(&p, o, &mut nop).expect_err("an infinite residual");
+    assert_eq!(e.code, ErrorCode::NewtonDiverged);
+    assert!(e.cause.contains("NaN"), "{}", e.cause);
+
+    // 5. a material the checks cannot see is a failure, not something to cut back from
+    p.materials = vec![Material { props: vec![YOUNG], ..steel() }];
+    assert!(checks::all(&p).is_empty(), "the well-posedness checks never look at the props");
+    let e = run_nonlinear(&p, nl_options(1), &mut nop).expect_err("a law with one prop instead of two");
+    assert_eq!(e.code, ErrorCode::MaterialProps);
+}
+
+/// A host that says stop is obeyed at every phase a nonlinear Step reports from.
+#[test]
+fn a_host_that_says_stop_cancels_a_nonlinear_step() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let mut seen = 0;
+    {
+        let mut count = |_p: Progress| {
+            seen += 1;
+            true
+        };
+        run_nonlinear(&p, nl_options(2), &mut count).expect("it runs");
+    }
+    assert!(seen > 3, "a nonlinear Step reports per iteration, not per Step");
+    for at in 0..seen {
+        let mut stop = cancel_on(at);
+        let e = run_nonlinear(&p, nl_options(2), &mut stop).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "at report {at}");
+    }
+}
+
+/// A bonded tie is eliminated *inside* the Newton loop, not around it: a beam cut in two and
+/// welded back together reaches the same large deflection as the single-Body beam, its
+/// reactions still balance the applied load, and the tie force never leaks into them.
+#[test]
+fn a_welded_beam_reaches_the_same_large_deflection_as_the_whole_one() {
+    let traction = 2.0e7;
+    let root = |on: &str| vec![fix("root", on, [true, true, true], 0.0)];
+    let whole = Structured { kind: ElementKind::Hex20, n: [8, 1, 1] }.box_([1.0, 0.05, 0.05]);
+    let whole_sets = sets_of(&whole);
+    let one = one_body();
+    let mut wp = problem(&whole, &whole_sets, &one, Idealisation::Solid3d, Formulation::Full, root("xmin"));
+    wp.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -traction] }];
+    let whole_res = run_nonlinear(&wp, nl_options(4), &mut nop).expect("the whole beam bends");
+
+    let half = Structured { kind: ElementKind::Hex20, n: [4, 1, 1] }.box_([0.5, 0.05, 0.05]);
+    let mesh = join(&half, &half, [0.5, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root("a.xmin"));
+    p.couplings = vec![bond(1e-9)];
+    p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -traction] }];
+    let welded = run_nonlinear(&p, nl_options(4), &mut nop).expect("and so does the welded one");
+
+    let tip = |mesh: &Mesh, res: &StepResult| {
+        let node = nearest_node(mesh, [1.0, 0.025, 0.025]);
+        res.fields[&Field::Displacement].data[node * 3 + 2]
+    };
+    let (a, b) = (tip(&whole, &whole_res), tip(&mesh, &welded));
+    assert!(a < -0.05, "the load has to be large enough to be nonlinear at all: {a}");
+    assert!((a - b).abs() <= 1e-6 * a.abs(), "whole {a} vs welded {b}");
+    // A tie carries no external load, so the supports still carry the whole of it.
+    reaction_balance(&welded, [0.0, 0.0, -traction * 0.05 * 0.05], traction * 0.05 * 0.05);
+    assert!(welded.warnings.is_empty(), "{:?}", welded.warnings);
+    assert_eq!(welded.scalars["load_factor"], 1.0);
+}
+
+/// A nonlinear Result is bit-identical at one and many threads: the assembly scatter, the
+/// residual norms and therefore every convergence decision are all fixed-order.
+#[test]
+fn a_nonlinear_step_is_bit_identical_at_one_and_many_threads() {
+    let mesh = cantilever_mesh([4, 2, 2], ElementKind::Hex20);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -2e7] }];
+    let run = |threads: usize| {
+        let step = Step::StaticNonlinear(nl_options(3));
+        pollster::block_on(procedure::run(&p, &step, &Pool::new(threads), None, None, &mut nop)).expect("it converges")
+    };
+    let (one, many) = (run(1), run(4));
+    for field in [Field::Displacement, Field::Stress, Field::Reaction] {
+        for (a, b) in one.fields[&field].data.iter().zip(&many.fields[&field].data) {
+            assert_eq!(a.to_bits(), b.to_bits(), "{field:?}");
+        }
+    }
+    assert_eq!(one.scalars, many.scalars);
+}
+
+/// The load factor is the Step's Amplitude when it has one, so a load–unload cycle is one Step
+/// and the Result reports where the cycle ended rather than where it peaked.
+#[test]
+fn an_amplitude_drives_the_load_factor_of_a_nonlinear_step() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex20);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e6] }];
+    let mut o = nl_options(4);
+    o.amplitude = Some(procedure::Amplitude::Table { t: vec![0.0, 0.5, 1.0], value: vec![0.0, 1.0, 0.0] });
+    let res = run_nonlinear(&p, o, &mut nop).expect("a load–unload cycle converges");
+    assert_eq!(res.scalars["load_factor"], 0.0);
+    let history = res.history.as_ref().expect("the cycle is the history");
+    assert_eq!(history.times, vec![0.0, 0.5, 1.0, 0.5, 0.0]);
+    // an elastic material comes back to where it started
+    let u = &res.fields[&Field::Displacement];
+    assert!(u.data.iter().all(|x| x.abs() < 1e-12), "an elastic cycle returns to the origin");
+    assert!(history.values[2].iter().any(|x| x.abs() > 1e-6), "and it went somewhere in between");
 }

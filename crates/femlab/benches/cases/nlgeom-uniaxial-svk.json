@@ -1,0 +1,61 @@
+{
+  "name": "nlgeom-uniaxial-svk",
+  "reference": "Benchmark K1. The only Command-level case with an *exact* finite-strain answer, and the reason it is exact is that the linear elastic law evaluated on Green-Lagrange strain and second Piola-Kirchhoff stress IS the St Venant-Kirchhoff material. A 1 m bar of a nu = 0 material is stretched 10 % by a prescribed displacement against three symmetry planes. With nu = 0 the Lame constant is zero, so a traction-free lateral face means E22 = E33 = 0 and the exact deformation is F = diag(1.1, 1, 1) everywhere: E11 = (lambda^2 - 1)/2 = 0.105, S11 = E * 0.105 = 22050 MPa, the first Piola-Kirchhoff stress is lambda S11 = 24255 MPa and the Cauchy stress is F S F^T / det F = lambda S11 = 24255 MPa as well, because the cross-section does not change. The root reaction is the first Piola-Kirchhoff stress on the reference area, 24255 MPa x 0.01 m^2 = 242.55 MN. Every number here is closed form; the tolerance is 1e-9 relative, which is round-off. A small-strain formulation would answer 0.1 for E11 and 21000 MPa for the stress, 5 % and 13 % away, so this also separates the two formulations outright.",
+  "journal": [
+    { "cmd": "model.new", "name": "nlgeom-uniaxial" },
+    { "cmd": "model.setUnits", "units": { "length": "m", "stress": "MPa", "force": "MN" } },
+    { "cmd": "geometry.addBox", "name": "bar", "size": ["1 m", "0.1 m", "0.1 m"] },
+    { "cmd": "material.add", "name": "svk", "E": "210 GPa", "nu": 0.0 },
+    { "cmd": "material.assign", "material": "svk", "bodies": ["bar"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 4, "ny": 1, "nz": 1 } }, "order": 2 },
+    { "cmd": "constraint.symmetry", "name": "sym-x", "on": "bar.xmin", "normal": "x" },
+    { "cmd": "constraint.symmetry", "name": "sym-y", "on": "bar.ymin", "normal": "y" },
+    { "cmd": "constraint.symmetry", "name": "sym-z", "on": "bar.zmin", "normal": "z" },
+    { "cmd": "constraint.prescribe", "name": "pull", "on": "bar.xmax", "dof": "ux", "value": "0.1 m" },
+    {
+      "cmd": "step.add",
+      "name": "stretch",
+      "procedure": "static-nonlinear",
+      "constraints": ["sym-x", "sym-y", "sym-z", "pull"],
+      "loads": [],
+      "output": ["displacement", "stress", "strain", "reaction"],
+      "increments": 2
+    },
+    { "cmd": "solve.run", "step": "stretch" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "stress", "component": 0, "at": ["0.5 m", "0.05 m", "0.05 m"] },
+      "path": "/value/value",
+      "expect": 24255.0,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "Cauchy sigma_11 = lambda E (lambda^2 - 1)/2 with lambda = 1.1, exact"
+    },
+    {
+      "query": { "query": "query.probe", "field": "strain", "component": 0, "at": ["0.5 m", "0.05 m", "0.05 m"] },
+      "path": "/value/value",
+      "expect": 0.105,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "Green-Lagrange E_11 = (lambda^2 - 1)/2, not the 0.1 a small-strain formulation gives"
+    },
+    {
+      "query": { "query": "query.probe", "field": "stress", "component": 1, "at": ["0.5 m", "0.05 m", "0.05 m"] },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-06,
+      "note": "and the lateral faces stay traction free, which is what makes the state uniaxial"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/0/value",
+      "expect": -242.55,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "the root carries the first Piola-Kirchhoff stress on the reference area"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false },
+    { "query": { "query": "query.result" }, "path": "/solver", "expect": "cpu-direct" }
+  ]
+}
