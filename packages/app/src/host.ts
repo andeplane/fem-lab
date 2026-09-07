@@ -553,10 +553,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Display only — the Model and the Journal are untouched and the mode survives every solve.',
       schema: z.object({ mode: z.enum(['geometry', 'mesh', 'results']) }),
       tool: true,
-      run: (input) => {
+      run: async (input) => {
         const { mode } = input as { mode: ViewMode };
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
+        _results?.invalidateTransient();
+        await _results?.refresh(true);
       },
     },
     {

@@ -90,6 +90,9 @@ impl Engine {
                 self.selected_summary(step.as_deref(), result_id.as_deref()).map(QueryResult::Result)
             }
             Query::Results {} => Ok(QueryResult::Results(self.query_results())),
+            Query::Surface { step, result_id } => {
+                self.query_surface(step.as_deref(), result_id.as_deref()).map(QueryResult::Surface)
+            }
             Query::Field { step, result_id, field } => {
                 self.query_field(step.as_deref(), result_id.as_deref(), &field).map(QueryResult::Field)
             }

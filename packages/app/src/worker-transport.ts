@@ -1,9 +1,10 @@
 // `EngineTransport` over a Worker. Calls are serialised (the engine is single-instance and
 // `&mut self`), progress is routed back to the caller, and cancel is terminate + recreate +
 // replay of the Journal so far (plan B §4.2, §5.3).
-import type { Ack, ImportAck, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, FrameResult, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
+import type { Ack, ImportAck, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, ResultSelector, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
 import { FemError, decodeBulk } from '@femlab/registry';
 import type { AppOp, AppReq, AppRes } from './protocol';
+import { checkResultIdentity, isBulkQuery, scientificQuery } from './result-transfer';
 
 export interface EngineOptions {
   gpu: boolean;
@@ -77,22 +78,22 @@ export class WorkerTransport implements EngineTransport {
   }
 
   async query(q: Query): Promise<QueryResult> {
-    const value = await this.call('query', q);
-    if (q.query === 'query.frame') {
-      const frame = value as Omit<FrameResult, 'values'> & { values: Float64Array };
-      // The public schema is JSON (number[]), in every host. The wire uses an f64 staging
-      // buffer only; converting here preserves scientific precision and the registry type.
-      return { ...frame, values: Array.from(frame.values) };
-    }
-    return value as QueryResult;
+    const requested = structuredClone(q);
+    const value = await this.call('query', requested);
+    return isBulkQuery(requested) ? scientificQuery(requested, value) : value as QueryResult;
   }
 
-  async surface(): Promise<AppSurface> {
-    return (await this.call('surface')) as AppSurface;
+  async surface(selector?: ResultSelector): Promise<AppSurface> {
+    const requested = selector === undefined ? undefined : structuredClone(selector);
+    const value = await this.call('surface', requested) as AppSurface;
+    if (requested !== undefined) checkResultIdentity({ query: 'query.surface', ...requested }, value);
+    return value;
   }
 
-  field(step: string, field: Field, component?: number): Promise<FieldData> {
-    return this.call('field', { step, field, component }) as Promise<FieldData>;
+  async field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData> {
+    const value = await this.call('field', { step, field, component, resultId }) as FieldData;
+    checkResultIdentity({ query: 'query.field', step, field, resultId }, value);
+    return value;
   }
 
   async export(spec: ExportSpec): Promise<ExportedFile> {
@@ -169,6 +170,7 @@ export class WorkerTransport implements EngineTransport {
 
   private wire(worker: Worker): Worker {
     worker.onmessage = (e: MessageEvent<AppRes & { raw?: ArrayBuffer[] }>) => {
+      if (worker !== this.worker) return;
       const res = e.data;
       const p = this.pending.get(res.id);
       if (!p) return;
