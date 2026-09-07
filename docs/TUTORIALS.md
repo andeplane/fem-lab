@@ -27,6 +27,7 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`symmetry-and-2d`](../packages/app/tutorials/symmetry-and-2d.json) | 9 | The `kirsch-quarter-plate` example: plane stress, two symmetry planes, mapped blocks on the hole. | Kirsch's field, plane stress vs plane strain, what symmetry costs you |
 | [`journal-as-program`](../packages/app/tutorials/journal-as-program.json) | 8 | The `cantilever` example again, then exported, edited and replayed as a script instead of clicked. | L³ scaling of a doubled beam, and the CLI `--verify` check against the committed fixture |
 | [`thermal-stress-chaining`](../packages/app/tutorials/thermal-stress-chaining.json) | 14 | `step.add.after`: a heat Step's temperature field consumed as the next Step's load (the `thermal-stress-plate` example), plus the same model with one edge genuinely free and one wrongly given a symmetry constraint. | σₓₓ = −EαΔT/(1−ν) = −150 MPa at −0.00 % error, and why the same number can be real physics or a restraint artefact |
+| [`pressure-vessel`](../packages/app/tutorials/pressure-vessel.json) | 10 | A thick cylinder revolved into an axisymmetric slice instead of meshed as a 3D solid (the `lame-cylinder-axisymmetric` example). | Lamé's σθθ(a) = 100 MPa, σrr(a) = −60 MPa against the pr/t thin-wall shortcut, which breaks at this vessel's t/a = 1 |
 
 The first four are the phase-1 set. The rest each own one procedure, one idealisation or one
 piece of method that the Commands alone do not explain.

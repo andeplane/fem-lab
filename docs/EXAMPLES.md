@@ -60,6 +60,7 @@ to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 | `explicit-free-fall` | u_z after 1 ms | −4.905 µm (gt²/2) | −4.915 µm | +0.20 % | 0.03 s |
 | `kirsch-quarter-plate` | σₓₓ at the hole edge | 300 MPa (Kirsch, Kₜ = 3) | 302.19 MPa | +0.73 % | 0.07 s |
 | `lame-cylinder-plane-strain` | σ_rr at the bore | −60 MPa (Lamé, = −p) | −59.65 MPa | −0.58 % | 0.02 s |
+| `lame-cylinder-axisymmetric` | σ_θθ at the bore | 100 MPa (Lamé) | 99.59 MPa | −0.41 % | — |
 | `cook-membrane` | tip u_y | 23.9 (Cook 1974, plane stress) | 23.93 | +0.14 % | 0.02 s |
 | `nafems-le1-membrane` | σ_yy at D | 92.7 MPa (NAFEMS LE1) | 92.16 MPa | −0.58 % | 0.02 s |
 | `nafems-le10-plate` | σ_yy at D, upper surface | −5.25 MPa (ESRD full-face LE10 variant) | −5.234 MPa | −0.30 % | — |
@@ -97,6 +98,7 @@ is the one the example computes.
 |---|---|---|---|---|
 | `kirsch-quarter-plate` | 3 | A quarter-symmetry model of a plate with a circular hole, two graded mapped blocks meeting at the hole. | Kt = σxx(0,a)/σ → 3.00 | Kirsch (1898); BENCHMARKS.md C1; [symmetry-and-2d](../packages/app/tutorials/symmetry-and-2d.json) |
 | `lame-cylinder-plane-strain` | 3 | A thick-walled cylinder under internal pressure, modelled as a plane-strain quarter section. | σθθ(a) = 100 MPa, σrr(a) = −60 MPa | Lamé closed form; BENCHMARKS.md C2 |
+| `lame-cylinder-axisymmetric` | 3 | The same cylinder, this time revolved into an axisymmetric slice instead of meshed as a flat quarter section. | σθθ(a) = 100 MPa, σrr(a) = −60 MPa | Lamé closed form; BENCHMARKS.md C2; [pressure-vessel](../packages/app/tutorials/pressure-vessel.json) |
 | `cook-membrane` | 2 | The classic tapered, shear-loaded panel used to test bending accuracy in a distorted mesh. | u_y at the tip ≈ 23.9 (plane stress, ν = 1/3) | Cook (1974); BENCHMARKS.md C4 |
 | `nafems-le1-membrane` | 3 | An elliptical plate with an elliptical hole under outward pressure — the standard curved-boundary benchmark. | σyy(D) = 92.7 MPa | NAFEMS Standard Benchmark LE1; BENCHMARKS.md C5 |
 | `nafems-le10-plate` | 3 | Elliptic thick plate with the whole outer face held; ESRD's variant of LE10. | σyy(D) = −5.25 MPa | ESRD StressCheck Benchmarks Guide pp. 29–31; BENCHMARKS.md D1 (#183) |
