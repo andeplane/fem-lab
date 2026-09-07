@@ -207,7 +207,11 @@ Expensive numeric buffers are addressed by immutable pinned snapshot/Result hand
 into every refresh. Account for pin lifetimes, eviction, cancellation and transferred-buffer
 ownership; TypeScript `Readonly` alone does not freeze mutable typed-array contents.
 
-The UI stores one ActiveProjectSession subtree. Responses can update it only if session,
+The UI stores one ActiveProjectSession subtree and keys the mounted model workspace by SessionId.
+Viewer refs, subscriptions and callbacks belong to that session too; component-local menu/form
+state must not survive by reusing a global ViewerRef or the same mounted subtree. Disposal stops
+subscriptions, while ownership checks still reject callbacks already queued before disposal.
+Responses can update the subtree only if session,
 operation/request ownership and appropriate version match. Errors and progress use the same
 check as success. A stale response may be retained in its original operation log but cannot
 replace the new project's error card or geometry. Selection and forms belong inside the subtree;
