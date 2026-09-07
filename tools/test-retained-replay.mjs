@@ -1,5 +1,5 @@
-import { batchModule } from './checked-batch.mjs';
 #!/usr/bin/env node
+import { batchModule } from './checked-batch.mjs';
 // #282: the registry Query is shared by native and WASM; transfers own only staging arrays.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
