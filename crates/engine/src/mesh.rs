@@ -90,13 +90,17 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
-        MesherSettings::Lattice { size, counts } => {
-            bodies(model, solids, dim, settings.simplices, &|solid| lattice(solid, *size, *counts, quadratic))?
+        MesherSettings::Lattice { size, counts, sizes } => {
+            validate_body_sizes(model, sizes)?;
+            bodies(model, solids, dim, settings.simplices, &|solid, body| {
+                let (size, counts) = sizes.get(body).map_or((*size, *counts), |&s| (Some(s), None));
+                lattice(solid, size, counts, quadratic)
+            })?
         }
         // A tet mesh is already simplices, so `simplices` is a no-op here rather than a second
         // split of elements that have no quads or hexes to split.
         MesherSettings::Tet { size, max_elements } => {
-            bodies(model, solids, dim, false, &|solid| tet(solid, *size, quadratic, *max_elements as usize))?
+            bodies(model, solids, dim, false, &|solid, _| tet(solid, *size, quadratic, *max_elements as usize))?
         }
         m => {
             let (body, part, mesher) = planar_or_swept(model, m, quadratic)?;
@@ -267,7 +271,8 @@ fn one_body(body: &str, part: Mesh, dim: usize, mesher: &str) -> Result<Meshed, 
 
 /// One mesh per Body of the Model, merged into one Mesh.
 ///
-/// `part` is the whole-Body mesher — the lattice or the free tet mesher — and everything after
+/// `part` is the whole-Body mesher — the lattice or the free tet mesher — given the Solid and
+/// the Body's name (the lattice reads its per-Body size override by name), and everything after
 /// it (the node and element offsets, the `simplices` split, the `<body>.<tag>` face Set naming)
 /// is the same either way, which is why there is one copy of it.
 fn bodies(
@@ -275,7 +280,7 @@ fn bodies(
     solids: &BTreeMap<String, Solid>,
     dim: usize,
     simplices: bool,
-    part: &dyn Fn(&Solid) -> Result<Mesh, GeomError>,
+    part: &dyn Fn(&Solid, &str) -> Result<Mesh, GeomError>,
 ) -> Result<Meshed, Error> {
     if model.bodies.is_empty() {
         return Err(Error::new(ErrorCode::ModelIllPosed, "the Model has no Body to mesh").suggest("geometry.add"));
@@ -322,7 +327,7 @@ fn bodies(
             .at(format!("body '{}'", body.name))
             .suggest("model.setIdealisation, or give the Body a shape of the right dimension"));
         }
-        let part = part(solid).map_err(|e| {
+        let part = part(solid, &body.name).map_err(|e| {
             Error::new(ErrorCode::MeshFailed, e.0)
                 .at(format!("body '{}'", body.name))
                 .suggest("mesh.set with a smaller element size")
@@ -381,24 +386,48 @@ fn append(mesh: &mut Mesh, part: &Mesh, body: &str, body_of_block: &mut Vec<Stri
     }
 }
 
+/// Validate explicit size targets both at dispatch and after later geometry replacements.
+pub fn validate_body_sizes(model: &Model, sizes: &BTreeMap<String, f64>) -> Result<(), Error> {
+    for name in sizes.keys() {
+        let at = format!("mesher.sizes.{name}");
+        let body =
+            model.body(name).ok_or_else(|| Error::not_found("body", name, &model.names(ObjectKind::Body)).at(&at))?;
+        if let Shape::Polyline { .. } = body.shape {
+            return Err(Error::new(ErrorCode::Unsupported, "line Bodies use member divisions, not element sizes")
+                .at(at)
+                .suggest("mesh.set without the line override, then geometry.addLine with divisions"));
+        }
+    }
+    Ok(())
+}
+
+fn positive_size(q: &Q<Length>, at: &str) -> Result<f64, Error> {
+    let size = q.si().map_err(|e| e.at(at))?;
+    if size <= 0.0 {
+        return Err(Error::schema("element size must be positive").at(at).suggest("mesh.set with a positive length"));
+    }
+    Ok(size)
+}
+
 /// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.
 pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
     match spec {
-        MesherSpec::Lattice { size } => match size {
-            LatticeSize::Size(q) => {
-                let s = q.si().map_err(|e| e.at("mesher.size"))?;
-                if s <= 0.0 {
-                    return Err(Error::schema("element size must be positive").at("mesher.size"));
+        MesherSpec::Lattice { size, sizes } => {
+            let (size, counts) = match size {
+                LatticeSize::Size(q) => (Some(positive_size(q, "mesher.size")?), None),
+                LatticeSize::Counts { nx, ny, nz } => {
+                    if *nx == 0 || *ny == 0 || *nz == 0 {
+                        return Err(Error::schema("element counts must be at least 1").at("mesher.size"));
+                    }
+                    (None, Some([*nx, *ny, *nz]))
                 }
-                Ok(MesherSettings::Lattice { size: Some(s), counts: None })
-            }
-            LatticeSize::Counts { nx, ny, nz } => {
-                if *nx == 0 || *ny == 0 || *nz == 0 {
-                    return Err(Error::schema("element counts must be at least 1").at("mesher.size"));
-                }
-                Ok(MesherSettings::Lattice { size: None, counts: Some([*nx, *ny, *nz]) })
-            }
-        },
+            };
+            let sizes = sizes
+                .iter()
+                .map(|(body, q)| Ok((body.clone(), positive_size(q, &format!("mesher.sizes.{body}"))?)))
+                .collect::<Result<_, Error>>()?;
+            Ok(MesherSettings::Lattice { size, counts, sizes })
+        }
         MesherSpec::Mapped { body, blocks } => {
             if blocks.is_empty() {
                 return Err(Error::schema("a mapped mesh needs at least one block").at("mesher.blocks"));
@@ -464,10 +493,16 @@ const DEFAULT_MAX_ELEMENTS: u32 = 500_000;
 pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
     let k = |n: usize| ((n as f64 * h0 / h).round() as usize).max(1);
     match m {
-        MesherSettings::Lattice { size: Some(_), .. } => MesherSettings::Lattice { size: Some(h), counts: None },
-        MesherSettings::Lattice { counts, .. } => {
-            MesherSettings::Lattice { size: None, counts: counts.map(|c| c.map(|n| k(n as usize) as u32)) }
-        }
+        MesherSettings::Lattice { size: Some(original), sizes, .. } => MesherSettings::Lattice {
+            size: Some(h),
+            counts: None,
+            sizes: sizes.iter().map(|(body, size)| (body.clone(), size * h / original)).collect(),
+        },
+        MesherSettings::Lattice { counts, sizes, .. } => MesherSettings::Lattice {
+            size: None,
+            counts: counts.map(|c| c.map(|n| k(n as usize) as u32)),
+            sizes: sizes.iter().map(|(body, size)| (body.clone(), size * h / h0)).collect(),
+        },
         MesherSettings::Free { of, refine, .. } => {
             MesherSettings::Free { of: of.clone(), size: h, refine: refine.clone() }
         }
