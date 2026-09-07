@@ -45,6 +45,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 
 | Benchmark | Status | Checks | Measured | Reference | Error |
 |---|---|---|---|---|---|
+| amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -53,7 +54,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cantilever-model | green | 11/11 | 1.0000e7 | 1.0000e7 | 0.00 % |
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
-| explicit-free-fall | green | 3/3 | -0.004915 | -0.004905 | 0.20 % |
+| explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
 | lame-3d-revolve-hex20 | green | 5/5 | 99.816731 | 100 | 0.18 % |
@@ -75,6 +76,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
 | near-incompressible-0499 | green | 4/4 | 5.9951e-5 | 5.9990e-5 | 0.07 % |
 | near-incompressible-04999 | green | 4/4 | 5.9609e-5 | 5.9999e-5 | 0.65 % |
+| radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
+| radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 
 <!-- bench:end -->
@@ -110,21 +113,6 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, including
 faer factorization/triangular solution under the platform policy documented below.
 
-Direct-solver acceptance (#266) is also checked independently of factorization success.
-`a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
-one-triangle factorization gives `(2/3,-1/3)` but whose actual residual is exactly `(0,-2/3)`
-for `b=(1,0)`: returning that candidate as a successful solve fails the test. An SPD scalar
-system whose exact solution is `1e500` must return a structured error. Conversely, `3x=b`
-for `b=1e-300,1,1e300` must recover `x/b=1/3` within 1e-15 without norm overflow. A 3–4–5
-norm-ratio check verifies the same residual ratio at those scales, plus zero and nonfinite
-cases. NaN, infinite, nonpositive and allowance-overflowing tolerances are rejected before
-changing the solution vector. Direct solves reject a nonfinite residual or one above the existing
-refinement floor of `100*tolerance` (default 1e-8); this is an acceptance guard, not a replacement for D1's
-published stress and force-balance oracles. Command regressions keep Model/Journal/previous
-Result intact on rejection and ensure transient heat and modal analysis propagate the error
-without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
-scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
-
 The standalone [faer platform discriminator](../tools/diagnose-faer-266/README.md) isolates
 #266 below FEM assembly: integer rank-one block products must match every entry exactly,
 and 3D Dirichlet grids of widths 5, 9, 13 must recover the constant solution 1 with maximum
@@ -152,6 +140,27 @@ The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` independently
 checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-thread
 construction and concurrent callers; no solve may mutate faer's global setting.
 The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
+
+Direct-solver acceptance (#266) is also checked independently of factorization success.
+`a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
+one-triangle factorization gives `(2/3,-1/3)` but whose actual residual is exactly `(0,-2/3)`
+for `b=(1,0)`: returning that candidate as a successful solve fails the test. An SPD scalar
+system whose exact solution is `1e500` must return a structured error. Conversely, `3x=b`
+for `b=1e-300,1,1e300` must recover `x/b=1/3` within 1e-15 without norm overflow. A 3–4–5
+norm-ratio check verifies the same residual ratio at those scales, plus zero and nonfinite
+cases. NaN, infinite, nonpositive and allowance-overflowing tolerances are rejected before
+changing the solution vector. Direct solves reject a nonfinite residual or one above the existing
+refinement floor of `100*tolerance` (default 1e-8); this is an acceptance guard, not a replacement for D1's
+published stress and force-balance oracles. Command regressions keep Model/Journal/previous
+Result intact on rejection and ensure transient heat and modal analysis propagate the error
+without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
+scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
+
+Windows uses per-call sequential numeric factorization, retaining parallel assembly and
+triangular solution ([ADR0019](adr/0019-windows-direct-factorization-parallelism.md)).
+The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` checks reusable factors
+at 65/129/257 unknowns, two right-hand sides, one/four threads and concurrent callers.
+The unchanged D1 stress and force-balance checks remain the physical acceptance gate.
 
 A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
 including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
@@ -193,6 +202,26 @@ reference monomial, including unit-measure normalization, through degree 3 (tri3
 adds degree 2/3 in 2D/3D, and axisymmetric `r` adds degree 2. Compile-time collapsed
 Gauss tables are positive and cover these factors; stiffness/recovery retains its own rule.
 
+### Richardson rate and limit with unequal refinements (#121)
+
+The manufactured sequence `q(h) = 1.25 + C h^p` has the independent exact limit `1.25`
+and rate `p`. Engine tests cover `p = 0.5, 1, 2, 3, 4`, both signs of `C`, equal ratios
+(`[4,2,1]`) and unequal ratios in both directions (`[7,4,1]`, `[7,2,1]`). Length and
+quantity unit factors span `1e-100`–`1e100` and `1e-200`–`1e200`, respectively: the rate
+must stay within `1e-9` and the rescaled limit within `1e-8` of the closed forms. The
+reported regression `q = 1 + h²` on `[3,2,1]` recovers `(limit, rate) = (1,2)` within
+`1e-12`; reordering or adding a coarse point outside the power-law range has no effect.
+An extreme spacing case (`[1e200,1e-200,1e-300]`, `p=0.001`) also checks that mesh-size
+quotient overflow cannot invalidate finite data.
+
+The generalized equation uses both log refinement ratios `a=log(h1/h2)` and
+`b=log(h2/h3)`: `Δq12/Δq23 = (exp(ap)-1)/(1-exp(-bp))`. Its positive-rate solution
+exists uniquely only when the difference ratio exceeds `a/b`. Logarithms, `expm1` and a
+bracketed solve avoid forming overflowing difference products or size powers. Diverging,
+logarithmic, constant and oscillating sequences, invalid triples and unrepresentable
+limits have no estimate; `study.converge` reports its existing unavailable fields.
+
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -204,10 +233,27 @@ Gauss tables are positive and cover these factors; stiffness/recovery retains it
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+| B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
 refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
+
+B8 (`amplitude-ramped-cantilever`) is B1's hex20 cantilever with a triangular amplitude,
+t = [0, 1, 2] s and g = [0, 1, 0] at dt = 0.25 s: eight increments, nine retained frames. The
+fully loaded frame measures 0.1904070 mm, the same value the un-amplituded `cantilever-hex20`
+case reports, and the half-loaded frames on the way up and the way down are exactly half of it.
+
+**Linear static is affine in the amplitude, not proportional.** `u(t) = u_th + g(t)·u_L`: the
+amplitude scales the Loads and the prescribed displacements, and never the temperature, because
+the thermal strain an element subtracts in `recover` belongs to the temperature field rather
+than to the load history. So a whole schedule costs at most two solves against one reduced
+system, and `an_amplitude_is_affine_in_the_loads_and_never_scales_the_temperature` in
+`tests/fem.rs` is what fails if that is ever "simplified" back into a scaling of one solve: with
+a temperature Load present, the frame at g = 0 must equal a pure thermal solve — fields, stress
+and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
+itself is what a linear procedure guarantees; when a nonlinear material, contact or large
+deflection lands, the increments become real solves and this benchmark becomes their gate.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
@@ -334,8 +380,10 @@ and named edge preservation and deterministic replay for Tri3/Tri6.
 | E1 | 1D bar, fixed temperatures, hex8/tet4/quad4/tri3 | linear profile | 1e-10 | conduction | engine test + green |
 | E2 | Ansys VM97 fin, conduction + convection | 1D fin with a convective tip, `θ(L)/θ₀ = 1/[cosh mL + (h/mk) sinh mL]` | 2 % (see below) | convection with an analytical fin solution | engine test |
 | E3 | NAFEMS T3 1D transient, sinusoidal boundary | T = 36.60 °C, 20 mm inside the driven face at t = 32 s | 0.5 °C | transient integrator, θ-method order | engine test + green |
-| E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC (if/when added) | |
+| E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC | **resolve** — needs the published table |
 | E5 | Forced transient slab, all four simplex kinds | mean T(t) = 1/12 − Σ(m odd) 8 exp(−m²π²t)/(mπ)⁴, at t=0.1 | finest mean error < 2e-4; monotone refinement, rate > 1.8 (linear), > 3.5 (quadratic) | capacity and transient mesh convergence | engine test |
+| E6 | Radiating slab, conduction into a grey-body face | T_L from bisecting `k(T0 − T_L)/L = σε(T_L⁴ − T∞⁴)`: 927.0039504520639 K at k = 55.6 W/(m K), L = 0.1 m, T0 = 1000 K, T∞ = 300 K, ε = 0.98 | 1e-9 relative at three mesh sizes, and heat in through the held face = power radiated to 1e-9 | radiation BC, its Newton iteration, and the discrete energy balance it closes | engine test + green |
+| E7 | Radiating block, analytic transient | `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)`, `c = σεA/(ρ c_p V)`: 381.49284808810995 K at t = 1 s | Crank–Nicolson at dt = 5 ms within 1e-4 relative; observed temporal rate > 0.85 at θ = 1 and > 1.7 at θ = 0.5 under two halvings | the fourth-power law itself, and the θ-method's order on a nonlinear boundary | engine test + green |
 
 E1 runs the four element families on the same bar and checks every node, not just a probe: the
 profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
@@ -347,6 +395,22 @@ The registry's E1 VTU export is also read, unmodified, by the independent `vtkio
 Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
 in metres; the B1 export checks point-field tuple counts and mesh topology through the same
 reader. This catches file-format errors that an encoder-specific test decoder would miss (#186).
+
+**E4 is still unsourced, and that is why it is not a gate.** The radiation boundary condition
+that E4 was waiting for now exists, and E6 runs T2's own physical parameters — k = 55.6 W/(m K),
+L = 0.1 m, 1000 K held, ε = 0.98 into a 300 K surrounding. Bisecting the flux balance gives
+927.0039504520639 K and the engine lands 6e-15 relative from it, which is within 0.0005 % of the
+927 K that circulates for T2. But nobody here has read that number out of the NAFEMS publication,
+and this catalogue only hard-codes numbers somebody has read from a source: E4 therefore stays
+**resolve**, and E6 — whose oracle is a scalar equation this repository solves itself — is the
+row that gates the feature.
+
+**E6 and E7 are the two halves of a radiation gate.** E6 fixes the steady answer against an
+oracle that never touches a finite element, and adds a conservation check: at convergence the
+heat entering through the held face equals `σε∫(T⁴ − T∞⁴)dS` off the radiating one, to 1e-9. E7
+fixes the transient answer against a closed form that a linearised film cannot reproduce by
+accident, and measures the θ-method's own order on it. Between them they would fail if the
+film, the iteration, the energy balance or the time integrator were wrong.
 
 **E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
 one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct
@@ -598,6 +662,35 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Transformed Sheet free meshing (#230)
+
+A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°
+about z and translated (5,7) m, has area 18 m² and bounds [−1,5]×[7,11] m.
+`transformed_sheets_mesh_in_world_space_with_oriented_hole_boundaries` checks that
+area, positive signed triangle Jacobians, empty hole, exact named boundary lines,
+world-size area bounds and local refinement in world coordinates. Both tri3 and
+tri6 run at sizes 0.8, 0.4 and 0.2 m; quadratic midpoints retain the edge ordering.
+The engine regression runs the shared tagged polygon at 1, 0.5 and 0.25 m, checks
+outer lengths (6,4,6,4) m and hole perimeter 10 m, with each tag qualified once.
+
+`transformed_curved_holes_resample_as_world_element_size_decreases` scales a
+10×10 m square with a unit-radius circular hole into a 20×30 m rectangle with
+an elliptical hole of radii 2 and 3 m. At world sizes 2, 1 and 0.5 m its area
+converges from above to 600−6π m². The error is bounded by 0.4π·size m², and
+every quadratic boundary node stays within the normalized chord bound. Sampling
+uses local tolerance 0.1·size/max(scale_x,scale_y), which bounds world error after
+rotation and nonuniform scaling. This is mesh-dependent sampling, independent of
+the fixed display preview. Unsupported nested/out-of-plane transforms remain
+explicit errors, with engine command rejection preserving Model and Journal.
+
+### Transformed Sheet arithmetic guard (#230, #274)
+
+Finite scale and translation inputs that overflow world coordinates return structured errors
+before triangulation. A never-panic property exercises multiplication and addition overflow,
+linear/quadratic meshing and shared Solid evaluation. Registry checks verify rejected geometry
+leaves the Model and Journal unchanged. Existing transformed-hole area, boundary, refinement
+and convergence oracles continue to check ordinary geometry.
 
 ## Unmeshed Sheet preview (#154)
 

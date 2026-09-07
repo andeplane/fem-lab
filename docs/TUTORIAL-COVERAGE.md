@@ -53,7 +53,7 @@ login.
 | 11 | [Beam/gap example](https://ceae-server.colorado.edu/v2016/books/bmk/ch01s01ach01.html) (Abaqus Benchmarks Guide) | Cubic beam elements, three cantilevers, five gap elements opening and closing | **cannot** — no beam elements, no gap/contact elements |
 | 12 | [FV4: Cantilever with off-center point masses](https://ceae-server.colorado.edu/v2016/books/bmk/ch04s04anf17.html) (NAFEMS) | Beam elements, eccentric point masses, first six eigenmodes | **cannot** — no beam elements, no point masses |
 | 13 | [The Hertz contact problem](https://ceae-server.colorado.edu/v2016/books/bmk/ch01s01ach11.html) (Abaqus Benchmarks Guide) | Two cylinders, frictionless finite-sliding contact, quarter symmetry, contact pressure vs the Hertz solution | **cannot** — no contact |
-| 14 | [Conductive, convective, and radiative heat transfer in an exhaust manifold](https://ceae-server.colorado.edu/v2016/books/exa/ch05s01aex121.html) | Steady conduction, surface film convection, cavity radiation, nonlinear iteration | **partial** — conduction and convection are `step.add{heat-steady}` + `load.convection`; radiation and the CAD manifold are missing |
+| 14 | [Conductive, convective, and radiative heat transfer in an exhaust manifold](https://ceae-server.colorado.edu/v2016/books/exa/ch05s01aex121.html) | Steady conduction, surface film convection, cavity radiation, nonlinear iteration | **partial** — conduction, convection and radiation to a surrounding are `step.add{heat-steady}` + `load.convection` + `load.radiation`; the tutorial's *cavity* radiation (surface-to-surface view factors) and the CAD manifold are missing |
 | 15 | [Geometrically nonlinear analysis of a cantilever beam](https://ceae-server.colorado.edu/v2016/books/bmk/ch02s01ach139.html) | Large displacement and rotation, transverse and end-moment loading, Bisshopp–Drucker exact solution | **cannot** — no geometric nonlinearity, no moment loads |
 
 ### Siemens Simcenter Femap / Nastran
@@ -389,12 +389,16 @@ Scope: exactly #14's K_σ, reused — a `modal` Step whose `after` names a stati
 (K + K_σ) instead of K. If #14 ships, this is a flag rather than a project; file it as a
 follow-up on that issue.
 
-**24. Radiation boundary condition — 1 tutorial.**
+**24. Radiation boundary condition — 1 tutorial.** *Shipped (#79).*
 Tutorial 14.
-Scope: a `load.radiation` with emissivity and a sink temperature giving a σε(T⁴ − T∞⁴) surface
-term. It makes the heat Step nonlinear (a Newton loop over temperature), so it is the smallest
-possible customer for a nonlinear thermal solve. Gate already written: BENCHMARKS E4 (NAFEMS T2,
-T(B) = 927 K).
+`load.radiation` gives a face a σε(T⁴ − T∞⁴) surface term against a large surrounding, and makes
+the heat Step nonlinear — a Newton loop over temperature through `procedure::iterate`, which is
+now the repository's shared nonlinear-iteration structure, governed by `step.add`'s
+`nonlinearTolerance` and `nonlinearMaxIterations`. Gated by BENCHMARKS E6 (a bisection oracle on
+the steady flux balance) and E7 (the analytic T(t) = T0(1 + 3cT0³t)^(−1/3) cooling curve); E4
+(NAFEMS T2) stays **resolve** because its 927 K has not been read from the publication.
+What is still missing for tutorial 14 is *cavity* radiation — surface-to-surface exchange with
+view factors — which is a different feature, not a parameter of this one.
 
 **25. Conjugate heat transfer / fluid-structure — 1 tutorial.**
 Tutorial 45.
