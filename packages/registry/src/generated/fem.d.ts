@@ -365,8 +365,10 @@ export interface Fem {
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
      * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
      * `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
-     * implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
-     * `increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
+     * implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `rayleighAlpha`,
+     * `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
+     * `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+     * `amplitude` to static-nonlinear. An
      * implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
      * (default 0, Newmark average acceleration: second order, unconditionally stable and
      * energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
@@ -392,6 +394,12 @@ export interface Fem {
      * Heat Results report net applied power, positive removed heat and stored-energy rate;
      * transient powers belong to the last θ-method integration stage (radiation uses weighted
      * endpoint fluxes), while temperature fields belong to its endpoint.
+     * A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
+     * superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
+     * bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and
+     * answers a nodal amplitude and a phase lag per retained frequency; `displacement` is the
+     * amplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero
+     * — a moving support is base excitation, which this procedure does not do.
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -464,9 +472,10 @@ export interface Fem {
   };
   query: {
     /**
-     * Everything about the Model in one read: bodies with volumes and materials, materials,
-     * named Sets, constraints, loads with their totals, steps, mesh settings, and the
-     * well-posedness warnings that would block a solve. Read this before changing anything.
+     * Everything about the Model in one read: bodies with volumes and materials, imported
+     * face patches with paste-ready naming predicates, named Sets, constraints, loads with
+     * their totals, steps, mesh settings, and the well-posedness warnings that would block a
+     * solve. Read this before changing anything.
      */
     model(): Promise<ModelSummary>;
     /**
