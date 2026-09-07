@@ -8082,6 +8082,26 @@ fn an_orthotropic_material_is_reported_everywhere_a_material_is_named() {
     let oriented = report(&mut e, None, Some(vec![ReportSection::Verification, ReportSection::Materials]));
     assert!(!oriented.markdown.contains("Hand calculation"), "an oriented material has no beam-theory E");
     assert!(oriented.markdown.contains("20° about [0, 0, 1]"), "{}", oriented.markdown);
+    // Dropping the orientation does not bring the hand check back either: with the material axes
+    // along the global ones there is still no single `E` for `δ = F L³ / 3 E I` to quote. This is
+    // the beam's only material, so nothing earlier in the hook can be what stands it down.
+    ok(
+        &mut e,
+        &serde_json::json!({
+            "cmd": "material.add", "name": "steel", "rho": "1600 kg/m^3", "orthotropic": lamina_block()
+        })
+        .to_string(),
+    );
+    let only = e.model().materials.clone();
+    assert!(only.len() == 1 && only[0].orientation.is_none() && only[0].e.is_none(), "{only:?}");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let unoriented = report(&mut e, None, Some(vec![ReportSection::Verification]));
+    assert!(!unoriented.markdown.contains("Hand calculation"), "{}", unoriented.markdown);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+        "orientation":{"axis":[0,0,1],"angle":"20 deg"}}"#,
+    );
     // And an orthotropic one, which the materials table and the assumptions both describe.
     ok(&mut e, r#"{"cmd":"material.add","name":"plain","E":"70 GPa","nu":0.33}"#);
     ok(
@@ -8126,14 +8146,6 @@ fn an_orthotropic_material_is_reported_everywhere_a_material_is_named() {
     assert!(ply.summary.starts_with("orthotropic, E1 = 1.55e11 Pa"), "{}", ply.summary);
     let steel = o.objects.iter().find(|x| x.name == "steel").expect("the steel object");
     assert!(steel.summary.starts_with("E = 2.1e11 Pa"), "{}", steel.summary);
-    // Dropping the orientation does not bring the hand check back: with the material axes along
-    // the global ones there is still no single `E` for `δ = F L³ / 3 E I` to quote.
-    ok(&mut e, &lamina_command(serde_json::json!({ "rho": "1600 kg/m^3" })));
-    let cleared = e.model().materials.iter().find(|m| m.name == "ply").expect("the ply").clone();
-    assert!(cleared.orientation.is_none() && cleared.e.is_none(), "no orientation and no single E");
-    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
-    let unoriented = report(&mut e, None, Some(vec![ReportSection::Verification]));
-    assert!(!unoriented.markdown.contains("Hand calculation"), "{}", unoriented.markdown);
 }
 
 /// An orthotropic Model replays to the same hashes it was built with, so a Journal that names
