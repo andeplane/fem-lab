@@ -65,6 +65,10 @@ pub enum ErrorCode {
     ConstraintConflict,
     #[serde(rename = "constraint.rigid-modes")]
     ConstraintRigidModes,
+    #[serde(rename = "constraint.dependent")]
+    ConstraintDependent,
+    #[serde(rename = "contact.unpaired")]
+    ContactUnpaired,
     #[serde(rename = "solve.not-positive-definite")]
     SolveNotPositiveDefinite,
     #[serde(rename = "solve.stalled")]
@@ -166,6 +170,8 @@ mod tests {
             ErrorCode::ResultStale,
             ErrorCode::ConstraintConflict,
             ErrorCode::ConstraintRigidModes,
+            ErrorCode::ConstraintDependent,
+            ErrorCode::ContactUnpaired,
             ErrorCode::SolveNotPositiveDefinite,
             ErrorCode::SolveStalled,
             ErrorCode::SolveDiverged,
