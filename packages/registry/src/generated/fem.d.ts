@@ -167,6 +167,21 @@ export interface Fem {
      */
     remove(args: Omit<Extract<Command, { cmd: 'constraint.remove' }>, 'cmd'>): Promise<Ack>;
   };
+  contact: {
+    /**
+     * Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+     * point it projects onto in `master`, in every displacement component. It is a linear
+     * constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+     * bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+     * slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+     * gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+     * master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+     * so the two parts are in perfect thermal contact. A tie is listed in a Step's
+     * `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+     * between Bodies that share no element, which query.cost does not count.
+     */
+    add(args: Omit<Extract<Command, { cmd: 'contact.add' }>, 'cmd'>): Promise<Ack>;
+  };
   load: {
     /**
      * Uniform pressure on a face Set, positive into the surface (a negative value pulls).

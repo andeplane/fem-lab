@@ -32,6 +32,34 @@ pub struct Constraint {
     pub value: f64,
 }
 
+/// One resolved connection between parts: a linear relation between DOFs rather than a
+/// prescribed value, turned into eliminated rows by [`crate::fem::mpc::build`].
+///
+/// Kept apart from [`Constraint`] because nothing about it resolves to `(dof, value)` pairs:
+/// it has no value, it names two Sets, and it changes the operator instead of the right-hand
+/// side. The Model stores both in `model.constraints`, so `constraint.remove`, `model.rename`
+/// and a Step's constraint list work on it unchanged.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Coupling {
+    /// A bonded contact: every node of `slave` follows the point it projects onto in the face
+    /// Set `master`, in every component. `tol` is the largest gap that still pairs, in metres.
+    Bonded { name: String, master: String, slave: String, tol: f64 },
+}
+
+impl Coupling {
+    /// The name the Command gave it, which every error and warning quotes.
+    pub fn name(&self) -> &str {
+        let Coupling::Bonded { name, .. } = self;
+        name
+    }
+
+    /// The Sets it names, so `checks::all` can report an empty one before the pairing runs.
+    pub fn sets(&self) -> [&str; 2] {
+        let Coupling::Bonded { master, slave, .. } = self;
+        [master, slave]
+    }
+}
+
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
 /// block, and the resolved Constraints and Loads.
 pub struct Problem<'a> {
@@ -46,6 +74,8 @@ pub struct Problem<'a> {
     pub idealisation: Idealisation,
     pub formulation: Formulation,
     pub constraints: Vec<Constraint>,
+    /// Bonded contacts and the other multipoint constraints, in Step order.
+    pub couplings: Vec<Coupling>,
     pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
     /// Registry Loads with different Body references use increments with a zero reference.

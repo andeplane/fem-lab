@@ -14,7 +14,7 @@ use crate::command::Field;
 use crate::engine::OnProgress;
 use crate::error::Error;
 use crate::fem::problem::Problem;
-use crate::fem::{assembly, checks, loads};
+use crate::fem::{assembly, checks, loads, mpc};
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, stress, Per};
 use crate::procedure::{report, retained_frame_count, time_grid, vector_field, Amplitude, History, StepResult};
@@ -72,11 +72,16 @@ pub async fn run(
             loads::assemble_loads(p, &mut f).map(|applied| (a, applied, f))
         })
     })?;
-    // `checks::all` has already resolved these and found no conflict.
+    // `checks::all` has already resolved these and paired every contact.
     let rc = assembly::resolve(p).expect("the checks resolved the constraints");
-    let red = assembly::reduce(&a.k, &f, &rc);
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    // `TᵀKT v = Tᵀf` with the slaves dropped from the free set; the GPU never sees this step,
+    // because what reaches a solver is still a plain reduced `k_ff` (plan B §1).
+    let (kt, ft) = pool.install(|| mpc::transform(&a.k, &f, &mpc));
+    let red = assembly::reduce(&kt, &ft, &rc, &mpc.slaves);
     let (u_f, mut solver) = solve(&red.k_ff, &red.f_f, opts, pool, gpu, &mut progress).await?;
     let mut u = assembly::expand(&red, &u_f);
+    mpc::recover(&mpc, &mut u);
     let mut scalars = BTreeMap::new();
     // Everything the amplitude scales: the applied totals, the load vector the reactions are
     // measured against, and `u_L`. One without an amplitude leaves all three exactly as they
@@ -89,11 +94,16 @@ pub async fn run(
         // a temperature field, and then the whole schedule costs the one solve above.
         let mut u_th = vec![0.0; a.k.n];
         if p.temperature.is_some() {
-            let f_th: Vec<f64> = red.free.iter().map(|&dof| a.f_thermal[dof as usize]).collect();
+            // `Tᵀf_thermal`, because the reduced system this is solved against is `TᵀKT`.
+            let ft_th = mpc::transpose_load(&mpc, &a.f_thermal);
+            let f_th: Vec<f64> = red.free.iter().map(|&dof| ft_th[dof as usize]).collect();
             let (th_f, th) = solve(&red.k_ff, &f_th, opts, pool, gpu, &mut progress).await?;
             for (i, &dof) in red.free.iter().enumerate() {
                 u_th[dof as usize] = th_f[i];
             }
+            // `recover` is linear, so recovering the two parts separately and subtracting is
+            // the same as recovering `u_L` itself; `ramp` then works on full fields.
+            mpc::recover(&mpc, &mut u_th);
             // Two solves, one reported residual: the worse of them, never the flattering one.
             solver.rel_residual = solver.rel_residual.max(th.rel_residual);
         }
@@ -107,7 +117,8 @@ pub async fn run(
         scalars.insert("dt".to_string(), dt);
         history = Some(h);
     }
-    let r = assembly::reactions(&a.k, &u, &f, &red);
+    // The original `k` and `f`: a tie's internal force is never a support reaction.
+    let r = assembly::reactions(&a.k, &u, &f, &red.fixed, &mpc);
     report(&mut progress, "post", 0.9, "recovering fields")?;
 
     // The stiffness integral above already called this material on these elements, so the
@@ -146,7 +157,7 @@ pub async fn run(
         modes: Vec::new(),
         history,
         solver,
-        warnings: Vec::new(),
+        warnings: mpc.warnings,
         assumptions: Vec::new(),
     })
 }
