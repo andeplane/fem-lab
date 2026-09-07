@@ -17,6 +17,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 
 ## Commands
 
+- [constraint.couple](#commands-constraint-couple)
 - [constraint.fix](#commands-constraint-fix)
 - [constraint.prescribe](#commands-constraint-prescribe)
 - [constraint.remove](#commands-constraint-remove)
@@ -26,6 +27,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
 - [geometry.addLine](#commands-geometry-addLine)
+- [geometry.addMass](#commands-geometry-addMass)
 - [geometry.import](#commands-geometry-import)
 - [geometry.nameFace](#commands-geometry-nameFace)
 - [geometry.nameRegion](#commands-geometry-nameRegion)
@@ -64,6 +66,30 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [step.remove](#commands-step-remove)
 - [step.reorder](#commands-step-reorder)
 - [study.converge](#commands-study-converge)
+
+<a id="commands-constraint-couple"></a>
+
+### constraint.couple
+
+Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a
+load introduction is idealised. `distributed` makes the point follow the face's weighted
+mean displacement and adds no stiffness at all, so a force at the point spreads over the
+face in exactly the weights a uniform traction would produce, and a mass at the point
+loads the face the same way; that is the one to reach for. `rigid` is the opposite:
+every node of the face takes the point's displacement, so the face cannot deform and the
+part around it is stiffer than the real one. Nodes carry translations only, so **neither
+kind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling
+does not rotate its face — it translates it. It is a linear multipoint constraint inside
+the same operator, needs no iteration, is listed in a Step's `constraints` like any
+other Constraint, and is removed with constraint.remove.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| point | yes | <code>{"type":"string"}</code> |  |
+| on | yes | <code>{"type":"string"}</code> |  |
+| kind | yes | <code>{"$ref":"#/$defs/CoupleKind"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"constraint.couple"}</code> |  |
 
 <a id="commands-constraint-fix"></a>
 
@@ -212,6 +238,26 @@ Line Bodies need the 3D idealisation and are not cut, meshed or previewed as sol
 | members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> |  |
 | divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> |  |
+
+<a id="commands-geometry-addMass"></a>
+
+### geometry.addMass
+
+Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing
+else. It contributes to the mass matrix (so it changes modal frequencies) and to gravity
+(m·g at that point), and has no stiffness whatever, so it must be attached to the model
+with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
+The point is also a node Set of the same name, so constraint.couple, constraint.fix,
+load.force and query.set target it by name. Re-issuing with an existing name replaces
+it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
+so it models a compact mass, not a flywheel.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| at | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
+| mass | yes | <code>{"$ref":"#/$defs/Q_mass"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"geometry.addMass"}</code> |  |
 
 <a id="commands-geometry-import"></a>
 
@@ -967,6 +1013,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
       "type": "string",
       "const": "bonded"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>CoupleKind</summary>
+
+```json
+{
+  "description": "How a point mass is connected to a face Set. Nodes carry translations only, so neither kind\ntransmits a moment.",
+  "oneOf": [
+    {
+      "description": "The point follows the face's weighted mean displacement and adds no stiffness, so a\nforce or a mass at the point spreads over the face in exactly the weights a uniform\ntraction would produce. How a bearing or a load introduction is idealised.",
+      "type": "string",
+      "const": "distributed"
+    },
+    {
+      "description": "Every node of the face takes the point's displacement, so the face translates as one\nand cannot deform at all. Stiffer than the real part around a real attachment.",
+      "type": "string",
+      "const": "rigid"
     }
   ]
 }
@@ -1893,6 +1962,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "length"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_mass</summary>
+
+```json
+{
+  "description": "A mass with unit, e.g. \"2 kg\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "mass"
 }
 ```
 
@@ -3909,6 +3991,36 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "at": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "mass": {
+          "$ref": "#/$defs/Q_mass"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "geometry.addMass"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "at",
+        "mass"
+      ]
+    },
+    {
       "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
       "type": "object",
       "properties": {
@@ -4303,6 +4415,35 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "master",
         "slave",
+        "kind"
+      ]
+    },
+    {
+      "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "point": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/CoupleKind"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "constraint.couple"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "point",
+        "on",
         "kind"
       ]
     },
@@ -4974,6 +5115,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
       "type": "string",
       "const": "bonded"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>CoupleKind</summary>
+
+```json
+{
+  "description": "How a point mass is connected to a face Set. Nodes carry translations only, so neither kind\ntransmits a moment.",
+  "oneOf": [
+    {
+      "description": "The point follows the face's weighted mean displacement and adds no stiffness, so a\nforce or a mass at the point spreads over the face in exactly the weights a uniform\ntraction would produce. How a bearing or a load introduction is idealised.",
+      "type": "string",
+      "const": "distributed"
+    },
+    {
+      "description": "Every node of the face takes the point's displacement, so the face translates as one\nand cannot deform at all. Stiffer than the real part around a real attachment.",
+      "type": "string",
+      "const": "rigid"
     }
   ]
 }
@@ -6053,6 +6217,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "length"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_mass</summary>
+
+```json
+{
+  "description": "A mass with unit, e.g. \"2 kg\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "mass"
 }
 ```
 

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::Mesh;
 
-use crate::command::Formulation;
+use crate::command::{CoupleKind, Formulation};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::{ElementCtx, Material};
 use crate::fem::heat::HeatLoad;
@@ -45,20 +45,53 @@ pub enum Coupling {
     /// A bonded contact: every node of `slave` follows the point it projects onto in the face
     /// Set `master`, in every component. `tol` is the largest gap that still pairs, in metres.
     Bonded { name: String, master: String, slave: String, tol: f64 },
+    /// A point mass attached to the face Set `faces`: `distributed` eliminates the point onto
+    /// the face's weighted mean, `rigid` eliminates every face node onto the point. `node` is
+    /// the point's own mesh node, resolved with the Mesh so the numerics never look a name up.
+    Couple { name: String, point: String, node: u32, faces: String, kind: CoupleKind },
 }
 
 impl Coupling {
     /// The name the Command gave it, which every error and warning quotes.
     pub fn name(&self) -> &str {
-        let Coupling::Bonded { name, .. } = self;
-        name
+        match self {
+            Coupling::Bonded { name, .. } | Coupling::Couple { name, .. } => name,
+        }
+    }
+
+    /// What an error calls it: a tie between Bodies is a contact, a point attachment a coupling.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Coupling::Bonded { .. } => "contact",
+            Coupling::Couple { .. } => "coupling",
+        }
     }
 
     /// The Sets it names, so `checks::all` can report an empty one before the pairing runs.
     pub fn sets(&self) -> [&str; 2] {
-        let Coupling::Bonded { master, slave, .. } = self;
-        [master, slave]
+        match self {
+            Coupling::Bonded { master, slave, .. } => [master, slave],
+            Coupling::Couple { point, faces, .. } => [faces, point],
+        }
     }
+
+    /// The point mass it attaches, if it attaches one.
+    pub fn point(&self) -> Option<&str> {
+        match self {
+            Coupling::Bonded { .. } => None,
+            Coupling::Couple { point, .. } => Some(point),
+        }
+    }
+}
+
+/// One resolved point mass: the Set name it owns, the node the Mesh builder gave it, and its
+/// mass in kilograms. It has no element, so it reaches the numerics only through the mass
+/// matrix, gravity, and whatever [`Coupling::Couple`] attaches it to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointMass {
+    pub name: String,
+    pub node: u32,
+    pub mass: f64,
 }
 
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
@@ -81,6 +114,8 @@ pub struct Problem<'a> {
     pub constraints: Vec<Constraint>,
     /// Bonded contacts and the other multipoint constraints, in Step order.
     pub couplings: Vec<Coupling>,
+    /// Lumped point masses, one node each, in Model order.
+    pub points: Vec<PointMass>,
     pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
     /// Registry Loads with different Body references use increments with a zero reference.
