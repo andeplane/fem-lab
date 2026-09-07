@@ -257,6 +257,7 @@ export type Command =
       mesher: MesherSpec;
       order?: number | null;
       formulation?: Formulation | null;
+      simplices?: boolean | null;
       cmd: "mesh.set";
     }
   | {
@@ -1928,6 +1929,7 @@ export type ModelFile_Command =
       mesher: MesherSpec;
       order?: number | null;
       formulation?: Formulation | null;
+      simplices?: boolean | null;
       cmd: "mesh.set";
     }
   | {
@@ -3355,6 +3357,10 @@ export interface MeshSettings {
   mesher: MesherSettings;
   order: number;
   formulation: Formulation;
+  /**
+   * Split the chosen mesher's quads/hexes into triangles/tetrahedra.
+   */
+  simplices?: boolean;
 }
 /**
  * One mapped block: a curvilinear quadrilateral meshed as a structured grid.
