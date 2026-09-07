@@ -5,7 +5,7 @@ use femlab_engine::command::{
     Axis, Dof, FacePredicate, Field, IdealisationSpec, LatticeSize, MesherSpec, ObjectKind, Procedure, RegionPredicate,
     Solver,
 };
-use femlab_engine::model::Model;
+use femlab_engine::model::{Axial, Model};
 use femlab_engine::post::convergence::richardson;
 use femlab_engine::query::{AssumedMaterialProperty, Output, Query, QueryResult, Valued};
 use femlab_engine::report::ReportSection;
@@ -121,8 +121,9 @@ fn builds_a_cantilever_and_reports_it() {
     assert!((m.bodies[0].mass.as_ref().unwrap().value - 78.5).abs() < 1e-9);
     assert_eq!(m.bodies[0].faces, ["beam.xmax", "beam.xmin", "beam.ymax", "beam.ymin", "beam.zmax", "beam.zmin"]);
     assert_eq!(m.bodies[0].bbox[3].value, 1000.0);
-    assert_eq!(m.materials[0].e.value, 210_000.0);
-    assert_eq!(m.materials[0].e.unit, "MPa");
+    let young = m.materials[0].e.as_ref().expect("an isotropic material reports E");
+    assert_eq!(young.value, 210_000.0);
+    assert_eq!(young.unit, "MPa");
     assert_eq!(m.materials[0].assigned_to, ["beam"]);
     assert_eq!(m.constraints[0].summary, "fix ux, uy, uz");
     assert_eq!(m.loads[0].kind, "traction");
@@ -398,7 +399,7 @@ fn upsert_edits_in_place_and_reports_replaced() {
     assert_eq!(e.model().loads.len(), 1);
     let a = ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
     assert_eq!(a.output, Output::Replaced { kind: ObjectKind::Material, name: "steel".into() });
-    assert_eq!(e.model().materials[0].e, 200e9);
+    assert_eq!(e.model().materials[0].e, Some(200e9));
     assert!(e.model().materials[0].rho.is_none());
     let a = ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["2 m","100 mm","100 mm"]}"#);
     assert_eq!(a.output, Output::Replaced { kind: ObjectKind::Body, name: "beam".into() });
@@ -9103,6 +9104,356 @@ fn steady_radiation_propagates_a_rejected_direct_solve_transactionally() {
 #[test]
 fn transient_radiation_propagates_a_rejected_direct_solve_transactionally() {
     radiating_heat_with_unrepresentable_temperature("heat-transient");
+}
+
+// ------------------------------------------------- orthotropic materials (#68)
+
+/// The nine constants of a carbon/epoxy lamina, as the `orthotropic` block of `material.add`.
+fn lamina_block() -> serde_json::Value {
+    serde_json::json!({
+        "E1": "155 GPa", "E2": "12.1 GPa", "E3": "12.1 GPa",
+        "G12": "4.4 GPa", "G13": "4.4 GPa", "G23": "3.2 GPa",
+        "nu12": 0.248, "nu13": 0.248, "nu23": 0.458
+    })
+}
+
+/// `material.add "ply"` with that block, plus whatever else the case needs.
+fn lamina_command(extra: serde_json::Value) -> String {
+    let mut cmd = serde_json::json!({ "cmd": "material.add", "name": "ply", "orthotropic": lamina_block() });
+    for (k, v) in extra.as_object().expect("an object").clone() {
+        cmd[k] = v;
+    }
+    cmd.to_string()
+}
+
+/// `material.add` takes exactly one of the isotropic and orthotropic stiffness forms, refuses an
+/// inadmissible one outright, and stores the orientation as a unit axis and an angle in radians.
+#[test]
+fn material_add_takes_one_stiffness_form_and_an_orientation() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"ortho"}"#);
+    // Neither form.
+    let none = err(&mut e, r#"{"cmd":"material.add","name":"ply"}"#);
+    assert_eq!((none.code, none.where_.as_deref()), (ErrorCode::Schema, Some("E")));
+    assert!(none.cause.contains("exactly one"), "{none:?}");
+    assert!(none.suggestion.is_some());
+    // Both forms.
+    let both = err(&mut e, &lamina_command(serde_json::json!({ "E": "210 GPa", "nu": 0.3 })));
+    assert_eq!((both.code, both.where_.as_deref()), (ErrorCode::Schema, Some("E")));
+    assert!(both.cause.contains("exactly one"), "{both:?}");
+    // Half of the isotropic form is neither.
+    let half = err(&mut e, r#"{"cmd":"material.add","name":"ply","E":"210 GPa"}"#);
+    assert_eq!((half.code, half.where_.as_deref()), (ErrorCode::Schema, Some("E")));
+    assert!(half.cause.contains("go together"), "{half:?}");
+    let other_half = err(&mut e, r#"{"cmd":"material.add","name":"ply","nu":0.3}"#);
+    assert!(other_half.cause.contains("go together"), "{other_half:?}");
+    // An inadmissible set of constants is refused by `material.add`, not at solve time.
+    let mut inadmissible = lamina_block();
+    inadmissible["nu12"] = serde_json::json!(9.0);
+    let bad =
+        err(&mut e, &serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":inadmissible}).to_string());
+    assert_eq!(bad.code, ErrorCode::MaterialProps);
+    assert_eq!(bad.where_.as_deref(), Some("orthotropic"));
+    assert!(bad.cause.contains("positive definite"), "{bad:?}");
+    // A dimension mistake inside the block is a located unit error, and every one of the six
+    // stiffnesses is located by its own name rather than by the first one that happens to fail.
+    for field in ["E1", "E2", "E3", "G12", "G13", "G23"] {
+        let mut wrong_unit = lamina_block();
+        wrong_unit[field] = serde_json::json!("155 m");
+        let unit =
+            err(&mut e, &serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":wrong_unit}).to_string());
+        assert_eq!(unit.code, ErrorCode::UnitDimension, "{field}");
+        assert_eq!(unit.where_.as_deref(), Some(format!("orthotropic.{field}").as_str()), "{field}");
+    }
+    // The happy path, with an orientation given in degrees about an unnormalised axis.
+    ok(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": [0, 0, 2], "angle": "30 deg" } })));
+    let mat = e.model().materials[0].clone();
+    assert!(mat.e.is_none() && mat.nu.is_none(), "an orthotropic material has no single E");
+    let o = mat.orthotropic.expect("the orthotropic block");
+    assert_eq!(o.e1, 155e9);
+    assert_eq!(o.props(), vec![155e9, 12.1e9, 12.1e9, 4.4e9, 4.4e9, 3.2e9, 0.248, 0.248, 0.458]);
+    let axes = mat.orientation.expect("the orientation");
+    assert_eq!(axes.axis, [0.0, 0.0, 1.0], "the axis is normalised on the way in");
+    assert!((axes.angle - std::f64::consts::PI / 6.0).abs() < 1e-15, "radians in the Model: {}", axes.angle);
+    // Material axis 1 is the first row of the rotation, at +30° from global x.
+    let rows = axes.rows();
+    assert!((rows[0][0] - libm::cos(axes.angle)).abs() < 1e-15, "{rows:?}");
+    assert!((rows[0][1] - libm::sin(axes.angle)).abs() < 1e-15, "{rows:?}");
+    // Re-issuing without an orientation clears it, which the doc string promises.
+    ok(&mut e, &lamina_command(serde_json::json!({})));
+    assert!(e.model().materials[0].orientation.is_none(), "an omitted orientation clears the old one");
+    // A zero-length or nonfinite axis has no direction to be.
+    for axis in [serde_json::json!([0, 0, 0]), serde_json::json!([1e308, 1e308, 1e308])] {
+        let bad =
+            err(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": axis, "angle": "30 deg" } })));
+        assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("orientation.axis")), "{axis}");
+        assert!(bad.suggestion.is_some());
+    }
+    // The angle carries a dimension like every other quantity.
+    let angle =
+        err(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": [0, 0, 1], "angle": "30 m" } })));
+    assert_eq!((angle.code, angle.where_.as_deref()), (ErrorCode::UnitDimension, Some("orientation.angle")));
+    // The axis defaults to the out-of-plane direction.
+    ok(&mut e, &lamina_command(serde_json::json!({ "orientation": { "angle": "0.4" } })));
+    assert_eq!(e.model().materials[0].orientation.expect("orientation").axis, [0.0, 0.0, 1.0]);
+    // An isotropic material may be oriented too; it is simply invariant under it.
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,
+        "orientation":{"axis":[1,0,0],"angle":"15 deg"}}"#,
+    );
+    let steel = e.model().material("steel").expect("steel").clone();
+    assert_eq!(steel.e, Some(210e9));
+    assert!(steel.orientation.is_some() && steel.orthotropic.is_none());
+}
+
+/// Expansion and conductivity are either one isotropic value or one per material axis, never
+/// both, and the three components reach the Model in the material axes' order.
+#[test]
+fn a_material_axis_property_is_isotropic_or_per_axis_but_not_both() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"ortho"}"#);
+    ok(&mut e, &lamina_command(serde_json::json!({ "alpha": "1.2e-5 1/K", "k": "0.6 W/(m K)" })));
+    // One value stays one value in the Model (its saved form and hash are unchanged) and
+    // reads as the same value on every axis.
+    assert_eq!(e.model().materials[0].alpha, Some(Axial::Isotropic(1.2e-5)));
+    assert_eq!(e.model().materials[0].k, Some(Axial::Isotropic(0.6)));
+    assert_eq!(e.model().materials[0].alpha.map(Axial::axes), Some([1.2e-5; 3]));
+    assert_eq!(serde_json::to_value(&e.model().materials[0]).unwrap()["alpha"], serde_json::json!(1.2e-5));
+    let per_axis = |alpha: bool, k: bool| {
+        let mut block = lamina_block();
+        if alpha {
+            block["alpha"] = serde_json::json!(["1e-6 1/K", "2e-5 1/K", "3e-5 1/K"]);
+        }
+        if k {
+            block["k"] = serde_json::json!(["0.4 W/(m K)", "0.2 W/(m K)", "0.1 W/(m K)"]);
+        }
+        block
+    };
+    ok(&mut e, &serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":per_axis(true, true)}).to_string());
+    assert_eq!(e.model().materials[0].alpha, Some(Axial::Axes([1e-6, 2e-5, 3e-5])));
+    assert_eq!(e.model().materials[0].k, Some(Axial::Axes([0.4, 0.2, 0.1])));
+    assert_eq!(e.model().materials[0].k.map(Axial::axes), Some([0.4, 0.2, 0.1]));
+    // Both forms of the same property is a Schema error naming the property, not a silent winner.
+    for (field, block, extra) in [
+        ("alpha", per_axis(true, false), serde_json::json!({ "alpha": "1e-5 1/K" })),
+        ("k", per_axis(false, true), serde_json::json!({ "k": "4 W/(m K)" })),
+    ] {
+        let mut cmd = serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":block});
+        for (key, value) in extra.as_object().expect("an object").clone() {
+            cmd[key] = value;
+        }
+        let clash = err(&mut e, &cmd.to_string());
+        assert_eq!((clash.code, clash.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{cmd}");
+        assert!(clash.cause.contains("given twice"), "{clash:?}");
+        assert!(clash.suggestion.is_some());
+    }
+    // A dimension mistake in one component names that component.
+    let mut block = lamina_block();
+    block["k"] = serde_json::json!(["1 W/(m K)", "2 m", "3 W/(m K)"]);
+    let unit = err(&mut e, &serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":block}).to_string());
+    assert_eq!((unit.code, unit.where_.as_deref()), (ErrorCode::UnitDimension, Some("orthotropic.k[1]")));
+}
+
+/// A 2D idealisation only carries axes turned about the out-of-plane direction: `material.add`
+/// refuses the rest outright, and a `model.setIdealisation` that arrives afterwards is caught by
+/// the well-posedness checks, which name the Body and stop `solve.run`.
+#[test]
+fn a_two_dimensional_idealisation_only_carries_out_of_plane_material_axes() {
+    for kind in [
+        serde_json::json!({ "kind": "planeStrain" }),
+        serde_json::json!({ "kind": "planeStress", "thickness": "2 mm" }),
+        serde_json::json!({ "kind": "axisymmetric" }),
+    ] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"ortho"}"#);
+        ok(&mut e, &serde_json::json!({"cmd":"model.setIdealisation","idealisation":kind}).to_string());
+        for axis in [[1, 0, 0], [0, 1, 0], [1, 0, 1]] {
+            let bad =
+                err(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": axis, "angle": "30 deg" } })));
+            assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("orientation.axis")), "{kind}");
+            assert!(bad.suggestion.is_some());
+        }
+        // The out-of-plane axis is fine in every one of them, at any angle.
+        ok(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": [0, 0, 1], "angle": "30 deg" } })));
+    }
+    // The other order: a legal 3D orientation, then an idealisation that cannot carry it. The
+    // Command has already been accepted, so the check has to run again where the two meet.
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"ortho"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+        {"kind":"line","to":["1 m","0 m"]},{"kind":"line","to":["1 m","1 m"]},
+        {"kind":"line","to":["0 m","1 m"]},{"kind":"line","to":["0 m","0 m"]}]}}}"#,
+    );
+    ok(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": [1, 0, 0], "angle": "30 deg" } })));
+    ok(&mut e, r#"{"cmd":"material.assign","material":"ply","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"plate.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"push","on":"plate.xmax","value":"1 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["push"]}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let refused = err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(refused.code, ErrorCode::ModelIllPosed);
+    assert_eq!(refused.where_.as_deref(), Some("body 'plate'"));
+    assert!(refused.cause.contains("out of the plane"), "{refused:?}");
+    assert!(refused.suggestion.is_some());
+    // Turning the axes back into the plane makes the same model solve.
+    ok(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": [0, 0, 1], "angle": "30 deg" } })));
+    ok(&mut e, r#"{"cmd":"material.assign","material":"ply","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    // A heat Step reaches the same check, which lives outside the `if p.heat` branch.
+    ok(
+        &mut e,
+        &lamina_command(serde_json::json!({
+            "orientation": { "axis": [0, 0, 1], "angle": "30 deg" },
+            "alpha": "1e-5 1/K", "k": "0.6 W/(m K)"
+        })),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"ply","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"plate.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"plate.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    // `material.add` refuses an out-of-plane orientation directly, so the heat path's copy of
+    // the check is reached the other way: solve after the idealisation moves under a material
+    // that was legal when it was written.
+    let mut e2 = engine();
+    ok(&mut e2, r#"{"cmd":"model.new","name":"ortho-heat"}"#);
+    ok(
+        &mut e2,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+        {"kind":"line","to":["1 m","0 m"]},{"kind":"line","to":["1 m","1 m"]},
+        {"kind":"line","to":["0 m","1 m"]},{"kind":"line","to":["0 m","0 m"]}]}}}"#,
+    );
+    ok(
+        &mut e2,
+        &lamina_command(serde_json::json!({
+            "orientation": { "axis": [0, 1, 0], "angle": "30 deg" }, "k": "0.6 W/(m K)"
+        })),
+    );
+    ok(&mut e2, r#"{"cmd":"material.assign","material":"ply","bodies":["plate"]}"#);
+    ok(&mut e2, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"},"order":1}"#);
+    ok(&mut e2, r#"{"cmd":"constraint.temperature","name":"cold","on":"plate.xmin","value":"0 degC"}"#);
+    ok(&mut e2, r#"{"cmd":"constraint.temperature","name":"hot","on":"plate.xmax","value":"100 degC"}"#);
+    ok(
+        &mut e2,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#,
+    );
+    ok(&mut e2, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let heat_refused = err(&mut e2, r#"{"cmd":"solve.run","step":"heat"}"#);
+    assert_eq!(heat_refused.code, ErrorCode::ModelIllPosed);
+    assert!(heat_refused.cause.contains("out of the plane"), "{heat_refused:?}");
+}
+
+/// The Model view, the object list and the calculation note all say what an orthotropic material
+/// is, and the report's beam-theory hand check stands down rather than quoting a modulus the
+/// material does not have.
+#[test]
+fn an_orthotropic_material_is_reported_everywhere_a_material_is_named() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let isotropic = report(&mut e, None, Some(vec![ReportSection::Verification, ReportSection::Materials]));
+    assert!(isotropic.markdown.contains("Hand calculation"), "the isotropic hand check is published");
+    assert!(!isotropic.markdown.contains("| Axes |"), "an unoriented Model keeps the table it had");
+    // The same beam with an orientation: no single stiffness for beam theory, so no hand check.
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+        "orientation":{"axis":[0,0,1],"angle":"20 deg"}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let oriented = report(&mut e, None, Some(vec![ReportSection::Verification, ReportSection::Materials]));
+    assert!(!oriented.markdown.contains("Hand calculation"), "an oriented material has no beam-theory E");
+    assert!(oriented.markdown.contains("20° about [0, 0, 1]"), "{}", oriented.markdown);
+    // Dropping the orientation does not bring the hand check back either: with the material axes
+    // along the global ones there is still no single `E` for `δ = F L³ / 3 E I` to quote. This is
+    // the beam's only material, so nothing earlier in the hook can be what stands it down.
+    ok(
+        &mut e,
+        &serde_json::json!({
+            "cmd": "material.add", "name": "steel", "rho": "1600 kg/m^3", "orthotropic": lamina_block()
+        })
+        .to_string(),
+    );
+    let only = e.model().materials.clone();
+    assert!(only.len() == 1 && only[0].orientation.is_none() && only[0].e.is_none(), "{only:?}");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let unoriented = report(&mut e, None, Some(vec![ReportSection::Verification]));
+    assert!(!unoriented.markdown.contains("Hand calculation"), "{}", unoriented.markdown);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+        "orientation":{"axis":[0,0,1],"angle":"20 deg"}}"#,
+    );
+    // And an orthotropic one, which the materials table and the assumptions both describe.
+    ok(&mut e, r#"{"cmd":"material.add","name":"plain","E":"70 GPa","nu":0.33}"#);
+    ok(
+        &mut e,
+        &lamina_command(serde_json::json!({
+            "rho": "1600 kg/m^3", "orientation": { "axis": [0, 0, 1], "angle": "30 deg" }
+        })),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"ply","bodies":["beam"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let r = report(
+        &mut e,
+        None,
+        Some(vec![ReportSection::Assumptions, ReportSection::Materials, ReportSection::Verification]),
+    );
+    assert!(r.markdown.contains("Orthotropic and isotropic materials"), "{}", r.markdown);
+    assert!(r.markdown.contains("155000 MPa / 12100 MPa / 12100 MPa"), "{}", r.markdown);
+    assert!(r.markdown.contains("0.248 / 0.248 / 0.458"), "{}", r.markdown);
+    assert!(r.markdown.contains("30° about [0, 0, 1]"), "{}", r.markdown);
+    assert!(r.markdown.contains("| global |"), "the unoriented material's row says its axes are global");
+    assert!(r.markdown.contains("| — |"), "a material with no density still prints a row");
+    assert!(!r.markdown.contains("Hand calculation"), "no beam-theory hand check for an orthotropic beam");
+    // query.model carries the nine constants and the orientation in degrees.
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    let row = m.materials.iter().find(|x| x.name == "ply").expect("the ply row");
+    assert!(row.e.is_none() && row.nu.is_none());
+    let o = row.orthotropic.as_ref().expect("the orthotropic row");
+    assert_eq!((o.e1.value, o.e1.unit.as_str()), (155_000.0, "MPa"));
+    assert_eq!((o.g23.value, o.g23.unit.as_str()), (3_200.0, "MPa"));
+    assert_eq!(o.nu23, 0.458);
+    let axes = row.orientation.as_ref().expect("the orientation row");
+    assert_eq!(axes.axis, [0.0, 0.0, 1.0]);
+    assert!((axes.degrees - 30.0).abs() < 1e-12, "{}", axes.degrees);
+    let plain = m.materials.iter().find(|x| x.name == "plain").expect("the plain row");
+    assert!(plain.orthotropic.is_none() && plain.orientation.is_none());
+    assert_eq!(plain.nu, Some(0.33));
+    // and query.objects summarises it without pretending it has one modulus
+    let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Material]) }).unwrap() else {
+        panic!()
+    };
+    let ply = o.objects.iter().find(|x| x.name == "ply").expect("the ply object");
+    assert!(ply.summary.starts_with("orthotropic, E1 = 1.55e11 Pa"), "{}", ply.summary);
+    let steel = o.objects.iter().find(|x| x.name == "steel").expect("the steel object");
+    assert!(steel.summary.starts_with("E = 2.1e11 Pa"), "{}", steel.summary);
+}
+
+/// An orthotropic Model replays to the same hashes it was built with, so a Journal that names
+/// nine constants and an orientation is as reproducible as one that names two.
+#[test]
+fn an_orthotropic_journal_replays_to_the_same_hashes() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"ortho"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","0.5 m","0.25 m"]}"#);
+    ok(
+        &mut e,
+        &lamina_command(serde_json::json!({
+            "rho": "1600 kg/m^3", "orientation": { "axis": [1, 2, 3], "angle": "37 deg" }
+        })),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"ply","bodies":["block"]}"#);
+    let file = e.export_file();
+    let hashes: Vec<String> = file.journal.entries.iter().map(|x| x.hash_after.clone()).collect();
+    let mut replayed = engine();
+    let got = pollster::block_on(replayed.replay(&file.journal.entries, false, true)).expect("replays");
+    assert_eq!(got, hashes);
+    assert_eq!(replayed.model(), e.model());
 }
 
 /// Solver acceptance and the report's stricter force-balance check are separate contracts.

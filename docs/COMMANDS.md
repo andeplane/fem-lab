@@ -583,16 +583,21 @@ face"). Use this instead of nodal forces on solids: point loads give singular st
 
 ### material.add
 
-Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio
-`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for
-thermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came
-from. Re-issuing with an existing name edits the material in place.
+Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
+ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one
+of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
+direction) away from the global axes; without it they are the global axes. Density `rho`
+is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
+heat transfer; `source` records where the numbers came from. Re-issuing with an existing
+name edits the material in place, so an omitted `orientation` clears the previous one.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | name | yes | <code>{"type":"string"}</code> |  |
-| E | yes | <code>{"$ref":"#/$defs/Q_stress"}</code> |  |
-| nu | yes | <code>{"type":"number","format":"double"}</code> |  |
+| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
+| nu | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
+| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}]}</code> |  |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}]}</code> |  |
 | rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}]}</code> |  |
 | alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}]}</code> |  |
 | k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}]}</code> |  |
@@ -1798,6 +1803,121 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>Orientation</summary>
+
+```json
+{
+  "description": "Rotate the material axes by `angle` (e.g. `\"30 deg\"`) about `axis`, a global direction that\nis normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s\nfirst component and `k`'s first component belong to, and a positive angle turns it towards\nthe second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the\nrotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would\ncouple the in-plane strains to the out-of-plane shears the idealisation does not carry.",
+  "type": "object",
+  "properties": {
+    "axis": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "format": "double"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "default": [
+        0,
+        0,
+        1
+      ]
+    },
+    "angle": {
+      "$ref": "#/$defs/Q_dimensionless"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "angle"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>Orthotropic</summary>
+
+```json
+{
+  "description": "Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the\nthree *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the\ncontraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the\nfibre, the grain, the rolling direction — and `orientation` says where it points. The nine\nnumbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the\nsame for the other two pairs, and `material.add` says so if they do not.",
+  "type": "object",
+  "properties": {
+    "E1": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "E2": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "E3": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "G12": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "G13": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "G23": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "nu12": {
+      "type": "number",
+      "format": "double"
+    },
+    "nu13": {
+      "type": "number",
+      "format": "double"
+    },
+    "nu23": {
+      "type": "number",
+      "format": "double"
+    },
+    "alpha": {
+      "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Q_thermal_expansion"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "k": {
+      "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Q_conductivity"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "E1",
+    "E2",
+    "E3",
+    "G12",
+    "G13",
+    "G23",
+    "nu12",
+    "nu13",
+    "nu23"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>Placement</summary>
 
 ```json
@@ -2022,6 +2142,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A density with unit, e.g. \"7850 kg/m^3\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "density"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_dimensionless</summary>
+
+```json
+{
+  "description": "A dimensionless with unit, e.g. \"0.3\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "dimensionless"
 }
 ```
 
@@ -4196,18 +4329,48 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
+      "description": "Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's\nratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one\nof the two. `orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. Re-issuing with an existing\nname edits the material in place, so an omitted `orientation` clears the previous one.",
       "type": "object",
       "properties": {
         "name": {
           "type": "string"
         },
         "E": {
-          "$ref": "#/$defs/Q_stress"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_stress"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "nu": {
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "format": "double"
+        },
+        "orthotropic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Orthotropic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Orientation"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "rho": {
           "anyOf": [
@@ -4272,9 +4435,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       },
       "required": [
         "cmd",
-        "name",
-        "E",
-        "nu"
+        "name"
       ]
     },
     {
@@ -6289,6 +6450,121 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>Orientation</summary>
+
+```json
+{
+  "description": "Rotate the material axes by `angle` (e.g. `\"30 deg\"`) about `axis`, a global direction that\nis normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s\nfirst component and `k`'s first component belong to, and a positive angle turns it towards\nthe second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the\nrotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would\ncouple the in-plane strains to the out-of-plane shears the idealisation does not carry.",
+  "type": "object",
+  "properties": {
+    "axis": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "format": "double"
+      },
+      "minItems": 3,
+      "maxItems": 3,
+      "default": [
+        0,
+        0,
+        1
+      ]
+    },
+    "angle": {
+      "$ref": "#/$defs/Q_dimensionless"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "angle"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>Orthotropic</summary>
+
+```json
+{
+  "description": "Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the\nthree *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the\ncontraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the\nfibre, the grain, the rolling direction — and `orientation` says where it points. The nine\nnumbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the\nsame for the other two pairs, and `material.add` says so if they do not.",
+  "type": "object",
+  "properties": {
+    "E1": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "E2": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "E3": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "G12": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "G13": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "G23": {
+      "$ref": "#/$defs/Q_stress"
+    },
+    "nu12": {
+      "type": "number",
+      "format": "double"
+    },
+    "nu13": {
+      "type": "number",
+      "format": "double"
+    },
+    "nu23": {
+      "type": "number",
+      "format": "double"
+    },
+    "alpha": {
+      "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Q_thermal_expansion"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "k": {
+      "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/Q_conductivity"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "E1",
+    "E2",
+    "E3",
+    "G12",
+    "G13",
+    "G23",
+    "nu12",
+    "nu13",
+    "nu23"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>Placement</summary>
 
 ```json
@@ -6513,6 +6789,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A density with unit, e.g. \"7850 kg/m^3\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "density"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_dimensionless</summary>
+
+```json
+{
+  "description": "A dimensionless with unit, e.g. \"0.3\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "dimensionless"
 }
 ```
 
