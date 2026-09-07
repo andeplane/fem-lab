@@ -5793,18 +5793,31 @@ fn the_heat_and_mass_assemblies_report_what_the_checks_would_have_caught() {
     );
     p.material_of_block = vec![None];
     let pat = pattern(&mesh, 1);
+    let none = Mpc::none();
     // The face loop runs first, so with a convection load it is the one that reports the Body.
-    assert_eq!(heat::assemble(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    assert_eq!(heat::assemble(&p, &pat, &none).expect_err("no material").code, ErrorCode::ModelNoMaterial);
     // Without one, the element loop reports it instead.
     p.heat_loads = vec![HeatLoad::Source { bodies: one_body(), q: 1.0 }];
-    assert_eq!(heat::assemble(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    assert_eq!(heat::assemble(&p, &pat, &none).expect_err("no material").code, ErrorCode::ModelNoMaterial);
     assert_eq!(heat::assemble_capacity(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
     let e = run_step(&p, &steady()).expect_err("the checks catch it first");
     assert_eq!(e.code, ErrorCode::ModelNoMaterial);
     // The material is there but the convection Set is not: the face loop reports the Set.
     p.material_of_block = vec![Some(0)];
     p.heat_loads = vec![HeatLoad::Convection { faces: "nowhere".into(), h: 10.0, t_inf: 300.0 }];
-    assert_eq!(heat::assemble(&p, &pat).expect_err("no such Set").code, ErrorCode::SetEmpty);
+    assert_eq!(heat::assemble(&p, &pat, &none).expect_err("no such Set").code, ErrorCode::SetEmpty);
+
+    // The thermal-contact loop (#85) integrates the slave faces of the Coupling its `of` names,
+    // so it answers for the same two things: the slave Set, then the Body's material.
+    p.heat_loads = vec![HeatLoad::Contact { of: "weld".into(), h: 500.0 }];
+    p.couplings = vec![tie("weld", "xmin", "nowhere", 1e-9)];
+    assert_eq!(heat::assemble(&p, &pat, &none).expect_err("no slave Set").code, ErrorCode::SetEmpty);
+    p.couplings = vec![tie("weld", "xmin", "xmax", 1e-9)];
+    p.material_of_block = vec![None];
+    let no_material = heat::assemble(&p, &pat, &none).expect_err("no material on the slave faces");
+    assert_eq!((no_material.code, no_material.where_.as_deref()), (ErrorCode::ModelNoMaterial, Some("element 0")));
+    p.material_of_block = vec![Some(0)];
+    p.couplings = Vec::new();
 
     // The radiative face integral answers for the same three things, and it is the one the
     // procedures call with an `expect` on the strength of the checks having run first.
@@ -7185,7 +7198,7 @@ fn mat_mul_t(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
 /// One `Mpc` built by hand, without a Mesh: the rows are the whole definition of `T`.
 fn hand_mpc(rows: Vec<Row>) -> Mpc {
     let slaves = rows.iter().map(|r| r.slave).collect();
-    Mpc { rows, slaves, warnings: Vec::new() }
+    Mpc { rows, slaves, contact: Vec::new(), warnings: Vec::new() }
 }
 
 /// The dense `T` of an `Mpc`: identity on the retained DOFs, the row's coefficients on a slave
@@ -8096,6 +8109,193 @@ fn stress_averaging_gives_a_point_mass_zero() {
         assert_eq!(nodal.data[node as usize * nodal.comps + c], 0.0, "no element, no stress");
     }
     assert!(nodal.data[..VOIGT].iter().any(|v| v.abs() > 0.0), "the block itself is stressed");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Thermal contact resistance (#85). `contact.thermal` replaces a bonded contact's perfect
+// thermal tie with a finite conductance, assembled directly into `K` rather than eliminated.
+
+/// `Csr::add_at` is the direct-write half of thermal contact assembly: it finds the entry
+/// `pattern_coupled` promised and adds into it, wherever the row happens to put it, rather than
+/// going through the element scatter's slot map.
+#[test]
+fn csr_add_at_writes_the_entry_the_pattern_promised() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let pat = pattern_coupled(&mesh, 1, &[[0, 5]]);
+    let mut k = pat.csr;
+    k.add_at(0, 5, 3.0);
+    k.add_at(0, 5, 1.0);
+    k.add_at(5, 0, -2.0);
+    let entry = |k: &Csr, r: u32, c: u32| {
+        let (lo, hi) = (k.row_ptr[r as usize] as usize, k.row_ptr[r as usize + 1] as usize);
+        let at = k.col_idx[lo..hi].binary_search(&c).expect("the extra pair seeded this entry");
+        k.vals[lo + at]
+    };
+    assert_eq!(entry(&k, 0, 5), 4.0, "repeated adds accumulate");
+    assert_eq!(entry(&k, 5, 0), -2.0, "the two triangles are independent entries");
+    assert_eq!(entry(&k, 0, 0), 0.0, "add_at never touches an entry it was not asked for");
+}
+
+/// `mpc::build` excludes the rows of a contact a `contact.thermal` load names, so the perfect
+/// tie and the finite resistance are never both applied — but only on the heat DOF: the very
+/// same Coupling read by a structural Problem still produces an ordinary eliminated tie, because
+/// a `HeatLoad::Contact` never reaches a Problem whose unknown is displacement.
+#[test]
+fn a_thermal_contact_load_excludes_its_tie_from_elimination_but_only_for_heat() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        vec![hold("cold", "a.xmin", 300.0), hold("hot", "b.xmax", 400.0)],
+        vec![HeatLoad::Contact { of: "weld".into(), h: 500.0 }],
+    );
+    p.couplings = vec![bond(1e-9)];
+    let m = mpc::build(&p).expect("the pairing still runs; only its destination changes");
+    assert!(m.rows.is_empty(), "the tie is excluded, not eliminated: {:?}", m.rows);
+    assert!(m.slaves.is_empty());
+    assert_eq!(m.contact.len(), 4, "one row per node of the shared 1x1 face");
+    for row in &m.contact {
+        assert_eq!(row.owner, 0);
+        assert_eq!(row.masters.len(), 1, "a matched face pairs node to node");
+        assert_eq!(row.masters[0].1, 1.0);
+    }
+    assert_eq!(
+        m.contact_pairs().len(),
+        4,
+        "one [slave, master] pair per node; a 1:1 pairing has no master-master fill"
+    );
+
+    // The identical Coupling and an (unrealistic, but not our business to forbid) leftover
+    // `HeatLoad::Contact` on a structural Problem: `p.heat` being false is what keeps the
+    // mechanical tie untouched, not the absence of the heat Load.
+    let mut sp = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    sp.couplings = vec![bond(1e-9)];
+    sp.heat_loads = vec![HeatLoad::Contact { of: "weld".into(), h: 500.0 }];
+    let sm = mpc::build(&sp).expect("a structural Problem ignores heat_loads for the skip check");
+    assert_eq!(sm.rows.len(), 12, "4 nodes * 3 components: the mechanical tie is unaffected");
+    assert!(sm.contact.is_empty());
+}
+
+/// `checks::all` refuses a `contact.thermal` whose `of` names a contact this Step's constraints
+/// do not list — the `model.ill-posed` the doc string promises, and what keeps `heat::assemble`'s
+/// `of` → Coupling lookup total.
+#[test]
+fn checks_refuse_a_thermal_contact_naming_a_contact_outside_the_step() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        vec![hold("cold", "a.xmin", 300.0), hold("hot", "b.xmax", 400.0)],
+        vec![HeatLoad::Contact { of: "nope".into(), h: 500.0 }],
+    );
+    p.couplings = vec![bond(1e-9)];
+    let e = checks::all(&p).into_iter().find(|e| e.code == ErrorCode::ModelIllPosed).expect("caught");
+    assert!(e.cause.contains("'nope'"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("contact 'nope'"));
+    let refused = run_step(&p, &steady()).expect_err("the checks catch it first");
+    assert_eq!(refused.code, ErrorCode::ModelIllPosed);
+
+    // Naming the contact this Step really does list is not an error.
+    p.heat_loads = vec![HeatLoad::Contact { of: "weld".into(), h: 500.0 }];
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+}
+
+/// Benchmark F4e: `contact.thermal` reproduces the closed form of two conductors in series with
+/// a finite interface resistance, `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, with a temperature jump of
+/// exactly `q/hc` at the interface. Two independent Bodies of different conductivity, tied by
+/// `contact.add` and overridden by `contact.thermal`, against an oracle no part of the engine
+/// supplies.
+#[test]
+fn f4e_a_finite_interface_conductance_matches_the_series_resistance_closed_form() {
+    let (k1, k2, hc) = (10.0, 20.0, 500.0);
+    let (l1, l2) = (0.4, 0.6);
+    let (side, area) = (0.1, 0.1 * 0.1);
+    let (t_cold, t_hot) = (300.0, 400.0);
+    let a = Structured { kind: ElementKind::Hex8, n: [4, 1, 1] }.box_([l1, side, side]);
+    let b = Structured { kind: ElementKind::Hex8, n: [6, 1, 1] }.box_([l2, side, side]);
+    let mesh = join(&a, &b, [l1, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0), Some(1)],
+        materials: vec![conductor(k1, 1.0, 1.0), conductor(k2, 1.0, 1.0)],
+        section_of_block: vec![None, None],
+        sections: Vec::new(),
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        constraints: vec![hold("cold", "a.xmin", t_cold), hold("hot", "b.xmax", t_hot)],
+        couplings: vec![bond(1e-9)],
+        points: Vec::new(),
+        loads: Vec::new(),
+        temperature: None,
+        heat: true,
+        heat_loads: vec![HeatLoad::Contact { of: "weld".into(), h: hc }],
+    };
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let res = run_step(&p, &steady()).expect("a well-posed series-resistance conduction problem");
+    assert!(res.warnings.is_empty(), "a matched, closed interface warns about nothing: {:?}", res.warnings);
+
+    // The independent oracle: series thermal resistance, and the jump it implies at the
+    // interface. Nothing here is computed by the engine.
+    let r_total = l1 / k1 + 1.0 / hc + l2 / k2;
+    let q = (t_hot - t_cold) / r_total;
+    let t_master = t_cold + q * l1 / k1; // the master (cold-side) face of the tie, x = l1
+    let t_slave = t_master + q / hc; // the slave (hot-side) face, across the resistance
+    assert!((t_hot - (t_slave + q * l2 / k2)).abs() <= 1e-9 * t_hot, "the oracle itself closes");
+
+    // Two distinct nodes share the coordinate x = l1 — one on each side of the interface — so
+    // the check is split by body, not by x: that coincidence is exactly the physics under test.
+    let temperature = temperature_of(&res);
+    let na = a.n_nodes() as u32;
+    for node in 0..na {
+        let x = mesh.node(node)[0];
+        let want = t_cold + q * x / k1;
+        let got = temperature[node as usize];
+        assert!((got - want).abs() <= 1e-9 * t_hot, "body a, node {node} at x={x}: got {got}, want {want}");
+    }
+    for node in na..mesh.n_nodes() as u32 {
+        let x = mesh.node(node)[0] - l1;
+        let want = t_slave + q * x / k2;
+        let got = temperature[node as usize];
+        assert!((got - want).abs() <= 1e-9 * t_hot, "body b, node {node} at local x={x}: got {got}, want {want}");
+    }
+
+    // The engine's own master and slave nodes, found unambiguously in each Body's own mesh
+    // rather than by their shared global coordinate, reproduce the closed-form jump exactly.
+    let master_node = node_at(&a, [l1, 0.0, 0.0]);
+    let slave_node = na + node_at(&b, [0.0, 0.0, 0.0]);
+    let (got_master, got_slave) = (temperature[master_node as usize], temperature[slave_node as usize]);
+    assert!((got_master - t_master).abs() <= 1e-9 * t_hot, "master node: got {got_master}, want {t_master}");
+    assert!((got_slave - t_slave).abs() <= 1e-9 * t_hot, "slave node: got {got_slave}, want {t_slave}");
+    assert!(
+        (got_slave - got_master - q / hc).abs() <= 1e-9 * q,
+        "the interface jump is exactly q / hc: got {}, want {}",
+        got_slave - got_master,
+        q / hc
+    );
+
+    // The total flux crosses every cross-section unchanged, including the resistance itself,
+    // and the two held ends carry it in and out with nothing left over.
+    let flow: Vec<f64> = res.reactions.iter().map(|(_, r)| r[0]).collect();
+    assert!((flow[0] - q * area).abs() <= 1e-9 * q * area, "the cold end removes q*A: {flow:?}");
+    assert!((flow[0] + flow[1]).abs() <= 1e-9 * q * area, "and the hot end supplies exactly that much");
+    assert!((res.scalars["applied_total_x"]).abs() <= 1e-12, "no source or film: nothing is externally applied");
+
+    // The tie is not a support: the interface reports no reaction of its own.
+    assert!(res.reactions.iter().all(|(name, _)| name != "weld"));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -10731,7 +10931,7 @@ fn a_unit_flux_on_a_warms_b_as_much_as_a_unit_flux_on_b_warms_a() {
         let mut solve_with = |set: &str| {
             let film = HeatLoad::Convection { faces: "ymin".into(), h: 30.0, t_inf: 0.0 };
             p.heat_loads = vec![film, HeatLoad::Flux { faces: set.into(), q: 1.0 }];
-            let f = heat::assemble(&p, &pat).expect("assembles").f;
+            let f = heat::assemble(&p, &pat, &Mpc::none()).expect("assembles").f;
             (f, temperature_of(&run_step(&p, &steady()).expect("conducts")))
         };
         let ((fa, ta), (fb, tb)) = (solve_with("A"), solve_with("B"));
@@ -11206,7 +11406,7 @@ fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: b
         .collect();
     let k = if heat {
         let p = heat_problem(mesh, &sets, &bodies, id.clone(), steel(), Vec::new(), Vec::new());
-        heat::assemble(&p, &pattern(mesh, 1)).expect("conductivity assembles").k
+        heat::assemble(&p, &pattern(mesh, 1), &Mpc::none()).expect("conductivity assembles").k
     } else {
         let p = problem(mesh, &sets, &bodies, id.clone(), form, Vec::new());
         assemble_stiffness(&p, &pattern(mesh, mesh.dim)).expect("stiffness assembles").k

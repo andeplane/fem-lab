@@ -206,6 +206,7 @@ fn build_problem_with_temperature<'a>(
                 let j = face_set_polar_moment(&p, on)?;
                 loads.push(Load::Torque { faces: on.clone(), c: total / j });
             }
+            LoadKind::ThermalContact { of, h } => heat_loads.push(HeatLoad::Contact { of: of.clone(), h: *h }),
         }
     }
     p.loads = loads;

@@ -678,6 +678,20 @@ export type Command =
     }
   | {
       name: string;
+      of: string;
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      conductance:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "contact.thermal";
+    }
+  | {
+      name: string;
       cmd: "load.remove";
     }
   | {
@@ -1601,6 +1615,26 @@ export type SectionSpec =
 export type MesherSpec =
   | {
       size: LatticeSize;
+      /**
+       * Optional positive element lengths keyed by existing Body name. Each entry overrides
+       * `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+       * size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+       * and cannot have size overrides. Names follow model.rename; remove an override before
+       * removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+       * them with the global size, preserving the refinement ratio.
+       */
+      sizes?: {
+        /**
+         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        [k: string]:
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+          | undefined;
+      };
       kind: "lattice";
     }
   | {
@@ -2811,6 +2845,20 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      of: string;
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      conductance:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "contact.thermal";
+    }
+  | {
+      name: string;
       cmd: "load.remove";
     }
   | {
@@ -3255,6 +3303,9 @@ export type MesherSettings =
        * @maxItems 3
        */
       counts?: [number, number, number] | null;
+      sizes?: {
+        [k: string]: number | undefined;
+      };
       kind: "lattice";
     }
   | {
@@ -3692,6 +3743,11 @@ export type Load1 =
       on: string;
       total: number;
       kind: "torque";
+    }
+  | {
+      of: string;
+      h: number;
+      kind: "thermalContact";
     };
 /**
  * A time function scaling the prescribed temperatures of a transient Step, SI.

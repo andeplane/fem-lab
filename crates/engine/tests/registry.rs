@@ -1134,7 +1134,7 @@ fn enum_helpers_used_by_hosts() {
     assert_eq!(Procedure::Static, Procedure::Static);
     let spec = IdealisationSpec::PlaneStrain;
     assert_eq!(serde_json::to_string(&spec).unwrap(), r#"{"kind":"planeStrain"}"#);
-    let m = MesherSpec::Lattice { size: LatticeSize::Counts { nx: 1, ny: 2, nz: 3 } };
+    let m = MesherSpec::Lattice { size: LatticeSize::Counts { nx: 1, ny: 2, nz: 3 }, sizes: Default::default() };
     assert!(serde_json::to_string(&m).unwrap().contains("\"nx\":1"));
     let p = FacePredicate::Normal { normal: [0.0, 0.0, 1.0], max_angle_deg: None };
     assert!(p.to_si().is_ok());
@@ -7647,7 +7647,8 @@ fn assert_implicit_source(e: &mut Engine, n: u32, order: u32, swept: bool) -> f6
     // uses the prescribed volume (2*1*0.25 or 2*1*3), not the mesher's measured volume.
     let problem = femlab_engine::solve_run::build_problem(&model, built, model.step("conduct").unwrap()).unwrap();
     let pattern = femlab_engine::fem::assembly::pattern(&built.mesh, 1);
-    let system = femlab_engine::procedure::heat::assemble(&problem, &pattern).unwrap();
+    let system =
+        femlab_engine::procedure::heat::assemble(&problem, &pattern, &femlab_engine::fem::mpc::Mpc::none()).unwrap();
     let watts = if swept { 600.0 } else { 50.0 };
     assert!((system.applied - watts).abs() < 1e-9);
     let x = 1.0 / n as f64;
@@ -7990,6 +7991,157 @@ fn two_cubes(e: &mut Engine) {
     ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"},"order":1}"#);
 }
 
+#[test]
+fn lattice_body_sizes_validate_references_and_survive_rename_replay_and_undo() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    let original = e.model_hash();
+    for (body, value, code) in [
+        ("missing", "250 mm", ErrorCode::NotFound),
+        ("b", "1 kg", ErrorCode::UnitDimension),
+        ("b", "0 mm", ErrorCode::Schema),
+        ("b", "-1 mm", ErrorCode::Schema),
+    ] {
+        let error = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":"500 mm","sizes":{{"{body}":"{value}"}}}}}}"#
+            ),
+        );
+        assert_eq!(error.code, code);
+        assert_eq!(error.where_.as_deref(), Some(format!("mesher.sizes.{body}").as_str()));
+        assert_eq!(e.model_hash(), original);
+    }
+    for fallback in [r#""500 mm""#, r#"{"nx":2,"ny":2,"nz":2}"#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{fallback},"sizes":{{"b":"250 mm"}}}}}}"#
+            ),
+        );
+        assert_eq!(set_info(&mut e, "a.xmax").count, 4);
+        assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+        assert_eq!(mesh_summary(&mut e).elements, 72);
+        let before_rename = e.model_hash();
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"b","to":"fine"}"#);
+        assert_eq!(set_info(&mut e, "fine.xmin").count, 16);
+        assert_eq!(err(&mut e, r#"{"cmd":"geometry.remove","name":"fine"}"#).code, ErrorCode::InUse);
+        let mut replayed = engine();
+        pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
+        assert_eq!(replayed.model_hash(), e.model_hash());
+        assert_eq!(mesh_summary(&mut replayed), mesh_summary(&mut e));
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(e.model_hash(), before_rename);
+        assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"}}"#);
+        assert_eq!(mesh_summary(&mut e).elements, 16);
+    }
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm","sizes":{"b":"250 mm"}}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"b","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("mesher.sizes.b"));
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+    // A line uses its own member divisions and must never silently ignore an override.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"line","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm","sizes":{"line":"250 mm"}}}"#).code,
+        ErrorCode::Unsupported
+    );
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"b"}"#);
+}
+
+#[test]
+fn lattice_body_sizes_run_the_installed_nonmatching_patch_at_two_refinements() {
+    for text in [
+        include_str!("../../femlab/benches/cases/tie-nonmatching-patch.json"),
+        include_str!("../../femlab/benches/cases/tie-nonmatching-patch-refined.json"),
+    ] {
+        let case: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut reference = None;
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            for command in case["journal"].as_array().unwrap() {
+                ok(&mut e, &command.to_string());
+            }
+            let QueryResult::Field(stress) =
+                e.query(Query::Field { step: None, result_id: None, field: "vonMises".into() }).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                &stress.values,
+                reference.get_or_insert(stress.values.clone()),
+                "thread count must not change the field"
+            );
+            assert_eq!(stress.unit, "Pa");
+            assert!(!stress.values.is_empty());
+            for value in stress.values {
+                assert!((value - 1e6).abs() < 0.1, "uniform tension must carry 1 MPa at every node, got {value}");
+            }
+            for check in case["checks"].as_array().unwrap() {
+                let query = serde_json::from_value(check["query"].clone()).unwrap();
+                let result = serde_json::to_value(e.query(query).unwrap()).unwrap();
+                let got = result.pointer(check["path"].as_str().unwrap()).unwrap();
+                if let Some(expected) = check["expect"].as_f64() {
+                    let tolerance = check["tol"].as_f64().unwrap();
+                    let scale = if check["rel"] == true { expected.abs() } else { 1.0 };
+                    assert!((got.as_f64().unwrap() - expected).abs() <= tolerance * scale, "{check}: got {got}");
+                } else {
+                    assert_eq!(got, &check["expect"]);
+                }
+            }
+            let before_study = e.model_hash();
+            let summary = study(
+                &mut e,
+                r#"{"cmd":"study.converge","step":"static","sizes":["1 m","500 mm"],"quantity":{"kind":"max","field":"displacement"},"restore":false}"#,
+            );
+            assert_eq!(summary.rows[0].dofs, 105);
+            assert_eq!(summary.rows[1].dofs, 456);
+            assert_eq!(set_info(&mut e, "a.xmax").count, 4);
+            assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+            let mut replayed = engine();
+            pollster::block_on(replayed.replay(&e.export_file().journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), e.model_hash());
+            ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+            assert_eq!(e.model_hash(), before_study);
+        }
+    }
+}
+
+#[test]
+fn lattice_body_sizes_scale_with_convergence_while_preserving_ratios() {
+    use femlab_engine::model::{MesherSettings, Sweep};
+    for fallback in [r#""500 mm""#, r#"{"nx":2,"ny":2,"nz":2}"#] {
+        let spec: MesherSpec =
+            serde_json::from_str(&format!(r#"{{"kind":"lattice","size":{fallback},"sizes":{{"b":"250 mm"}}}}"#))
+                .unwrap();
+        let original = femlab_engine::mesh::mesher_settings(&spec).unwrap();
+        let mut swept = MesherSettings::Sweep {
+            base: Box::new(original.clone()),
+            sweep: Sweep::Extrude { layers: 1, height: 1.0 },
+        };
+        assert!(swept.references_body("b"));
+        assert!(!swept.references_body("a"));
+        swept.rename_body("b", "fine");
+        assert!(swept.references_body("fine"));
+        assert!(!swept.references_body("b"));
+        let scaled = femlab_engine::mesh::scale_mesher(&original, 0.5, 0.25);
+        let json = serde_json::to_value(&scaled).unwrap();
+        assert_eq!(json["sizes"]["b"], 0.125);
+        let twice = femlab_engine::mesh::scale_mesher(&original, 0.5, 0.125);
+        assert_eq!(serde_json::to_value(twice).unwrap()["sizes"]["b"], 0.0625);
+    }
+    // A dimensional global size defines the ratio even if the first study size differs.
+    let spec: MesherSpec =
+        serde_json::from_str(r#"{"kind":"lattice","size":"500 mm","sizes":{"b":"250 mm"}}"#).unwrap();
+    let original = femlab_engine::mesh::mesher_settings(&spec).unwrap();
+    assert_eq!(
+        serde_json::to_value(femlab_engine::mesh::scale_mesher(&original, 0.25, 0.125)).unwrap()["sizes"]["b"],
+        0.0625
+    );
+}
+
 /// `contact.add` is a Constraint object with two Set references: it validates both, is listed as
 /// a Connection rather than a Constraint, follows a rename of either Set or of a Body, and holds
 /// the geometry it names in use.
@@ -8116,6 +8268,119 @@ fn a_step_that_lists_a_tie_solves_the_assembly_as_one_part() {
     assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
     assert_eq!(r.warnings[0].code, "contact.gap");
     assert_eq!(r.warnings[0].where_.as_deref(), Some("contact 'weld'"));
+}
+
+/// Two steel bars of different conductivity, meeting at x = 400 mm, tied by `contact.add` and
+/// held at 300 K / 400 K: the fixture `contact.thermal` overrides in the tests below.
+fn two_bars_heat(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"thermal-contact"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"a","size":["400 mm","100 mm","100 mm"]}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"b","size":["600 mm","100 mm","100 mm"],"at":["400 mm","0 mm","0 mm"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"metalA","E":"210 GPa","nu":0.3,"k":"10 W/(m K)"}"#);
+    ok(e, r#"{"cmd":"material.add","name":"metalB","E":"210 GPa","nu":0.3,"k":"20 W/(m K)"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"metalA","bodies":["a"]}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"metalB","bodies":["b"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"100 mm"},"order":1}"#);
+    ok(e, r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"cold","on":"a.xmin","value":"300 K"}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"hot","on":"b.xmax","value":"400 K"}"#);
+}
+
+/// `contact.thermal` validates `of` at dispatch (an unknown Constraint is `not-found`, a real one
+/// that is not bonded is `model.ill-posed`), is a Load like any other — removed by `load.remove`,
+/// held in use against `constraint.remove`, and following `model.rename` of the Constraint it
+/// names — and, named by a Step that also lists its contact, replaces the perfect thermal tie
+/// with the finite conductance F4e gates in `crates/engine/tests/fem.rs`.
+#[test]
+fn contact_thermal_validates_of_and_tracks_the_contact_it_names() {
+    let mut e = engine();
+    two_bars_heat(&mut e);
+
+    let missing = err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"nope","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(missing.code, ErrorCode::NotFound);
+
+    let not_bonded =
+        err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"cold","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(not_bonded.code, ErrorCode::ModelIllPosed);
+    assert_eq!(not_bonded.where_.as_deref(), Some("of"));
+
+    ok(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(e.model().loads.last().unwrap().name, "resist");
+
+    // The name and the conductance are validated like every other Load's, and each error says
+    // where it points.
+    let unnamed = err(&mut e, r#"{"cmd":"contact.thermal","name":"","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!((unnamed.code, unnamed.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+    let wrong_dim = err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W"}"#);
+    assert_eq!((wrong_dim.code, wrong_dim.where_.as_deref()), (ErrorCode::UnitDimension, Some("conductance")));
+
+    // It lists among the loads with its own kind and a summary naming the contact, and its
+    // definition round-trips through the Command that made it.
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    let row = m.loads.iter().find(|l| l.name == "resist").expect("listed");
+    assert_eq!(row.kind, "thermalContact");
+    assert_eq!(row.on, None, "a thermal contact names a Constraint, not a Set");
+    assert_eq!(row.summary, "h = 500 SI across 'weld'", "a derived dimension has no display unit of its own");
+    let before = e.model().clone();
+    let QueryResult::Definition(def) =
+        e.query(Query::Definition { kind: ObjectKind::Load, name: "resist".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+    assert_eq!(e.model(), &before, "replaying the definition changes nothing");
+
+    // Renaming a Body or a Set leaves a thermal contact alone: it names a Constraint, not either
+    // of those, so it takes the same no-op arm Gravity and the Body-targeted loads do.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"aa"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"dummy","of":"aa","where":{"kind":"normal","normal":[0,0,1]}}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"dummy","to":"dummy2"}"#);
+    assert_eq!(
+        e.model().loads.iter().find(|l| l.name == "resist").unwrap().kind,
+        femlab_engine::model::LoadKind::ThermalContact { of: "weld".into(), h: 500.0 }
+    );
+
+    // The Load is in use against the Constraint it names, exactly like a Step listing it.
+    let held = err(&mut e, r#"{"cmd":"constraint.remove","name":"weld"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+    assert!(held.cause.contains("load 'resist'"), "{}", held.cause);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"resist"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"weld"}"#);
+    ok(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"aa.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+
+    // A rename of the Constraint follows into the Load's `of`.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"weld","to":"welded"}"#);
+    let still_held = err(&mut e, r#"{"cmd":"constraint.remove","name":"welded"}"#);
+    assert_eq!(still_held.code, ErrorCode::InUse);
+    // Renaming a Constraint the Load does not name leaves its `of` alone.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"cold","to":"chill"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"chill","to":"cold"}"#);
+    assert_eq!(
+        e.model().loads.iter().find(|l| l.name == "resist").unwrap().kind,
+        femlab_engine::model::LoadKind::ThermalContact { of: "welded".into(), h: 500.0 }
+    );
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot","welded"],"loads":["resist"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    let r = result_of(&mut e, Some("conduct"));
+    assert!(r.balance.abs() < 1e-9, "the reactions balance: {}", r.balance);
+    assert!(r.warnings.is_empty(), "a matched, closed interface warns about nothing: {:?}", r.warnings);
+    // The cold end removes q * A = 13.888888888888888 W (see F4e); positive reactions remove
+    // heat, and the interface is not itself a support.
+    assert!((r.reactions[0].total[0].value - 13.888888888888888).abs() < 1e-6);
+    assert!(r.reactions.iter().all(|row| row.constraint != "resist" && row.constraint != "welded"));
+
+    // Naming a contact this Step does not list is `model.ill-posed`, not a panic.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bad","procedure":"heat-steady","constraints":["cold","hot"],"loads":["resist"]}"#,
+    );
+    let ill_posed = err(&mut e, r#"{"cmd":"solve.run","step":"bad"}"#);
+    assert_eq!(ill_posed.code, ErrorCode::ModelIllPosed);
 }
 
 /// One steel cantilever, meshed, with a point mass at its tip: the Model every point-mass test

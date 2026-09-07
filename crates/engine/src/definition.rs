@@ -223,6 +223,9 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 LoadKind::Torque { on, total } => {
                     Command::LoadTorque { name, on: on.clone(), total: Q::new(*total, "N*m") }
                 }
+                LoadKind::ThermalContact { of, h } => {
+                    Command::ContactThermal { name, of: of.clone(), conductance: Q::new(*h, "W/(m^2 K)") }
+                }
             }
         }
         ObjectKind::Step => {

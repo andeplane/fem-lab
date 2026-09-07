@@ -1195,6 +1195,31 @@
         ]
       },
       {
+        "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "of": {
+            "type": "string"
+          },
+          "conductance": {
+            "$ref": "#/$defs/Q_heat_transfer_coefficient"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "contact.thermal"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "of",
+          "conductance"
+        ]
+      },
+      {
         "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
         "type": "object",
         "properties": {
@@ -2665,6 +2690,13 @@
             "properties": {
               "size": {
                 "$ref": "#/$defs/LatticeSize"
+              },
+              "sizes": {
+                "description": "Optional positive element lengths keyed by existing Body name. Each entry overrides\n`size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave\nsize to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions\nand cannot have size overrides. Names follow model.rename; remove an override before\nremoving its Body. A new mesh.set replaces all overrides; convergence studies scale\nthem with the global size, preserving the refinement ratio.",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/Q_length"
+                }
               },
               "kind": {
                 "type": "string",
@@ -5383,6 +5415,31 @@
             ]
           },
           {
+            "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "of": {
+                "type": "string"
+              },
+              "conductance": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.thermal"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "of",
+              "conductance"
+            ]
+          },
+          {
             "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -6810,6 +6867,13 @@
               "size": {
                 "$ref": "#/$defs/LatticeSize"
               },
+              "sizes": {
+                "description": "Optional positive element lengths keyed by existing Body name. Each entry overrides\n`size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave\nsize to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions\nand cannot have size overrides. Names follow model.rename; remove an override before\nremoving its Body. A new mesh.set replaces all overrides; convergence studies scale\nthem with the global size, preserving the refinement ratio.",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/Q_length"
+                }
+              },
               "kind": {
                 "type": "string",
                 "const": "lattice"
@@ -8171,6 +8235,13 @@
                 },
                 "minItems": 3,
                 "maxItems": 3
+              },
+              "sizes": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                }
               },
               "kind": {
                 "type": "string",
@@ -9726,6 +9797,31 @@
             ]
           },
           {
+            "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "of": {
+                "type": "string"
+              },
+              "conductance": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.thermal"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "of",
+              "conductance"
+            ]
+          },
+          {
             "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -11135,6 +11231,13 @@
             "properties": {
               "size": {
                 "$ref": "#/$defs/LatticeSize"
+              },
+              "sizes": {
+                "description": "Optional positive element lengths keyed by existing Body name. Each entry overrides\n`size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave\nsize to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions\nand cannot have size overrides. Names follow model.rename; remove an override before\nremoving its Body. A new mesh.set replaces all overrides; convergence studies scale\nthem with the global size, preserving the refinement ratio.",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/Q_length"
+                }
               },
               "kind": {
                 "type": "string",
@@ -15814,6 +15917,28 @@
               "on",
               "total"
             ]
+          },
+          {
+            "description": "A finite conductance across the bonded contact `of`, replacing its perfect thermal tie.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "h": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "thermalContact"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "h"
+            ]
           }
         ]
       },
@@ -16172,6 +16297,13 @@
                 },
                 "minItems": 3,
                 "maxItems": 3
+              },
+              "sizes": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                }
               },
               "kind": {
                 "type": "string",
@@ -17746,6 +17878,31 @@
             ]
           },
           {
+            "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "of": {
+                "type": "string"
+              },
+              "conductance": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.thermal"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "of",
+              "conductance"
+            ]
+          },
+          {
             "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -19155,6 +19312,13 @@
             "properties": {
               "size": {
                 "$ref": "#/$defs/LatticeSize"
+              },
+              "sizes": {
+                "description": "Optional positive element lengths keyed by existing Body name. Each entry overrides\n`size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave\nsize to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions\nand cannot have size overrides. Names follow model.rename; remove an override before\nremoving its Body. A new mesh.set replaces all overrides; convergence studies scale\nthem with the global size, preserving the refinement ratio.",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/Q_length"
+                }
               },
               "kind": {
                 "type": "string",
