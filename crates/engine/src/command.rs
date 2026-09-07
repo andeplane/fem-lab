@@ -289,7 +289,12 @@ pub enum Solver {
 /// Result fields. Reaction is support force in N for structural Results and removed heat
 /// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
 /// display units. Transient thermal reactions include stored energy and refer to the last
-/// θ-method integration stage, not an endpoint steady-state residual.
+/// θ-method integration stage, not an endpoint steady-state residual. Three fields exist only
+/// on a static Result of a Model with beams: `rotation` (every node's rotation about the
+/// global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
+/// tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
+/// member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
+/// triple at each end of every beam and zeros on every other element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -301,15 +306,8 @@ pub enum Field {
     Strain,
     Reaction,
     Temperature,
-    /// The rotation of every node about the global axes, in radians: a static Result of a
-    /// Model with beams carries it, zero on every node no beam reaches. Absent otherwise.
     Rotation,
-    /// Per-member section forces of beam elements at each element end: `N` (axial, positive
-    /// in tension), `V_y` and `V_z` (shear along the member's local y and z). One triple per
-    /// element node (`elementNode` location), zero on every element that is not a beam.
     SectionForce,
-    /// Per-member section moments of beam elements at each element end: `T` (torque about the
-    /// member axis), `M_y` and `M_z` (bending about local y and z). Same layout as sectionForce.
     SectionMoment,
 }
 
@@ -1276,21 +1274,21 @@ pub enum Command {
     /// Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
     /// one without it is reported by query.model warnings and blocks solve.run with
     /// model.no-section. A Section on a solid or sheet Body is carried but never used: those
-    /// Bodies get their cross-section from their geometry. `orientation` sets the section's
-    /// local z-axis (its `height` direction, the one `iY` resists bending along) for the beams
-    /// of these Bodies: local z is the given vector made perpendicular to each member's axis,
-    /// and local y completes the right-handed triad (y = z × x). It may not be parallel to a
-    /// member. Without it the rule is: local z is global Z made perpendicular to the member,
-    /// so a horizontal beam has its height vertical; a member within 1e-6 of vertical uses
-    /// global X instead, so a column's local z points along +X. `iZ` then resists bending
-    /// along local y. Trusses ignore it.
+    /// Bodies get their cross-section from their geometry. `orientation` names the global
+    /// axis the section's local z (its `height` direction, the one `iY` resists bending along)
+    /// follows for the beams of these Bodies: local z is that axis made perpendicular to each
+    /// member, and local y completes the right-handed triad (y = z × x). It may not lie along
+    /// a member. Without it the rule is: local z follows global Z, so a horizontal beam has
+    /// its height vertical; a member within 1e-6 of vertical follows global X instead, so a
+    /// column's local z points along +X. `iZ` then resists bending along local y. Trusses
+    /// ignore it.
     #[serde(rename = "section.assign", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAssign {
         section: String,
         bodies: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        orientation: Option<[f64; 3]>,
+        orientation: Option<Axis>,
     },
 
     /// Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies

@@ -3,8 +3,8 @@
 //!
 //! It shares the truss's geometry (`truss::axis`, the one-Gauss-point line tables) and its
 //! Section, and adds a local triad. Local x is the member axis `e1`; local z is a reference
-//! vector made perpendicular to the axis — the Body's `orientation` from `section.assign`, or
-//! by default global Z (global X for a member within 1e-6 of vertical); local y closes the
+//! vector made perpendicular to the axis — the Body's `orientation` axis from `section.assign`,
+//! or by default global Z (global X for a member within 1e-6 of vertical); local y closes the
 //! right-handed triad, `y = z × x`. A horizontal beam therefore has the section's `height`
 //! (local z, `i_y`) vertical, which is what a floor beam means.
 //!

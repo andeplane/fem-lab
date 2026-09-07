@@ -196,8 +196,17 @@ fn build_problem_with_temperature<'a>(
             model.sections.iter().position(|s| s.name == name)
         })
         .collect();
-    let orientation_of_block =
-        built.body_of_block.iter().map(|body| model.body(body).and_then(|b| b.orientation)).collect();
+    let orientation_of_block = built
+        .body_of_block
+        .iter()
+        .map(|body| {
+            model.body(body).and_then(|b| b.orientation).map(|axis| {
+                let mut v = [0.0; 3];
+                v[axis.index()] = 1.0;
+                v
+            })
+        })
+        .collect();
     let mut p = Problem {
         mesh: &built.mesh,
         sets: &built.sets,

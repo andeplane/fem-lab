@@ -122,8 +122,9 @@ pub struct Problem<'a> {
     /// `checks::missing_sections`; a solid block never needs one.
     pub section_of_block: Vec<Option<usize>>,
     pub sections: Vec<Section>,
-    /// Per block: the reference vector its beams take their local z-axis from, or `None` for
-    /// the default rule (`section.assign`'s `orientation`). Ignored by every other element.
+    /// Per block: the unit vector of the global axis its beams take their local z-axis from,
+    /// or `None` for the default rule (`section.assign`'s `orientation`). Ignored by every
+    /// other element.
     pub orientation_of_block: Vec<Option<[f64; 3]>>,
     pub idealisation: Idealisation,
     pub formulation: Formulation,

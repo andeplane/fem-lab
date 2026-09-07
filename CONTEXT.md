@@ -77,8 +77,8 @@ Venant torsion, so its joints carry three rotations `rx, ry, rz` as well as the 
 displacements. A Mesh with a beam Body has six unknowns per node; on nodes no beam reaches the
 rotations are *inert* (no stiffness, no mass, dropped from the free set) so a solid next to a
 beam answers exactly as it does alone. The section's local z (its height) follows the
-`orientation` of `section.assign` or the default rule (global Z, global X for a vertical
-member); local y closes the right-handed triad.
+`orientation` axis of `section.assign` or the default rule (global Z, global X for a
+vertical member); local y closes the right-handed triad.
 _Avoid_: frame element, bar (that is a truss), B31
 
 **Section force**:

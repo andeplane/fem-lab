@@ -890,20 +890,20 @@ edits the section in place. Assign it to Bodies with section.assign.
 Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
 one without it is reported by query.model warnings and blocks solve.run with
 model.no-section. A Section on a solid or sheet Body is carried but never used: those
-Bodies get their cross-section from their geometry. `orientation` sets the section's
-local z-axis (its `height` direction, the one `iY` resists bending along) for the beams
-of these Bodies: local z is the given vector made perpendicular to each member's axis,
-and local y completes the right-handed triad (y = z × x). It may not be parallel to a
-member. Without it the rule is: local z is global Z made perpendicular to the member,
-so a horizontal beam has its height vertical; a member within 1e-6 of vertical uses
-global X instead, so a column's local z points along +X. `iZ` then resists bending
-along local y. Trusses ignore it.
+Bodies get their cross-section from their geometry. `orientation` names the global
+axis the section's local z (its `height` direction, the one `iY` resists bending along)
+follows for the beams of these Bodies: local z is that axis made perpendicular to each
+member, and local y completes the right-handed triad (y = z × x). It may not lie along
+a member. Without it the rule is: local z follows global Z, so a horizontal beam has
+its height vertical; a member within 1e-6 of vertical follows global X instead, so a
+column's local z points along +X. `iZ` then resists bending along local y. Trusses
+ignore it.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | section | yes | <code>{"type":"string"}</code> |  |
 | bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| orientation | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"},"minItems":3,"maxItems":3}</code> |  |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Axis"},{"type":"null"}]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"section.assign"}</code> |  |
 
 <a id="commands-section-remove"></a>
@@ -1546,36 +1546,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
-  "oneOf": [
-    {
-      "type": "string",
-      "enum": [
-        "displacement",
-        "stress",
-        "stressUnaveraged",
-        "vonMises",
-        "principal",
-        "strain",
-        "reaction",
-        "temperature"
-      ]
-    },
-    {
-      "description": "The rotation of every node about the global axes, in radians: a static Result of a\nModel with beams carries it, zero on every node no beam reaches. Absent otherwise.",
-      "type": "string",
-      "const": "rotation"
-    },
-    {
-      "description": "Per-member section forces of beam elements at each element end: `N` (axial, positive\nin tension), `V_y` and `V_z` (shear along the member's local y and z). One triple per\nelement node (`elementNode` location), zero on every element that is not a beam.",
-      "type": "string",
-      "const": "sectionForce"
-    },
-    {
-      "description": "Per-member section moments of beam elements at each element end: `T` (torque about the\nmember axis), `M_y` and `M_z` (bending about local y and z). Same layout as sectionForce.",
-      "type": "string",
-      "const": "sectionMoment"
-    }
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
+  "type": "string",
+  "enum": [
+    "displacement",
+    "stress",
+    "stressUnaveraged",
+    "vonMises",
+    "principal",
+    "strain",
+    "reaction",
+    "temperature",
+    "rotation",
+    "sectionForce",
+    "sectionMoment"
   ]
 }
 ```
@@ -4714,7 +4698,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry. `orientation` sets the section's\nlocal z-axis (its `height` direction, the one `iY` resists bending along) for the beams\nof these Bodies: local z is the given vector made perpendicular to each member's axis,\nand local y completes the right-handed triad (y = z × x). It may not be parallel to a\nmember. Without it the rule is: local z is global Z made perpendicular to the member,\nso a horizontal beam has its height vertical; a member within 1e-6 of vertical uses\nglobal X instead, so a column's local z points along +X. `iZ` then resists bending\nalong local y. Trusses ignore it.",
+      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
       "type": "object",
       "properties": {
         "section": {
@@ -4727,16 +4711,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
           }
         },
         "orientation": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "number",
-            "format": "double"
-          },
-          "minItems": 3,
-          "maxItems": 3
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Axis"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cmd": {
           "type": "string",
@@ -6379,36 +6361,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
-  "oneOf": [
-    {
-      "type": "string",
-      "enum": [
-        "displacement",
-        "stress",
-        "stressUnaveraged",
-        "vonMises",
-        "principal",
-        "strain",
-        "reaction",
-        "temperature"
-      ]
-    },
-    {
-      "description": "The rotation of every node about the global axes, in radians: a static Result of a\nModel with beams carries it, zero on every node no beam reaches. Absent otherwise.",
-      "type": "string",
-      "const": "rotation"
-    },
-    {
-      "description": "Per-member section forces of beam elements at each element end: `N` (axial, positive\nin tension), `V_y` and `V_z` (shear along the member's local y and z). One triple per\nelement node (`elementNode` location), zero on every element that is not a beam.",
-      "type": "string",
-      "const": "sectionForce"
-    },
-    {
-      "description": "Per-member section moments of beam elements at each element end: `T` (torque about the\nmember axis), `M_y` and `M_z` (bending about local y and z). Same layout as sectionForce.",
-      "type": "string",
-      "const": "sectionMoment"
-    }
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
+  "type": "string",
+  "enum": [
+    "displacement",
+    "stress",
+    "stressUnaveraged",
+    "vonMises",
+    "principal",
+    "strain",
+    "reaction",
+    "temperature",
+    "rotation",
+    "sectionForce",
+    "sectionMoment"
   ]
 }
 ```

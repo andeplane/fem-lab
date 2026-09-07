@@ -13905,6 +13905,14 @@ fn the_beam_stiffness_reproduces_the_cantilever_closed_forms_about_every_axis() 
     el.recover(&c, &u_c, &mut sig, &mut eps).expect("recovery");
     assert!((sig[0] + e * 1e-4 / l).abs() < 1e-3, "{sig:?}");
     assert!((eps[0] + 1e-4 / l).abs() < 1e-18, "{eps:?}");
+    // Compression plus bending: the compressed fibre wins, with its sign.
+    let mut u_cb = u_c.clone();
+    for (i, x) in u.iter().enumerate() {
+        u_cb[i] += x;
+    }
+    el.recover(&c, &u_cb, &mut sig, &mut eps).expect("recovery");
+    let want = -e * 1e-4 / l - p * l * sec.c_y / sec.i_z;
+    assert!((sig[0] - want).abs() < 1e-9 * want.abs(), "{sig:?} vs {want}");
 }
 
 /// Six independent rigid motions — three translations and three rotations, the rotations
@@ -14143,8 +14151,17 @@ fn a_beam_refuses_what_it_cannot_do_and_names_what_it_is_missing() {
     assert!(el.body_load(&c, &|_x| [0.0; 3], &mut v).is_ok());
 
     let folded = [1.0, 2.0, 3.0, 1.0, 2.0, 3.0];
-    let c = beam_ctx(&folded, &mat, Some(&sec), None, [0.0; 3], None);
-    assert_eq!(el.stiffness(&c, &mut big).expect_err("no axis").code, ErrorCode::MeshInverted);
+    let c = beam_ctx(&folded, &mat, Some(&sec), None, [0.0; 3], Some(&t));
+    for code in [
+        el.stiffness(&c, &mut big).expect_err("no axis").code,
+        el.mass(&c, &mut big, true).expect_err("no axis").code,
+        el.body_load(&c, &|_x| [0.0; 3], &mut v).expect_err("no axis").code,
+        el.thermal_load(&c, &mut v).expect_err("no axis").code,
+        el.recover(&c, &[0.0; 12], &mut sig, &mut eps).expect_err("no axis").code,
+        femlab_engine::fem::beam::section_forces(&c, &[0.0; 12]).expect_err("no axis").code,
+    ] {
+        assert_eq!(code, ErrorCode::MeshInverted);
+    }
     assert_eq!(min_det_j(ElementKind::Beam2, &folded), None);
 }
 
@@ -14367,6 +14384,11 @@ fn a_solid_next_to_a_beam_keeps_its_own_answer_and_the_beam_keeps_its_own() {
         }
     }
     assert!(!res_alone.fields.contains_key(&Field::Rotation), "no beams, no rotation field");
+    // A moment on a Set the Mesh does not have is the same `set.empty` error every Load gets.
+    let mut lost = mixed_problem(&mixed, &sets, &bodies, 0.0, 0.0);
+    lost.loads = vec![Load::NodalMoment { nodes: "nope".into(), m: [1.0, 0.0, 0.0] }];
+    let mut f = vec![0.0; lost.n_dofs()];
+    assert_eq!(assemble_loads(&lost, &mut f).expect_err("no such set").code, ErrorCode::SetEmpty);
     // The two clamps carry the two loads, and a beam's clamp reports its force, not its moment.
     let per = reactions_per_constraint(&p, &resolve(&p).unwrap(), &res.fields[&Field::Reaction]);
     assert!((per[0].1[2] - p_tip).abs() < 1e-6 * p_tip, "{per:?}");

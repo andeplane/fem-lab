@@ -61,10 +61,10 @@ pub struct Body {
     /// The cross-section of its line members; unused by a solid or sheet Body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
-    /// The reference vector the beams of this Body take their local z-axis from
-    /// (`section.assign` `orientation`); `None` is the default rule. Unused by a truss or a solid.
+    /// The global axis the beams of this Body take their local z-axis from (`section.assign`
+    /// `orientation`); `None` is the default rule. Unused by a truss or a solid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub orientation: Option<[f64; 3]>,
+    pub orientation: Option<Axis>,
 }
 
 /// A named cross-section, resolved to SI properties by the section library.

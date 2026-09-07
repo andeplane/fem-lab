@@ -758,16 +758,6 @@ impl Engine {
                 self.model
                     .section(section)
                     .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
-                if let Some(v) = orientation {
-                    let norm = libm::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-                    if !(norm.is_finite() && norm > 0.0) {
-                        return Err(Error::schema(format!("orientation must be a finite, non-zero vector, got {v:?}"))
-                            .at("orientation")
-                            .suggest(
-                                "section.assign with orientation [0, 0, 1], or without one for the default rule",
-                            ));
-                    }
-                }
                 // A Section belongs to explicit line geometry; a mesher's implicit Body is a
                 // surface and gets its cross-section from the idealisation, so it is not listed.
                 let known: Vec<&str> = self.model.bodies.iter().map(|b| b.name.as_str()).collect();

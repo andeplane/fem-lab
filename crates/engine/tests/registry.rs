@@ -10816,14 +10816,20 @@ fn beam_commands_validate_summarise_and_round_trip() {
         err(&mut e, r#"{"cmd":"load.moment","name":"m","on":"nope","total":["1 kN m","0 kN m","0 kN m"]}"#).code,
         ErrorCode::NotFound
     );
+    // Names are checked and a moment is a torque, like every other Command.
+    assert_eq!(err(&mut e, r#"{"cmd":"constraint.pin","name":"","on":"beam.p1"}"#).code, ErrorCode::Schema);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"load.moment","name":"a b","on":"beam.p1","total":["1 kN m","0 kN m","0 kN m"]}"#).code,
+        ErrorCode::Schema
+    );
+    let er = err(&mut e, r#"{"cmd":"load.moment","name":"m","on":"beam.p1","total":["1 kN m","1 mm","0 kN m"]}"#);
+    assert_eq!(er.where_.as_deref(), Some("total[1]"));
     // A rotation cannot be prescribed a length.
     let er = err(&mut e, r#"{"cmd":"constraint.prescribe","name":"turn","on":"beam.p1","dof":"ry","value":"1 mm"}"#);
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Unsupported, Some("dof")));
-    // An orientation has to be a direction.
-    let er = err(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":[0,0,0]}"#);
-    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Schema, Some("orientation")));
-    ok(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":[0,1,0]}"#);
-    assert_eq!(e.model().body("beam").unwrap().orientation, Some([0.0, 1.0, 0.0]));
+    // An orientation is a global axis, and the Body remembers it.
+    ok(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":"y"}"#);
+    assert_eq!(e.model().body("beam").unwrap().orientation, Some(femlab_engine::command::Axis::Y));
 
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.p0"}"#);
     ok(&mut e, r#"{"cmd":"constraint.pin","name":"tip","on":"beam.p1"}"#);
@@ -10945,7 +10951,7 @@ fn a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused() {
     };
     assert!(!r.stale);
 
-    ok(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":[1,0,0]}"#);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":"x"}"#);
     let er = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("element 0")));
     assert!(er.cause.contains("orientation") && er.cause.contains("parallel"), "{er:?}");
