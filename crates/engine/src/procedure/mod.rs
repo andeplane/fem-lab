@@ -53,14 +53,101 @@ impl Amplitude {
     }
 }
 
+/// Convergence control for a Step whose system depends on its own answer.
+///
+/// Radiation, a temperature-dependent conductivity and a geometrically nonlinear stiffness are
+/// all the same shape: assemble at the current state, solve, repeat. One control governs them
+/// all, so a Step that has several of them still has one tolerance and one iteration budget.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NonlinearControl {
+    /// Converged when the relative sup-norm change of the state falls to or below this.
+    pub tol: f64,
+    /// Give up after this many passes and report `solve.diverged`.
+    pub max_iterations: usize,
+}
+
+impl Default for NonlinearControl {
+    fn default() -> NonlinearControl {
+        NonlinearControl { tol: 1e-6, max_iterations: 50 }
+    }
+}
+
+/// Relative sup-norm change between two states, or `NaN` when the new state is not finite.
+///
+/// The scale floor is [`f64::MIN_POSITIVE`] rather than a branch on zero, so a state that is
+/// identically zero reports no change instead of `0/0`.
+fn relative_change(previous: &[f64], next: &[f64]) -> f64 {
+    let mut change = 0.0f64;
+    let mut scale = f64::MIN_POSITIVE;
+    let mut finite = true;
+    for (p, n) in previous.iter().zip(next) {
+        finite &= n.is_finite();
+        change = change.max(libm::fabs(n - p));
+        scale = scale.max(libm::fabs(*n));
+    }
+    if finite {
+        change / scale
+    } else {
+        f64::NAN
+    }
+}
+
+/// The iteration ran out of budget, or left the finite numbers behind.
+fn diverged(where_: &str, iterations: usize, change: f64) -> Error {
+    Error::new(
+        ErrorCode::SolveDiverged,
+        format!("the nonlinear iteration did not converge: {iterations} passes reached a relative change of {change}"),
+    )
+    .at(where_)
+    .suggest("step.add with a larger nonlinearMaxIterations, a smaller dt, or a milder nonlinearity")
+}
+
+/// One pass of a nonlinear iteration: read the current state, write the next one, and report
+/// the linear solve it took to get there.
+pub(crate) type Advance<'a> = &'a mut dyn FnMut(&[f64], &mut Vec<f64>) -> Result<SolveInfo, Error>;
+
+/// Repeat `advance(current, next)` until the relative sup-norm change of the state is at or
+/// below `control.tol`, and answer the last linear solve plus the number of passes it took.
+///
+/// `advance` re-assembles *everything* that depends on the state and solves once, so a Step
+/// with both a radiating face and a temperature-dependent conductivity is one loop with two
+/// contributions rather than two nested loops. A problem that is already linear converges on
+/// the first pass and pays one extra assembly for the proof.
+///
+/// `where_` is what the divergence Error points at — the Step, so the user knows which one to
+/// give a larger budget. A state that stops being finite ends the loop immediately rather than
+/// burning the whole budget on numbers that cannot recover.
+pub(crate) fn iterate(
+    control: &NonlinearControl,
+    state: &mut Vec<f64>,
+    where_: &str,
+    advance: Advance<'_>,
+) -> Result<(SolveInfo, usize), Error> {
+    let mut next = vec![0.0; state.len()];
+    let mut change = f64::INFINITY;
+    for pass in 1..=control.max_iterations {
+        let info = advance(state, &mut next)?;
+        change = relative_change(state, &next);
+        std::mem::swap(state, &mut next);
+        if change <= control.tol {
+            return Ok((info, pass));
+        }
+        if !change.is_finite() {
+            return Err(diverged(where_, pass, change));
+        }
+    }
+    Err(diverged(where_, control.max_iterations, change))
+}
+
 /// One analysis step.
 pub enum Step {
     /// Linear static equilibrium: `K u = f`.
     Static { solver: SolveOptions },
     /// Natural frequencies and mode shapes by subspace iteration (plan A §6).
     Modal { n_modes: usize, shift: Option<f64>, solver: SolveOptions },
-    /// Steady conduction with convection and flux boundaries: `(K + H) T = f`.
-    HeatSteady { solver: SolveOptions },
+    /// Steady conduction with convection, flux and radiation boundaries: `(K + H) T = f`,
+    /// iterated when a radiating face makes `H` depend on `T`.
+    HeatSteady { solver: SolveOptions, control: NonlinearControl },
     /// Transient conduction by the θ-method, one factorisation reused for every time step.
     HeatTransient {
         /// Maximum increment; a uniform increment no larger than this reaches `t_end` exactly.
@@ -74,6 +161,7 @@ pub enum Step {
         output_every: usize,
         amplitude: Option<Amplitude>,
         solver: SolveOptions,
+        control: NonlinearControl,
     },
     /// Explicit dynamics by central differences on a lumped mass (plan A §6).
     Explicit {
@@ -200,10 +288,20 @@ pub async fn run(
     match step {
         Step::Static { solver } => static_::run(p, solver, pool, gpu, progress).await,
         Step::Modal { n_modes, shift, solver } => modal::run(p, *n_modes, *shift, solver, pool, progress),
-        Step::HeatSteady { solver } => heat::steady(p, solver, pool, gpu, progress).await,
-        Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver } => {
-            heat::transient(p, *dt, *t_end, *theta, *initial, *output_every, amplitude.as_ref(), solver, pool, progress)
-        }
+        Step::HeatSteady { solver, control } => heat::steady(p, solver, control, pool, gpu, progress).await,
+        Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver, control } => heat::transient(
+            p,
+            *dt,
+            *t_end,
+            *theta,
+            *initial,
+            *output_every,
+            amplitude.as_ref(),
+            solver,
+            control,
+            pool,
+            progress,
+        ),
         Step::Explicit { t_end, dt_factor, initial_velocity, output_every } => {
             explicit::run(p, *t_end, *dt_factor, initial_velocity.as_deref(), *output_every, pool, progress)
         }
@@ -279,8 +377,97 @@ pub(crate) fn report(
 
 #[cfg(test)]
 mod tests {
-    use super::{retained_frame_count, retained_payload_bytes, time_grid};
+    use super::{iterate, relative_change, retained_frame_count, retained_payload_bytes, time_grid, NonlinearControl};
+    use crate::solve::SolveInfo;
     use crate::ErrorCode;
+
+    fn info() -> SolveInfo {
+        SolveInfo { solver: "test", iterations: 3, rel_residual: 0.0, time_ms: 0.0 }
+    }
+
+    #[test]
+    fn a_linear_problem_converges_on_the_first_pass() {
+        let control = NonlinearControl::default();
+        assert_eq!((control.tol, control.max_iterations), (1e-6, 50));
+        let mut state = vec![1.0, -2.0];
+        let mut calls = 0usize;
+        let (solver, passes) = iterate(&control, &mut state, "step 'heat'", &mut |current, next| {
+            calls += 1;
+            next.copy_from_slice(current);
+            Ok(info())
+        })
+        .expect("a state that does not move is converged");
+        assert_eq!((calls, passes, solver.iterations), (1, 1, 3));
+        assert_eq!(state, vec![1.0, -2.0]);
+    }
+
+    #[test]
+    fn a_contraction_reaches_its_fixed_point() {
+        // x <- (x + 4/x)/2 is Newton on sqrt(4), so the fixed point is 2 and the sup-norm
+        // change falls below 1e-12 after four passes from 1.
+        let control = NonlinearControl { tol: 1e-12, max_iterations: 50 };
+        let mut state = vec![1.0];
+        let (_, passes) = iterate(&control, &mut state, "step 'heat'", &mut |current, next| {
+            next[0] = 0.5 * (current[0] + 4.0 / current[0]);
+            Ok(info())
+        })
+        .expect("Newton on sqrt(4) converges");
+        assert_eq!(passes, 6);
+        assert!(libm::fabs(state[0] - 2.0) < 1e-15, "{state:?}");
+    }
+
+    #[test]
+    fn a_closure_that_never_settles_is_solve_diverged() {
+        let control = NonlinearControl { tol: 1e-6, max_iterations: 7 };
+        let mut state = vec![1.0];
+        let mut calls = 0usize;
+        let error = iterate(&control, &mut state, "step 'heat'", &mut |current, next| {
+            calls += 1;
+            next[0] = -current[0];
+            Ok(info())
+        })
+        .expect_err("a sign flip never converges");
+        assert_eq!(calls, 7);
+        assert_eq!(error.code, ErrorCode::SolveDiverged);
+        assert_eq!(error.where_.as_deref(), Some("step 'heat'"));
+        assert!(error.cause.contains("7 passes"), "{}", error.cause);
+        assert!(error.suggestion.expect("a budget suggestion").contains("nonlinearMaxIterations"));
+    }
+
+    #[test]
+    fn a_non_finite_state_stops_at_once() {
+        let control = NonlinearControl { tol: 1e-6, max_iterations: 50 };
+        let mut state = vec![1.0, 1.0];
+        let mut calls = 0usize;
+        let error = iterate(&control, &mut state, "step 'heat'", &mut |_, next| {
+            calls += 1;
+            next[1] = f64::NAN;
+            Ok(info())
+        })
+        .expect_err("a NaN state cannot converge");
+        assert_eq!(calls, 1);
+        assert_eq!(error.code, ErrorCode::SolveDiverged);
+        assert!(error.cause.contains("1 passes"), "{}", error.cause);
+        assert!(state[1].is_nan(), "the failing state is kept for inspection");
+    }
+
+    #[test]
+    fn a_failing_advance_reports_its_own_error() {
+        let control = NonlinearControl { tol: 1e-6, max_iterations: 50 };
+        let mut state = vec![1.0];
+        let error = iterate(&control, &mut state, "step 'heat'", &mut |_, _| {
+            Err(crate::error::Error::new(ErrorCode::SolveNotPositiveDefinite, "singular"))
+        })
+        .expect_err("the advance failure is not swallowed");
+        assert_eq!(error.code, ErrorCode::SolveNotPositiveDefinite);
+    }
+
+    #[test]
+    fn the_relative_change_is_scaled_and_never_divides_by_zero() {
+        assert_eq!(relative_change(&[0.0, 0.0], &[0.0, 0.0]), 0.0);
+        assert_eq!(relative_change(&[2.0, 0.0], &[4.0, 0.0]), 0.5);
+        assert!(relative_change(&[1.0], &[f64::INFINITY]).is_nan());
+    }
 
     #[test]
     fn time_grid_reaches_the_endpoint_without_rounding_above_the_step_bound() {

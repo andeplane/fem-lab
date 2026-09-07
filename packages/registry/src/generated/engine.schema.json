@@ -3,7 +3,7 @@
   "commands": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Command",
-    "description": "Every Command. Serialised with a `cmd` tag: `{ \"cmd\": \"geometry.addBox\", \"name\": \"beam\", … }`.",
+    "description": "Every Command. Serialised with a `cmd` tag: `{ \"cmd\": \"geometry.addBox\", \"name\": \"beam\", \u2026 }`.",
     "oneOf": [
       {
         "description": "Start a new, empty Model and Journal with this name. Discards the current Model, its\nResults and the undo history; it is the first entry of every Journal, so call it once\nat the start, never to \"reset\" mid-way (use journal.undo for that).",
@@ -63,7 +63,7 @@
         ]
       },
       {
-        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` \u2026). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
         "type": "object",
         "properties": {
           "kind": {
@@ -113,7 +113,7 @@
         ]
       },
       {
-        "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
+        "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, \u2026 `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
         "type": "object",
         "properties": {
           "name": {
@@ -150,7 +150,7 @@
         ]
       },
       {
-        "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
+        "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` \u2026 and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
         "type": "object",
         "properties": {
           "name": {
@@ -189,7 +189,7 @@
         ]
       },
       {
-        "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.",
+        "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, \u2026); list them with query.model. Lengths need units.",
         "type": "object",
         "properties": {
           "name": {
@@ -298,7 +298,7 @@
         ]
       },
       {
-        "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
+        "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 \u2264 \u03bd < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
         "type": "object",
         "properties": {
           "name": {
@@ -457,7 +457,7 @@
         ]
       },
       {
-        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data \u2014 displacement, reaction, stress and von Mises \u2014 so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
         "type": "object",
         "properties": {
           "format": {
@@ -717,7 +717,7 @@
         ]
       },
       {
-        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
+        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain \u03b1\u00b7\u0394T in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
         "type": "object",
         "properties": {
           "name": {
@@ -755,7 +755,7 @@
         ]
       },
       {
-        "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
+        "description": "Newton cooling on a face Set: heat `h (T \u2212 tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
         "type": "object",
         "properties": {
           "name": {
@@ -784,7 +784,7 @@
         ]
       },
       {
-        "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
+        "description": "A prescribed heat flux into a face Set, in W/m\u00b2 (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
         "type": "object",
         "properties": {
           "name": {
@@ -809,7 +809,37 @@
         ]
       },
       {
-        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
+        "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "emissivity": {
+            "type": "number",
+            "format": "double"
+          },
+          "tInf": {
+            "$ref": "#/$defs/Q_temperature"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.radiation"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "emissivity",
+          "tInf"
+        ]
+      },
+      {
+        "description": "A volumetric heat source on whole Bodies, in W/m\u00b3 (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
           "name": {
@@ -854,7 +884,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].\nHeat Results report net applied power,\npositive removed heat and stored-energy rate; transient powers belong to the last\nθ-method integration stage, while temperature fields belong to its endpoint.",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues \u2014 a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer \u2014 today a radiation load \u2014 and are ignored by\na Step that is linear. Heat Results report net applied power, positive removed heat and\nstored-energy rate; transient powers belong to the last \u03b8-method integration stage\n(radiation uses weighted endpoint fluxes), while temperature fields belong to its endpoint.",
         "type": "object",
         "properties": {
           "name": {
@@ -968,6 +998,23 @@
                 "type": "null"
               }
             ]
+          },
+          "nonlinearTolerance": {
+            "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           },
           "cmd": {
             "type": "string",
@@ -1284,7 +1331,7 @@
             ]
           },
           {
-            "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.",
+            "description": "Axisymmetric 2D body: x is the radius (x \u2265 0), y the axis of revolution.",
             "type": "object",
             "properties": {
               "kind": {
@@ -1345,7 +1392,7 @@
         "description": "A shape with unit strings; the geometry crate's `Shape` is its SI form.",
         "oneOf": [
           {
-            "description": "Axis-aligned box from its `at` corner (default origin) spanning `size`; faces `xmin…zmax`.",
+            "description": "Axis-aligned box from its `at` corner (default origin) spanning `size`; faces `xmin\u2026zmax`.",
             "type": "object",
             "properties": {
               "size": {
@@ -1751,7 +1798,7 @@
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
         "oneOf": [
           {
-            "description": "Boundary faces on the plane `normal · x = offset` whose outward normal is within 10° of ±normal.",
+            "description": "Boundary faces on the plane `normal \u00b7 x = offset` whose outward normal is within 10\u00b0 of \u00b1normal.",
             "type": "object",
             "properties": {
               "normal": {
@@ -1788,7 +1835,7 @@
             ]
           },
           {
-            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10°) of `normal`.",
+            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10\u00b0) of `normal`.",
             "type": "object",
             "properties": {
               "normal": {
@@ -2357,7 +2404,7 @@
         "description": "Element formulation for linear hexahedra and quadrilaterals.",
         "oneOf": [
           {
-            "description": "Wilson–Taylor incompatible modes: a linear element that bends (default).",
+            "description": "Wilson\u2013Taylor incompatible modes: a linear element that bends (default).",
             "type": "string",
             "const": "incompatible-modes"
           },
@@ -2465,7 +2512,7 @@
             "const": "heat-steady"
           },
           {
-            "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
+            "description": "Transient heat conduction by the \u03b8-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
             "type": "string",
             "const": "heat-transient"
           },
@@ -2477,7 +2524,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -2499,7 +2546,7 @@
         "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
         "oneOf": [
           {
-            "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
+            "description": "`amplitude \u00b7 sin(2\u03c0 t / period)`. NAFEMS T3's `100 sin(\u03c0 t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
             "type": "object",
             "properties": {
               "amplitude": {
@@ -2551,7 +2598,7 @@
         ]
       },
       "Solver": {
-        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
+        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop \u2014 on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
         "type": "string",
         "enum": [
           "auto",
@@ -3106,7 +3153,7 @@
         "x-returns": "ObjectList"
       },
       {
-        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Automatic hand references require a current static Step on an uncut 3D lattice\nbox with one fully clamped end and one single-component force on the opposite end;\nother cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.",
+        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Automatic hand references require a current static Step on an uncut 3D lattice\nbox with one fully clamped end and one single-component force on the opposite end;\nother cases explicitly report no applicable automatic reference. Formulas are `$$\u2026$$` for KaTeX.",
         "type": "object",
         "properties": {
           "step": {
@@ -3245,7 +3292,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -3558,7 +3605,7 @@
             ]
           },
           "faces": {
-            "description": "Auto-named faces of this body (`beam.xmin` …), plus its cuts' faces.",
+            "description": "Auto-named faces of this body (`beam.xmin` \u2026), plus its cuts' faces.",
             "type": "array",
             "items": {
               "type": "string"
@@ -3868,7 +3915,7 @@
         ]
       },
       "QuadBlock": {
-        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`\nalong u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
+        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 \u2192 c1`\nalong u and `c0 \u2192 c3` along v. Edge `k` joins `c_k \u2192 c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
         "type": "object",
         "properties": {
           "corners": {
@@ -3976,7 +4023,7 @@
             ]
           },
           {
-            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)² + ((y - cy)/b)² = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
+            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)\u00b2 + ((y - cy)/b)\u00b2 = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
             "type": "object",
             "properties": {
               "center": {
@@ -4098,7 +4145,7 @@
         "description": "Element formulation for linear hexahedra and quadrilaterals.",
         "oneOf": [
           {
-            "description": "Wilson–Taylor incompatible modes: a linear element that bends (default).",
+            "description": "Wilson\u2013Taylor incompatible modes: a linear element that bends (default).",
             "type": "string",
             "const": "incompatible-modes"
           },
@@ -4144,7 +4191,7 @@
         ]
       },
       "Command": {
-        "description": "Every Command. Serialised with a `cmd` tag: `{ \"cmd\": \"geometry.addBox\", \"name\": \"beam\", … }`.",
+        "description": "Every Command. Serialised with a `cmd` tag: `{ \"cmd\": \"geometry.addBox\", \"name\": \"beam\", \u2026 }`.",
         "oneOf": [
           {
             "description": "Start a new, empty Model and Journal with this name. Discards the current Model, its\nResults and the undo history; it is the first entry of every Journal, so call it once\nat the start, never to \"reset\" mid-way (use journal.undo for that).",
@@ -4204,7 +4251,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` \u2026). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
             "type": "object",
             "properties": {
               "kind": {
@@ -4254,7 +4301,7 @@
             ]
           },
           {
-            "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
+            "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, \u2026 `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
             "type": "object",
             "properties": {
               "name": {
@@ -4291,7 +4338,7 @@
             ]
           },
           {
-            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
+            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` \u2026 and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -4330,7 +4377,7 @@
             ]
           },
           {
-            "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.",
+            "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, \u2026); list them with query.model. Lengths need units.",
             "type": "object",
             "properties": {
               "name": {
@@ -4439,7 +4486,7 @@
             ]
           },
           {
-            "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
+            "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 \u2264 \u03bd < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
             "type": "object",
             "properties": {
               "name": {
@@ -4598,7 +4645,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data \u2014 displacement, reaction, stress and von Mises \u2014 so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -4858,7 +4905,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain \u03b1\u00b7\u0394T in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -4896,7 +4943,7 @@
             ]
           },
           {
-            "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
+            "description": "Newton cooling on a face Set: heat `h (T \u2212 tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
             "type": "object",
             "properties": {
               "name": {
@@ -4925,7 +4972,7 @@
             ]
           },
           {
-            "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
+            "description": "A prescribed heat flux into a face Set, in W/m\u00b2 (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
             "type": "object",
             "properties": {
               "name": {
@@ -4950,7 +4997,37 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
+            "description": "A volumetric heat source on whole Bodies, in W/m\u00b3 (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -4995,7 +5072,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].\nHeat Results report net applied power,\npositive removed heat and stored-energy rate; transient powers belong to the last\nθ-method integration stage, while temperature fields belong to its endpoint.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues \u2014 a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer \u2014 today a radiation load \u2014 and are ignored by\na Step that is linear. Heat Results report net applied power, positive removed heat and\nstored-energy rate; transient powers belong to the last \u03b8-method integration stage\n(radiation uses weighted endpoint fluxes), while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
@@ -5109,6 +5186,23 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
               },
               "cmd": {
                 "type": "string",
@@ -5364,7 +5458,7 @@
             ]
           },
           {
-            "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.",
+            "description": "Axisymmetric 2D body: x is the radius (x \u2265 0), y the axis of revolution.",
             "type": "object",
             "properties": {
               "kind": {
@@ -5425,7 +5519,7 @@
         "description": "A shape with unit strings; the geometry crate's `Shape` is its SI form.",
         "oneOf": [
           {
-            "description": "Axis-aligned box from its `at` corner (default origin) spanning `size`; faces `xmin…zmax`.",
+            "description": "Axis-aligned box from its `at` corner (default origin) spanning `size`; faces `xmin\u2026zmax`.",
             "type": "object",
             "properties": {
               "size": {
@@ -5831,7 +5925,7 @@
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
         "oneOf": [
           {
-            "description": "Boundary faces on the plane `normal · x = offset` whose outward normal is within 10° of ±normal.",
+            "description": "Boundary faces on the plane `normal \u00b7 x = offset` whose outward normal is within 10\u00b0 of \u00b1normal.",
             "type": "object",
             "properties": {
               "normal": {
@@ -5868,7 +5962,7 @@
             ]
           },
           {
-            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10°) of `normal`.",
+            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10\u00b0) of `normal`.",
             "type": "object",
             "properties": {
               "normal": {
@@ -6530,7 +6624,7 @@
             "const": "heat-steady"
           },
           {
-            "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
+            "description": "Transient heat conduction by the \u03b8-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
             "type": "string",
             "const": "heat-transient"
           },
@@ -6542,7 +6636,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -6564,7 +6658,7 @@
         "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
         "oneOf": [
           {
-            "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
+            "description": "`amplitude \u00b7 sin(2\u03c0 t / period)`. NAFEMS T3's `100 sin(\u03c0 t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
             "type": "object",
             "properties": {
               "amplitude": {
@@ -6616,7 +6710,7 @@
         ]
       },
       "Solver": {
-        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
+        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop \u2014 on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
         "type": "string",
         "enum": [
           "auto",
@@ -6977,7 +7071,7 @@
             }
           },
           "appliedTotal": {
-            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection) in component 0, with remaining thermal components zero.",
+            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection and radiation) in component 0, with remaining thermal components zero.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -7000,12 +7094,12 @@
             }
           },
           "balance": {
-            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
+            "description": "Structural force equilibrium: |\u03a3 reactions + \u03a3 applied| / largest force. Thermal\nconservation: |net applied \u2212 removed \u2212 storage| divided by \u03a3|Kij T\u03b8j| + \u03a3|fi| +\n\u03a3|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
           "storagePower": {
-            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
+            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last \u03b8-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied \u2212 removed = storage.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"
@@ -8191,7 +8285,7 @@
             }
           },
           "appliedTotal": {
-            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection) in component 0, with remaining thermal components zero.",
+            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection and radiation) in component 0, with remaining thermal components zero.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -8214,12 +8308,12 @@
             }
           },
           "balance": {
-            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
+            "description": "Structural force equilibrium: |\u03a3 reactions + \u03a3 applied| / largest force. Thermal\nconservation: |net applied \u2212 removed \u2212 storage| divided by \u03a3|Kij T\u03b8j| + \u03a3|fi| +\n\u03a3|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
           "storagePower": {
-            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
+            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last \u03b8-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied \u2212 removed = storage.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"
@@ -8508,6 +8602,7 @@
           "constraint.rigid-modes",
           "solve.not-positive-definite",
           "solve.stalled",
+          "solve.diverged",
           "solve.too-large",
           "gpu.shader",
           "gpu.too-large",
@@ -8787,7 +8882,7 @@
         "description": "A shape: a primitive, a sketch made into a body, or a boolean/transform of shapes.\nAll lengths are SI metres, angles degrees.",
         "oneOf": [
           {
-            "description": "Axis-aligned box from the origin to `size`. Faces are tagged `xmin … zmax`.",
+            "description": "Axis-aligned box from the origin to `size`. Faces are tagged `xmin \u2026 zmax`.",
             "type": "object",
             "properties": {
               "size": {
@@ -8867,7 +8962,7 @@
             ]
           },
           {
-            "description": "A 2D body in the xy plane (plane stress/strain or axisymmetric with x = r, y = z).\nIts boundary edges are the \"faces\", tagged by segment (`edge0 …`, `hole0.edge0 …`, or the\nsegment's own tag).",
+            "description": "A 2D body in the xy plane (plane stress/strain or axisymmetric with x = r, y = z).\nIts boundary edges are the \"faces\", tagged by segment (`edge0 \u2026`, `hole0.edge0 \u2026`, or the\nsegment's own tag).",
             "type": "object",
             "properties": {
               "sketch": {
@@ -8906,7 +9001,7 @@
             ]
           },
           {
-            "description": "The sketch (x = radius ≥ 0, y = axial) revolved about the y axis, which becomes the\nsolid's z axis, through `angle` degrees starting at +x. Faces: the segment tags, plus\n`theta0` and `theta1` when the angle is below 360.",
+            "description": "The sketch (x = radius \u2265 0, y = axial) revolved about the y axis, which becomes the\nsolid's z axis, through `angle` degrees starting at +x. Faces: the segment tags, plus\n`theta0` and `theta1` when the angle is below 360.",
             "type": "object",
             "properties": {
               "sketch": {
@@ -9274,7 +9369,7 @@
         "description": "Selects boundary faces (3D) or boundary edges (2D) of a mesh by geometry.",
         "oneOf": [
           {
-            "description": "Faces whose centroid lies on the plane `normal · x = offset` (within `tol`, default\n1e-6 of the bounding-box diagonal) and whose outward normal is within 10° of ±normal.",
+            "description": "Faces whose centroid lies on the plane `normal \u00b7 x = offset` (within `tol`, default\n1e-6 of the bounding-box diagonal) and whose outward normal is within 10\u00b0 of \u00b1normal.",
             "type": "object",
             "properties": {
               "normal": {
@@ -9309,7 +9404,7 @@
             ]
           },
           {
-            "description": "Faces whose outward normal is within `max_angle_deg` (default 10°) of `normal`.",
+            "description": "Faces whose outward normal is within `max_angle_deg` (default 10\u00b0) of `normal`.",
             "type": "object",
             "properties": {
               "normal": {
@@ -9372,7 +9467,7 @@
             ]
           },
           {
-            "description": "Faces whose centroid is at distance `radius` (± `tol`) from the axis line through\n`point` along `axis`. In 2D with axis z this is a circle.",
+            "description": "Faces whose centroid is at distance `radius` (\u00b1 `tol`) from the axis line through\n`point` along `axis`. In 2D with axis z this is a circle.",
             "type": "object",
             "properties": {
               "point": {
@@ -9834,6 +9929,32 @@
               "on": {
                 "type": "string"
               },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "t_inf": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "radiation"
+              }
+            },
+            "required": [
+              "kind",
+              "on",
+              "emissivity",
+              "t_inf"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string"
+              },
               "q": {
                 "type": "number",
                 "format": "double"
@@ -9876,7 +9997,7 @@
         ]
       },
       "Step": {
-        "description": "A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;\n`after` names the Step whose Result this one continues (plan B §2.2).",
+        "description": "A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;\n`after` names the Step whose Result this one continues (plan B \u00a72.2).",
         "type": "object",
         "properties": {
           "name": {
@@ -9976,6 +10097,21 @@
               "null"
             ],
             "format": "double"
+          },
+          "nonlinearTolerance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
@@ -10005,7 +10141,7 @@
             "const": "heat-steady"
           },
           {
-            "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
+            "description": "Transient heat conduction by the \u03b8-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
             "type": "string",
             "const": "heat-transient"
           },
@@ -10017,7 +10153,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -10220,7 +10356,7 @@
         ]
       },
       "QuadBlock": {
-        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`\nalong u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
+        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 \u2192 c1`\nalong u and `c0 \u2192 c3` along v. Edge `k` joins `c_k \u2192 c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
         "type": "object",
         "properties": {
           "corners": {
@@ -10328,7 +10464,7 @@
             ]
           },
           {
-            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)² + ((y - cy)/b)² = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
+            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)\u00b2 + ((y - cy)/b)\u00b2 = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
             "type": "object",
             "properties": {
               "center": {
@@ -10450,7 +10586,7 @@
         "description": "Element formulation for linear hexahedra and quadrilaterals.",
         "oneOf": [
           {
-            "description": "Wilson–Taylor incompatible modes: a linear element that bends (default).",
+            "description": "Wilson\u2013Taylor incompatible modes: a linear element that bends (default).",
             "type": "string",
             "const": "incompatible-modes"
           },
@@ -10515,7 +10651,7 @@
         ]
       },
       "Command": {
-        "description": "Every Command. Serialised with a `cmd` tag: `{ \"cmd\": \"geometry.addBox\", \"name\": \"beam\", … }`.",
+        "description": "Every Command. Serialised with a `cmd` tag: `{ \"cmd\": \"geometry.addBox\", \"name\": \"beam\", \u2026 }`.",
         "oneOf": [
           {
             "description": "Start a new, empty Model and Journal with this name. Discards the current Model, its\nResults and the undo history; it is the first entry of every Journal, so call it once\nat the start, never to \"reset\" mid-way (use journal.undo for that).",
@@ -10575,7 +10711,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` \u2026). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
             "type": "object",
             "properties": {
               "kind": {
@@ -10625,7 +10761,7 @@
             ]
           },
           {
-            "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
+            "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, \u2026 `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
             "type": "object",
             "properties": {
               "name": {
@@ -10662,7 +10798,7 @@
             ]
           },
           {
-            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
+            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` \u2026 and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -10701,7 +10837,7 @@
             ]
           },
           {
-            "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.",
+            "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, \u2026); list them with query.model. Lengths need units.",
             "type": "object",
             "properties": {
               "name": {
@@ -10810,7 +10946,7 @@
             ]
           },
           {
-            "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
+            "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 \u2264 \u03bd < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
             "type": "object",
             "properties": {
               "name": {
@@ -10969,7 +11105,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data \u2014 displacement, reaction, stress and von Mises \u2014 so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -11229,7 +11365,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain \u03b1\u00b7\u0394T in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -11267,7 +11403,7 @@
             ]
           },
           {
-            "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
+            "description": "Newton cooling on a face Set: heat `h (T \u2212 tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
             "type": "object",
             "properties": {
               "name": {
@@ -11296,7 +11432,7 @@
             ]
           },
           {
-            "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
+            "description": "A prescribed heat flux into a face Set, in W/m\u00b2 (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
             "type": "object",
             "properties": {
               "name": {
@@ -11321,7 +11457,37 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
+            "description": "A volumetric heat source on whole Bodies, in W/m\u00b3 (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -11366,7 +11532,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].\nHeat Results report net applied power,\npositive removed heat and stored-energy rate; transient powers belong to the last\nθ-method integration stage, while temperature fields belong to its endpoint.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues \u2014 a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer \u2014 today a radiation load \u2014 and are ignored by\na Step that is linear. Heat Results report net applied power, positive removed heat and\nstored-energy rate; transient powers belong to the last \u03b8-method integration stage\n(radiation uses weighted endpoint fluxes), while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
@@ -11480,6 +11646,23 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
               },
               "cmd": {
                 "type": "string",
@@ -11735,7 +11918,7 @@
             ]
           },
           {
-            "description": "Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.",
+            "description": "Axisymmetric 2D body: x is the radius (x \u2265 0), y the axis of revolution.",
             "type": "object",
             "properties": {
               "kind": {
@@ -11796,7 +11979,7 @@
         "description": "A shape with unit strings; the geometry crate's `Shape` is its SI form.",
         "oneOf": [
           {
-            "description": "Axis-aligned box from its `at` corner (default origin) spanning `size`; faces `xmin…zmax`.",
+            "description": "Axis-aligned box from its `at` corner (default origin) spanning `size`; faces `xmin\u2026zmax`.",
             "type": "object",
             "properties": {
               "size": {
@@ -12202,7 +12385,7 @@
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
         "oneOf": [
           {
-            "description": "Boundary faces on the plane `normal · x = offset` whose outward normal is within 10° of ±normal.",
+            "description": "Boundary faces on the plane `normal \u00b7 x = offset` whose outward normal is within 10\u00b0 of \u00b1normal.",
             "type": "object",
             "properties": {
               "normal": {
@@ -12239,7 +12422,7 @@
             ]
           },
           {
-            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10°) of `normal`.",
+            "description": "Boundary faces whose outward normal is within `maxAngleDeg` (default 10\u00b0) of `normal`.",
             "type": "object",
             "properties": {
               "normal": {
@@ -12873,7 +13056,7 @@
         "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
         "oneOf": [
           {
-            "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
+            "description": "`amplitude \u00b7 sin(2\u03c0 t / period)`. NAFEMS T3's `100 sin(\u03c0 t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
             "type": "object",
             "properties": {
               "amplitude": {
@@ -12925,7 +13108,7 @@
         ]
       },
       "Solver": {
-        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
+        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop \u2014 on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
         "type": "string",
         "enum": [
           "auto",

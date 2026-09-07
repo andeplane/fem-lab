@@ -482,6 +482,21 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -546,6 +561,16 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -1305,8 +1330,7 @@ export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | 
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
- * display units. Transient thermal reactions include stored energy and refer to the last
- * θ-method integration stage, not an endpoint steady-state residual.
+ * display units.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -2204,6 +2228,21 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -2268,6 +2307,16 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -2855,6 +2904,12 @@ export type Load1 =
     }
   | {
       on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
+    }
+  | {
+      on: string;
       q: number;
       kind: "heatFlux";
     }
@@ -3357,7 +3412,7 @@ export interface ResultSummary {
   reactions: ReactionRow[];
   /**
    * Applied force vector or net thermal power (flux/source plus incoming minus outgoing
-   * convection) in component 0, with remaining thermal components zero.
+   * convection and radiation) in component 0, with remaining thermal components zero.
    *
    * @minItems 3
    * @maxItems 3
@@ -3854,6 +3909,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.diverged"
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
@@ -4010,6 +4066,8 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  nonlinearTolerance?: number | null;
+  nonlinearMaxIterations?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).

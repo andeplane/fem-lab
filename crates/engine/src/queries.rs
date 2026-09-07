@@ -233,6 +233,18 @@ impl Engine {
                             ),
                         )
                     }
+                    LoadKind::Radiation { emissivity, t_inf, .. } => {
+                        let t = display(m, *t_inf, Temperature::DIM);
+                        (
+                            "radiation",
+                            format!(
+                                "emissivity = {}, tInf = {} {}",
+                                units::fmt_sig(*emissivity, 4),
+                                units::fmt_sig(t.value, 4),
+                                t.unit
+                            ),
+                        )
+                    }
                     LoadKind::HeatFlux { q, .. } => {
                         let v = display(m, *q, crate::units::HeatFlux::DIM);
                         ("heatFlux", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
@@ -469,7 +481,7 @@ impl Engine {
         let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
-        if matches!(procedure, crate::procedure::Step::Explicit { .. }) {
+        if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
             Ok(crate::solve_run::planned_cost(&built.mesh, Some(&problem), &procedure)?.estimate)
         } else {

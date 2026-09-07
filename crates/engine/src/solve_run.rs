@@ -142,6 +142,9 @@ fn build_problem_with_temperature<'a>(
             LoadKind::Convection { on, h, t_inf } => {
                 heat_loads.push(HeatLoad::Convection { faces: on.clone(), h: *h, t_inf: *t_inf });
             }
+            LoadKind::Radiation { on, emissivity, t_inf } => {
+                heat_loads.push(HeatLoad::Radiation { faces: on.clone(), emissivity: *emissivity, t_inf: *t_inf });
+            }
             LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
             LoadKind::HeatSource { bodies, q } => {
                 heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
@@ -209,6 +212,15 @@ pub fn procedure_name(p: Procedure) -> String {
 /// The `procedure::Step` a Model Step means: the fields that procedure reads, and the defaults
 /// plan A names for the ones the Command left out. A missing `dt` or `tEnd` is a schema error
 /// naming the field, because a transient with no clock is not a Step anybody meant.
+/// The convergence control a Step carries, with the defaults an old Journal replays under.
+fn control(step: &Step) -> procedure::NonlinearControl {
+    let d = procedure::NonlinearControl::default();
+    procedure::NonlinearControl {
+        tol: step.nonlinear_tolerance.unwrap_or(d.tol),
+        max_iterations: step.nonlinear_max_iterations.map_or(d.max_iterations, |n| n as usize),
+    }
+}
+
 pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
     let want = |v: Option<f64>, field: &'static str| {
         v.ok_or_else(|| {
@@ -223,8 +235,9 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
         Procedure::Modal => {
             procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
         }
-        Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts },
+        Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts, control: control(step) },
         Procedure::HeatTransient => procedure::Step::HeatTransient {
+            control: control(step),
             dt: want(step.dt, "dt")?,
             t_end: want(step.t_end, "tEnd")?,
             theta: step.theta.unwrap_or(0.5),
@@ -258,13 +271,17 @@ pub(crate) fn planned_cost(
         procedure::Step::Static { solver } | procedure::Step::Modal { solver, .. } => {
             crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
         }
-        procedure::Step::HeatSteady { solver } => crate::solve::cost_estimate(mesh, 1, solver.solver),
+        procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
             let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
-            // The original five-vector allowance plus film, evaluated temperature, reused
-            // previous/rate, and capacity_rate, which coexist during balance recovery.
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 9)
+            // Linear heat: original five plus film, evaluated, previous/rate and capacity_rate.
+            // Radiation's peak is inside Newton: seven outer vectors (film, zeros, t, previous,
+            // rhs_full, rhs_f, t_f), old radiation, next iterate, film RHS, reduced RHS/solution,
+            // and expand's replacement. Reduction and matrix/factor storage remain excluded.
+            let p = explicit_problem.expect("a transient heat cost plan needs its resolved Problem");
+            let work = if procedure::heat::radiates(p) { 13 } else { 9 };
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
         }
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {

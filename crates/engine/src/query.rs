@@ -438,7 +438,7 @@ pub struct ResultSummary {
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
     /// Applied force vector or net thermal power (flux/source plus incoming minus outgoing
-    /// convection) in component 0, with remaining thermal components zero.
+    /// convection and radiation) in component 0, with remaining thermal components zero.
     pub applied_total: [Valued; 3],
     /// Thermal stored-energy rate in power display units (zero for steady heat). Transient
     /// power totals/reactions use the last θ-method integration stage; the temperature field
