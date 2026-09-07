@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{RegionPredicate, Shape, Solid};
 
-use crate::command::{Command, ContactKind, ExportFormat, IdealisationSpec, ObjectKind};
+use crate::command::{Command, ContactKind, DataEncoding, ExportFormat, IdealisationSpec, MeshFormat, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
@@ -52,12 +52,6 @@ pub struct GeometrySurface {
     pub outlines: Vec<femlab_geometry::sketch::Loop>,
 }
 
-/// Full solve identity stays name-sensitive; validity excludes only the display name (ADR 0017).
-pub(crate) struct ResultHashes {
-    pub model: String,
-    pub validity: String,
-}
-
 /// The engine.
 pub struct Engine {
     pub(crate) model: Model,
@@ -72,9 +66,11 @@ pub struct Engine {
     pub(crate) solids: BTreeMap<String, Solid>,
     /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
-    /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
-    /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (ResultHashes, u32, crate::procedure::StepResult)>,
+    /// Latest retained Result per Step. Records are shared with the bounded insertion queue;
+    /// an edit changes validity, never the solved fields or their context.
+    pub(crate) results: BTreeMap<String, std::sync::Arc<crate::retained::ResultRecord>>,
+    pub(crate) retained: std::collections::VecDeque<std::sync::Arc<crate::retained::ResultRecord>>,
+    pub(crate) next_result: String,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
@@ -94,6 +90,8 @@ impl Engine {
             solids: BTreeMap::new(),
             mesh: None,
             results: BTreeMap::new(),
+            retained: std::collections::VecDeque::new(),
+            next_result: "0".into(),
             studies: BTreeMap::new(),
         }
     }
@@ -236,7 +234,7 @@ impl Engine {
         self.journal = f.journal;
         self.undo.clear();
         self.redo.clear();
-        self.results.clear();
+        self.clear_results();
         self.studies.clear();
         self.invalidate_geometry();
         Ok(())
@@ -257,7 +255,7 @@ impl Engine {
         self.undo.clear();
         self.redo.clear();
         self.invalidate_geometry();
-        self.results.clear();
+        self.clear_results();
         self.studies.clear();
         let mut hashes = Vec::with_capacity(entries.len());
         let mut nop = |_p: Progress| true;
@@ -464,7 +462,7 @@ impl Engine {
                 let mut m = Model::new(name);
                 m.description = description.clone();
                 self.model = m;
-                self.results.clear();
+                self.clear_results();
                 self.invalidate_geometry();
                 Ok(Output::None)
             }
@@ -514,6 +512,52 @@ impl Engine {
             Command::GeometrySubtract { name, from, shape } => {
                 let shape = shape.to_si("shape")?;
                 self.add_cut(name, from, shape)
+            }
+            Command::GeometryImport {
+                name,
+                format,
+                data,
+                encoding,
+                sha256,
+                unit_length,
+                feature_angle,
+                simplify_below,
+            } => {
+                let bytes = match encoding.unwrap_or(DataEncoding::Utf8) {
+                    DataEncoding::Utf8 => data.as_bytes().to_vec(),
+                    DataEncoding::Base64 => crate::io::base64_decode(data).ok_or_else(|| {
+                        Error::schema("data is not standard base64")
+                            .at("data")
+                            .suggest("re-issue geometry.import with encoding 'utf8', or with valid base64")
+                    })?,
+                };
+                if let Some(want) = sha256 {
+                    let got = crate::hash::sha256_hex(&bytes);
+                    if !got.eq_ignore_ascii_case(want) {
+                        return Err(Error::schema(format!("the data hashes to {got}, not the {want} you gave"))
+                            .at("sha256")
+                            .suggest("re-issue geometry.import with the sha256 of this file, or without sha256"));
+                    }
+                }
+                let scale = unit_length.si().map_err(|e| e.at("unitLength"))?;
+                if !(scale > 0.0 && scale.is_finite()) {
+                    return Err(Error::schema(format!("unitLength must be positive, got {scale} m")).at("unitLength"));
+                }
+                let (mut positions, triangles) = match format {
+                    MeshFormat::Stl => crate::io::read_stl(&bytes),
+                }?;
+                for p in &mut positions {
+                    for c in p.iter_mut() {
+                        *c *= scale;
+                    }
+                }
+                let shape = Shape::Mesh {
+                    positions,
+                    triangles,
+                    feature_angle: *feature_angle,
+                    simplify_below: opt_si(simplify_below, "simplifyBelow")?,
+                };
+                self.add_body(name, shape)
             }
             Command::GeometryNameFace { name, of, where_ } => {
                 check_name(name)?;

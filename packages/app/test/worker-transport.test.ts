@@ -303,13 +303,24 @@ it('does not record undo/redo acks as new Journal entries', async () => {
   expect(spy).toHaveBeenCalled();
 });
 
-it('returns the import boundary Journal and uses its normalized entries for cancel replay', async () => {
+it('commits the normalized import Journal before cancellation can snapshot it', async () => {
   const journal = { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'normalized', description: null }, hashAfter: 'normalized-hash' }] };
-  const { transport, workers } = make((req, reply) => reply(ok(req.id, req.op === 'importFile' ? { ...ack(), journal } : {})));
+  let finishImport!: () => void;
+  const { transport, workers } = make((req, reply) => {
+    if (req.op === 'importFile') finishImport = () => reply(ok(req.id, { ...ack(), journal }));
+    else reply(ok(req.id, {}));
+  });
   await transport.init();
-  const file = { format: 'femlab/1', engineVersion: '0', model: {}, journal: { entries: [] } } as never;
-  expect((await transport.importFile(file)).journal).toEqual(journal);
-  await transport.cancel();
+  const file = { format: 'femlab/1', engineVersion: '0', model: {}, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'source' }, hashAfter: 'source-hash' }] } };
+  const importing = transport.importFile(file as never);
+  file.journal.entries[0]!.cmd.name = 'mutated caller';
+  await vi.waitFor(() => expect(finishImport).toBeTypeOf('function'));
+  expect(workers[0]!.sent.find(req => req.op === 'importFile')!.payload).toMatchObject({ journal: { entries: [{ cmd: { name: 'source' } }] } });
+  finishImport();
+  // Cancel in the same task as delivery, before importFile's async continuation runs.
+  const cancelled = transport.cancel();
+  expect((await importing).journal).toEqual(journal);
+  await cancelled;
   const replay = workers.at(-1)!.sent.find((r) => r.op === 'replay');
-  expect(replay?.payload).toMatchObject({ entries: journal.entries });
+  expect(replay?.payload).toMatchObject({ entries: journal.entries, revision: 1 });
 });

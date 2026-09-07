@@ -9,19 +9,18 @@ import type { WorkerTransport } from '../src/worker-transport';
 const metres = (value: number): Valued => ({ value, unit: 'm' });
 const origin: [Valued, Valued, Valued] = [metres(0), metres(0), metres(0)];
 const catalogue: FramesResult = {
-  step: 'motion', modelHash: 'solved', stale: false, field: 'displacement',
+  resultId: 'result-1', step: 'motion', modelHash: 'solved', stale: false, field: 'displacement',
   components: 3, storedComponents: 3, nodeCount: 1, retainedBytes: 96,
   frames: [0, 0.2, 1].map((timeSi, index) => ({ index, timeSi, time: { value: timeSi, unit: 's' } })),
 };
 const summary: ResultSummary = {
-  step: 'motion', revision: 1, stale: false, solver: 'explicit', iterations: 5, residual: 0, timeMs: 1,
-  reactionQuantity: 'force',
+  resultId: 'result-1', reactionQuantity: 'force', step: 'motion', revision: 1, stale: false, solver: 'explicit', iterations: 5, residual: 0, timeMs: 1,
   extremes: [{ field: 'displacement', component: 1, min: metres(10), max: metres(10), minAt: origin, maxAt: origin }],
   reactions: [], appliedTotal: [{ value: 0, unit: 'N' }, { value: 0, unit: 'N' }, { value: 0, unit: 'N' }], balance: 0,
   history: catalogue.frames.map(frame => ({ time: frame.time, min: metres(10 * frame.timeSi), max: metres(10 * frame.timeSi) })),
 };
 const frameOf = (index: number): FrameResult => ({
-  sample: { step: 'motion', modelHash: 'solved', frame: catalogue.frames[index]! },
+  sample: { resultId: catalogue.resultId, step: 'motion', modelHash: 'solved', frame: catalogue.frames[index]! },
   field: 'displacement', components: 3, nodeCount: 1, unit: 'm', values: [0, 10 * catalogue.frames[index]!.timeSi, 0],
 });
 
