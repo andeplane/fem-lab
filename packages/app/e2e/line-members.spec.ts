@@ -96,9 +96,10 @@ test('@cpu draws and colors two-bar line members while preserving visibility and
   const uyColour = await patch(page, left.x, left.y);
   await page.getByRole('button', { name: '|u|', exact: true }).click();
   await expect(page.locator('.legend-field')).toHaveText('|u|');
-  const umagColour = await patch(page, left.x, left.y);
-  const fieldColourDelta = Math.abs(uyColour.mean[0] - umagColour.mean[0]) + Math.abs(uyColour.mean[1] - umagColour.mean[1]) + Math.abs(uyColour.mean[2] - umagColour.mean[2]);
-  expect(fieldColourDelta).toBeGreaterThan(6);
+  await expect.poll(async () => {
+    const umagColour = await patch(page, left.x, left.y);
+    return Math.abs(uyColour.mean[0] - umagColour.mean[0]) + Math.abs(uyColour.mean[1] - umagColour.mean[1]) + Math.abs(uyColour.mean[2] - umagColour.mean[2]);
+  }).toBeGreaterThan(6);
 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['truss'], on: false }));
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.bright)).toBe(0);
