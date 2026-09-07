@@ -23,6 +23,7 @@ import { Store } from './store';
 import { App } from './ui/App';
 import './ui/style.css';
 import { WorkerTransport } from './worker-transport';
+import { serializeModelDispatch } from './model-dispatch';
 
 declare global {
   interface Window {
@@ -115,8 +116,11 @@ async function boot(): Promise<void> {
    */
   const REFRESHES = new Set(['file.restore', 'file.export', 'file.save', 'file.open', 'project.new', 'project.open', 'geometry.importFile']);
 
+  // Preserve the provider dispatch before decorating the public registry. Instrumentation can
+  // wrap registry.dispatch without the provider call recursing back through that wrapper.
+  const registryDispatch = registry.dispatch.bind(registry);
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
-  const dispatch: Registry['dispatch'] = async (cmd) => {
+  registry.dispatch = serializeModelDispatch(registry, async (cmd) => {
     store.set({ lastError: null });
     // Both example Commands refresh internally, so the fork must happen before dispatch: it
     // prevents that refresh from writing over the project being replaced.
@@ -127,11 +131,28 @@ async function boot(): Promise<void> {
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
-      const ack = await registry.dispatch(cmd);
+      const ack = await registryDispatch(cmd);
       if (cmd.cmd === 'model.new') store.newDocument();
       if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
       if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });
+      if (clearsBenchmark(cmd.cmd, ack) || opensExample) {
+        // A replacement owns a fresh set of model targets. Invalidate pending definition
+        // reads before clearing their form, even when both Models have the same revision.
+        ctx.selection.clear();
+        viewer.current?.setHighlight({});
+        viewer.current?.setVisible(store.state.hiddenBodies, true);
+        if (cmd.cmd === 'project.new' || cmd.cmd === 'model.new') {
+          viewer.current?.setMode('geometry');
+          store.set({ viewMode: 'geometry' });
+        }
+        store.set({
+          form: null, formError: null, formHints: null,
+          pickInto: null, pickTarget: 'off', hiddenBodies: [], paletteIntent: null,
+          journalWho: {}, lastError: null,
+          panels: Object.fromEntries(Object.entries(store.state.panels).filter(([key]) => !key.startsWith('tree.menu.'))),
+        });
+      }
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
       // Journal outright, so the store, viewer and Results have to catch up after those too.
@@ -148,11 +169,13 @@ async function boot(): Promise<void> {
     } finally {
       if (long) store.set({ solving: null, progress: null });
     }
-  };
+  });
+  const dispatch: Registry['dispatch'] = (cmd) => registry.dispatch(cmd);
   const query: Registry['query'] = (q) => registry.query(q);
   late.dispatch = dispatch;
   late.query = query;
 
+  // Expose the same dispatch through the explicit registry, panels and generated proxy.
   const proxy = makeFemProxy(dispatch, query) as unknown as Record<string, unknown>;
   window.fem = new Proxy({} as Window['fem'], {
     get: (_t, k: string | symbol) =>
@@ -161,9 +184,8 @@ async function boot(): Promise<void> {
 
   // The Assistant's tool calls and the tutorial's "do it for me" go through the same wrapper
   // as a click, so the Journal, the tree and the viewer surface all catch up either way.
-  const panelRegistry = new Proxy(registry, { get: (t, k) => (k === 'dispatch' ? dispatch : Reflect.get(t, k, t)) });
   store.dispatch = dispatch;
-  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={panelRegistry} />, root);
+  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={registry} />, root);
 
   // The Recent projects list is what the start screen leads with, so it is read before the
   // 3.2 MB wasm module rather than after it.
