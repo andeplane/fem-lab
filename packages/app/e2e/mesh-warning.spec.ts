@@ -15,6 +15,7 @@ test('@cpu mesh accuracy warning previews a supported quadratic switch', async (
   await expect(page.locator('.props [data-field="order"] input')).toHaveValue('2');
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   await page.locator('.props button.apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.length)).toBe(journal.entries.length + 1);
   await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.at(-1)?.cmd)).toEqual({ cmd: 'mesh.set', ...args, order: 2 });
   expect((await page.evaluate(() => window.fem.query.journal())).entries).toHaveLength(journal.entries.length + 1);
 });
@@ -37,6 +38,7 @@ test('@cpu tetrahedral accuracy fix produces quadratic tetrahedra on Apply', asy
   await warning.getByRole('button', { name: 'Switch to quadratic' }).click();
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   await page.locator('.props button.apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.length)).toBe(journal.entries.length + 1);
   await expect.poll(() => page.evaluate(async () => (await window.fem.query.mesh()).elementKind)).toBe('tet10');
   await expect(page.locator('.tree .summary').filter({ hasText: 'Tet 10' })).toHaveCount(1);
   const after = await page.evaluate(() => window.fem.query.journal());
@@ -59,6 +61,7 @@ test('@cpu the free tet mesher warns at order 1 without needing simplices', asyn
   await warning.getByRole('button', { name: 'Switch to quadratic' }).click();
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   await page.locator('.props button.apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.length)).toBe(journal.entries.length + 1);
   await expect.poll(() => page.evaluate(async () => (await window.fem.query.mesh()).elementKind)).toBe('tet10');
   const after = await page.evaluate(() => window.fem.query.journal());
   expect(after.entries.at(-1)?.cmd).toEqual({ cmd: 'mesh.set', ...args, order: 2 });
