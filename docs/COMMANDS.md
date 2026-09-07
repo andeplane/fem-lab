@@ -18,6 +18,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 ## Commands
 
 - [constraint.couple](#commands-constraint-couple)
+- [constraint.cyclic](#commands-constraint-cyclic)
 - [constraint.fix](#commands-constraint-fix)
 - [constraint.prescribe](#commands-constraint-prescribe)
 - [constraint.remove](#commands-constraint-remove)
@@ -91,6 +92,33 @@ other Constraint, and is removed with constraint.remove.
 | on | yes | <code>{"type":"string"}</code> |  |
 | kind | yes | <code>{"$ref":"#/$defs/CoupleKind"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"constraint.couple"}</code> |  |
+
+<a id="commands-constraint-cyclic"></a>
+
+### constraint.cyclic
+
+Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of
+`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic
+condition: a static solve is exact for loading that repeats sector by sector, and a modal
+Step finds only the harmonic-index-0 family. Non-zero harmonics need a complex
+eigenproblem and are not implemented. The two faces must mesh identically — use the
+revolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is
+for. The tie is node to node, not node to face, because a matching sector mesh is the
+only case in scope. Because the coefficients are a rotation rather than a partition of
+unity, a cyclic model's global reaction sum is not the applied load — read
+query.result's per-Constraint reactions, never its balance, on a Step that lists this
+Command. Refused in an explicit Step, like a bonded contact.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| from | yes | <code>{"type":"string"}</code> |  |
+| to | yes | <code>{"type":"string"}</code> |  |
+| axis | yes | <code>{"$ref":"#/$defs/Axis"}</code> |  |
+| angleDeg | yes | <code>{"type":"number","format":"double"}</code> |  |
+| through | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
+| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"constraint.cyclic"}</code> |  |
 
 <a id="commands-constraint-fix"></a>
 
@@ -4777,6 +4805,61 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "master",
         "slave",
         "kind"
+      ]
+    },
+    {
+      "description": "Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of\n`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic\ncondition: a static solve is exact for loading that repeats sector by sector, and a modal\nStep finds only the harmonic-index-0 family. Non-zero harmonics need a complex\neigenproblem and are not implemented. The two faces must mesh identically — use the\nrevolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is\nfor. The tie is node to node, not node to face, because a matching sector mesh is the\nonly case in scope. Because the coefficients are a rotation rather than a partition of\nunity, a cyclic model's global reaction sum is not the applied load — read\nquery.result's per-Constraint reactions, never its balance, on a Step that lists this\nCommand. Refused in an explicit Step, like a bonded contact.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "axis": {
+          "$ref": "#/$defs/Axis"
+        },
+        "angleDeg": {
+          "type": "number",
+          "format": "double"
+        },
+        "through": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "tol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cmd": {
+          "type": "string",
+          "const": "constraint.cyclic"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "from",
+        "to",
+        "axis",
+        "angleDeg"
       ]
     },
     {

@@ -8780,6 +8780,130 @@ fn contact_add_refuses_an_unknown_or_self_referential_pair() {
     assert!(e.model().constraints.is_empty(), "nothing was recorded");
 }
 
+/// `constraint.cyclic` is a Constraint object with two Set references: it validates both, is
+/// listed as a Connection rather than a Constraint, and follows a rename of either Set or Body.
+#[test]
+fn constraint_cyclic_is_a_connection_that_tracks_the_sets_it_names() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.cyclic","name":"cyc","from":"a.xmax","to":"b.xmin","axis":"z","angleDeg":60}"#);
+
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.constraints.is_empty(), "a cyclic tie is not a Constraint row: {:?}", m.constraints);
+    assert_eq!(m.connections.len(), 1);
+    let row = &m.connections[0];
+    assert_eq!((row.name.as_str(), row.kind.as_str()), ("cyc", "cyclic"));
+    assert_eq!((row.master.as_str(), row.slave.as_str()), ("a.xmax", "b.xmin"));
+    assert_eq!(row.summary, "cyclic, 60 deg");
+
+    // Renaming the `from` Set's Body rewrites the reference, as it does for a bonded tie.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"left"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].master, "left.xmax");
+    let body = err(&mut e, r#"{"cmd":"geometry.remove","name":"left"}"#);
+    assert_eq!(body.code, ErrorCode::InUse);
+    assert!(body.cause.contains("constraint 'cyc'"), "{}", body.cause);
+}
+
+/// Everything `constraint.cyclic` refuses, and where it says the fault is.
+#[test]
+fn constraint_cyclic_refuses_an_unknown_or_self_referential_pair() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    let unknown =
+        err(&mut e, r#"{"cmd":"constraint.cyclic","name":"cyc","from":"nope","to":"b.xmin","axis":"z","angleDeg":60}"#);
+    assert_eq!(unknown.code, ErrorCode::NotFound);
+    assert_eq!(unknown.where_.as_deref(), Some("from"));
+    let to =
+        err(&mut e, r#"{"cmd":"constraint.cyclic","name":"cyc","from":"a.xmax","to":"nope","axis":"z","angleDeg":60}"#);
+    assert_eq!(to.where_.as_deref(), Some("to"));
+    let itself = err(
+        &mut e,
+        r#"{"cmd":"constraint.cyclic","name":"cyc","from":"a.xmax","to":"a.xmax","axis":"z","angleDeg":60}"#,
+    );
+    assert_eq!(itself.code, ErrorCode::ModelIllPosed);
+    assert_eq!(itself.where_.as_deref(), Some("to"));
+    assert!(itself.suggestion.as_deref().is_some_and(|s| s.contains("revolved Body")));
+    let named = err(
+        &mut e,
+        r#"{"cmd":"constraint.cyclic","name":"a.b","from":"a.xmax","to":"b.xmin","axis":"z","angleDeg":60}"#,
+    );
+    assert_eq!((named.code, named.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+    let unit = err(
+        &mut e,
+        r#"{"cmd":"constraint.cyclic","name":"cyc","from":"a.xmax","to":"b.xmin","axis":"z","angleDeg":60,"tol":"1 kg"}"#,
+    );
+    assert_eq!((unit.code, unit.where_.as_deref()), (ErrorCode::UnitDimension, Some("tol")));
+    let through = err(
+        &mut e,
+        r#"{"cmd":"constraint.cyclic","name":"cyc","from":"a.xmax","to":"b.xmin","axis":"z","angleDeg":60,"through":["1 kg","0 m","0 m"]}"#,
+    );
+    assert_eq!((through.code, through.where_.as_deref()), (ErrorCode::UnitDimension, Some("through")));
+    assert!(e.model().constraints.is_empty(), "nothing was recorded");
+}
+
+/// A 60° revolved sector, tied to itself with `constraint.cyclic` instead of the symmetry planes
+/// a 90° sector would use, reproduces the Lamé thick-cylinder closed form: this is the physics
+/// gate the review asked for beyond the sector-vs-full equivalence (plan B §4, #81).
+#[test]
+fn a_cyclic_sector_matches_the_lame_closed_form() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cyclic-annulus"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","body":"tube","blocks":[
+            {"corners":[["0.1 m","0 m"],["0.2 m","0 m"],["0.2 m","0.1 m"],["0.1 m","0.1 m"]],
+             "n":[8,2],"tags":["zmin","outer","zmax","inner"]}]},
+            "sweep":{"kind":"revolve","segments":10,"angleDeg":60}},"order":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["tube"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"pin","where":{"kind":"bbox","min":["0.099 m","-0.001 m","0.049 m"],"max":["0.101 m","0.001 m","0.051 m"]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"constraint.cyclic","name":"cyclic","from":"tube.theta0","to":"tube.theta1","axis":"z","angleDeg":60}"#,
+    );
+    // No end-face Dirichlet constraint: `theta1` is entirely a slave of the tie and its edge
+    // nodes coincide with `zmin`/`zmax`, so fixing those faces would collide with the tie's own
+    // rows. `pin` is on `theta0` (a master, never a slave), so fixing its tangential (uy) and
+    // axial (uz) components there removes the tie's two remaining freedoms without conflict --
+    // that leaves both ends free, the "free ends" Lamé variant at u_r(a) = 5.90e-5 m.
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"spin","on":"pin","dofs":["uy","uz"]}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"inside","on":"tube.inner","value":"60 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["cyclic","spin"],"loads":["inside"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+
+    let mut probe_at = |field: Field, component: u8| {
+        let q = Query::Probe {
+            result_id: None,
+            sample: None,
+            step: None,
+            field,
+            component: Some(component),
+            at: [Q::text("0.1 m"), Q::text("0 m"), Q::text("0.05 m")],
+        };
+        let QueryResult::Probe(p) = e.query(q).unwrap() else { panic!() };
+        p.value.value
+    };
+    let sigma_theta = probe_at(Field::Stress, 1);
+    let sigma_rr = probe_at(Field::Stress, 0);
+    let u_r = probe_at(Field::Displacement, 0);
+    // No `model.setUnits`, so `query.probe` reports SI: pascals and metres.
+    assert!((sigma_theta / 100e6 - 1.0).abs() < 0.01, "sigma_theta(a) = {sigma_theta}, want ~100 MPa");
+    assert!((sigma_rr / -60e6 - 1.0).abs() < 0.01, "sigma_rr(a) = {sigma_rr}, want ~-60 MPa");
+    assert!((u_r / 5.90e-5 - 1.0).abs() < 0.01, "u_r(a) = {u_r}, want ~5.90e-5 m");
+
+    // Removing the tie the Step lists is refused, like any other Constraint.
+    let held = err(&mut e, r#"{"cmd":"constraint.remove","name":"cyclic"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+}
+
 /// A tie in a Step joins the two Bodies into one operator: the assembly under uniform tension
 /// carries the applied load through to the held end, and the tie itself reports no reaction.
 /// Removing the tie is refused while the Step lists it, and the Step then refuses to solve.

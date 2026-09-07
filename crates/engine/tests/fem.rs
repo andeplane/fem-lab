@@ -50,7 +50,7 @@ use femlab_engine::units::{Length, Q};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
-use femlab_geometry::{annulus, mapped, perturb_interior, Curve, Mesh, QuadBlock, Structured};
+use femlab_geometry::{annulus, mapped, perturb_interior, revolve, Curve, Mesh, QuadBlock, Structured};
 use proptest::prelude::*;
 
 #[path = "support/cost_allocator.rs"]
@@ -8907,6 +8907,300 @@ fn the_projection_clamps_a_node_that_falls_off_its_master_face() {
     let off = node_at(&slid, [1.0, 1.8, 0.0]);
     let row = sm.rows.iter().find(|r| r.slave == 3 * off).expect("the far node is tied");
     assert!(row.masters.len() <= 2, "a node past the triangle clamps onto an edge or a corner: {row:?}");
+}
+
+// ------------------------------------------------------------------------ cyclic symmetry (#81)
+
+/// A `from` node and a `to` node at its rotated image, with nothing else in the Mesh: the
+/// minimum a cyclic tie's pairing needs, so the rotation weights are checked against a
+/// hand-computed `R` rather than against a real sector.
+fn two_node_mesh(from: [f64; 3], to: [f64; 3]) -> Mesh {
+    Mesh {
+        dim: 3,
+        coords: vec![from[0], from[1], from[2], to[0], to[1], to[2]],
+        blocks: Vec::new(),
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    }
+}
+
+fn from_to_sets() -> BTreeMap<String, ResolvedSet> {
+    let mut sets = BTreeMap::new();
+    sets.insert(
+        "from".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![0], elems: Vec::new() },
+    );
+    sets.insert("to".into(), ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![1], elems: Vec::new() });
+    sets
+}
+
+fn cyclic(axis: usize, angle: f64) -> Coupling {
+    Coupling::Cyclic {
+        name: "cyc".into(),
+        from: "from".into(),
+        to: "to".into(),
+        axis,
+        through: [0.0; 3],
+        angle,
+        tol: 1e-6,
+    }
+}
+
+/// The rows of a cyclic tie mix a structural DOF's three components by the rotation matrix
+/// about whichever axis was named, for every coordinate axis; a heat DOF (one component, no
+/// orientation to rotate) is unchanged, which is the "no branch" the module promises.
+#[test]
+fn cyclic_rows_rotate_a_structural_dof_and_leave_a_heat_dof_alone() {
+    let angle = 60.0_f64.to_radians();
+    let (c, s) = (libm::cos(angle), libm::sin(angle));
+    // axis, from position, to position, the rotation about that axis
+    type Case = (usize, [f64; 3], [f64; 3], [[f64; 3]; 3]);
+    #[rustfmt::skip]
+    let cases: [Case; 3] = [
+        (0, [0.0, 1.0, 0.0], [0.0, c, s],  [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]),
+        (1, [1.0, 0.0, 0.0], [c, 0.0, -s], [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]),
+        (2, [1.0, 0.0, 0.0], [c, s, 0.0],  [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]),
+    ];
+    for (axis, from_pos, to_pos, r) in cases {
+        let mesh = two_node_mesh(from_pos, to_pos);
+        let sets = from_to_sets();
+        let body = one_body();
+        let mut p = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, Vec::new());
+        p.couplings = vec![cyclic(axis, angle)];
+        let mpc = mpc::build(&p).expect("the rotated `from` node lands on `to`");
+        assert_eq!(mpc.rows.len(), 3, "axis {axis}: one row per structural component");
+        for (c_idx, row) in mpc.rows.iter().enumerate() {
+            assert_eq!(row.slave, 3 + c_idx as u32, "the slave is node 1's DOF {c_idx}");
+            let want: Vec<(u32, f64)> =
+                (0..3).filter(|&d| r[c_idx][d].abs() > 1e-12).map(|d| (d as u32, r[c_idx][d])).collect();
+            assert_eq!(row.masters.len(), want.len(), "axis {axis} row {c_idx}: {:?}", row.masters);
+            for (&(m, a), &(wm, wa)) in row.masters.iter().zip(&want) {
+                assert_eq!(m, wm, "axis {axis} row {c_idx}");
+                assert!((a - wa).abs() < 1e-12, "axis {axis} row {c_idx}: got {a}, want {wa}");
+            }
+        }
+    }
+
+    // Heat: one DOF per node, no orientation to rotate, so `T_to = T_from` exactly, whatever
+    // the axis and angle -- the identity `dpn == 1` returns rather than the rotation's own
+    // top-left corner (which would be `cos(angle)`, not 1, for a rotation about z).
+    let mesh = two_node_mesh([0.1, 0.0, 0.0], [0.1 * c, 0.1 * s, 0.0]);
+    let sets = from_to_sets();
+    let body = one_body();
+    let mut hp =
+        heat_problem(&mesh, &sets, &body, Idealisation::Solid3d, conductor(1.0, 1.0, 1.0), Vec::new(), Vec::new());
+    hp.couplings = vec![cyclic(2, angle)];
+    let hm = mpc::build(&hp).expect("the rotated node still lands on `to`");
+    assert_eq!(hm.rows, vec![Row { slave: 1, masters: vec![(0, 1.0)], owner: 0 }]);
+}
+
+/// A `from` node whose rotated image lands nowhere near a `to` node is `contact.unpaired`,
+/// exactly as a bonded contact reports an unpaired node -- named, with the distance, and
+/// suggesting the revolve mesher rather than a larger `tol` (matching sector meshes are the
+/// only case in scope).
+#[test]
+fn a_cyclic_node_beyond_the_tolerance_is_unpaired() {
+    let mesh = two_node_mesh([0.1, 0.0, 0.0], [5.0, 5.0, 5.0]);
+    let sets = from_to_sets();
+    let body = one_body();
+    let mut p = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![cyclic(2, 60.0_f64.to_radians())];
+    let e = mpc::build(&p).expect_err("nothing rotates onto (5, 5, 5)");
+    assert_eq!(e.code, ErrorCode::ContactUnpaired);
+    assert!(e.cause.contains("node 0"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("cyclic 'cyc'"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("revolve mesher")));
+}
+
+/// `from` and `to` sharing a node ties it to itself, exactly as a bonded contact refuses a
+/// master and slave that overlap.
+#[test]
+fn a_cyclic_tie_that_shares_a_node_with_itself_is_ill_posed() {
+    let mesh = two_node_mesh([0.1, 0.0, 0.0], [0.1, 0.0, 0.0]);
+    let mut sets = from_to_sets();
+    sets.get_mut("to").unwrap().nodes.push(0);
+    let body = one_body();
+    let mut p = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![cyclic(2, 0.0)];
+    let e = mpc::build(&p).expect_err("node 0 is in both sets");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert!(e.cause.contains("node 0"), "{}", e.cause);
+    assert!(e.cause.contains("to itself"), "{}", e.cause);
+}
+
+/// A Set the tie names but the Problem does not have is `set.empty` located at the tie, on
+/// either side, exactly as a bonded contact reports an unknown master or slave; the Coupling
+/// itself carries its name, its two Sets, its label and no point mass.
+#[test]
+fn a_cyclic_tie_names_its_sets_when_one_is_missing() {
+    let c = cyclic(2, 0.0);
+    assert_eq!(c.clone(), c);
+    assert!(format!("{c:?}").starts_with("Cyclic"), "{c:?}");
+    assert_eq!((c.name(), c.sets(), c.label(), c.point()), ("cyc", ["from", "to"], "cyclic", None));
+    let mesh = two_node_mesh([0.1, 0.0, 0.0], [0.1, 0.0, 0.0]);
+    let body = one_body();
+    for missing in ["from", "to"] {
+        let mut sets = from_to_sets();
+        sets.remove(missing);
+        let mut p = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, Vec::new());
+        p.couplings = vec![cyclic(2, 0.0)];
+        let e = mpc::build(&p).expect_err("an unknown Set");
+        assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::SetEmpty, Some("cyclic 'cyc'")), "{missing}");
+    }
+}
+
+/// The `(r, z)` cross-section of Benchmark C2's thick cylinder as the mapped block the revolve
+/// mesher needs: `a` = 0.1 m, `b` = 0.2 m, height 0.1 m.
+fn annulus_strip(kind: ElementKind, n: [usize; 2]) -> Mesh {
+    mapped(
+        &[QuadBlock {
+            corners: [[0.1, 0.0], [0.2, 0.0], [0.2, 0.1], [0.1, 0.1]],
+            edges: [Curve::Line, Curve::Line, Curve::Line, Curve::Line],
+            n,
+            grading: [1.0, 1.0],
+            tags: [Some("zmin".into()), Some("outer".into()), Some("zmax".into()), Some("inner".into())],
+        }],
+        kind,
+    )
+    .expect("a rectangle meshes")
+}
+
+/// One node's `ResolvedSet`, for a pin against a rigid mode a cyclic tie or a full revolution
+/// does not remove on its own.
+fn one_node(node: u32) -> ResolvedSet {
+    ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() }
+}
+
+/// A sector of `annulus_strip`, revolved and tied to itself with `constraint.cyclic` between
+/// the revolve mesher's `theta0` and `theta1` (plan B §4, #81).
+///
+/// No end-face Dirichlet constraint is added here on purpose: `theta1` is entirely a slave of
+/// the tie, and its edge nodes coincide with `zmin`/`zmax`, so fixing those faces would collide
+/// with the tie's own rows (`constraint.conflict`) -- fixing only `theta0`'s share of the edge
+/// would work, but the schema has no way to name "this face except that edge". Leaving both
+/// ends free gives the free-ends Lamé variant instead of the eps_z = 0 one, at u_r(a) =
+/// 5.90e-5 m (BENCHMARKS.md's C2 row), which is still a copied closed form, not an invented one.
+fn cyclic_sector(
+    kind: ElementKind,
+    n: [usize; 2],
+    segments: usize,
+    angle_deg: f64,
+) -> (Mesh, BTreeMap<String, ResolvedSet>, Coupling) {
+    let mesh = revolve(&annulus_strip(kind, n), segments, angle_deg).expect("a sector revolves");
+    let sets = sets_of(&mesh);
+    let cyclic = Coupling::Cyclic {
+        name: "cyclic".into(),
+        from: "theta0".into(),
+        to: "theta1".into(),
+        axis: 2,
+        through: [0.0; 3],
+        angle: angle_deg.to_radians(),
+        tol: 1e-9,
+    };
+    (mesh, sets, cyclic)
+}
+
+/// A cyclic tie's rows already force the two translations and the two bending rotations
+/// perpendicular to its axis to zero -- at a point `x` on `from` with `r = |x| > 0`, matching
+/// `u(Rx) = R·u(x)` component by component for a rigid `t + ω×x` forces `t`'s in-plane part and
+/// `ω`'s in-plane part to vanish, because rotating `ω×x` by `R` is not the same as rotating `x`
+/// by `R` first unless `ω` is along the shared axis. What is left free is exactly the "zero
+/// harmonic": translation along the axis, and rotation about it, which is exact under the tie by
+/// construction. A sector held only by the tie is therefore not a false rigid-mode alarm, but
+/// it is still short two supports -- which `checks::rigid_modes` restricting the rigid basis on
+/// the tie's rows reports correctly, neither a false alarm nor a missed one.
+#[test]
+fn rigid_modes_accepts_a_cyclic_sector_and_still_finds_its_axial_freedoms() {
+    let (mesh, mut sets, coupling) = cyclic_sector(ElementKind::Quad4, [2, 1], 2, 60.0);
+    let body = one_body();
+    let mut p = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![coupling.clone()];
+    let free = checks::all(&p);
+    assert_eq!(free.len(), 1, "{:?}", free);
+    assert_eq!(free[0].code, ErrorCode::ConstraintRigidModes);
+    assert!(free[0].cause.contains("translation z"), "{}", free[0].cause);
+    assert!(free[0].cause.contains("rotation about z"), "{}", free[0].cause);
+
+    let pin = node_at(&mesh, [0.1, 0.0, 0.0]);
+    sets.insert("pin".into(), one_node(pin));
+    let held = vec![fix("pin", "pin", [false, true, true], 0.0)];
+    let mut q = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, held);
+    q.couplings = vec![coupling];
+    assert!(checks::all(&q).is_empty(), "{:?}", checks::all(&q));
+}
+
+/// The zero-harmonic condition, proved rather than measured (the closed-form gate is Benchmark
+/// F4f): a 60° sector tied to itself with `constraint.cyclic` reproduces the displacement and
+/// von Mises stress of a full 360° revolution of the same cross-section at the same angular
+/// density, at three probes inside the sector (away from any pin), because internal pressure repeats
+/// sector by sector. The full model has no cyclic tie -- it is one continuous revolution -- so
+/// all six of its rigid motions are removed by a tangential- and axial-displacement-zero pin at
+/// three points 90° apart, which the true (θ-independent) field already satisfies everywhere: a
+/// gauge choice, not a boundary condition, so it does not perturb the comparison.
+#[test]
+fn a_cyclic_sector_matches_a_full_revolution_at_three_probes() {
+    const PRESSURE: f64 = 60e6;
+    let kind = ElementKind::Quad4;
+    let n = [2, 1];
+
+    let body = one_body();
+    let (s_mesh, mut s_sets, s_coupling) = cyclic_sector(kind, n, 2, 60.0);
+    let s_pin = node_at(&s_mesh, [0.1, 0.0, 0.0]);
+    s_sets.insert("pin".into(), one_node(s_pin));
+    let s_held = vec![fix("pin", "pin", [false, true, true], 0.0)];
+    let mut sp = problem(&s_mesh, &s_sets, &body, Idealisation::Solid3d, Formulation::Full, s_held);
+    sp.couplings = vec![s_coupling];
+    sp.loads = vec![Load::Pressure { faces: "inner".into(), p: PRESSURE }];
+    assert!(checks::all(&sp).is_empty(), "{:?}", checks::all(&sp));
+    let s_res = run_step(&sp, &static_step(SolveOptions::default())).expect("the sector solves");
+
+    let f_mesh = revolve(&annulus_strip(kind, n), 12, 360.0).expect("a full revolution");
+    let mut f_sets = sets_of(&f_mesh);
+    for (name, x) in [("p0", [0.1, 0.0, 0.0]), ("p90", [0.0, 0.1, 0.0]), ("p180", [-0.1, 0.0, 0.0])] {
+        let node = node_at(&f_mesh, x);
+        f_sets.insert(name.into(), one_node(node));
+    }
+    // Each pin fixes the tangential component (zero in the true field, at that point) and the
+    // axial one (a gauge choice, since the pressure has no net axial force): together the three
+    // points determine all six rigid parameters uniquely (plan B §4's derivation).
+    let f_constraints = vec![
+        fix("pin0", "p0", [false, true, true], 0.0),
+        fix("pin90", "p90", [true, false, true], 0.0),
+        fix("pin180", "p180", [false, true, true], 0.0),
+    ];
+    let mut fp = problem(&f_mesh, &f_sets, &body, Idealisation::Solid3d, Formulation::Full, f_constraints);
+    fp.loads = vec![Load::Pressure { faces: "inner".into(), p: PRESSURE }];
+    assert!(checks::all(&fp).is_empty(), "{:?}", checks::all(&fp));
+    let f_res = run_step(&fp, &static_step(SolveOptions::default())).expect("the full revolution solves");
+
+    // Probed at theta = 30° (mid-sector), away from every pin: a pin's reaction is only zero
+    // in the continuum limit, and this mesh is coarse, so the small residual each model's own
+    // pin configuration actually carries would otherwise contaminate the comparison right next
+    // to it -- the two models do not pin the same points, only the same physics away from them.
+    let (c30, s30) = (libm::cos(30.0_f64.to_radians()), libm::sin(30.0_f64.to_radians()));
+    for r in [0.1, 0.15, 0.2] {
+        let at = [r * c30, r * s30, 0.05];
+        let (_, su) = probe(&s_mesh, &s_res.fields[&Field::Displacement], at).expect("inside the sector");
+        let (_, fu) = probe(&f_mesh, &f_res.fields[&Field::Displacement], at).expect("inside the full model");
+        let scale = su.iter().fold(0.0f64, |m, &x| m.max(x.abs())).max(1e-9);
+        for c in 0..3 {
+            assert!(
+                (su[c] - fu[c]).abs() <= 1e-8 * scale,
+                "r = {r} component {c}: sector {} vs full {} (scale {scale})",
+                su[c],
+                fu[c]
+            );
+        }
+        let (_, sv) = probe(&s_mesh, &s_res.fields[&Field::VonMises], at).expect("inside the sector");
+        let (_, fv) = probe(&f_mesh, &f_res.fields[&Field::VonMises], at).expect("inside the full model");
+        assert!(
+            (sv[0] - fv[0]).abs() <= 1e-8 * fv[0].max(1.0),
+            "r = {r}: sector von Mises {} vs full {}",
+            sv[0],
+            fv[0]
+        );
+    }
 }
 
 // -------------------------------------------------------- point masses and couplings (#67)

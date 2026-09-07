@@ -891,6 +891,61 @@
         ]
       },
       {
+        "description": "Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of\n`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic\ncondition: a static solve is exact for loading that repeats sector by sector, and a modal\nStep finds only the harmonic-index-0 family. Non-zero harmonics need a complex\neigenproblem and are not implemented. The two faces must mesh identically — use the\nrevolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is\nfor. The tie is node to node, not node to face, because a matching sector mesh is the\nonly case in scope. Because the coefficients are a rotation rather than a partition of\nunity, a cyclic model's global reaction sum is not the applied load — read\nquery.result's per-Constraint reactions, never its balance, on a Step that lists this\nCommand. Refused in an explicit Step, like a bonded contact.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "axis": {
+            "$ref": "#/$defs/Axis"
+          },
+          "angleDeg": {
+            "type": "number",
+            "format": "double"
+          },
+          "through": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "tol": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_length"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cmd": {
+            "type": "string",
+            "const": "constraint.cyclic"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "from",
+          "to",
+          "axis",
+          "angleDeg"
+        ]
+      },
+      {
         "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
         "type": "object",
         "properties": {
@@ -5333,6 +5388,61 @@
               "master",
               "slave",
               "kind"
+            ]
+          },
+          {
+            "description": "Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of\n`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic\ncondition: a static solve is exact for loading that repeats sector by sector, and a modal\nStep finds only the harmonic-index-0 family. Non-zero harmonics need a complex\neigenproblem and are not implemented. The two faces must mesh identically — use the\nrevolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is\nfor. The tie is node to node, not node to face, because a matching sector mesh is the\nonly case in scope. Because the coefficients are a rotation rather than a partition of\nunity, a cyclic model's global reaction sum is not the applied load — read\nquery.result's per-Constraint reactions, never its balance, on a Step that lists this\nCommand. Refused in an explicit Step, like a bonded contact.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "axis": {
+                "$ref": "#/$defs/Axis"
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "through": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.cyclic"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "from",
+              "to",
+              "axis",
+              "angleDeg"
             ]
           },
           {
@@ -10297,6 +10407,61 @@
               "master",
               "slave",
               "kind"
+            ]
+          },
+          {
+            "description": "Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of\n`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic\ncondition: a static solve is exact for loading that repeats sector by sector, and a modal\nStep finds only the harmonic-index-0 family. Non-zero harmonics need a complex\neigenproblem and are not implemented. The two faces must mesh identically — use the\nrevolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is\nfor. The tie is node to node, not node to face, because a matching sector mesh is the\nonly case in scope. Because the coefficients are a rotation rather than a partition of\nunity, a cyclic model's global reaction sum is not the applied load — read\nquery.result's per-Constraint reactions, never its balance, on a Step that lists this\nCommand. Refused in an explicit Step, like a bonded contact.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "axis": {
+                "$ref": "#/$defs/Axis"
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "through": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.cyclic"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "from",
+              "to",
+              "axis",
+              "angleDeg"
             ]
           },
           {
@@ -16754,6 +16919,51 @@
             ]
           },
           {
+            "description": "A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector\nface, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`\n(metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales\nwith the Mesh).",
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "axis": {
+                "$ref": "#/$defs/Axis"
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "through": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "tol": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "cyclic"
+              }
+            },
+            "required": [
+              "kind",
+              "from",
+              "axis",
+              "angleDeg"
+            ]
+          },
+          {
             "description": "A point mass attached to the Constraint's own face Set: `distributed` makes the point\nfollow the face's weighted mean displacement, `rigid` makes every node of the face\nfollow the point. `point` names a [`PointMass`]; the field is not called `kind` because\nthat tag already names the Constraint kind itself.",
             "type": "object",
             "properties": {
@@ -18783,6 +18993,61 @@
               "master",
               "slave",
               "kind"
+            ]
+          },
+          {
+            "description": "Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of\n`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic\ncondition: a static solve is exact for loading that repeats sector by sector, and a modal\nStep finds only the harmonic-index-0 family. Non-zero harmonics need a complex\neigenproblem and are not implemented. The two faces must mesh identically — use the\nrevolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is\nfor. The tie is node to node, not node to face, because a matching sector mesh is the\nonly case in scope. Because the coefficients are a rotation rather than a partition of\nunity, a cyclic model's global reaction sum is not the applied load — read\nquery.result's per-Constraint reactions, never its balance, on a Step that lists this\nCommand. Refused in an explicit Step, like a bonded contact.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "axis": {
+                "$ref": "#/$defs/Axis"
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "through": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.cyclic"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "from",
+              "to",
+              "axis",
+              "angleDeg"
             ]
           },
           {

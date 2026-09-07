@@ -302,6 +302,13 @@ impl Engine {
                         }
                     },
                 }),
+                ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
+                    name: c.name.clone(),
+                    kind: "cyclic".into(),
+                    master: from.clone(),
+                    slave: c.on.clone(),
+                    summary: format!("cyclic, {angle_deg} deg"),
+                }),
                 ConstraintKind::Couple { point, coupling } => Some(match coupling {
                     CoupleKind::Distributed => ConnectionRow {
                         name: c.name.clone(),
@@ -341,9 +348,11 @@ impl Engine {
             .iter()
             .filter_map(|c| {
                 let summary = match &c.kind {
-                    // A tie or a coupling prescribes nothing and names two Sets: they are the
+                    // A tie, a cyclic tie or a coupling prescribes nothing and names two Sets: they are the
                     // Connections above.
-                    ConstraintKind::Bonded { .. } | ConstraintKind::Couple { .. } => return None,
+                    ConstraintKind::Bonded { .. } | ConstraintKind::Cyclic { .. } | ConstraintKind::Couple { .. } => {
+                        return None
+                    }
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")

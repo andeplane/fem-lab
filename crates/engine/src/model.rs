@@ -214,6 +214,20 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<f64>,
     },
+    /// A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector
+    /// face, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`
+    /// (metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales
+    /// with the Mesh).
+    Cyclic {
+        from: String,
+        axis: Axis,
+        #[serde(rename = "angleDeg")]
+        angle_deg: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
     /// A point mass attached to the Constraint's own face Set: `distributed` makes the point
     /// follow the face's weighted mean displacement, `rigid` makes every node of the face
     /// follow the point. `point` names a [`PointMass`]; the field is not called `kind` because
@@ -241,6 +255,7 @@ impl Constraint {
         let mut out = vec![self.on.as_str()];
         match &self.kind {
             ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
             | ConstraintKind::Prescribe { .. }
@@ -255,6 +270,7 @@ impl Constraint {
         let mut out = vec![&mut self.on];
         match &mut self.kind {
             ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
             | ConstraintKind::Prescribe { .. }

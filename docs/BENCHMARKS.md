@@ -56,6 +56,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | couple-distributed-cantilever | green | 6/6 | -0.190113 | -0.190113 | 0.00 % |
+| cyclic-annulus-sector | green | 4/4 | 99.847585 | 100 | 0.15 % |
 | euler-column-fixed-free-hex20 | green | 4/4 | 17.399614 | 17.2718 | 0.74 % |
 | euler-column-pinned-quad8 | green | 3/3 | 68.798751 | 69.0872 | 0.42 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
@@ -734,6 +735,8 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
 | F4e | `contact.thermal` on a bonded pair: two conductors in series with a finite interface resistance | `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, interface jump `q/hc` | 1e-9 rel | thermal contact resistance (#85) | green |
+| F4f | A 60° sector of Benchmark C2's pressurised thick annulus, revolved and tied to itself with `constraint.cyclic` instead of a symmetry plane, free ends | C2's own free-ends (SimScale) number: σθθ(a) = 100 MPa, σrr(a) = −60 MPa, u_r(a) = 5.90e-5 m | 1 % | cyclic symmetry (#81) is exact for a harmonic-0 load | green |
+| F4g | The same sector against a full 360° revolution of the same cross-section at the same angular density, three probes | equivalence, not a published number | 1e-8 rel | the cyclic elimination reproduces the full model exactly | engine test |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
 | F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
 | F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
@@ -763,6 +766,29 @@ the slave DOFs dropped from the free set — so the tie is exact rather than app
 and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
 `cantilever-hex8-im` measures on the single Body beside it, not a published number: it is an
 equivalence, and the published Timoshenko value is the one that case is gated against.
+
+**Cyclic symmetry (#81) reuses the same machinery**, with `R(axis, angleDeg)` instead of a
+node-to-face projection: `u(to) = R·u(from)`, the identity when the Problem has one DOF per node
+because a temperature has no orientation to rotate. F4f is the closed-form gate 60° does not
+land on a coordinate axis, so it cannot be built from `lame-3d-revolve-hex20`'s symmetry planes
+the way that case's own 90° sector can — `constraint.cyclic` between the revolve mesher's
+`theta0` and `theta1` is what a non-axis-aligned sector needs. At a point `x` on `theta0` with
+`r = |x| > 0`, matching `u(Rx) = R·u(x)` for a rigid `t + ω×x` forces the two in-plane
+translations and the two bending rotations to zero — rotating `ω×x` by `R` is not the same as
+rotating `x` first unless `ω` is along the shared axis — so the tie alone removes four of the six
+rigid modes. What is left is exactly the "zero harmonic": translation along the axis and rotation
+about it, both exact under the tie by construction, so no end-face Dirichlet constraint can touch
+them without conflict — `theta1` is entirely a slave, its edge nodes coincide with `zmin`/`zmax`,
+and the schema has no way to say "this face except that edge". F4f instead pins one node on
+`theta0` (a master, never a slave) in its tangential and axial components, which leaves both ends
+free: the free-ends Lamé variant, not the eps_z = 0 one `lame-3d-revolve-hex20` gates against, but
+still a number copied from C2's own row, not invented. F4g proves the tie itself: the full 360°
+model has no cyclic tie of its own, so all six of its rigid motions are removed instead by a
+tangential- and axial-displacement pin at three points 90° apart, which the true (θ-independent)
+field already satisfies everywhere and so does not perturb the comparison — a gauge choice, not a
+physical constraint, matching plan B §4's warning that the coefficients of a cyclic tie are a
+rotation rather than a partition of unity: the global reaction sum on a cyclic model is not the
+applied load, unlike F4's bonded tie.
 
 F4b is installed as `tie-nonmatching-patch` and `tie-nonmatching-patch-refined`.
 The public Command `mesh.set` uses `mesher: { kind: "lattice", size: "500 mm",

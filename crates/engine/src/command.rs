@@ -1306,6 +1306,29 @@ pub enum Command {
         tol: Option<Q<Length>>,
     },
 
+    /// Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of
+    /// `angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic
+    /// condition: a static solve is exact for loading that repeats sector by sector, and a modal
+    /// Step finds only the harmonic-index-0 family. Non-zero harmonics need a complex
+    /// eigenproblem and are not implemented. The two faces must mesh identically — use the
+    /// revolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is
+    /// for. The tie is node to node, not node to face, because a matching sector mesh is the
+    /// only case in scope. Because the coefficients are a rotation rather than a partition of
+    /// unity, a cyclic model's global reaction sum is not the applied load — read
+    /// query.result's per-Constraint reactions, never its balance, on a Step that lists this
+    /// Command. Refused in an explicit Step, like a bonded contact.
+    #[serde(rename = "constraint.cyclic", rename_all = "camelCase")]
+    ConstraintCyclic {
+        name: String,
+        from: SetRef,
+        to: SetRef,
+        axis: Axis,
+        angle_deg: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<[Q<Length>; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<Q<Length>>,
+    },
     /// Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a
     /// load introduction is idealised. `distributed` makes the point follow the face's weighted
     /// mean displacement and adds no stiffness at all, so a force at the point spreads over the

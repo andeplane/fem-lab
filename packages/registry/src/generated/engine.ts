@@ -456,6 +456,52 @@ export type Command =
     }
   | {
       name: string;
+      from: string;
+      to: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?:
+        | [
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          ]
+        | null;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "constraint.cyclic";
+    }
+  | {
+      name: string;
       point: string;
       on: string;
       kind: CoupleKind;
@@ -2684,6 +2730,52 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      from: string;
+      to: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?:
+        | [
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          ]
+        | null;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "constraint.cyclic";
+    }
+  | {
+      name: string;
       point: string;
       on: string;
       kind: CoupleKind;
@@ -3764,6 +3856,18 @@ export type Constraint1 =
       master: string;
       tol?: number | null;
       kind: "bonded";
+    }
+  | {
+      from: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?: [number, number, number] | null;
+      tol?: number | null;
+      kind: "cyclic";
     }
   | {
       point: string;
