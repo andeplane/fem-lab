@@ -161,6 +161,35 @@ export type Command =
     }
   | {
       name: string;
+      points: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ][];
+      members?: [number, number][] | null;
+      divisions?: number | null;
+      cmd: "geometry.addLine";
+    }
+  | {
+      name: string;
       from: string;
       shape: ShapeSpec;
       cmd: "geometry.subtract";
@@ -2102,6 +2131,35 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      points: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ][];
+      members?: [number, number][] | null;
+      divisions?: number | null;
+      cmd: "geometry.addLine";
+    }
+  | {
+      name: string;
       from: string;
       shape: ShapeSpec;
       cmd: "geometry.subtract";
@@ -2892,6 +2950,12 @@ export type Shape =
       name: string;
       shape: Shape;
       kind: "named";
+    }
+  | {
+      points: [number, number, number][];
+      members: [number, number][];
+      divisions: number;
+      kind: "polyline";
     };
 /**
  * One edge of a loop. A loop is a closed sequence: segment k runs from the previous

@@ -1642,9 +1642,12 @@ fn the_line_mesher_divides_every_member_and_names_every_joint() {
     assert_eq!(m.blocks[0].conn, [0, 2, 1, 2]);
     assert_eq!(m.node_sets.keys().collect::<Vec<_>>(), ["p0", "p1", "p2"]);
     assert_eq!(m.node_sets["p2"], [2]);
-    // A member has no boundary face and contributes no skin triangle.
+    // A member has no boundary face and no skin triangle: the segments are all it draws.
     assert!(m.boundary_faces().is_empty());
-    assert!(m.surface().triangles.is_empty());
+    let s = m.surface();
+    assert!(s.triangles.is_empty() && s.edges.is_empty());
+    assert_eq!(s.lines, [[0, 2], [1, 2]]);
+    assert_eq!(s.line_elem, [0, 1]);
 
     // Subdivision adds interior nodes after the joints, in member order, evenly spaced.
     let m = truss(&pts, &[[0, 1]], 4);
@@ -1682,6 +1685,24 @@ fn the_line_mesher_rejects_every_ill_formed_body() {
     }
     let e = line_mesher(&ok[..2], &[[1, 1]], 1, ElementKind::Truss2).unwrap_err();
     assert!(e.0.contains("joins point 1 to itself"), "{}", e.0);
+}
+
+#[test]
+fn a_polyline_shape_has_no_interior_and_no_solid() {
+    let shape = Shape::Polyline { points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 2 };
+    assert_eq!(shape.dim(), 1);
+    shape.validate().expect("a straight member");
+    // A curve has no volume for a point to be inside of, not even a point on it.
+    assert!(!shape.contains([0.5, 0.0, 0.0]).unwrap());
+    // And it never becomes a Solid: the line mesher is its own geometry.
+    let e = Solid::evaluate(&shape).unwrap_err();
+    assert!(e.0.contains("no volume"), "{}", e.0);
+    // Its validation is the line mesher's, so the Shape and the mesher agree on the cause.
+    let bad = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1 };
+    assert!(bad.validate().unwrap_err().0.contains("at least 2 points"));
+    // A boolean cannot mix dimensions, and the message says all three.
+    let mixed = Shape::Union { shapes: vec![shape.clone(), Shape::Box { size: [1.0; 3] }] };
+    assert!(mixed.validate().unwrap_err().0.contains("1D line members"));
 }
 
 #[test]

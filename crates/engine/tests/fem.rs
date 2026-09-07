@@ -5540,10 +5540,14 @@ fn the_truss_maps_points_onto_its_own_axis_and_stops_at_its_ends() {
     let end = [coords[3], coords[4], coords[5]];
     let back = el.inverse_map(&coords, end).expect("the far end is on the member");
     assert!((back[0] - 1.0).abs() < 1e-12, "{back:?}");
-    // Off the axis but abreast of the midpoint: a member is a curve, so a probe reads the
-    // station it is abreast of rather than nothing at all.
+    // Off the axis but abreast of the midpoint: a member is a curve, so a point beside it is
+    // in no element rather than in whichever member happened to be checked first.
     let abreast = [mid[0] + 1.0, mid[1] + 2.0, mid[2]];
-    assert_eq!(el.inverse_map(&coords, abreast), Some([0.0, 0.0, 0.0]));
+    assert_eq!(el.inverse_map(&coords, abreast), None);
+    // A point on the axis a quarter of the way along is inside, and says where.
+    let quarter: Vec<f64> = (0..3).map(|k| mid[k] + 0.25 * TRUSS_LENGTH * TRUSS_DIR[k]).collect();
+    let xi = el.inverse_map(&coords, [quarter[0], quarter[1], quarter[2]]).expect("on the member");
+    assert!((xi[0] - 0.5).abs() < 1e-12, "{xi:?}");
     // Past the end, it is outside.
     let past: Vec<f64> = (0..3).map(|k| coords[3 + k] + TRUSS_DIR[k]).collect();
     assert_eq!(el.inverse_map(&coords, [past[0], past[1], past[2]]), None);
@@ -5674,4 +5678,75 @@ fn a_line_body_without_a_section_is_reported_by_the_well_posedness_checks() {
     let a = assemble_stiffness(&p, &pat).expect("a truss assembles like any other block");
     assert_eq!(a.min_det_j, 0.5);
     assert!((a.k.diag()[0] - YOUNG * TRUSS_AREA / 1.0).abs() < 1e-3, "{:?}", a.k.diag());
+}
+
+/// Benchmark B12: the axial modes of a fixed-free bar meshed with truss elements converge to
+/// `f_n = (2n-1)/(4L) sqrt(E/rho)` at the second order a linear element gives.
+#[test]
+fn truss_axial_modes_converge_to_the_closed_form_bar_frequency() {
+    let mut errors = Vec::new();
+    for n in [4u32, 8, 16] {
+        let mesh = femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], n, ElementKind::Truss2)
+            .expect("a straight bar");
+        let sets = BTreeMap::from([
+            (
+                "root".to_string(),
+                ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![0], elems: Vec::new() },
+            ),
+            (
+                "all".to_string(),
+                ResolvedSet {
+                    kind: SetKind::Node,
+                    faces: Vec::new(),
+                    nodes: (0..mesh.n_nodes() as u32).collect(),
+                    elems: Vec::new(),
+                },
+            ),
+        ]);
+        let bodies = vec!["bar".to_string()];
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![
+                fix("root", "root", [true, false, false], 0.0),
+                // A bar carries no transverse stiffness, so every node has to be held across
+                // the axis or the model is a mechanism rather than a bar.
+                fix("transverse", "all", [false, true, true], 0.0),
+            ],
+        );
+        p.materials[0].props = vec![1.0, 0.0];
+        p.materials[0].rho = 1.0;
+        p.sections = vec![unit_section()];
+        p.section_of_block = vec![Some(0)];
+        let res = run_step(&p, &Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default() })
+            .expect("axial bar modes");
+        // E = rho = L = 1, so f_n = (2n - 1) / 4.
+        for (i, f) in res.frequencies.iter().enumerate() {
+            let exact = (2.0 * (i as f64 + 1.0) - 1.0) / 4.0;
+            assert!(f / exact - 1.0 > -1e-12, "a discrete bar is stiffer than the continuum: {f} vs {exact}");
+        }
+        errors.push((res.frequencies[0] / 0.25 - 1.0).abs());
+    }
+    let rate = observed_rate(&[0.25, 0.125, 0.0625], &errors);
+    assert!(rate > 1.9, "modal rate {rate}: {errors:?}");
+    assert!(errors[2] < 0.01, "1 % at sixteen elements: {errors:?}");
+}
+
+/// A generic section of unit area, so `E = rho = A = L = 1` makes every closed form a round
+/// number.
+fn unit_section() -> Section {
+    properties(&SectionSpec::Generic {
+        a: Q::new(1.0, "m^2"),
+        i_y: Q::new(1.0, "m^4"),
+        i_z: Q::new(1.0, "m^4"),
+        j: Q::new(1.0, "m^4"),
+        k_y: None,
+        k_z: None,
+        c_y: None,
+        c_z: None,
+    })
+    .expect("a valid generic section")
 }

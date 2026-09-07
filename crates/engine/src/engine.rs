@@ -421,7 +421,8 @@ impl Engine {
     /// The derived Mesh with every Set resolved, built on demand (plan B §2.1).
     pub fn mesh(&mut self) -> Result<&crate::mesh::BuiltMesh, Error> {
         if self.mesh.is_none() {
-            let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+            let bodies: Vec<String> =
+                self.model.bodies.iter().filter(|b| b.shape.dim() > 1).map(|b| b.name.clone()).collect();
             for b in &bodies {
                 self.solid(b)?;
             }
@@ -436,8 +437,12 @@ impl Engine {
     }
 
     /// The Bodies' triangles and Sheet outlines, for a host before there is a Mesh.
+    ///
+    /// A line Body has neither, so it has no preview row; it appears once the Mesh is built,
+    /// as line elements in [`Engine::mesh_surface`].
     pub fn geometry_surface(&mut self) -> Result<Vec<GeometrySurface>, Error> {
-        let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+        let bodies: Vec<String> =
+            self.model.bodies.iter().filter(|b| b.shape.dim() > 1).map(|b| b.name.clone()).collect();
         let mut out = Vec::with_capacity(bodies.len());
         for b in bodies {
             let solid = self.solid(&b)?;
@@ -496,6 +501,21 @@ impl Engine {
             }
             Command::GeometryAdd { name, shape } => {
                 let shape = shape.to_si("shape")?;
+                self.add_body(name, shape)
+            }
+            Command::GeometryAddLine { name, points, members, divisions } => {
+                let mut joints = Vec::with_capacity(points.len());
+                for (i, p) in points.iter().enumerate() {
+                    let mut q = [0.0; 3];
+                    for (k, v) in p.iter().enumerate() {
+                        q[k] = v.si().map_err(|e| e.at(format!("points[{i}][{k}]")))?;
+                    }
+                    joints.push(q);
+                }
+                // The default wiring is the chain the points describe, which is what a single
+                // polyline member usually is; a truss names its own members.
+                let members = members.clone().unwrap_or_else(|| (1..joints.len() as u32).map(|i| [i - 1, i]).collect());
+                let shape = Shape::Polyline { points: joints, members, divisions: divisions.unwrap_or(1) };
                 self.add_body(name, shape)
             }
             Command::GeometrySubtract { name, from, shape } => {
@@ -936,8 +956,12 @@ impl Engine {
         }
         shape.validate().map_err(|e| geom_error(e, "shape"))?;
         let dim = shape.dim();
-        let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
-            .map_err(|e| geom_error(e, "shape"))?;
+        // A line Body never becomes a Solid — the line mesher is its own geometry — so
+        // `validate` above is the whole of its geometric check.
+        if dim > 1 {
+            let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
+                .map_err(|e| geom_error(e, "shape"))?;
+        }
         let old = self.model.body(name);
         let body = Body {
             name: name.to_string(),

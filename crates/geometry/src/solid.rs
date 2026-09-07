@@ -295,6 +295,9 @@ fn eval(shape: &Shape, prefix: &str, leaves: &mut Leaves) -> Result<(Manifold, V
             (m, ids)
         }
         Shape::Sheet { .. } => return Err(GeomError("a 2D sheet cannot be evaluated as a solid".into())),
+        Shape::Polyline { .. } => {
+            return Err(GeomError("a line body has no volume: the line mesher is its own geometry".into()))
+        }
         Shape::Extrude { sketch, height } => {
             let loops = sketch.loops(sketch_chord_tol(sketch, DEFAULT_SEGMENTS))?;
             let m = Manifold::extrude(&polygons(&loops), *height, 0, 0.0, Vec2::new(1.0, 1.0));

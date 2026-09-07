@@ -210,6 +210,59 @@
         ]
       },
       {
+        "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            }
+          },
+          "members": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "divisions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "cmd": {
+            "type": "string",
+            "const": "geometry.addLine"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "points"
+        ]
+      },
+      {
         "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
         "type": "object",
         "properties": {
@@ -4607,6 +4660,59 @@
               "cmd",
               "name",
               "shape"
+            ]
+          },
+          {
+            "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "members": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "divisions": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.addLine"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "points"
             ]
           },
           {
@@ -9549,6 +9655,52 @@
               "name",
               "shape"
             ]
+          },
+          {
+            "description": "Straight line members between joints: a truss or a frame. `points` are the joints,\n`members` index pairs into them, and each member is cut into `divisions` elements. It\nhas no volume and no surface, so it never becomes a [`crate::Solid`]; the line mesher\nis its own geometry. Its node sets are `p0 … pN`, one per joint.",
+            "type": "object",
+            "properties": {
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "double"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "divisions": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "const": "polyline"
+              }
+            },
+            "required": [
+              "kind",
+              "points",
+              "members",
+              "divisions"
+            ]
           }
         ]
       },
@@ -11300,6 +11452,59 @@
               "cmd",
               "name",
               "shape"
+            ]
+          },
+          {
+            "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "members": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "divisions": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.addLine"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "points"
             ]
           },
           {

@@ -5321,10 +5321,166 @@ fn sections_are_named_assigned_removed_and_listed_like_materials() {
     assert_eq!(e.model().names(ObjectKind::Section), ["other"]);
 }
 
+fn truss_model(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"truss"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"kN"}}"#);
+    ok(
+        e,
+        r#"{"cmd":"geometry.addLine","name":"truss","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["0.5 m","0.5 m","0 m"]],"members":[[0,2],[1,2]],"divisions":2}"#,
+    );
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["truss"]}"#);
+    ok(e, r#"{"cmd":"section.add","name":"rod","shape":{"kind":"circle","radius":"20 mm"}}"#);
+    ok(e, r#"{"cmd":"section.assign","section":"rod","bodies":["truss"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+}
+
+#[test]
+fn a_line_body_meshes_into_members_with_a_node_set_per_joint() {
+    let mut e = engine();
+    truss_model(&mut e);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    // Two members of two elements each, five nodes, three of them the named joints.
+    assert_eq!((m.elements, m.nodes, m.dofs), (4, 5, 15));
+    assert_eq!(m.element_kind, "truss2");
+    let names: Vec<&str> = m.sets.iter().map(|s| s.name.as_str()).collect();
+    for joint in ["truss.p0", "truss.p1", "truss.p2"] {
+        assert!(names.contains(&joint), "{names:?}");
+    }
+    let p2 = m.sets.iter().find(|s| s.name == "truss.p2").expect("the apex joint");
+    assert_eq!(p2.kind, "node");
+    assert!(p2.summary.contains("1 "), "one node: {}", p2.summary);
+
+    // The Body row reports the total member length, and a line Body has no faces.
+    let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    let body = &model.bodies[0];
+    assert!(body.faces.is_empty(), "{:?}", body.faces);
+    let want = 2.0 * 1000.0 * f64::sqrt(0.5);
+    assert!((body.measure.value - want).abs() < 1e-9, "{:?} vs {want}", body.measure);
+    assert_eq!(body.measure.unit, "mm");
+    assert_eq!(body.mass, None, "a line Body's mass needs its Section, which the row does not read");
+
+    // Subdividing a member of a pin-jointed truss puts a hinge in the middle of it: the
+    // interior node carries no transverse stiffness and the model is a local mechanism. The
+    // well-posedness checks only look for *global* rigid motion, so this surfaces as a
+    // factorisation failure rather than a named check — a known limitation, not a surprise.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"plane","where":{"kind":"bbox","min":["-10 mm","-10 mm","-10 mm"],"max":["1010 mm","510 mm","10 mm"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"flat","on":"plane","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"truss.p0"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"right","on":"truss.p1"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"hang","on":"truss.p2","total":["0 kN","-10 kN","0 kN"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["flat","left","right"],"loads":["hang"],"output":["displacement","stress"]}"#,
+    );
+    let er = err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(er.code, ErrorCode::SolveNotPositiveDefinite);
+
+    // Undivided, the same truss is determinate and solves: two bars at 45 degrees carrying a
+    // 10 kN pull each take 10/sqrt(2) kN of it, and the supports carry the lot.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.addLine","name":"truss","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["0.5 m","0.5 m","0 m"]],"members":[[0,2],[1,2]],"divisions":1}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap() else { panic!("result") };
+    assert!(!r.stale);
+    assert!(r.balance.abs() < 1e-9, "reactions balance the load: {}", r.balance);
+}
+
+#[test]
+fn geometry_add_line_refuses_geometry_it_cannot_mesh() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"truss"}"#);
+    // The shape checks come first, at the Command, naming the cause.
+    for (json, want) in [
+        (r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"]]}"#, "at least 2 points"),
+        (
+            r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"members":[[0,3]]}"#,
+            "references point 3",
+        ),
+        (r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["0 m","0 m","0 m"]]}"#, "zero length"),
+        (
+            r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"divisions":0}"#,
+            "divisions must be at least 1",
+        ),
+    ] {
+        let er = err(&mut e, json);
+        assert_eq!(er.where_.as_deref(), Some("shape"), "{json}");
+        assert!(er.cause.contains(want), "{json}: {}", er.cause);
+    }
+    // A wrong unit is located at the point and the component that carries it.
+    let er =
+        err(&mut e, r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","1 kg"]]}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::UnitDimension, Some("points[1][2]")));
+
+    // Line members need the 3D idealisation; the Mesh is where that is found out.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"bar","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let er = e.query(Query::Mesh {}).expect_err("a line body in a 2D model");
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert!(er.cause.contains("3D idealisation"), "{er:?}");
+}
+
+/// `import_file` installs a Model as it stands, so a hand-written or corrupted file can carry
+/// a line Body the mesher refuses; the failure names the Body rather than panicking.
+#[test]
+fn an_imported_line_body_the_mesher_refuses_names_itself() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"broken"}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let mut file = e.export_file();
+    file.model.bodies.push(femlab_engine::model::Body {
+        name: "collapsed".into(),
+        shape: femlab_geometry::Shape::Polyline {
+            points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+        },
+        material: None,
+        section: None,
+    });
+    e.import_file(file).unwrap();
+    let er = e.query(Query::Mesh {}).expect_err("a zero-length member");
+    assert_eq!(er.code, ErrorCode::MeshFailed);
+    assert_eq!(er.where_.as_deref(), Some("body 'collapsed'"));
+    assert!(er.cause.contains("zero length"), "{er:?}");
+}
+
+#[test]
+fn line_bodies_that_meet_at_a_joint_are_welded_into_one_node() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"chain"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"a","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"b","points":[["1 m","0 m","0 m"],["2 m","0 m","0 m"]]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    // Four joints, but the two at x = 1 m are the same point and become one node.
+    assert_eq!((m.elements, m.nodes), (2, 3));
+    let joint = m.sets.iter().find(|s| s.name == "a.p1").expect("a1");
+    let shared = m.sets.iter().find(|s| s.name == "b.p0").expect("b0");
+    assert_eq!(joint.summary, shared.summary, "the two names are the same single node");
+
+    // A Body that does not touch keeps its own nodes.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"c","points":[["0 m","1 m","0 m"],["1 m","1 m","0 m"]]}"#);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    assert_eq!((m.elements, m.nodes), (3, 5));
+}
+
 #[test]
 fn editable_definitions_preserve_every_public_object_variant() {
-    let cases: Vec<serde_json::Value> =
+    // Sections live in their own fixture: the app's Model tree has no Section group yet, and
+    // the app test walks only the fixture it can click through.
+    let mut cases: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("../../../tools/fixtures/editable-definitions.json")).unwrap();
+    cases.extend(
+        serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../../../tools/fixtures/editable-sections.json"))
+            .unwrap(),
+    );
     for case in cases {
         let mut e = engine();
         ok(&mut e, r#"{"cmd":"geometry.addBox","name":"base","size":["1 m","1 m","1 m"]}"#);

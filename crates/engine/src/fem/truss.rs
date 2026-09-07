@@ -34,6 +34,10 @@ use crate::fem::shape::{centre_xi, dshape_of, in_reference, rule_of, shape_of};
 /// Degrees of freedom of one member: three translations at each of two nodes.
 const N_DOF: usize = 6;
 
+/// How far off its own axis, relative to its half-length, a point may be and still count as
+/// being on the member.
+const ON_AXIS_TOL: f64 = 1e-8;
+
 /// The member's unit axis and half-length, or `None` when it has neither: `dx/dξ` is half the
 /// vector between the nodes, so its norm is `det J = L/2` and its direction is the axis.
 pub(crate) fn axis(coords: &[f64]) -> Option<([f64; 3], f64)> {
@@ -200,13 +204,21 @@ impl Element for Truss2 {
         shape_of(ElementKind::Truss2, xi, n)
     }
 
-    /// A member is a curve, so a point is mapped by projecting it onto the member's own axis:
-    /// a probe or a `query.path` station reads the member at the station nearest the point,
-    /// and `None` only once the projection leaves the segment.
+    /// A member is a curve, so a point is inside it only if it is *on* it: the projection has
+    /// to land within the segment and the perpendicular offset has to vanish. Probing a truss
+    /// therefore means probing a joint or a station along a member, which is what
+    /// `query.path` between two joints produces; a point merely abreast of a member belongs to
+    /// no element, rather than to whichever member happened to be first.
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
         let (e1, half) = axis(coords)?;
         let mid = midpoint(coords);
-        let xi = [(0..3).map(|i| (x[i] - mid[i]) * e1[i]).sum::<f64>() / half, 0.0, 0.0];
+        let d = [x[0] - mid[0], x[1] - mid[1], x[2] - mid[2]];
+        let along: f64 = (0..3).map(|i| d[i] * e1[i]).sum();
+        let off: f64 = (0..3).map(|i| (d[i] - along * e1[i]) * (d[i] - along * e1[i])).sum();
+        if off > (ON_AXIS_TOL * half) * (ON_AXIS_TOL * half) {
+            return None;
+        }
+        let xi = [along / half, 0.0, 0.0];
         in_reference(ElementKind::Truss2, xi, 1e-8).then_some(xi)
     }
 

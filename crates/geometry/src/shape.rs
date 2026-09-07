@@ -10,6 +10,9 @@ use crate::GeomError;
 /// Default number of facets around a circle for cylinders, spheres and revolutions.
 pub const DEFAULT_SEGMENTS: u32 = 32;
 
+/// A boolean over shapes of different dimensions has no meaning.
+const DIM_MIX: &str = "cannot combine 1D line members, 2D sheets and 3D solids";
+
 /// Scale, then rotate about x, y, z (degrees, in that order), then translate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -137,12 +140,18 @@ pub enum Shape {
     Transform { shape: Box<Shape>, at: Affine3 },
     /// A named sub-shape: its faces are tagged `<name>.<tag>`.
     Named { name: String, shape: Box<Shape> },
+    /// Straight line members between joints: a truss or a frame. `points` are the joints,
+    /// `members` index pairs into them, and each member is cut into `divisions` elements. It
+    /// has no volume and no surface, so it never becomes a [`crate::Solid`]; the line mesher
+    /// is its own geometry. Its node sets are `p0 … pN`, one per joint.
+    Polyline { points: Vec<[f64; 3]>, members: Vec<[u32; 2]>, divisions: u32 },
 }
 
 impl Shape {
-    /// 2 for sheets (and booleans of sheets), 3 otherwise.
+    /// 1 for line members, 2 for sheets (and booleans of sheets), 3 otherwise.
     pub fn dim(&self) -> usize {
         match self {
+            Shape::Polyline { .. } => 1,
             Shape::Sheet { .. } => 2,
             Shape::Union { shapes } | Shape::Intersect { shapes } => shapes.first().map_or(3, Shape::dim),
             Shape::Subtract { from, .. } => from.dim(),
@@ -210,7 +219,7 @@ impl Shape {
                 for s in shapes {
                     s.validate()?;
                     if s.dim() != d {
-                        return Err(GeomError("cannot combine 2D sheets with 3D solids".into()));
+                        return Err(GeomError(DIM_MIX.into()));
                     }
                 }
                 Ok(())
@@ -220,7 +229,7 @@ impl Shape {
                 for c in cut {
                     c.validate()?;
                     if c.dim() != from.dim() {
-                        return Err(GeomError("cannot combine 2D sheets with 3D solids".into()));
+                        return Err(GeomError(DIM_MIX.into()));
                     }
                 }
                 Ok(())
@@ -235,6 +244,7 @@ impl Shape {
                 }
                 shape.validate()
             }
+            Shape::Polyline { points, members, divisions } => crate::mesher::line::check(points, members, *divisions),
         }
     }
 
@@ -286,6 +296,8 @@ impl Shape {
             }
             Shape::Transform { shape, at } => shape.contains(at.inverse(p))?,
             Shape::Named { shape, .. } => shape.contains(p)?,
+            // A member is a curve: it has no interior for a point to be inside of.
+            Shape::Polyline { .. } => false,
         })
     }
 }

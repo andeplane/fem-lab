@@ -24,6 +24,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [constraint.temperature](#commands-constraint-temperature)
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
+- [geometry.addLine](#commands-geometry-addLine)
 - [geometry.nameFace](#commands-geometry-nameFace)
 - [geometry.nameRegion](#commands-geometry-nameRegion)
 - [geometry.remove](#commands-geometry-remove)
@@ -161,6 +162,28 @@ directly in constraints and loads. Re-issuing with an existing name replaces the
 | size | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | at | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"geometry.addBox"}</code> |  |
+
+<a id="commands-geometry-addLine"></a>
+
+### geometry.addLine
+
+Add a Body made of straight line members: a truss. `points` are the joints, in order,
+and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
+Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
+becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
+and joints of different line Bodies that sit at the same point are welded into one node
+when the Mesh is built. A member carries axial force only, so give the Body a Section
+with section.assign as well as a Material, and hold enough joints that none of them can
+drift sideways — an under-braced truss is singular and fails in the solver, not here.
+Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| points | yes | <code>{"type":"array","items":{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}}</code> |  |
+| members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> |  |
+| divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> |  |
 
 <a id="commands-geometry-nameFace"></a>
 

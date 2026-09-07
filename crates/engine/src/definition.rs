@@ -59,9 +59,10 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
             shape: Box::new(shape(s)?),
             at: Placement { translate: Some(at.translate.map(length)), rotate: Some(at.rotate), scale: Some(at.scale) },
         },
-        // Named shapes are an internal geometry wrapper, not a public ShapeSpec. Imported
-        // snapshots can contain them; refuse editing instead of silently dropping face tags.
-        Shape::Named { .. } => {
+        // Named shapes are an internal geometry wrapper and a line body has its own Command,
+        // so neither is a public ShapeSpec. Imported snapshots can contain them nested; refuse
+        // editing instead of silently dropping face tags.
+        Shape::Named { .. } | Shape::Polyline { .. } => {
             return Err(Error::new(ErrorCode::Unsupported, "this imported shape contains internal face-name wrappers")
                 .at("shape")
                 .suggest("geometry.add with an explicit public shape definition"))
@@ -95,7 +96,15 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
     Ok(match kind {
         ObjectKind::Body => {
             let b = m.body(name).ok_or_else(missing)?;
-            Command::GeometryAdd { name: b.name.clone(), shape: shape(&b.shape)? }
+            match &b.shape {
+                Shape::Polyline { points, members, divisions } => Command::GeometryAddLine {
+                    name: b.name.clone(),
+                    points: points.iter().map(|p| p.map(length)).collect(),
+                    members: Some(members.clone()),
+                    divisions: Some(*divisions),
+                },
+                other => Command::GeometryAdd { name: b.name.clone(), shape: shape(other)? },
+            }
         }
         // A Section is stored as its resolved properties, so its definition comes back in the
         // `generic` form: the same numbers, and re-applying it is exactly idempotent.

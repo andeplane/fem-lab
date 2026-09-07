@@ -228,6 +228,11 @@ pub struct Surface {
     pub tri_face: Vec<Option<u32>>,
     /// 2D only, parallel to `faces`: the corner nodes of each boundary edge. Empty in 3D.
     pub edges: Vec<[u32; 2]>,
+    /// The two nodes of every 1D element, which is the whole of what a line member draws:
+    /// a member has no skin to triangulate.
+    pub lines: Vec<[u32; 2]>,
+    /// The element behind each entry of `lines`.
+    pub line_elem: Vec<u32>,
 }
 
 /// Weld nodes closer together than `tol` into one, keeping the lowest node id of each cluster.
@@ -412,7 +417,16 @@ impl Mesh {
             tri_elem: Vec::new(),
             tri_face: Vec::new(),
             edges: Vec::new(),
+            lines: Vec::new(),
+            line_elem: Vec::new(),
         };
+        for e in 0..self.n_elems() as u32 {
+            if self.kind_of(e).dim() == 1 {
+                let n = self.elem_nodes(e);
+                s.lines.push([n[0], n[1]]);
+                s.line_elem.push(e);
+            }
+        }
         if self.dim == 3 {
             for (i, &face) in s.faces.iter().enumerate() {
                 let corners: Vec<u32> =

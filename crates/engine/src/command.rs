@@ -792,6 +792,25 @@ pub enum Command {
     #[serde(rename = "geometry.add", rename_all = "camelCase")]
     GeometryAdd { name: String, shape: ShapeSpec },
 
+    /// Add a Body made of straight line members: a truss. `points` are the joints, in order,
+    /// and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
+    /// Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
+    /// becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
+    /// and joints of different line Bodies that sit at the same point are welded into one node
+    /// when the Mesh is built. A member carries axial force only, so give the Body a Section
+    /// with section.assign as well as a Material, and hold enough joints that none of them can
+    /// drift sideways — an under-braced truss is singular and fails in the solver, not here.
+    /// Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+    #[serde(rename = "geometry.addLine", rename_all = "camelCase")]
+    GeometryAddLine {
+        name: String,
+        points: Vec<[Q<Length>; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        members: Option<Vec<[u32; 2]>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        divisions: Option<u32>,
+    },
+
     /// Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
     /// cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
     /// is positioned in world coordinates, so use its `at` or a transform to place it.
