@@ -7319,3 +7319,42 @@ fn modal_analysis_propagates_a_rejected_direct_solve_without_panicking() {
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
     assert!(e.field(Some("modes"), Field::Displacement).unwrap().data.iter().all(|value| value.is_finite()));
 }
+
+/// Solver acceptance and the report's stricter force-balance check are separate contracts.
+/// A real mixed-precision PCG solve at a loose tolerance can satisfy one but fail the other.
+#[test]
+fn a_loose_accepted_solve_fails_public_report_equilibrium_until_refined() {
+    for size in ["100 mm", "50 mm"] {
+        let mut e = engine();
+        cantilever(&mut e);
+        ok(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":"{size}"}},"order":1}}"#));
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-pcg","tolerance":0.01}"#);
+        let loose = result_of(&mut e, Some("static"));
+        assert_eq!(loose.solver, "cpu-pcg");
+        assert!(!loose.stale);
+        assert!(loose.residual > 1e-9 && loose.residual < 0.01, "{size}: {}", loose.residual);
+        assert_eq!(loose.applied_total[2].unit, "kN");
+        assert_eq!(loose.applied_total[2].value, -1.0);
+        assert_eq!(loose.reactions.len(), 1);
+        assert_eq!(loose.reactions[0].constraint, "root");
+        // Independent equilibrium oracle: the only support must carry +1 kN vertically.
+        // This remains true at every mesh size and does not depend on beam theory or stiffness.
+        assert_eq!(loose.reactions[0].total[2].unit, "kN");
+        assert!((loose.reactions[0].total[2].value - 1.0).abs() > 1e-9);
+        assert!(loose.balance > 1e-9);
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        let note = report(&mut e, Some("static"), Some(vec![ReportSection::Results, ReportSection::Verification]));
+        assert_eq!(note.markdown.matches("**fail** (tolerance 1e-9)").count(), 2);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+
+        // The same physical model passes the report once the accepted answer is refined.
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-pcg","tolerance":1e-10}"#);
+        let refined = result_of(&mut e, Some("static"));
+        assert!(refined.residual < loose.residual);
+        assert!((refined.reactions[0].total[2].value - 1.0).abs() < 1e-9);
+        assert!(refined.balance <= 1e-9);
+        let note = report(&mut e, Some("static"), Some(vec![ReportSection::Results, ReportSection::Verification]));
+        assert_eq!(note.markdown.matches("**pass** (tolerance 1e-9)").count(), 2);
+        assert!(!note.markdown.contains("**fail**"));
+    }
+}
