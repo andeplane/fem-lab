@@ -1698,6 +1698,16 @@ const commands = {
             "format": "double"
           }
         },
+        "psd": {
+          "description": "One-sided PSD table for randomVibration. All Loads form one spatial pattern\nmultiplied by the same zero-mean stationary random process. Use density \"1 s\"\n(1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,\n`after` naming a solved modal Step, identical constraints, and positive damping.\nOutputs are componentwise standard deviations, never a signed equilibrium state.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PsdPoint"
+          }
+        },
         "cmd": {
           "type": "string",
           "const": "step.add"
@@ -3690,6 +3700,11 @@ const commands = {
           "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
           "type": "string",
           "const": "harmonic"
+        },
+        {
+          "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
+          "type": "string",
+          "const": "randomVibration"
         }
       ]
     },
@@ -3815,6 +3830,22 @@ const commands = {
           "type": "string",
           "const": "log"
         }
+      ]
+    },
+    "PsdPoint": {
+      "description": "One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.\nDensities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation\nis linear in Hz and density, with zero input outside the table's finite band.",
+      "type": "object",
+      "properties": {
+        "frequency": {
+          "$ref": "#/$defs/Q_frequency"
+        },
+        "density": {
+          "$ref": "#/$defs/Q_time"
+        }
+      },
+      "required": [
+        "frequency",
+        "density"
       ]
     },
     "Solver": {
@@ -4769,6 +4800,7 @@ const queries = {
     "InitialVelocitySpec": commands.$defs["InitialVelocitySpec"],
     "Q_velocity": commands.$defs["Q_velocity"],
     "SweepSpacing": commands.$defs["SweepSpacing"],
+    "PsdPoint": commands.$defs["PsdPoint"],
     "Solver": commands.$defs["Solver"],
     "QuantityOfInterest": commands.$defs["QuantityOfInterest"],
     "PluginKind": commands.$defs["PluginKind"],

@@ -1162,6 +1162,7 @@ impl Engine {
                 sweep,
                 damping_ratio,
                 damping_ratios,
+                psd,
                 alpha,
                 rayleigh_alpha,
                 rayleigh_beta,
@@ -1250,6 +1251,22 @@ impl Engine {
                     sweep: *sweep,
                     damping_ratio: *damping_ratio,
                     damping_ratios: damping_ratios.clone(),
+                    psd: psd
+                        .as_ref()
+                        .map(|points| {
+                            let table = points
+                                .iter()
+                                .map(|p| {
+                                    Ok([
+                                        p.frequency.si().map_err(|e| e.at("psd.frequency"))?,
+                                        p.density.si().map_err(|e| e.at("psd.density"))?,
+                                    ])
+                                })
+                                .collect::<Result<Vec<_>, Error>>()?;
+                            crate::procedure::random_vibration::Spectrum { table: table.clone() }.check()?;
+                            Ok::<_, Error>(table)
+                        })
+                        .transpose()?,
                     alpha: *alpha,
                     rayleigh_alpha: non_negative(opt_si(rayleigh_alpha, "rayleighAlpha")?, "rayleighAlpha")?,
                     rayleigh_beta: non_negative(opt_si(rayleigh_beta, "rayleighBeta")?, "rayleighBeta")?,

@@ -229,3 +229,15 @@ its mesh and display units, even after edits. The default per-Step selection ret
 stale-field safeguards. A supplied Step must match the id. Missing/evicted ids are errors;
 old values are never attached to current geometry. The existing FrameSample time/index rules
 remain canonical. See ADR0018 and issue #280.
+
+**Random vibration**:
+A stationary, zero-mean response to a spatial Load pattern multiplied by one random process.
+A `randomVibration` Step consumes a current modal Result through `after`, with identical
+Constraints. Its `psd` knots carry frequency and the one-sided density of that dimensionless
+multiplier (1/Hz, equivalently seconds); physical force units and amplitudes belong to the
+Loads. Density is piecewise linear and zero outside the supplied band. Positive damping is
+required for every mode. The Result's displacement and stress components are 1σ standard
+deviations, not a signed equilibrium field. Beam stresses are the largest standard deviation
+among the four extreme fibres at each member end, with cross-modal correlation retained until
+after integration. Von Mises and principal stress are nonlinear quantities and are not
+reported as standard deviations of the componentwise RMS tensor.

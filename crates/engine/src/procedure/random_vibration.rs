@@ -81,7 +81,7 @@ pub fn covariance(
             if lo < f && f < hi {
                 grid.push(f);
             }
-            let mut width = (z * f).max(f64::EPSILON * f);
+            let mut width = (z * f).max(f64::EPSILON * f).max(f64::MIN_POSITIVE);
             let reach = (hi - f).abs().max((lo - f).abs());
             while width < 2.0 * reach {
                 for point in [f - width, f + width] {
@@ -123,6 +123,150 @@ pub fn covariance(
             .suggest("step.add with smaller PSD densities or larger damping"));
     }
     Ok(covariance)
+}
+
+use super::{blank, report, rotation_field, vector_field, StepResult};
+use crate::command::Field;
+use crate::engine::OnProgress;
+use crate::fem::problem::Problem;
+use crate::par::Pool;
+use crate::post::stress;
+use crate::post::{extremes, FieldData, Per};
+use std::collections::BTreeMap;
+
+/// Linear response channels. A beam's four extreme fibres remain separate until variance
+/// has been integrated; taking absolute modal bending moments would lose their correlation.
+fn channels(p: &Problem<'_>, u: &[f64]) -> Result<BTreeMap<Field, Vec<FieldData>>, Error> {
+    let mut fields = BTreeMap::new();
+    fields.insert(Field::Displacement, vec![vector_field(u, p.dofs_per_node())]);
+    let (gp, _) = stress::stress_gp(p, u)?;
+    let unaveraged = stress::gp_to_nodes(p.mesh, &gp);
+    let mut fibres = vec![unaveraged; 4];
+    if p.has_beams() {
+        fields.insert(Field::Rotation, vec![rotation_field(u)]);
+        let (force, moment) = stress::section_fields(p, u)?;
+        let mut node_offset = 0;
+        for (block, blk) in p.mesh.blocks.iter().enumerate() {
+            let count = blk.n_elems() * blk.kind.n_nodes();
+            if blk.kind == femlab_geometry::ElementKind::Beam2 {
+                let section = &p.sections[p.section_of_block[block].expect("stress recovery validated the section")];
+                for (corner, &(y, z)) in [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)].iter().enumerate() {
+                    for node in node_offset..node_offset + count {
+                        fibres[corner].data[node * 6] = force.data[node * 3] / section.a
+                            + y * moment.data[node * 3 + 2] * section.c_y / section.i_z
+                            + z * moment.data[node * 3 + 1] * section.c_z / section.i_y;
+                    }
+                }
+            }
+            node_offset += count;
+        }
+        fields.insert(Field::SectionForce, vec![force]);
+        fields.insert(Field::SectionMoment, vec![moment]);
+    }
+    fields.insert(Field::Stress, fibres.iter().map(|f| stress::average_at_nodes(p, f)).collect());
+    fields.insert(Field::StressUnaveraged, fibres);
+    Ok(fields)
+}
+
+/// Post-modal stationary response; no stiffness assembly or factorisation.
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    p: &Problem<'_>,
+    previous: Option<&StepResult>,
+    spectrum: &Spectrum,
+    damping: &[f64],
+    rayleigh: (f64, f64),
+    pool: &Pool,
+    mut progress: OnProgress<'_>,
+) -> Result<StepResult, Error> {
+    let modal = previous.filter(|r| !r.modal_dofs.is_empty() && r.modal_dofs.len() == r.frequencies.len()).ok_or_else(
+        || {
+            Error::schema("randomVibration needs a solved modal Result")
+                .at("after")
+                .suggest("solve.run the modal Step named by after")
+        },
+    )?;
+    if modal.modal_dofs.iter().any(|u| u.len() != p.n_dofs()) {
+        return Err(Error::schema("modal vectors do not match this mesh")
+            .at("after")
+            .suggest("solve.run the modal Step again"));
+    }
+    report(&mut progress, "assemble", 0.05, "projecting the random load pattern")?;
+    let mut load = vec![0.0; p.n_dofs()];
+    pool.install(|| crate::fem::loads::assemble_loads(p, &mut load))?;
+    let rc = crate::fem::assembly::resolve(p)?;
+    for &(dof, value) in &rc.fixed {
+        if value != 0.0 {
+            return Err(Error::schema("randomVibration requires homogeneous constraints")
+                .at("constraints")
+                .suggest("constraint.fix or constraint.pin on the modal supports"));
+        }
+        load[dof as usize] = 0.0;
+    }
+    let participation: Vec<f64> =
+        modal.modal_dofs.iter().map(|u| u.iter().zip(&load).map(|(u, f)| u * f).sum()).collect();
+    let zeta = super::modal::damping_ratios(&modal.frequencies, damping, rayleigh);
+    let c = covariance(spectrum, &modal.frequencies, &zeta, &participation)?;
+    report(&mut progress, "solve", 0.5, "integrated the correlated modal covariance")?;
+    // A thermal preload contributes a mean stress, never random stress. Modal stress recovery
+    // uses only the perturbation displacement on the same materials and sections.
+    let mean = pool.install(|| channels(p, &vec![0.0; p.n_dofs()]))?;
+    let basis = modal
+        .modal_dofs
+        .iter()
+        .map(|u| {
+            let mut response = pool.install(|| channels(p, u))?;
+            for (field, variants) in &mut response {
+                for (values, baseline) in variants.iter_mut().zip(&mean[field]) {
+                    for (value, zero) in values.data.iter_mut().zip(&baseline.data) {
+                        *value -= zero;
+                    }
+                }
+            }
+            Ok(response)
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let n = basis.len();
+    let mut result = blank(crate::solve::SolveInfo {
+        solver: "cpu-modal-covariance",
+        iterations: 0,
+        rel_residual: 0.0,
+        time_ms: 0.0,
+    });
+    for (&field, variants) in &basis[0] {
+        let mut output = variants[0].clone();
+        output.data.fill(0.0);
+        for (corner, _) in variants.iter().enumerate() {
+            for (component, value) in output.data.iter_mut().enumerate() {
+                let mut variance = 0.0;
+                for i in 0..n {
+                    for j in 0..n {
+                        variance += basis[i][&field][corner].data[component]
+                            * c[i * n + j]
+                            * basis[j][&field][corner].data[component];
+                    }
+                }
+                *value = value.max(variance.max(0.0).sqrt());
+            }
+        }
+        result.fields.insert(field, output);
+    }
+    for axis in ["x", "y", "z"] {
+        result.scalars.insert(format!("applied_total_{axis}"), 0.0);
+    }
+    result.scalars.insert("rel_residual".into(), 0.0);
+    result.scalars.insert("sigma_level".into(), 1.0);
+    result.scalars.insert("modal_count".into(), n as f64);
+    result.scalars.insert("psd_frequency_min".into(), spectrum.table[0][0]);
+    result.scalars.insert("psd_frequency_max".into(), spectrum.table[spectrum.table.len() - 1][0]);
+    result.extremes = result
+        .fields
+        .iter()
+        .filter(|(_, f)| f.per == Per::Node)
+        .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
+        .collect();
+    report(&mut progress, "post", 0.9, "recovered one-sigma displacement and stress")?;
+    Ok(result)
 }
 
 #[cfg(test)]

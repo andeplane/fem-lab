@@ -11289,3 +11289,26 @@ fn a_linear_step_ignores_plasticity_with_a_warning_and_a_nonlinear_step_reports_
     assert!(f.values.iter().all(|v| (v - peeq.max.value).abs() < 1e-9), "homogeneous: {:?}", f.values);
     assert_eq!(r.yielded_fraction, Some(1.0));
 }
+
+#[test]
+fn random_vibration_registry_replays_psd_and_rejects_invalid_inputs() {
+    let mut e = engine();
+    harmonic_bar(&mut e, ",\"fStart\":\"1 Hz\",\"fStop\":\"2 Hz\",\"points\":2");
+    let add = r#"{"cmd":"step.add","name":"random","procedure":"randomVibration","constraints":["root","guide"],"loads":["pull"],"after":"modes","dampingRatio":0.02,"psd":[{"frequency":"0 Hz","density":"0.01 s"},{"frequency":"1 MHz","density":"0.01 s"}]}"#;
+    ok(&mut e, add);
+    assert_eq!(e.model().step("random").unwrap().psd.as_ref().unwrap()[1], [1e6, 0.01]);
+    for bad in [add.replace("0.01 s", "1 N"), add.replace("1 MHz", "0 Hz"), add.replace("0.01 s", "-1 s")] {
+        assert!(run(&mut e, &bad).is_err());
+    }
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"random"}"#).code, ErrorCode::NotFound);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"random"}"#);
+    let displacement = e.field(Some("random"), Field::Displacement).unwrap().clone();
+    assert!(displacement.data.iter().any(|v| *v > 0.0));
+    assert!(e.field(Some("random"), Field::Stress).is_ok());
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(replayed.field(Some("random"), Field::Displacement).unwrap(), &displacement);
+    assert_eq!(replayed.model_hash(), e.model_hash());
+}

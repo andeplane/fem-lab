@@ -951,6 +951,14 @@ export type Command =
        * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
        */
       dampingRatios?: number[] | null;
+      /**
+       * One-sided PSD table for randomVibration. All Loads form one spatial pattern
+       * multiplied by the same zero-mean stationary random process. Use density "1 s"
+       * (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+       * `after` naming a solved modal Step, identical constraints, and positive damping.
+       * Outputs are componentwise standard deviations, never a signed equilibrium state.
+       */
+      psd?: PsdPoint[] | null;
       cmd: "step.add";
     }
   | {
@@ -1978,7 +1986,8 @@ export type Procedure =
   | "heat-transient"
   | "explicit"
   | "implicit"
-  | "harmonic";
+  | "harmonic"
+  | "randomVibration";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -3878,6 +3887,14 @@ export type ModelFile_Command =
        * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
        */
       dampingRatios?: number[] | null;
+      /**
+       * One-sided PSD table for randomVibration. All Loads form one spatial pattern
+       * multiplied by the same zero-mean stationary random process. Use density "1 s"
+       * (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+       * `after` naming a solved modal Step, identical constraints, and positive damping.
+       * Outputs are componentwise standard deviations, never a signed equilibrium state.
+       */
+      psd?: PsdPoint[] | null;
       cmd: "step.add";
     }
   | {
@@ -5206,6 +5223,14 @@ export type DocumentSnapshot_Command =
        * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
        */
       dampingRatios?: number[] | null;
+      /**
+       * One-sided PSD table for randomVibration. All Loads form one spatial pattern
+       * multiplied by the same zero-mean stationary random process. Use density "1 s"
+       * (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+       * `after` naming a solved modal Step, identical constraints, and positive damping.
+       * Outputs are componentwise standard deviations, never a signed equilibrium state.
+       */
+      psd?: PsdPoint[] | null;
       cmd: "step.add";
     }
   | {
@@ -5746,6 +5771,31 @@ export interface InitialVelocitySpec {
         }
     )
   ];
+}
+/**
+ * One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.
+ * Densities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation
+ * is linear in Hz and density, with zero input outside the table's finite band.
+ */
+export interface PsdPoint {
+  /**
+   * A frequency with unit, e.g. "50 Hz". Any unit of the right dimension is accepted.
+   */
+  frequency:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+   */
+  density:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
 }
 /**
  * One explicit retained field used by `query.difference`.
@@ -7301,6 +7351,7 @@ export interface Step {
   sweep?: SweepSpacing | null;
   dampingRatio?: number | null;
   dampingRatios?: number[] | null;
+  psd?: [number, number][] | null;
   alpha?: number | null;
   rayleighAlpha?: number | null;
   rayleighBeta?: number | null;

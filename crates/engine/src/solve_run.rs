@@ -490,6 +490,15 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             amplitude: step.amplitude.as_ref().map(amplitude),
             solver: opts,
         },
+        Procedure::RandomVibration => procedure::Step::RandomVibration {
+            spectrum: procedure::random_vibration::Spectrum {
+                table: step.psd.clone().ok_or_else(|| {
+                    Error::schema("randomVibration needs psd").at("psd").suggest("step.add with a one-sided PSD table")
+                })?,
+            },
+            damping: step.damping_ratios.clone().or_else(|| step.damping_ratio.map(|z| vec![z])).unwrap_or_default(),
+            rayleigh: (step.rayleigh_alpha.unwrap_or(0.0), step.rayleigh_beta.unwrap_or(0.0)),
+        },
         Procedure::Harmonic => procedure::Step::Harmonic {
             f_start: want(step.f_start, "fStart")?,
             f_stop: want(step.f_stop, "fStop")?,
@@ -650,6 +659,7 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), 6, steps, *output_every, 4)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "harmonic")) });
         }
+        procedure::Step::RandomVibration { .. } => crate::solve::cost_estimate(mesh, dofs_per_node, Solver::Auto),
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
@@ -739,6 +749,16 @@ impl Engine {
                     )
                     .at(format!("step '{}'", step.name))
                     .suggest(format!("solve.run on step '{name}' again")));
+                }
+                if step.procedure == Procedure::RandomVibration {
+                    let source = record.model.step(name).expect("a retained Step belongs to its Model");
+                    if source.procedure != Procedure::Modal || source.constraints != step.constraints {
+                        return Err(Error::schema(
+                            "randomVibration needs a modal predecessor with identical constraints",
+                        )
+                        .at("after")
+                        .suggest("step.add with after naming a modal Step and the same constraints"));
+                    }
                 }
                 Some(std::sync::Arc::clone(record))
             }

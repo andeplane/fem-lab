@@ -15451,3 +15451,160 @@ fn a_load_past_the_collapse_load_is_a_cutback_and_then_newton_diverged() {
     assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
     assert!(e.cause.contains("after 2 cutbacks"), "{}", e.cause);
 }
+
+#[test]
+fn random_vibration_sdof_displacement_and_stress_match_stationary_energy_balance() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let e = p.materials[0].props[0];
+    let nu = p.materials[0].props[1];
+    let modulus = e * (1.0 - nu) / ((1.0 + nu) * (1.0 - 2.0 * nu));
+    let omega = (3.0 * modulus / p.materials[0].rho).sqrt();
+    let density = 0.01;
+    let damping = 0.02;
+    let step = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, density], [omega * 10000.0, density]] },
+        damping: vec![damping],
+        rayleigh: (0.0, 0.0),
+    };
+    let result = run_after(&p, &step, Some(&modal)).unwrap();
+    let exact = 1e6 / modulus * (density * omega / (8.0 * damping)).sqrt();
+    for &node in &sets["xmax"].nodes {
+        let got = result.fields[&Field::Displacement].data[node as usize * 3];
+        assert!((got / exact - 1.0).abs() < 1e-7, "RMS displacement {got} vs {exact}");
+    }
+    for stress in result.fields[&Field::Stress].data.chunks_exact(6) {
+        assert!((stress[0] / (modulus * exact) - 1.0).abs() < 1e-7);
+    }
+    assert_eq!(result.scalars["sigma_level"], 1.0);
+    assert!(!result.fields.contains_key(&Field::VonMises));
+    assert!(!result.fields.contains_key(&Field::Reaction));
+    assert_eq!(step.name(), "randomVibration");
+}
+
+/// VM19 reproduces NAFEMS R0016 Test 5R: 10 m long, 2 m square, E=200 GPa,
+/// nu=0.3, rho=8000 kg/m3, uniform load PSD (1e6 N/m)^2/Hz, zeta=0.02.
+/// Published targets: 42.65 Hz, 180.90 mm²/Hz, 58515.60 (N/mm²)²/Hz.
+#[test]
+fn vm19_random_vibration_deep_beam_converges_to_nafems_5r() {
+    let mut displacement_psds = Vec::new();
+    for divisions in [10, 20, 40] {
+        let mesh =
+            femlab_geometry::line(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &[[0, 1]], divisions, ElementKind::Beam2)
+                .unwrap();
+        let mut sets = BTreeMap::new();
+        let mut loads = Vec::new();
+        for node in 0..mesh.n_nodes() {
+            let x = mesh.node(node as u32)[0];
+            let name = format!("n{node}");
+            sets.insert(
+                name.clone(),
+                ResolvedSet { kind: SetKind::Node, faces: vec![], nodes: vec![node as u32], elems: vec![] },
+            );
+            let factor = if x == 0.0 || x == 10.0 { 0.5 } else { 1.0 };
+            loads.push(Load::NodalForce { nodes: name, f: [0.0, factor * 1e6 * 10.0 / f64::from(divisions), 0.0] });
+        }
+        let bodies = vec!["beam".into()];
+        let section =
+            properties(&SectionSpec::Rectangle { width: Q::new(2.0, "m"), height: Q::new(2.0, "m") }).unwrap();
+        let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, section);
+        p.constraints = vec![
+            Constraint {
+                name: "left".into(),
+                nodes: "n0".into(),
+                dofs: [true, true, true, true, false, false],
+                value: 0.0,
+            },
+            Constraint {
+                name: "right".into(),
+                nodes: "n1".into(),
+                dofs: [false, true, true, false, false, false],
+                value: 0.0,
+            },
+        ];
+        p.materials[0].props = vec![200e9, 0.3];
+        p.materials[0].rho = 8000.0;
+        p.loads = loads;
+        let modal =
+            run_step(&p, &Step::Modal { n_modes: 9, shift: None, solver: SolveOptions::default(), prestress: None })
+                .unwrap();
+        let mut f = vec![0.0; p.n_dofs()];
+        assemble_loads(&p, &mut f).unwrap();
+        let participation: Vec<f64> =
+            modal.modal_dofs.iter().map(|u| u.iter().zip(&f).map(|(u, f)| u * f).sum()).collect();
+        let t =
+            procedure::random_vibration::transfer(modal.frequencies[0], &modal.frequencies, &[0.02; 9], &participation);
+        let mid = node_at(&mesh, [5.0, 0.0, 0.0]) as usize;
+        let mut displacement = [0.0; 2];
+        let mut bending = [0.0; 2];
+        let beam_end = (0..mesh.n_elems())
+            .find_map(|e| mesh.elem_nodes(e as u32).iter().position(|n| *n as usize == mid).map(|end| e * 2 + end))
+            .unwrap();
+        for (mode, coefficients) in modal.modal_dofs.iter().zip(&t) {
+            let (_, moments) = section_fields(&p, mode).unwrap();
+            for c in 0..2 {
+                displacement[c] += mode[mid * 6 + 1] * coefficients[c];
+                bending[c] += moments.data[beam_end * 3 + 2] / p.sections[0].i_z * coefficients[c];
+            }
+        }
+        let dpsd = displacement.iter().map(|x| x * x).sum::<f64>() * 1e6;
+        displacement_psds.push(dpsd);
+        let spsd = bending.iter().map(|x| x * x).sum::<f64>() / 1e12;
+        eprintln!("VM19 n={divisions}: f={}, displacement PSD={dpsd}, bending PSD={spsd}", modal.frequencies[0]);
+        assert!((modal.frequencies[0] / 42.65 - 1.0).abs() < 0.02);
+        assert!((dpsd / 180.90 - 1.0).abs() < 0.02);
+        assert!((spsd / 58515.60 - 1.0).abs() < 0.01);
+        let random = Step::RandomVibration {
+            spectrum: procedure::random_vibration::Spectrum { table: vec![[0.1, 1.0], [70.0, 1.0]] },
+            damping: vec![0.02],
+            rayleigh: (0.0, 0.0),
+        };
+        let response = run_after(&p, &random, Some(&modal)).unwrap();
+        // Independent narrow-band estimate: Lorentzian peak area = peak PSD * pi*zeta*f_n.
+        // This is an approximation, not a published RMS target (the published gates are PSD).
+        let bandwidth = PI * 0.02 * 42.65;
+        let rms = response.fields[&Field::Displacement].data[mid * 3 + 1];
+        let stress_rms = response.fields[&Field::StressUnaveraged].data[beam_end * 6];
+        assert!((rms / (180.90e-6 * bandwidth).sqrt() - 1.0).abs() < 0.03, "RMS displacement {rms}");
+        assert!((stress_rms / (58515.60e12 * bandwidth).sqrt() - 1.0).abs() < 0.03, "RMS stress {stress_rms}");
+    }
+    let rate = ((displacement_psds[1] - displacement_psds[0]) / (displacement_psds[2] - displacement_psds[1])).log2();
+    assert!(rate > 1.9 && rate < 2.1, "second-order displacement PSD refinement: {rate}");
+}
+
+#[test]
+fn random_vibration_refuses_missing_modes_nonzero_constraints_and_supports_cancellation() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = sdof_bar(&mesh, &sets, &bodies);
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let step = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, 1.0], [10000.0, 1.0]] },
+        damping: vec![0.02],
+        rayleigh: (0.0, 0.0),
+    };
+    assert_eq!(run_after(&p, &step, None).unwrap_err().where_.as_deref(), Some("after"));
+    let mut bad = modal.clone();
+    bad.modal_dofs[0].pop();
+    assert_eq!(run_after(&p, &step, Some(&bad)).unwrap_err().where_.as_deref(), Some("after"));
+    p.constraints[0].value = 1.0;
+    assert_eq!(run_after(&p, &step, Some(&modal)).unwrap_err().where_.as_deref(), Some("constraints"));
+    p.constraints[0].value = 0.0;
+    for phase in ["assemble", "solve", "post"] {
+        let mut stop = |progress: Progress| progress.phase != phase;
+        let error =
+            pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, Some(&modal), &mut stop)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+    }
+    let one = pollster::block_on(procedure::run(&p, &step, &Pool::new(1), None, Some(&modal), &mut nop)).unwrap();
+    let two = run_after(&p, &step, Some(&modal)).unwrap();
+    assert_eq!(one, two, "thread count cannot alter modal covariance or RMS recovery");
+}
