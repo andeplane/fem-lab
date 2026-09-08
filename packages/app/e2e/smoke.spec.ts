@@ -381,6 +381,11 @@ test.describe('@gpu on SwiftShader', () => {
         for (let i = 0; i < field.values.length; i += 6) expect(Math.abs(field.values[i]! / expected - 1)).toBeLessThan(1e-6);
       }
     }
+    if (laminate) {
+      await page.evaluate(() => window.fem.dispatch({ cmd: 'view.showField', field: 'stressPly:1:top', component: 0 }));
+      await expect(page.locator('.legend')).toContainText('σxx ply 1 top');
+      await expect(page.locator('.tree [data-cmd="view.showField"]', { hasText: 'σxx ply 1 top' })).toHaveCount(1);
+    }
   });
 
   test('the engine gets a WebGPU adapter and the dot-product kernel is right', async ({ page }) => {

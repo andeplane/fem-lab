@@ -138,6 +138,7 @@ describe('fields and the legend', () => {
     const fields = ['stressPly:1:top', 'stressPly:2:bottom'];
     const choices = fieldChoices(fields);
     expect(choices).toHaveLength(12);
+    expect(fieldChoices(fields.flatMap((field) => Array<string>(6).fill(field)))).toEqual(choices);
     for (const field of fields) {
       expect(siUnitOf(field)).toBe('Pa');
       expect(displayUnitOf(field, { stress: 'MPa' })).toBe('MPa');

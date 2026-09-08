@@ -131,7 +131,7 @@ export function modeChoice(k: number, result?: ModeSpectrum | null): FieldChoice
 export function fieldChoices(fields: string[], modes: number | ModeSpectrum | null = 0, hasYield = false): FieldChoice[] {
   return [
     ...FIELD_CHOICES.filter((c) => fields.includes(c.field)),
-    ...fields.flatMap(plyChoices),
+    ...[...new Set(fields)].flatMap(plyChoices),
     ...Array.from({ length: typeof modes === 'number' ? modes : modeCount(modes) }, (_, i) => modeChoice(i + 1, typeof modes === 'number' ? undefined : modes)),
     ...(hasYield && fields.includes('vonMises') ? DERIVED_CHOICES : []),
   ];
