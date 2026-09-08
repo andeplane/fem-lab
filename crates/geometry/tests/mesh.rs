@@ -2583,3 +2583,19 @@ fn shell_surface_rejects_invalid_counts_tags_and_projections() {
     nonfinite.corners[0][0] = f64::INFINITY;
     assert!(surface(&[nonfinite]).is_err());
 }
+
+#[test]
+fn shell_surface_rejects_a_collapsed_corner_and_unrepresentable_extents() {
+    let collapsed = surface_patch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]]);
+    let error = femlab_geometry::surface(&[collapsed]).err().unwrap();
+    assert!(error.0.contains("folded or degenerate"));
+    let overflow = surface_patch([[-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], [1e308, 0.0, 0.0], [-1e308, 0.0, 0.0]]);
+    let error = femlab_geometry::surface(&[overflow]).err().unwrap();
+    assert!(error.0.contains("singular or non-finite"));
+    let planes: Vec<_> = [-1e308, 1e308]
+        .into_iter()
+        .map(|z| surface_patch([[0.0, 0.0, z], [1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]]))
+        .collect();
+    let error = femlab_geometry::surface(&planes).err().unwrap();
+    assert!(error.0.contains("extent is not representable"));
+}

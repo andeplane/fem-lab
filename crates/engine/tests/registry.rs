@@ -11422,6 +11422,8 @@ fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
     ok(&mut e, r#"{"cmd":"section.assign","section":"cross","bodies":["skin"],"orientation":"x"}"#);
     assert_eq!(e.model().mesher_orientation, Some(Axis::X));
     assert_eq!(e.model().mesher_material, None);
+    let objects = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Section]) }).unwrap();
+    assert!(serde_json::to_string(&objects).unwrap().contains("laminate: 2 plies, thickness = 0.01 m"));
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
     ok(&mut e, r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#);
     ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#);
@@ -11429,12 +11431,35 @@ fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
     let mut replay = engine();
     pollster::block_on(replay.replay(&file.journal.entries, false, true)).unwrap();
     assert_eq!(e.model(), replay.model());
+    let mut broken = e.model().clone();
+    broken.sections[0].plies[0].material = "missing".into();
+    let invalid =
+        femlab_engine::solve_run::build_problem(&broken, e.mesh().unwrap(), broken.step("s").unwrap()).err().unwrap();
+    assert_eq!(invalid.code, ErrorCode::NotFound);
+    assert!(invalid.cause.contains("missing"));
     for engine in [&mut e, &mut replay] {
         ok(engine, r#"{"cmd":"solve.run","step":"s"}"#);
         let x = probe_at(engine, "s", Field::Displacement, Some(0), ["1 m", "0.5 m", "0 m"]);
         let z = probe_at(engine, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
         assert!((x / 5e-7 - 1.0).abs() < 1e-7);
         assert!((z / -0.00015 - 1.0).abs() < 1e-7);
+        let QueryResult::Results(retained) = engine.query(Query::Results {}).unwrap() else { panic!("results") };
+        // The record's accounting must equal the public final-field payloads, including
+        // all four ply faces; omitting them would understate resident memory.
+        let summary = result_of(engine, Some("s"));
+        let fields: std::collections::BTreeSet<_> = summary.extremes.iter().map(|e| e.field.clone()).collect();
+        let mut field_bytes = 0u64;
+        for field in fields {
+            let QueryResult::Field(values) = engine.query(Query::Field { step: None, result_id: None, field }).unwrap()
+            else {
+                panic!("field")
+            };
+            field_bytes += values.values.len() as u64 * 8;
+        }
+        assert_eq!(retained.records[0].field_bytes, field_bytes);
+        let raw = engine.field_named(Some("s"), "stressPly:1:top").unwrap();
+        assert_eq!(raw.len(), 16);
+        assert!((raw.data[0] - 50000.0).abs() < 0.001);
         for (field, expected) in [
             ("shellMoment", 1.0),
             ("stressTop", 40000.0),
@@ -11486,6 +11511,7 @@ fn laminate_section_schema_rejects_invalid_plies_without_journaling() {
     let valid = serde_json::json!({"material":"ply","thickness":"1 mm","angle":"0 deg"});
     for plies in [
         vec![],
+        vec![serde_json::json!({"material":"ply","thickness":"1e308 m"}); 2],
         vec![valid.clone(); 257],
         vec![serde_json::json!({"material":"missing","thickness":"1 mm"})],
         vec![serde_json::json!({"material":"ply","thickness":"0 mm"})],
@@ -11516,6 +11542,8 @@ fn laminate_sections_track_every_ply_material_and_clear_implicit_orientation() {
     );
     ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"],"orientation":"y"}"#);
     assert!(e.warnings().iter().all(|w| w.code != "model.no-material"));
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"bottom","to":"base"}"#);
+    assert_eq!(e.model().section("stack").unwrap().plies[1].material, "top");
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-1 m/s^2"]}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"hot","bodies":["skin"],"value":"310 K","reference":"300 K"}"#);
@@ -11615,6 +11643,9 @@ fn shell_surface_projection_units_and_refinement_preserve_geometry() {
         let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
         assert_eq!(model.bodies[0].measure.unit, "m^2");
         assert!(model.bodies[0].measure.value > 0.0);
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"shell","to":"surface"}"#);
+        assert_eq!(e.model().implicit_body(), Some("surface"));
+        assert!(set_info(&mut e, "surface.top").measure.value > 0.0);
     }
 }
 
@@ -11641,6 +11672,22 @@ fn shell_surface_validation_reports_locations_and_rejects_incompatible_meshes() 
             serde_json::json!({"kind":"cylinder","center":["0 m","0 m","0 m"],"radius":"1 m","axis":axis});
         let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
         assert_eq!(err(&mut e, &command.to_string()).where_.as_deref(), Some("mesher.patches[0].projection.axis"));
+    }
+    for kind in ["sphere", "cylinder"] {
+        for (key, value) in
+            [("center", serde_json::json!(["1 N", "0 m", "0 m"])), ("radius", serde_json::json!("-1 m"))]
+        {
+            let mut invalid = patch.clone();
+            let mut projection = serde_json::json!({"kind":kind,"center":["0 m","0 m","0 m"],"radius":"1 m"});
+            if kind == "cylinder" {
+                projection["axis"] = serde_json::json!([0, 0, 1]);
+            }
+            projection[key] = value;
+            invalid["projection"] = projection;
+            let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
+            let error = err(&mut e, &command.to_string());
+            assert!(error.where_.unwrap().starts_with(&format!("mesher.patches[0].projection.{key}")));
+        }
     }
     for (order, simplices) in [(2, false), (1, true)] {
         let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[patch]},"order":order,"simplices":simplices});
