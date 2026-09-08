@@ -1351,6 +1351,9 @@ fn zero_density_element_mass_is_exactly_zero_and_negative_density_is_rejected() 
     for rho in [-1.0, f64::NAN] {
         mat.rho = rho;
         let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+        let gravity = el.gravity_load(&c, [0.0, 0.0, -9.81], &mut vec![0.0; el.n_dof()]).unwrap_err();
+        assert_eq!(gravity.code, ErrorCode::ModelIllPosed);
+        assert_eq!(gravity.where_.as_deref(), Some("material.rho"));
         let e = el.mass(&c, &mut m, true).expect_err("negative or non-finite mass is invalid");
         assert_eq!(e.code, ErrorCode::ModelIllPosed);
         assert_eq!(e.where_.as_deref(), Some("material.rho"));

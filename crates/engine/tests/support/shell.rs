@@ -1401,6 +1401,7 @@ fn shell_ply_fields_zero_elements_without_that_ply_and_keep_interface_values() {
             first_elem: i as u32,
         })
         .collect();
+    mesh.blocks.push(femlab_geometry::ElementBlock { kind: ElementKind::Truss2, conn: vec![0, 1], first_elem: 3 });
     let mut sets = super::sets_of(&mesh);
     let mut constraints = Vec::new();
     for i in 0..mesh.n_nodes() {
@@ -1422,13 +1423,14 @@ fn shell_ply_fields_zero_elements_without_that_ply_and_keep_interface_values() {
             value: 0.0,
         });
     }
-    let bodies = ["two".into(), "one".into(), "homogeneous".into()];
+    let bodies = ["two".into(), "one".into(), "homogeneous".into(), "member".into()];
     let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
     let section = properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap();
     p.sections = vec![section; 3];
-    p.section_of_block = vec![Some(0), Some(1), Some(2)];
-    p.material_of_block = vec![Some(0); 3];
-    p.orientation_of_block = vec![None; 3];
+    p.sections.push(properties(&SectionSpec::Circle { radius: Q::new(0.01, "m") }).unwrap());
+    p.section_of_block = vec![Some(0), Some(1), Some(2), Some(3)];
+    p.material_of_block = vec![Some(0); 4];
+    p.orientation_of_block = vec![None; 4];
     let lamina = super::orthotropic_material(&[100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
     p.plies = vec![
         vec![
@@ -1440,10 +1442,14 @@ fn shell_ply_fields_zero_elements_without_that_ply_and_keep_interface_values() {
     ];
     let result = super::run_static(&p, &mut |_| true).unwrap();
     assert_eq!(result.ply_stresses.len(), 2);
+    for field in [super::Field::StressTop, super::Field::StressBottom, super::Field::ShellMoment] {
+        assert!(result.fields[&field].data[72..].iter().all(|v| *v == 0.0));
+    }
     for (ply, expected) in [[100e6, 100e6, 0.0], [20e6, 0.0, 0.0]].iter().enumerate() {
         for face in &result.ply_stresses[ply].faces {
             assert_eq!(face.per, femlab_engine::post::Per::ElemNode);
-            assert_eq!(face.len(), 12);
+            assert_eq!(face.len(), 14);
+            assert!(face.data[72..].iter().all(|v| *v == 0.0));
             for (element, stress) in face.data.chunks_exact(24).enumerate() {
                 for node in stress.chunks_exact(6) {
                     close(node, &[expected[element], 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
@@ -1451,4 +1457,37 @@ fn shell_ply_fields_zero_elements_without_that_ply_and_keep_interface_values() {
             }
         }
     }
+}
+
+#[test]
+fn shell_recovery_and_thermal_load_validate_sections_frames_and_offsets() {
+    use femlab_engine::fem::shell::{recover_at, recover_ply_face, Ply};
+    let mat = super::steel();
+    let coords: Vec<f64> = flat().nodes.into_iter().flatten().collect();
+    let section = properties(&SectionSpec::Shell { thickness: Q::new(20.0, "m") }).unwrap();
+    let (mut stress, mut strain, mut load) = ([0.0; 24], [0.0; 24], [0.0; 24]);
+    let missing = super::beam_ctx(&coords, &mat, None, None, [0.0; 3], None);
+    assert_eq!(
+        recover_at(&missing, &[0.0; 24], 0.0, &mut stress, &mut strain).unwrap_err().code,
+        ErrorCode::ModelNoSection
+    );
+    let malformed = super::beam_ctx(&[], &mat, Some(&section), None, [0.0; 3], None);
+    assert!(recover_ply_face(&malformed, &[0.0; 24], 0, false, &mut stress, &mut strain).is_err());
+    let directors = [[-0.6, 0.0, 0.8], [0.6, 0.0, 0.8], [0.6, 0.0, 0.8], [-0.6, 0.0, 0.8]];
+    let mut c = super::beam_ctx(&coords, &mat, Some(&section), None, [0.0; 3], Some(&[1.0; 4]));
+    c.directors = Some(directors);
+    assert_eq!(element_for(ElementKind::Shell4).thermal_load(&c, &mut load).unwrap_err().code, ErrorCode::MeshInverted);
+    // The offset can have positive Jacobian even when the original midsurface is reversed.
+    // Recovery must validate both frames before interpreting the material orientation.
+    let reversed: Vec<f64> = flat().nodes.into_iter().flat_map(|[x, y, z]| [-x, y, z]).collect();
+    let mut c = super::beam_ctx(&reversed, &mat, Some(&section), None, [0.0; 3], None);
+    c.directors = Some(directors);
+    assert_eq!(recover_at(&c, &[0.0; 24], 5.0, &mut stress, &mut strain).unwrap_err().code, ErrorCode::MeshInverted);
+    let plies = [Ply { thickness: 20.0, angle: 0.0, material: mat.clone() }];
+    let mut c = super::beam_ctx(&coords, &mat, Some(&section), Some([0.0, 0.0, 1.0]), [0.0; 3], Some(&[1.0; 4]));
+    c.plies = &plies;
+    let error = recover_at(&c, &[0.0; 24], 0.0, &mut stress, &mut strain).unwrap_err();
+    assert_eq!(error.where_.as_deref(), Some("section.orientation"));
+    let error = element_for(ElementKind::Shell4).thermal_load(&c, &mut load).unwrap_err();
+    assert_eq!(error.where_.as_deref(), Some("section.orientation"));
 }

@@ -11393,6 +11393,7 @@ fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
 #[test]
 fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
     let mut e = engine();
+    assert_eq!(e.field_named(None, "stressPly:1:top").unwrap_err().code, ErrorCode::NotFound);
     ok(&mut e, r#"{"cmd":"model.new","name":"cross ply"}"#);
     ok(
         &mut e,
