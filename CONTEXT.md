@@ -101,6 +101,10 @@ angle. Its material axes follow the shell surface, with an optional projected
 reference axis from `section.assign`. Ply materials replace the Body material.
 The common MITC4 displacement field integrates each ply separately, preserving
 extension–bending coupling, thermal mismatch and eccentric mass (ADR 0023).
+`stressPly:k:bottom` and `stressPly:k:top` retain separate global stresses on
+each ply face, with k counting from 1 at the bottom. The fields use the same
+unaveraged element-node layout as outer shell stresses and carry zeros on
+elements without that ply.
 
 **Section force**:
 The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`

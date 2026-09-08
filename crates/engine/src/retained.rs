@@ -124,6 +124,7 @@ impl ResultRecord {
     pub(crate) fn field_bytes(&self) -> u64 {
         let r = &self.result;
         let values = r.fields.values().map(|f| f.data.len()).sum::<usize>()
+            + r.ply_stresses.iter().flat_map(|p| &p.faces).map(|f| f.data.len()).sum::<usize>()
             + r.modes.iter().map(|f| f.data.len()).sum::<usize>()
             + r.frequencies.len()
             + r.buckling_factors.len()
@@ -154,6 +155,22 @@ impl ResultRecord {
 
     pub(crate) fn named_field(&self, name: &str) -> Result<(&crate::post::FieldData, crate::command::Field), Error> {
         use crate::command::Field;
+        if let Some(ply_face) = name.strip_prefix("stressPly:") {
+            let field = ply_face.split_once(':').and_then(|(ply, side)| {
+                let index = ply.parse::<usize>().ok()?.checked_sub(1)?;
+                let face = match side {
+                    "bottom" => 0,
+                    "top" => 1,
+                    _ => return None,
+                };
+                self.result.ply_stresses.get(index).map(|p| &p.faces[face])
+            });
+            return field.map(|f| (f, Field::Stress)).ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, format!("Result '{}' has no ply face '{name}'", self.id))
+                    .at("field")
+                    .suggest("query.result lists stressPly:k:bottom and stressPly:k:top in its extremes")
+            });
+        }
         if let Some(mode) = name.strip_prefix("mode:") {
             let index: usize = mode.parse().unwrap_or(0);
             return self.result.modes.get(index.wrapping_sub(1)).map(|f| (f, Field::Displacement)).ok_or_else(|| {

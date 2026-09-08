@@ -1098,6 +1098,9 @@ impl Engine {
     /// Step, counting from 1.
     #[cfg(feature = "test-internals")]
     pub fn field_named(&self, step: Option<&str>, name: &str) -> Result<&crate::post::FieldData, Error> {
+        if name.starts_with("stressPly:") {
+            return self.result_record(step, None)?.named_field(name).map(|(field, _)| field);
+        }
         if let Some(k) = name.strip_prefix("mode:") {
             let (step_name, _, _, res) = self.stored(step)?;
             let i: usize = k.parse().unwrap_or(0);
@@ -1166,7 +1169,20 @@ impl Engine {
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,
             time_ms: res.solver.time_ms,
-            extremes: res.extremes.iter().map(|(f, e)| extreme(m, *f, e, res.reaction_quantity)).collect(),
+            extremes: res
+                .extremes
+                .iter()
+                .map(|(f, e)| extreme(m, *f, e, res.reaction_quantity))
+                .chain(res.ply_stresses.iter().enumerate().flat_map(|(i, ply)| {
+                    ["bottom", "top"].into_iter().zip(&ply.extremes).flat_map(move |(side, extremes)| {
+                        extremes.iter().map(move |e| {
+                            let mut row = extreme(m, Field::Stress, e, res.reaction_quantity);
+                            row.field = format!("stressPly:{}:{side}", i + 1);
+                            row
+                        })
+                    })
+                }))
+                .collect(),
             reactions: res
                 .reactions
                 .iter()

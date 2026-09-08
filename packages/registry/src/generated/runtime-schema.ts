@@ -4353,7 +4353,7 @@ const queries = {
       "x-returns": "ResultSurface"
     },
     {
-      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
       "type": "object",
       "properties": {
         "step": {

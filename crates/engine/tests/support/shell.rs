@@ -1355,3 +1355,74 @@ fn symmetric_laminate_plate_frequency_converges_to_the_navier_solution() {
     let rate = libm::log(errors[1] / errors[2]) / libm::log(2.0);
     assert!(rate > 1.7, "rate={rate}, errors={errors:?}");
 }
+
+#[test]
+fn shell_ply_fields_zero_elements_without_that_ply_and_keep_interface_values() {
+    use femlab_engine::command::Formulation;
+    use femlab_engine::fem::problem::Constraint;
+    use femlab_engine::fem::shell::Ply;
+    use femlab_engine::mesh::ResolvedSet;
+    use femlab_engine::model::Idealisation;
+    use femlab_engine::SetKind;
+    let mut mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [3, 1, 1] }.build(|p| p);
+    let connectivity = mesh.blocks[0].conn.clone();
+    mesh.blocks = connectivity
+        .chunks_exact(4)
+        .enumerate()
+        .map(|(i, conn)| femlab_geometry::ElementBlock {
+            kind: ElementKind::Shell4,
+            conn: conn.to_vec(),
+            first_elem: i as u32,
+        })
+        .collect();
+    let mut sets = super::sets_of(&mesh);
+    let mut constraints = Vec::new();
+    for i in 0..mesh.n_nodes() {
+        let name = format!("node{i}");
+        sets.insert(
+            name.clone(),
+            ResolvedSet { kind: SetKind::Node, nodes: vec![i as u32], faces: vec![], elems: vec![] },
+        );
+        constraints.push(Constraint {
+            name: format!("x{i}"),
+            nodes: name.clone(),
+            dofs: [true, false, false, false, false, false],
+            value: mesh.node(i as u32)[0] * 0.001,
+        });
+        constraints.push(Constraint {
+            name: format!("rest{i}"),
+            nodes: name,
+            dofs: [false, true, true, true, true, true],
+            value: 0.0,
+        });
+    }
+    let bodies = ["two".into(), "one".into(), "homogeneous".into()];
+    let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    let section = properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap();
+    p.sections = vec![section; 3];
+    p.section_of_block = vec![Some(0), Some(1), Some(2)];
+    p.material_of_block = vec![Some(0); 3];
+    p.orientation_of_block = vec![None; 3];
+    let lamina = super::orthotropic_material(&[100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
+    p.plies = vec![
+        vec![
+            Ply { thickness: 0.005, angle: 0.0, material: lamina.clone() },
+            Ply { thickness: 0.005, angle: std::f64::consts::FRAC_PI_2, material: lamina.clone() },
+        ],
+        vec![Ply { thickness: 0.01, angle: 0.0, material: lamina }],
+        vec![],
+    ];
+    let result = super::run_static(&p, &mut |_| true).unwrap();
+    assert_eq!(result.ply_stresses.len(), 2);
+    for (ply, expected) in [[100e6, 100e6, 0.0], [20e6, 0.0, 0.0]].iter().enumerate() {
+        for face in &result.ply_stresses[ply].faces {
+            assert_eq!(face.per, femlab_engine::post::Per::ElemNode);
+            assert_eq!(face.len(), 12);
+            for (element, stress) in face.data.chunks_exact(24).enumerate() {
+                for node in stress.chunks_exact(6) {
+                    close(node, &[expected[element], 0.0, 0.0, 0.0, 0.0, 0.0], 1e-6);
+                }
+            }
+        }
+    }
+}

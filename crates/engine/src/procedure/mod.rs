@@ -334,6 +334,8 @@ pub struct StepResult {
     /// Kept with the solved Result, so later model edits cannot change its reaction units.
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub fields: BTreeMap<Field, FieldData>,
+    /// Laminate stresses on both faces of every ply, bottom to top, including interface jumps.
+    pub ply_stresses: Vec<crate::post::stress::PlyStress>,
     pub scalars: BTreeMap<String, f64>,
     /// Per-component extremes of every nodal field, in `Field` order.
     pub extremes: Vec<(Field, Extremum)>,
@@ -478,6 +480,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
     StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
         fields: BTreeMap::new(),
+        ply_stresses: Vec::new(),
         scalars: BTreeMap::new(),
         extremes: Vec::new(),
         reactions: Vec::new(),

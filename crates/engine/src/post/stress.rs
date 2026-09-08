@@ -72,6 +72,30 @@ pub fn stress_gp(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), E
 /// Stress at one physical shell surface (`side` = +1 top, -1 bottom). Element
 /// nodes retain each patch's stress independently, including at shared creases.
 pub(crate) fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Result<FieldData, Error> {
+    shell_face_stress(p, u, side, None)
+}
+
+/// Both faces of one ply, and their immutable extremes. Faces are bottom then top.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlyStress {
+    pub faces: [FieldData; 2],
+    pub extremes: [Vec<crate::post::Extremum>; 2],
+}
+
+/// Retain every assigned laminate ply, indexed bottom to top within each section.
+/// Elements without that ply carry zeros, preserving the common element-node layout.
+pub(crate) fn shell_ply_stresses(p: &Problem<'_>, u: &[f64]) -> Result<Vec<PlyStress>, Error> {
+    let count = p.section_of_block.iter().flatten().map(|&s| p.plies.get(s).map_or(0, Vec::len)).max().unwrap_or(0);
+    (0..count)
+        .map(|ply| {
+            let faces = [shell_face_stress(p, u, -1.0, Some(ply))?, shell_face_stress(p, u, 1.0, Some(ply))?];
+            let extremes = faces.each_ref().map(|f| crate::post::extremes(f, p.mesh));
+            Ok(PlyStress { faces, extremes })
+        })
+        .collect()
+}
+
+fn shell_face_stress(p: &Problem<'_>, u: &[f64], side: f64, ply: Option<usize>) -> Result<FieldData, Error> {
     let dpn = p.dofs_per_node();
     let mut stress = Vec::new();
     for blk in &p.mesh.blocks {
@@ -88,9 +112,15 @@ pub(crate) fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Res
             p.gather_temperature(elem, &mut temp);
             crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), 6, dpn, &mut ue);
             let c = p.ctx(elem, &coords, &temp)?;
-            let z = side * crate::fem::shell::thickness(&c)? * 0.5;
             let (mut sig, mut eps) = ([0.0; 24], [0.0; 24]);
-            crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
+            if let Some(ply) = ply {
+                if ply < c.plies.len() {
+                    crate::fem::shell::recover_ply_face(&c, &ue, ply, side > 0.0, &mut sig, &mut eps)?;
+                }
+            } else {
+                let z = side * crate::fem::shell::thickness(&c)? * 0.5;
+                crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
+            }
             stress.extend(sig);
         }
     }

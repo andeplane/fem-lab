@@ -78,7 +78,9 @@ try {
   }
   // #64: surface directors, thickness assignments and element-node stresses cross
   // the same registry boundary. Compare an exact flat strip and a curved patch.
-  for (const curved of [false, true]) {
+  for (const variant of ['flat', 'curved', 'laminate']) {
+    const curved = variant === 'curved';
+    const laminate = variant === 'laminate';
     const engine = new Engine(1);
     const query = q => JSON.parse(engine.query(JSON.stringify(q)));
     const dispatch = async command => engine.dispatch(JSON.stringify(command));
@@ -91,9 +93,13 @@ try {
       for (const command of [
         { cmd: 'model.new', name: curved ? 'curved shell parity' : 'moment strip parity' },
         { cmd: 'mesh.set', mesher: { kind: 'surface', body: 'skin', patches: [patch] } },
-        { cmd: 'material.add', name: 'elastic', E: '200 GPa', nu: 0, rho: '8000 kg/m^3' },
+        laminate
+          ? { cmd: 'material.add', name: 'elastic', orthotropic: { E1: '100 GPa', E2: '20 GPa', E3: '10 GPa', G12: '10 GPa', G13: '5 GPa', G23: '3 GPa', nu12: 0, nu13: 0, nu23: 0 } }
+          : { cmd: 'material.add', name: 'elastic', E: '200 GPa', nu: 0, rho: '8000 kg/m^3' },
         { cmd: 'material.assign', material: 'elastic', bodies: ['skin'] },
-        { cmd: 'section.add', name: 'thin', shape: { kind: 'shell', thickness: '10 mm' } },
+        { cmd: 'section.add', name: 'thin', shape: laminate
+          ? { kind: 'laminate', plies: [{ material: 'elastic', thickness: '5 mm' }, { material: 'elastic', thickness: '5 mm', angle: '90 deg' }] }
+          : { kind: 'shell', thickness: '10 mm' } },
         { cmd: 'section.assign', section: 'thin', bodies: ['skin'] },
         { cmd: 'constraint.fix', name: 'root', on: 'skin.root' },
         { cmd: 'load.moment', name: 'bend', on: 'skin.tip', total: ['0 N m', '1 N m', '0 N m'] },
@@ -102,7 +108,7 @@ try {
       ]) await dispatch(command);
       const queries = [
         { query: 'query.surface', step: 's' },
-        ...['displacement', 'rotation', 'stressTop', 'stressBottom', 'shellMoment'].map(field => ({ query: 'query.field', step: 's', field })),
+        ...['displacement', 'rotation', 'stressTop', 'stressBottom', 'shellMoment', ...(laminate ? ['stressPly:1:bottom', 'stressPly:1:top', 'stressPly:2:bottom', 'stressPly:2:top'] : [])].map(field => ({ query: 'query.field', step: 's', field })),
       ];
       const expected = queries.map(query);
       const entries = JSON.parse(engine.export_file()).journal.entries;
@@ -121,10 +127,12 @@ try {
           const scale = Math.max(1e-12, ...values.map(Math.abs), ...wasmValues.map(Math.abs));
           values.forEach((v, j) => assert.ok(Math.abs(v - wasmValues[j]) < 1e-7 * scale, `${curved ? 'curved' : 'flat'} ${queries[i].field}[${j}]`));
           if (!curved && queries[i].field.startsWith('stress')) {
-            const sign = queries[i].field === 'stressTop' ? 1 : -1;
+            const reference = laminate
+              ? { stressTop: 40000, stressBottom: -100000, 'stressPly:1:bottom': -100000, 'stressPly:1:top': 50000, 'stressPly:2:bottom': 10000, 'stressPly:2:top': 40000 }[queries[i].field]
+              : (queries[i].field === 'stressTop' ? 60000 : -60000);
             for (let j = 0; j < values.length; j += 6) {
-              assert.ok(Math.abs(values[j] - sign * 60000) < 0.001);
-              assert.ok(Math.abs(wasmValues[j] - sign * 60000) < 0.001);
+              assert.ok(Math.abs(values[j] - reference) < 0.001);
+              assert.ok(Math.abs(wasmValues[j] - reference) < 0.001);
             }
           }
           if (!curved && queries[i].field === 'shellMoment') {
@@ -134,7 +142,7 @@ try {
             }
           }
         }
-        console.log(`${curved ? 'curved shell' : 'moment strip'}: journal, geometry and surface stress parity at native ${threads} threads passed`);
+        console.log(`${variant} shell: journal, geometry and surface stress parity at native ${threads} threads passed`);
       }
     } finally {
       engine.free();

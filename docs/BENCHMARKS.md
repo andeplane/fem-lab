@@ -1297,7 +1297,10 @@ in the top ply. The interface values stay distinct. A separate 20 mm section wit
 of 0.4 N m under 1 m/s² in-plane acceleration. Registry tests also author and
 replay the cross-ply strip through `section.add` with `kind: "laminate"`, retain
 its outer-face stresses and moment, and verify that every ply contributes to
-material assumptions and gravity. Retained internal ply-face output is pending.
+material assumptions and gravity. The retained fields `stressPly:1:top` and
+`stressPly:2:bottom` independently recover 50 and 10 kPa at the cross-ply
+interface and remain unchanged after section edits. Native/WASM replay checks
+cover all four ply faces as well as the outer-face fields and moment.
 
 ## H. Plugins (phase P)
 

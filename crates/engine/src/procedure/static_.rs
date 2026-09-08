@@ -240,6 +240,7 @@ pub(crate) async fn post(
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
+        ply_stresses: pool.install(|| stress::shell_ply_stresses(p, &u))?,
         fields,
         scalars,
         extremes: ex,
@@ -373,6 +374,12 @@ pub fn run_history(
     fields.insert(Field::StressUnaveraged, unaveraged);
     fields.insert(Field::Strain, nodal_strain);
     let mut scalars = BTreeMap::new();
+    if dpn == crate::fem::problem::NODE_DOFS_MAX {
+        fields.insert(Field::Rotation, rotation_field(&u));
+    }
+    if p.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
+        stress_fields(p, &u, pool, &mut fields);
+    }
     scalars.insert("min_det_j".to_string(), a.min_det_j);
     for (c, axis) in ["x", "y", "z"].iter().enumerate() {
         scalars.insert(format!("applied_total_{axis}"), applied.force[c]);
@@ -386,6 +393,7 @@ pub fn run_history(
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
+        ply_stresses: pool.install(|| stress::shell_ply_stresses(p, &u))?,
         fields,
         scalars,
         extremes: ex,

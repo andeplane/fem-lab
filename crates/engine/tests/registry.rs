@@ -11435,7 +11435,15 @@ fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
         let z = probe_at(engine, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
         assert!((x / 5e-7 - 1.0).abs() < 1e-7);
         assert!((z / -0.00015 - 1.0).abs() < 1e-7);
-        for (field, expected) in [("shellMoment", 1.0), ("stressTop", 40000.0), ("stressBottom", -100000.0)] {
+        for (field, expected) in [
+            ("shellMoment", 1.0),
+            ("stressTop", 40000.0),
+            ("stressBottom", -100000.0),
+            ("stressPly:1:bottom", -100000.0),
+            ("stressPly:1:top", 50000.0),
+            ("stressPly:2:bottom", 10000.0),
+            ("stressPly:2:top", 40000.0),
+        ] {
             let QueryResult::Field(values) =
                 engine.query(Query::Field { step: None, result_id: None, field: field.into() }).unwrap()
             else {
@@ -11446,9 +11454,28 @@ fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
             }
         }
     }
+    let saved = result_of(&mut e, Some("s"));
+    let ply_extreme = saved.extremes.iter().find(|v| v.field == "stressPly:1:top" && v.component == 0).unwrap();
+    assert!((ply_extreme.max.value - 50000.0).abs() < 1e-3);
+    for name in ["stressPly:", "stressPly:x:top", "stressPly:0:top", "stressPly:1:middle", "stressPly:3:bottom"] {
+        let error = e.query(Query::Field { step: None, result_id: None, field: name.into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NotFound);
+        assert_eq!(error.where_.as_deref(), Some("field"));
+    }
     ok(&mut e, r#"{"cmd":"section.assign","section":"cross","bodies":["skin"],"orientation":"z"}"#);
     let error = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
     assert!(error.cause.contains("normal to the surface"));
+    let QueryResult::Field(retained) = e
+        .query(Query::Field { step: None, result_id: Some(saved.result_id), field: "stressPly:1:top".into() })
+        .unwrap()
+    else {
+        panic!("retained ply field")
+    };
+    assert_eq!(retained.unit, "Pa");
+    for value in retained.values.chunks_exact(6) {
+        assert!((value[0] - 50000.0).abs() < 1e-3);
+    }
+    assert_eq!(result_of(&mut e, Some("s")).extremes, saved.extremes);
 }
 
 #[test]
