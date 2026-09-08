@@ -51,7 +51,7 @@ export class SessionChannel {
       }
       catch (error) { pending.reject(error); }
     };
-    worker.onerror = (event: ErrorEvent) => this.failed(new FemError('internal', `session Worker failed: ${event.message}`, 'engine.worker'));
+    worker.onerror = (event: ErrorEvent) => this.failed(new FemError('internal', `session Worker failed: ${event.message || 'could not load the engine worker; check the connection and reload the app'}`, 'engine.worker'));
   }
   request(message: SessionMessage, progress?: (p: Progress) => void): Promise<Answer> {
     if (this.closed) return Promise.reject(expired());

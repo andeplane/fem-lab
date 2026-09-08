@@ -335,12 +335,15 @@ const workspace = new SessionWorkspace<Bundle>({
   },
 });
 async function boot(): Promise<void> {
+  bootStage('Checking graphics capabilities…', 20);
   migratePersistentKeys();
   // Select the initial backend from an actual adapter probe. Later candidate device failures
   // still abort replacement; they never silently change an established backend.
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
   engineOptions.gpu = Boolean(await gpu?.requestAdapter());
+  bootStage('Reading saved projects…', 40);
   await primeAutosave();
+  bootStage('Loading the simulation engine…', 60);
   const active = await workspace.start();
   await active.resources.refresh();
   const example = new URLSearchParams(location.search).get('example');
@@ -348,5 +351,17 @@ async function boot(): Promise<void> {
   const commands = await readShareFragment(location.hash);
   if (commands) await workspace.replace(workspace.active.transport, { kind: 'commands', commands: commands as Command[] });
 }
-root.textContent = 'Starting FEM Lab…';
-void boot().catch(error => { root.textContent = error instanceof Error ? error.message : String(error); });
+function bootStage(message: string, progress: number): void {
+  const status = root.querySelector('.boot-status');
+  const bar = root.querySelector<HTMLElement>('.boot-fill');
+  if (status) status.textContent = message;
+  if (bar) bar.style.width = `${progress}%`;
+}
+void boot().catch(error => {
+  const message = error instanceof Error ? error.message : String(error);
+  if (root.querySelector('.boot')) {
+    root.querySelector('h1')!.textContent = 'Could not start the workspace';
+    root.querySelector('.boot')!.setAttribute('aria-busy', 'false');
+    bootStage(message, 100);
+  } else root.textContent = message;
+});
