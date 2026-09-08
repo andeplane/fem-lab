@@ -149,10 +149,10 @@ against the official `FreeCAD/FreeCAD-documentation` markdown mirror of the same
 
 | # | Tutorial | Physics / features needed | FEM Lab status |
 |---|---|---|---|
-| 67 | [step-8: The Elasticity Equations](https://dealii.org/current/doxygen/deal.II/step_8.html) | Vector elasticity (FESystem), body force, adaptive refinement driven by a Kelly error estimator | **partial** — the elasticity and `load.gravity` are there; refinement is uniform (`study.converge`), not error-estimator-driven |
+| 67 | [step-8: The Elasticity Equations](https://dealii.org/current/doxygen/deal.II/step_8.html) | Vector elasticity (FESystem), body force, adaptive refinement driven by a Kelly error estimator | **can do** — linear-simplex elasticity and `load.gravity` with ZZ error-estimator-driven `study.adapt` (#83); the estimator differs from the tutorial’s Kelly indicator |
 | 68 | [step-18: The quasistatic elasticity equations with large deformations](https://dealii.org/current/doxygen/deal.II/step_18.html) | Quasistatic large-deformation elasticity, Lagrangian mesh update, incremental stress with rotation correction | **cannot** — no geometric nonlinearity |
 | 69 | [step-44: Nonlinear Solid Mechanics (three-field formulation)](https://dealii.org/current/doxygen/deal.II/step_44.html) | Compressible neo-Hookean, quasi-incompressible, three-field (u, p̃, J̃) mixed formulation, Newton–Raphson | **cannot** — no hyperelasticity, no geometric nonlinearity, no mixed u/p element |
-| 70 | [step-26: The heat equation](https://dealii.org/current/doxygen/deal.II/step_26.html) | Transient conduction by the θ-scheme, adaptive refinement and coarsening coupled to time stepping | **partial** — `step.add{heat-transient, theta}` is the same θ-scheme (and the `transient-heat` tutorial teaches it); the time-coupled adaptivity is missing |
+| 70 | [step-26: The heat equation](https://dealii.org/current/doxygen/deal.II/step_26.html) | Transient conduction by the θ-scheme, adaptive refinement and coarsening coupled to time stepping | **partial** — the θ-scheme and final-field spatial `study.adapt` are available (#83); refinement/coarsening coupled to individual time steps is still missing |
 | 71 | [Elasticity using algebraic multigrid](https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_elasticity.html) (DOLFINx demo) | 3D linear elasticity, near-nullspace rigid body modes, CG with an AMG preconditioner, von Mises post-processing | **can do** — `static` + `solve.run{solver: 'gpu-pcg' or 'cpu-pcg'}` + `query.cost`; the preconditioner is Jacobi rather than AMG (PLAN 2.2), so the stiffest cases converge more slowly |
 
 ### SimScale
@@ -173,7 +173,7 @@ CATI are SOLIDWORKS resellers and training centres publishing the equivalent wri
 | # | Tutorial | Physics / features needed | FEM Lab status |
 |---|---|---|---|
 | 77 | [Using Symmetry in SOLIDWORKS Simulation Studies](https://www.goengineer.com/blog/using-symmetry-solidworks-simulation-studies) | Planar symmetry fixtures for half / quarter / eighth models, cyclic symmetry, mirrored loads, reading the full model back from the reduced one | **partial** — `constraint.symmetry` covers the planar cases (the `symmetry-and-2d` tutorial teaches them); cyclic symmetry is missing |
-| 78 | [SOLIDWORKS Is Discontinuing Adaptive Meshing – What Does This Mean?](https://www.goengineer.com/blog/solidworks-discontinuing-adaptive-meshing) | h-adaptive vs p-adaptive convergence, migration to manual curvature-based meshing | **partial** — `study.converge` is the h-study and `mesh.set{order}` is the p-switch; there is no error-estimator-driven adaptive loop |
+| 78 | [SOLIDWORKS Is Discontinuing Adaptive Meshing – What Does This Mean?](https://www.goengineer.com/blog/solidworks-discontinuing-adaptive-meshing) | h-adaptive vs p-adaptive convergence, migration to manual curvature-based meshing | **can do** — `study.adapt` adds a ZZ-driven h-adaptive loop for linear simplices (#83); `study.converge` and `mesh.set{order}` retain the manual h-study and p-switch |
 | 79 | [How Do I Complete a Simulation Fatigue Analysis in SOLIDWORKS?](https://www.cati.com/blog/how-do-i-complete-a-simulation-fatigue-analysis-in-solidworks/) | Fatigue study linked to a base linear static study, S-N curve on the material, load-cycle definition (fully reversible / zero-based / load ratio), life and damage-percentage plots | **cannot** — no S-N material data, no load-cycle definition, no fatigue post-processing |
 
 ### Autodesk Fusion (Simulation)
@@ -455,11 +455,13 @@ stair-steps — which is why it is worth filing independently.
 
 **31. Error-estimator-driven adaptive refinement — 3 tutorials.**
 Tutorials 67, 70, 78.
-Scope: a Zienkiewicz–Zhu or Kelly estimator as a field, then a `study.adapt` that refines where
-the estimated error is large and iterates to a target. `study.converge` already owns the
-re-mesh / re-solve / report loop, so the new parts are the estimator field and a size-field-capable
-mesher (#30). It is also the honest answer to "is my mesh good enough *here*?", which
-`study.converge` currently answers only globally.
+Implemented by #83: `errorEstimate` is a per-element ZZ energy-error field and
+`study.adapt` uses bulk marking to add local size boxes, re-mesh, re-solve, and report progress
+toward a relative-error target. Linear tri3/tet4 planar/3D static and thermal Steps are supported;
+`mesh.set.refinement` exposes the same size field. Journal entries preserve the chosen regions
+for deterministic replay. The base mesh still controls curved-boundary geometry error.
+Transient heat adapts the final spatial field by repeating the complete Step, so tutorial 70’s
+within-time-step refinement/coarsening remains outside this capability.
 
 ### Post-processing and UX
 

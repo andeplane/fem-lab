@@ -14,7 +14,7 @@ use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
 use crate::fem::problem::{Constraint, Coupling, PointMass, Problem, NODE_DOFS_MAX};
-use crate::mesh::{scale_mesher, BuiltMesh};
+use crate::mesh::{scale_settings, BuiltMesh};
 use crate::model::{Axial, ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData, Per};
@@ -104,7 +104,7 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
             ReactionQuantity::Power => Power::DIM,
         },
         Field::Temperature => Temperature::DIM,
-        Field::Strain | Field::Rotation | Field::PlasticStrain => Dimension::NONE,
+        Field::Strain | Field::Rotation | Field::PlasticStrain | Field::ErrorEstimate => Dimension::NONE,
         Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
         Field::SectionForce => Force::DIM,
         Field::SectionMoment => Torque::DIM,
@@ -714,6 +714,9 @@ impl Engine {
             .step(step_name)
             .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
             .clone();
+        if step.output.contains(&Field::ErrorEstimate) {
+            check_estimator_step(&step)?;
+        }
         let opts = SolveOptions {
             solver: solver.unwrap_or_default(),
             rel_tol: tolerance.unwrap_or(SolveOptions::default().rel_tol),
@@ -826,6 +829,9 @@ impl Engine {
                 result.assumptions = assumptions;
                 result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
                 result.prestress_from = preload;
+                if step.output.contains(&Field::ErrorEstimate) {
+                    self.pool.install(|| estimate_result(&p, &mut result))?;
+                }
                 result
             }
         };
@@ -898,7 +904,7 @@ impl Engine {
                 i as f64 / h.len() as f64,
                 &format!("size {} {} ({} of {})", crate::units::fmt_sig(where_.value, 4), where_.unit, i + 1, h.len()),
             )?;
-            self.model.mesh = Some(MeshSettings { mesher: scale_mesher(&settings.mesher, h[0], size), ..settings });
+            self.model.mesh = Some(scale_settings(&settings, h[0], size));
             self.mesh = None;
             self.mesh()?;
             let started = self.host.now_ms();
@@ -912,6 +918,10 @@ impl Engine {
                     procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
                 result.assumptions = assumptions;
                 result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
+                if step.output.contains(&Field::ErrorEstimate) {
+                    check_estimator_step(&step)?;
+                    self.pool.install(|| estimate_result(&p, &mut result))?;
+                }
                 (result, dofs)
             };
             result.solver.time_ms = self.host.now_ms() - started;
@@ -941,6 +951,128 @@ impl Engine {
         // measurement of the Model, never part of it, so it is not hashed and not journaled.
         self.studies.insert(step_name.to_string(), report.clone());
         Ok(Output::Study { report })
+    }
+
+    /// Adaptive studies share the procedure, mesh builder and cost checks with solves.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn study_adapt(
+        &mut self,
+        step_name: &str,
+        target: f64,
+        max_iterations: Option<u32>,
+        max_elements: Option<u32>,
+        marking_fraction: Option<f64>,
+        recorded: Option<&[Vec<crate::command::SizeBoxSpec>]>,
+        on_progress: OnProgress<'_>,
+    ) -> Result<Output, Error> {
+        let iterations = max_iterations.unwrap_or(8);
+        let limit = max_elements.unwrap_or(100_000);
+        let fraction = marking_fraction.unwrap_or(0.5);
+        if !(target.is_finite() && target > 0.0 && target < 1.0) {
+            return Err(Error::schema("targetError must be between zero and one").at("targetError"));
+        }
+        if iterations == 0 || iterations > 100 {
+            return Err(Error::schema("maxIterations must be in 1..=100").at("maxIterations"));
+        }
+        if limit == 0 {
+            return Err(Error::schema("maxElements must be positive").at("maxElements"));
+        }
+        if !(fraction.is_finite() && fraction > 0.0 && fraction <= 1.0) {
+            return Err(Error::schema("markingFraction must be in (0, 1]").at("markingFraction"));
+        }
+        if recorded.is_some_and(|r| r.len() >= iterations as usize) {
+            return Err(Error::schema("recorded refinements exceed maxIterations").at("refinements"));
+        }
+        let step = self
+            .model
+            .step(step_name)
+            .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
+            .clone();
+        check_estimator_step(&step)?;
+        let proc_step = procedure_step(&step, SolveOptions::default())?;
+        let mut progress = on_progress;
+        let mut rows = Vec::new();
+        let mut choices = Vec::new();
+        loop {
+            let iteration = rows.len();
+            report(
+                &mut progress,
+                "study",
+                iteration as f64 / iterations as f64,
+                &format!("adaptive solve {} of {iterations}", iteration + 1),
+            )?;
+            self.mesh()?;
+            let started = self.host.now_ms();
+            let built = self.mesh.as_ref().expect("built above");
+            if built.mesh.n_elems() > limit as usize {
+                return Err(Error::new(ErrorCode::MeshFailed, "adaptive mesh exceeds maxElements")
+                    .at("maxElements")
+                    .suggest("study.adapt with a larger maxElements or mesh.set with a coarser base"));
+            }
+            let p = build_problem(&self.model, built, &step)?;
+            let dofs = p.n_dofs() as u64;
+            let cost = planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
+                .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built));
+            if cost.transient.is_some() {
+                cost.enforce(step_name)?;
+            }
+            let mut result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+            result.assumptions = result_assumptions(&self.model, built, step_name, step.procedure, &p);
+            result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
+            let estimate = self.pool.install(|| estimate_result(&p, &mut result))?;
+            let relative = estimate.relative();
+            result.solver.time_ms = self.host.now_ms() - started;
+            rows.push(crate::query::AdaptRow {
+                elements: built.mesh.n_elems() as u64,
+                dofs,
+                estimated_error: relative,
+                time_ms: result.solver.time_ms,
+            });
+            let done = match recorded {
+                Some(r) => iteration == r.len(),
+                None => relative <= target || iteration + 1 == iterations as usize,
+            };
+            if done {
+                self.retain_result(step.name.clone(), result);
+                let result_id = self.result_summary(step_name).result_id;
+                let report = crate::query::AdaptReport {
+                    rows,
+                    converged: relative <= target,
+                    target_error: target,
+                    result_id,
+                    refinements: choices,
+                };
+                self.adaptations.insert(step_name.to_string(), report.clone());
+                return Ok(Output::Adapt { report });
+            }
+            let boxes = match recorded {
+                Some(r) => r[iteration].clone(),
+                None => mark_regions(&built.mesh, &estimate.squared_errors, fraction),
+            };
+            self.apply_adaptive_refinement(&boxes, limit)?;
+            choices.push(boxes);
+        }
+    }
+
+    pub(crate) fn apply_adaptive_refinement(
+        &mut self,
+        boxes: &[crate::command::SizeBoxSpec],
+        limit: u32,
+    ) -> Result<(), Error> {
+        let new = crate::mesh::local_refinement(&crate::command::LocalRefinementSpec {
+            boxes: boxes.to_vec(),
+            max_elements: limit,
+        })?;
+        let settings = self.model.mesh.as_mut().ok_or_else(|| {
+            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
+                .suggest("mesh.set with a linear simplex mesher")
+        })?;
+        let field =
+            settings.refinement.get_or_insert(crate::model::LocalRefinement { boxes: Vec::new(), max_elements: limit });
+        field.boxes.extend(new.boxes);
+        field.max_elements = limit;
+        self.mesh = None;
+        Ok(())
     }
 
     /// Mesh inputs shared by a running study and replay that omits its numerical work.
@@ -1195,6 +1327,100 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
     .iter()
     .filter_map(|&(label, field)| res.fields.get(&field).map(|f| (label, f.comps, f.data.clone())))
     .collect()
+}
+
+fn check_estimator_step(step: &Step) -> Result<(), Error> {
+    if !matches!(step.procedure, Procedure::Static | Procedure::HeatSteady | Procedure::HeatTransient)
+        || step.after.is_some()
+    {
+        return Err(Error::new(
+            ErrorCode::Unsupported,
+            "ZZ estimation supports static and thermal Steps without after",
+        )
+        .at("step")
+        .suggest("study.adapt on an independent static, heat-steady or heat-transient Step"));
+    }
+    Ok(())
+}
+
+fn estimate_result(p: &Problem<'_>, result: &mut StepResult) -> Result<crate::post::estimator::Estimate, Error> {
+    let which = if p.heat { Field::Temperature } else { Field::Displacement };
+    let f = &result.fields[&which];
+    let stride = if p.heat { 1 } else { p.dofs_per_node() };
+    let primary = FieldData::new(
+        Per::Node,
+        stride,
+        f.data.chunks_exact(f.comps).flat_map(|row| row[..stride].iter().copied()).collect(),
+    );
+    let estimate = crate::post::estimator::zz(p, &primary)?;
+    let denominator = estimate.squared_norm + estimate.squared_errors.iter().sum::<f64>();
+    let values: Vec<f64> = estimate
+        .squared_errors
+        .iter()
+        .map(|e| if denominator == 0.0 { 0.0 } else { (e / denominator).sqrt() })
+        .collect();
+    if !values.is_empty() {
+        let mut lo = 0;
+        let mut hi = 0;
+        for i in 1..values.len() {
+            if values[i] < values[lo] {
+                lo = i;
+            }
+            if values[i] > values[hi] {
+                hi = i;
+            }
+        }
+        result.extremes.push((
+            Field::ErrorEstimate,
+            Extremum {
+                component: 0,
+                min: values[lo],
+                max: values[hi],
+                min_at: femlab_geometry::elem_centroid(p.mesh, lo as u32),
+                max_at: femlab_geometry::elem_centroid(p.mesh, hi as u32),
+            },
+        ));
+    }
+    result.fields.insert(Field::ErrorEstimate, FieldData::new(Per::Element, 1, values));
+    Ok(estimate)
+}
+
+/// Dörfler bulk marking with element-id tie breaking. Quantities preserve f64 SI
+/// values in the Journal; no coordinate rounding can move the refinement region.
+fn mark_regions(mesh: &Mesh, errors: &[f64], fraction: f64) -> Vec<crate::command::SizeBoxSpec> {
+    let mut order: Vec<_> = (0..errors.len()).collect();
+    order.sort_by(|&a, &b| errors[b].total_cmp(&errors[a]).then(a.cmp(&b)));
+    let target = fraction * errors.iter().sum::<f64>();
+    let mut marked = 0.0;
+    let mut regions = Vec::new();
+    for i in order {
+        if marked >= target {
+            break;
+        }
+        marked += errors[i];
+        let nodes = mesh.elem_nodes(i as u32);
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        for &node in nodes {
+            let x = mesh.node(node);
+            for a in 0..3 {
+                min[a] = min[a].min(x[a]);
+                max[a] = max[a].max(x[a]);
+            }
+        }
+        let mut diameter = 0.0_f64;
+        for &[a, b] in mesh.kind_of(i as u32).edges() {
+            let x = mesh.node(nodes[a as usize]);
+            let y = mesh.node(nodes[b as usize]);
+            diameter = diameter.max(libm::hypot(libm::hypot(x[0] - y[0], x[1] - y[1]), x[2] - y[2]));
+        }
+        regions.push(crate::command::SizeBoxSpec {
+            min: min.map(|x| Q::new(x, "m")),
+            max: max.map(|x| Q::new(x, "m")),
+            size: Q::new(diameter * 0.5, "m"),
+        });
+    }
+    regions
 }
 
 #[cfg(test)]

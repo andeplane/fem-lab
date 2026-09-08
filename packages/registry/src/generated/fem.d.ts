@@ -508,6 +508,19 @@ export interface Fem {
      * dependencies and target at each mesh explicitly.
      */
     converge(args: Omit<Extract<Command, { cmd: 'study.converge' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Solve, estimate local spatial error with ZZ recovery, refine the largest
+     * contributions, and repeat until targetError or maxIterations is reached.
+     * Leaves the last solved mesh and Result installed. Supports planar tri3/solid
+     * tet4 with static, heat-steady or heat-transient Steps without after. Transient
+     * runs restart at the configured initial state and estimate the final field;
+     * this does not estimate time error or adapt/coarsen within a time integration.
+     * errorEstimate is a dimensionless element field; its squared sum is the squared
+     * global relative estimate. Recovery is an indicator, not a certified error bound.
+     * Refines the existing boundary approximation without CAD projection. Exceeding
+     * maxElements or cancellation rolls back the entire Command.
+     */
+    adapt(args: Omit<Extract<Command, { cmd: 'study.adapt' }>, 'cmd'>): Promise<Ack>;
   };
   journal: {
     /**

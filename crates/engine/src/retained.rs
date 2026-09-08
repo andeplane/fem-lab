@@ -48,6 +48,7 @@ fn next_sequence(sequence: &str) -> String {
 fn field_location(per: crate::post::Per) -> &'static str {
     match per {
         crate::post::Per::Node => "node",
+        crate::post::Per::Element => "element",
         crate::post::Per::ElemGp => "elementGaussPoint",
         crate::post::Per::ElemNode => "elementNode",
     }

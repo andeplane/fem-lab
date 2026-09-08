@@ -652,6 +652,17 @@ impl Engine {
                     }
                     for (r, st) in &results {
                         text += &one_result(r, st.as_ref());
+                        if let Some(study) = self.adaptations.get(&r.step).filter(|a| a.result_id == r.result_id) {
+                            text += "#### Adaptive refinement\n\n| Elements | DOFs | Estimated relative error |\n|---:|---:|---:|\n";
+                            for row in &study.rows {
+                                text += &format!("| {} | {} | {:.6} |\n", row.elements, row.dofs, row.estimated_error);
+                            }
+                            text += if study.converged {
+                                "\nTarget reached.\n\n"
+                            } else {
+                                "\nIteration limit reached; target not reached.\n\n"
+                            };
+                        }
                     }
                     text
                 }

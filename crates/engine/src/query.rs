@@ -1021,6 +1021,9 @@ pub enum Output {
     Study {
         report: StudyReport,
     },
+    Adapt {
+        report: AdaptReport,
+    },
     /// A file `mesh.export` produced, for the host to save.
     Export {
         format: crate::command::ExportFormat,
@@ -1034,6 +1037,26 @@ pub enum Output {
     Redo {
         steps: u32,
     },
+}
+
+/// Adaptive spatial-error study. The retained Result owns the final element field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdaptReport {
+    pub rows: Vec<AdaptRow>,
+    pub converged: bool,
+    pub target_error: f64,
+    pub result_id: String,
+    pub refinements: Vec<Vec<crate::command::SizeBoxSpec>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdaptRow {
+    pub elements: u64,
+    pub dofs: u64,
+    pub estimated_error: f64,
+    pub time_ms: f64,
 }
 
 /// `study.converge` output.

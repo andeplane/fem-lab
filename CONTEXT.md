@@ -229,3 +229,12 @@ its mesh and display units, even after edits. The default per-Step selection ret
 stale-field safeguards. A supplied Step must match the id. Missing/evicted ids are errors;
 old values are never attached to current geometry. The existing FrameSample time/index rules
 remain canonical. See ADR0018 and issue #280.
+
+**Adaptive refinement study**:
+`study.adapt` solves a Step, estimates local spatial error through ZZ recovery,
+and refines the largest contributions until a target or iteration limit. Its
+Journal entry records geometric refinement regions so replay reconstructs the
+same mesh without making new numerical decisions. `errorEstimate` contains one
+dimensionless contribution per element; the sum of their squares equals the
+squared global relative estimate. This is an error indicator, not a certified
+bound. See [ADR 0023](docs/adr/0023-adaptive-refinement-records-local-size-fields.md).

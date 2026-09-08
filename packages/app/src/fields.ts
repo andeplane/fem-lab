@@ -27,6 +27,7 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   vonMises: 'stress',
   principal: 'stress',
   strain: 'dimensionless',
+  errorEstimate: 'dimensionless',
   plasticStrain: 'dimensionless',
   temperature: 'temperature',
   rotation: 'dimensionless',

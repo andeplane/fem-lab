@@ -1825,3 +1825,22 @@ the bound; a remote region retains coarser elements. Refining an already complia
 mesh is idempotent. Invalid size fields and element budgets return errors without
 changing the input mesh. New boundary nodes bisect the existing mesh edges; these
 tests assert conservation of that boundary approximation, not improved CAD fidelity.
+
+`adaptive_heat_reduces_error_against_the_exact_parabolic_solution` solves the
+unit-square conduction problem with k=1 W/(m K), source 2 W/m³, T=300 K at
+x=0 and x=1, and insulated horizontal edges. Its independent exact solution is
+T=300+x(1−x) K. One, two and three adaptive solves must each reduce the sampled
+RMS temperature error by at least 30%. The element field's squared sum must equal
+the report's squared relative error. A separate registry test replays the recorded
+refinement choices with and without solves and compares exact meshes and Models,
+then checks undo and redo.
+
+The 3D adaptive cantilever also checks that the refined support reaction balances
+the 1000 N applied load to 1e-5 N. Transient adaptive conduction uses the same
+square, unit density/capacity, T(0)=300 K, θ=1/2, dt=0.01 s and tEnd=0.2 s.
+Its final probe is checked to 0.012 K against the independent odd-sine-series
+solution, ensuring spatial iterations restart rather than accumulate physical time.
+`tools/test-adaptive-replay.mjs` runs the recorded adaptive heat Journal through
+native execution at one/four threads and WASM, with exact per-entry hashes and
+surface topology and 1e-9 agreement of temperature/error fields. Both hosts also
+verify the same Model hashes when replay skips the solves.
