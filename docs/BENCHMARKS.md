@@ -1790,3 +1790,29 @@ verify detachment and repeated exact f64 reads, and isolate f32 casts to rendere
 `surface()` retains the current geometry-preview route; `surface({})` and
 `query.surface` require a compatible solved Result, while explicit IDs permit stale
 retained solves. Replies identify the immutable solve even when selected by Step.
+
+### ZZ recovery estimator (#83)
+
+`zz_two_triangles_have_the_exact_integrated_flux_error` uses the unit square split
+along its diagonal, with nodal temperatures sampled from T=xy and k=45 W/(m K).
+The two constant element gradients are (0,1) and (1,0); volume-weighted recovery
+at the shared corners is (1/2,1/2). Exact integration gives each squared error
+k/8, total field norm squared k, and relative estimate sqrt(1/5). This checks the
+energy integral, including the variation of the recovered field within an element.
+
+Affine temperature and displacement patches on distorted tri3/tet4 meshes have
+relative estimates below 1e-13, including plane stress with thickness, plane strain,
+and 3D. Two material patches keep independent recovered fluxes at their common
+nodes, so physical interface jumps do not become recovery error. One and four
+threads give identical estimates.
+
+For T=x² on unit-square tri3 meshes with 8, 16 and 32 divisions per side, the
+independent exact energy error of the nodal interpolant is sqrt(k/3)/n. The ZZ
+estimate has effectivity within 15% and first-order energy convergence within
+0.1 of the theoretical rate. This is an estimator benchmark on a manufactured
+field; adaptive solved-problem benchmarks are separate gates.
+
+The method uses volume-weighted, material-separated recovered stress/heat flux
+and the inverse elastic/conductivity tensor in the energy integral; see the
+[MFEM ZZ estimator contract](https://docs.mfem.org/html/classmfem_1_1ZienkiewiczZhuEstimator.html).
+An estimate is not a guaranteed bound on the true discretisation error.

@@ -15427,3 +15427,146 @@ fn a_load_past_the_collapse_load_is_a_cutback_and_then_newton_diverged() {
     assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
     assert!(e.cause.contains("after 2 cutbacks"), "{}", e.cause);
 }
+
+// ---------------------------------------------------------------- ZZ recovery (#83)
+
+#[test]
+fn zz_two_triangles_have_the_exact_integrated_flux_error() {
+    use femlab_engine::post::estimator::zz;
+    let mesh = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.],
+        blocks: vec![femlab_geometry::mesh::ElementBlock {
+            kind: ElementKind::Tri3,
+            conn: vec![0, 1, 2, 0, 2, 3],
+            first_elem: 0,
+        }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["sheet".into()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+    p.heat = true;
+    let field = FieldData::new(Per::Node, 1, vec![0., 0., 1., 0.]);
+    let estimate = zz(&p, &field).unwrap();
+    // T=xy at the four corners gives gradients (0,1), (1,0). Shared-corner
+    // recovery is (1/2,1/2). ∫_K (1-N_unshared)^2 = area/2, so η_K²=k/8.
+    for value in &estimate.squared_errors {
+        assert!((value - 45. / 8.).abs() < 1e-12);
+    }
+    assert!((estimate.squared_norm - 45.).abs() < 1e-12);
+    assert!((estimate.relative() - 0.2_f64.sqrt()).abs() < 1e-14);
+    assert_eq!(Pool::new(1).install(|| zz(&p, &field).unwrap()), Pool::new(4).install(|| zz(&p, &field).unwrap()));
+    let zero = FieldData::new(Per::Node, 1, vec![0.; 4]);
+    assert_eq!(zz(&p, &zero).unwrap().relative(), 0.);
+}
+
+#[test]
+fn zz_affine_thermal_and_elastic_patches_are_exact_in_two_and_three_dimensions() {
+    use femlab_engine::post::estimator::zz;
+    for (kind, id) in [
+        (ElementKind::Tri3, Idealisation::PlaneStrain),
+        (ElementKind::Tri3, Idealisation::PlaneStress { thickness: 0.3 }),
+        (ElementKind::Tet4, Idealisation::Solid3d),
+    ] {
+        let mesh = patch_mesh(kind);
+        let sets = BTreeMap::new();
+        let bodies = vec!["patch".into(); mesh.blocks.len()];
+        let mut p = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, vec![]);
+        let strain = [1e-3, 2e-3, 0., 3e-3, 0., 0.];
+        let u = FieldData::new(Per::Node, p.dofs_per_node(), patch_mesh_field(&mesh, &id, &strain));
+        assert!(zz(&p, &u).unwrap().relative() < 1e-13);
+        p.heat = true;
+        let t = FieldData::new(
+            Per::Node,
+            1,
+            (0..mesh.n_nodes())
+                .map(|i| {
+                    let x = mesh.node(i as u32);
+                    7. + x[0] + 2. * x[1] + 3. * x[2]
+                })
+                .collect(),
+        );
+        assert!(zz(&p, &t).unwrap().relative() < 1e-13);
+    }
+}
+
+#[test]
+fn zz_quadratic_temperature_has_first_order_energy_convergence() {
+    use femlab_engine::post::estimator::zz;
+    let mut errors = Vec::new();
+    for n in [8, 16, 32] {
+        let mesh = Structured { kind: ElementKind::Tri3, n: [n, n, 1] }.box_([1., 1., 0.]);
+        let sets = BTreeMap::new();
+        let bodies = vec!["sheet".into(); mesh.blocks.len()];
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+        p.heat = true;
+        let t = FieldData::new(Per::Node, 1, (0..mesh.n_nodes()).map(|i| mesh.node(i as u32)[0].powi(2)).collect());
+        let estimate = zz(&p, &t).unwrap();
+        let eta = estimate.squared_errors.iter().sum::<f64>().sqrt();
+        // For the nodal interpolant of x², ∫ k|∇(T-IhT)|² = k h²/3 exactly.
+        let exact = (45.0_f64 / 3.).sqrt() / n as f64;
+        assert!((eta / exact - 1.).abs() < 0.15, "n={n}: effectivity {}", eta / exact);
+        errors.push(eta);
+    }
+    for pair in errors.windows(2) {
+        let rate = (pair[0] / pair[1]).log2();
+        assert!((rate - 1.).abs() < 0.1, "rate {rate}");
+    }
+}
+
+#[test]
+fn zz_material_patches_do_not_smooth_physical_jumps() {
+    use femlab_engine::post::estimator::zz;
+    let mesh = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.],
+        blocks: vec![
+            femlab_geometry::mesh::ElementBlock { kind: ElementKind::Tri3, conn: vec![0, 1, 2], first_elem: 0 },
+            femlab_geometry::mesh::ElementBlock { kind: ElementKind::Tri3, conn: vec![0, 2, 3], first_elem: 1 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["first".into(), "second".into()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+    p.heat = true;
+    p.materials.push(steel());
+    p.materials[1].k = [90.; 3];
+    p.material_of_block[1] = Some(1);
+    let field = FieldData::new(Per::Node, 1, vec![0., 0., 1., 0.]);
+    assert!(zz(&p, &field).unwrap().relative() < 1e-14);
+    p.materials[1].k = [-1.; 3];
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::MaterialProps);
+    p.material_of_block[1] = None;
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::ModelNoMaterial);
+}
+
+#[test]
+fn zz_rejects_unsupported_elements_and_invalid_primary_fields() {
+    use femlab_engine::post::estimator::zz;
+    let mesh = patch_mesh(ElementKind::Tri3);
+    let sets = BTreeMap::new();
+    let bodies = vec!["sheet".into(); mesh.blocks.len()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+    p.heat = true;
+    for field in [
+        FieldData::new(Per::ElemNode, 1, vec![0.; mesh.n_nodes()]),
+        FieldData::new(Per::Node, 2, vec![0.; mesh.n_nodes() * 2]),
+        FieldData::new(Per::Node, 1, vec![]),
+        FieldData::new(Per::Node, 1, vec![f64::NAN; mesh.n_nodes()]),
+    ] {
+        assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Schema);
+    }
+    let field = FieldData::new(Per::Node, 1, vec![0.; mesh.n_nodes()]);
+    p.idealisation = Idealisation::Axisymmetric { twist: false };
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Unsupported);
+    let quad = patch_mesh(ElementKind::Quad4);
+    p.mesh = &quad;
+    p.idealisation = Idealisation::PlaneStrain;
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Unsupported);
+}

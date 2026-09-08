@@ -2,6 +2,7 @@
 //! grouped by the Constraint that carried them (plan A §8).
 
 pub mod convergence;
+pub mod estimator;
 pub mod probe;
 pub mod stress;
 
