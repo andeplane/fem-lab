@@ -1310,5 +1310,12 @@ mod tests {
         assert_eq!(error.code, crate::ErrorCode::SolveTooLarge);
         assert_eq!(error.where_.as_deref(), Some("step 'noise'"));
         assert!(error.suggestion.unwrap().contains("nModes"));
+        // The shared planner must still route a transient refusal to a stride suggestion,
+        // rather than recommending fewer modes for every procedure that exceeds the budget.
+        let estimate = crate::solve::add_transient_cost(small.estimate, mesh.n_nodes(), 3, 100_000_000, 1, 4).unwrap();
+        let transient = super::PlannedCost { estimate, transient: Some((100_000_000, 1, "harmonic")) };
+        let error = transient.enforce("sweep").unwrap_err();
+        assert_eq!(error.code, crate::ErrorCode::SolveTooLarge);
+        assert!(error.suggestion.unwrap().contains("outputEvery"));
     }
 }

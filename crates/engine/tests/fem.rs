@@ -14644,6 +14644,19 @@ fn a_solid_next_to_a_beam_keeps_its_own_answer_and_the_beam_keeps_its_own() {
     assert_eq!((p.dofs_per_node(), p.node_dofs(ElementKind::Hex8), p.node_dofs(ElementKind::Beam2)), (6, 3, 6));
     assert_eq!(p.inert_dofs().len(), 3 * base as usize);
     assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let modes =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let zero_psd = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, 0.0], [100.0, 0.0]] },
+        damping: vec![0.02],
+        rayleigh: (0.0, 0.0),
+    };
+    let zero_response = run_after(&p, &zero_psd, Some(&modes)).unwrap();
+    assert!(
+        zero_response.fields.values().all(|f| f.data.iter().all(|v| *v == 0.0)),
+        "zero PSD vanishes in both solid and beam channels"
+    );
     let res = run_step(&p, &static_step(SolveOptions::default())).expect("a mixed model solves");
     let u = &res.fields[&Field::Displacement];
     let rot = &res.fields[&Field::Rotation];
@@ -15616,6 +15629,19 @@ fn random_vibration_refuses_missing_modes_nonzero_constraints_and_supports_cance
     let one = pollster::block_on(procedure::run(&p, &step, &Pool::new(1), None, Some(&modal), &mut nop)).unwrap();
     let two = run_after(&p, &step, Some(&modal)).unwrap();
     assert_eq!(one, two, "thread count cannot alter modal covariance or RMS recovery");
+    let mut stop_after_integration = |p: Progress| p.message != "integrated the correlated modal covariance";
+    assert_eq!(
+        pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, Some(&modal), &mut stop_after_integration))
+            .unwrap_err()
+            .code,
+        ErrorCode::Cancelled
+    );
+    p.loads = vec![Load::NodalForce { nodes: "missing".into(), f: [1.0, 0.0, 0.0] }];
+    assert!(run_after(&p, &step, Some(&modal)).unwrap_err().cause.contains("missing"));
+    p.loads.clear();
+    p.constraints[0].nodes = "missing".into();
+    assert!(run_after(&p, &step, Some(&modal)).unwrap_err().cause.contains("missing"));
+    p.constraints[0].nodes = "xmin".into();
     let mut oversized = modal.clone();
     for mode in &mut oversized.modal_dofs {
         for value in mode {
@@ -15625,4 +15651,29 @@ fn random_vibration_refuses_missing_modes_nonzero_constraints_and_supports_cance
     p.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e-154, 0.0, 0.0] }];
     let overflow = run_after(&p, &step, Some(&oversized)).unwrap_err();
     assert!(overflow.cause.contains("field variance exceeded"), "{overflow:?}");
+}
+
+#[test]
+fn random_vibration_propagates_material_errors_from_every_recovery_pass() {
+    let mesh = femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1, ElementKind::Beam2).unwrap();
+    let sets = root_set();
+    let bodies = vec!["beam".into()];
+    let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, beam_section());
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let random = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, 1.0], [100.0, 1.0]] },
+        damping: vec![0.02],
+        rayleigh: (0.0, 0.0),
+    };
+    // Mean stress, mean section force, modal stress, modal section force. The MaterialLaw
+    // extension point can fail at any of them; no partially recovered Result may escape.
+    for pass in 1..=4 {
+        let (_, material) = fail_on(pass);
+        p.materials[0].law = material.law;
+        let error = run_after(&p, &random, Some(&modal)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::MaterialProps);
+        assert!(error.cause.contains("asked to fail"));
+    }
 }

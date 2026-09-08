@@ -357,6 +357,11 @@ mod tests {
             assert_eq!(e.where_.as_deref(), Some("psd"));
             assert!(e.suggestion.is_some());
         }
+        let invalid = Spectrum { table: Vec::new() };
+        assert_eq!(
+            covariance(&invalid, &[1.0], &[0.02], &[1.0], &mut |_| true).unwrap_err().where_.as_deref(),
+            Some("psd")
+        );
         let s = Spectrum { table: vec![[0.0, 1.0], [20.0, 1.0]] };
         for (f, z, p) in [
             (vec![], vec![], vec![]),

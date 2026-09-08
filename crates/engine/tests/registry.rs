@@ -11297,7 +11297,12 @@ fn random_vibration_registry_replays_psd_and_rejects_invalid_inputs() {
     let add = r#"{"cmd":"step.add","name":"random","procedure":"randomVibration","constraints":["root","guide"],"loads":["pull"],"after":"modes","dampingRatio":0.02,"psd":[{"frequency":"0 Hz","density":"0.01 s"},{"frequency":"1 MHz","density":"0.01 s"}]}"#;
     ok(&mut e, add);
     assert_eq!(e.model().step("random").unwrap().psd.as_ref().unwrap()[1], [1e6, 0.01]);
-    for bad in [add.replace("0.01 s", "1 N"), add.replace("1 MHz", "0 Hz"), add.replace("0.01 s", "-1 s")] {
+    for bad in [
+        add.replace("0.01 s", "1 N"),
+        add.replace("1 MHz", "0 Hz"),
+        add.replace("0.01 s", "-1 s"),
+        add.replace("1 MHz", "1 m"),
+    ] {
         assert!(run(&mut e, &bad).is_err());
     }
     let QueryResult::Definition(definition) =
