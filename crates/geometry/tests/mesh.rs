@@ -2535,6 +2535,17 @@ fn local_refinement_rejects_bad_boxes_and_limits_without_changing_the_input() {
     }
     assert!(refine(&mesh, &[valid.clone()], 1).is_err());
     assert!(refine(&mesh, &[valid.clone()], 2).is_err());
+    // One shared edge splits both incident triangles: a three-element budget is
+    // insufficient even though it admits the initial edge-count lower bound.
+    assert!(refine(&mesh, &[valid.clone()], 3).is_err());
+    let mut tiny = mesh.clone();
+    for x in &mut tiny.coords {
+        *x = 1. + *x * f64::EPSILON;
+    }
+    let microscopic = SizeBox { min: [1.; 3], max: [2.; 3], size: f64::MIN_POSITIVE };
+    let failure = refine(&tiny, &[microscopic], 100).unwrap_err();
+    assert!(failure.0.contains("floating-point coordinate resolution"));
+
     let quad = Structured { kind: ElementKind::Quad4, n: [1, 1, 1] }.box_([1., 1., 0.]);
     assert!(refine(&quad, &[valid], 100).is_err());
     assert_eq!(refine(&quad, &[], 100).unwrap(), quad);

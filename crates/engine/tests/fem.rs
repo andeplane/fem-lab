@@ -15461,6 +15461,26 @@ fn zz_two_triangles_have_the_exact_integrated_flux_error() {
     assert_eq!(Pool::new(1).install(|| zz(&p, &field).unwrap()), Pool::new(4).install(|| zz(&p, &field).unwrap()));
     let zero = FieldData::new(Per::Node, 1, vec![0.; 4]);
     assert_eq!(zz(&p, &zero).unwrap().relative(), 0.);
+
+    // u=(xy,0): the two constant strains are (0,0,1) and (1,0,0).
+    // Their recovered difference is ±(1,0,-1)/2 times the shared shape sum.
+    // Integrating its square gives (C_xxxx+G_xy)/16 per triangle.
+    p.heat = false;
+    let displacement = FieldData::new(Per::Node, 2, vec![0., 0., 0., 0., 1., 0., 0., 0.]);
+    let shear = YOUNG / (2. * (1. + POISSON));
+    for (idealisation, axial, thickness) in [
+        (Idealisation::PlaneStress { thickness: THICKNESS }, YOUNG / (1. - POISSON * POISSON), THICKNESS),
+        (Idealisation::PlaneStrain, YOUNG * (1. - POISSON) / ((1. + POISSON) * (1. - 2. * POISSON)), 1.),
+    ] {
+        p.idealisation = idealisation;
+        let estimate = zz(&p, &displacement).unwrap();
+        let expected = thickness * (axial + shear) / 16.;
+        for value in &estimate.squared_errors {
+            assert!((value / expected - 1.).abs() < 1e-13);
+        }
+        assert!((estimate.squared_norm / (8. * expected) - 1.).abs() < 1e-13);
+        assert!((estimate.relative() - 0.2_f64.sqrt()).abs() < 1e-13);
+    }
 }
 
 #[test]

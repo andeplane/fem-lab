@@ -1793,6 +1793,13 @@ retained solves. Replies identify the immutable solve even when selected by Step
 
 ### ZZ recovery estimator (#83)
 
+The same two-triangle square has the exact displacement interpolant u=(xy,0).
+The two constant engineering strains are (0,0,1) and (1,0,0), giving local
+squared recovery error t(C_xxxx+G_xy)/16 and total field energy
+t(C_xxxx+G_xy)/2. Both plane stress (including thickness) and plane strain
+are checked against these closed forms, including η_rel=sqrt(1/5).
+
+
 `zz_two_triangles_have_the_exact_integrated_flux_error` uses the unit square split
 along its diagonal, with nodal temperatures sampled from T=xy and k=45 W/(m K).
 The two constant element gradients are (0,1) and (1,0); volume-weighted recovery
