@@ -1165,6 +1165,18 @@ payload caches on every Solve Ack even when that hash is unchanged.
 
 ## G. Shells and plates (phase 8)
 
+The MITC4 kinematics foundation for #64 is checked in `tests/support/shell.rs`,
+included by the engine's `fem` test binary. Constant membrane and transverse shear
+strains are checked on a distorted quadrilateral against a prescribed Cartesian
+strain tensor; all six rigid motions give zero strain on a warped surface with
+varying directors, at three thickness positions. A constant-curvature plate gives
+`εxx = z κx`, `εyy = z κy`, `γxy = 2z κxy` and zero transverse shear at thicknesses
+1, 1e-2, 1e-5 and 1e-8 m. These are kinematic patch tests, not evidence that the
+assembled shell benchmarks below pass. The solver, section and mesher integration
+and G1–G7 remain pending. The shear interpolation follows §2 of
+[Ko, Lee and Bathe (2017)](https://doi.org/10.1016/j.compstruc.2016.11.004),
+which reviews the original MITC4 formulation before introducing MITC4+.
+
 | # | Case | Reference | Tolerance |
 |---|---|---|---|
 | G1 | Simply-supported square plate, uniform load | w_max = 0.00406 qa⁴/D | 1 % |

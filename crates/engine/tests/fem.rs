@@ -56,6 +56,9 @@ use proptest::prelude::*;
 #[path = "support/cost_allocator.rs"]
 mod cost_allocator;
 
+#[path = "support/shell.rs"]
+mod shell;
+
 // ---------------------------------------------------------------- quadrature
 
 fn integrate_monomial(r: &Rule, e: [i32; 3]) -> f64 {
