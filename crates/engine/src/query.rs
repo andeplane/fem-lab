@@ -157,7 +157,9 @@ pub enum Query {
         field: Option<Field>,
     },
 
-    /// A field value interpolated at a point (default: the last solved Step). Component
+    /// A field value at a point (default: the last solved Step). Nodal fields are
+    /// interpolated; errorEstimate returns the containing element's constant value
+    /// with interpolated=false. Shared-face ties use the lowest element id. Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
@@ -706,10 +708,33 @@ pub struct ResultSummary {
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
     /// Zero is perfect balance; values above 1e-9 fail the report's conservation check.
     pub balance: f64,
+    /// One row per frictionless contact the Step listed: how much of the paired slave face
+    /// ended in contact and the resultant it carries. Empty for a Step without one. These forces
+    /// are internal to the assembly — they are what one part pushes on the other with — so they
+    /// are not in `reactions` and do not enter `balance`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactRow>,
     /// What the solve wanted the user to know but would not stop for: a bonded contact tied
-    /// across a gap, a slave face coarser than its master. Retained with the Result.
+    /// across a gap, a slave face coarser than its master, a frictionless pair that ended fully
+    /// open. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// One frictionless contact of a solved Step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactRow {
+    pub contact: String,
+    /// Slave nodes held on the master surface at the end of the Step.
+    pub active: usize,
+    /// Slave nodes the search found within `tol` of the master: the ones that could touch.
+    pub paired: usize,
+    /// `active / paired`: 1 is a face fully in contact, 0 a pair that has opened completely.
+    pub active_fraction: f64,
+    /// The resultant of the normal forces the master exerts on the slave, in the Model's force
+    /// unit: the load the contact transmits.
+    pub force: [Valued; 3],
 }
 
 /// One retained frequency of a harmonic sweep.
@@ -858,9 +883,9 @@ pub struct CostEstimate {
     pub result_mesh_bytes: u64,
     /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
     pub retained_frames: u64,
-    /// Logical f64 bytes for retained times and unpadded primary values.
+    /// Logical f64 bytes for retained times and unpadded primary values, or random-response RMS fields.
     pub retained_bytes: u64,
-    /// Conservative full-field allowance for procedure working f64 vectors live with History.
+    /// Conservative full-field allowance for procedure working f64 vectors live with History or RMS fields.
     /// Free-DOF vectors are charged at the full nodal length.
     pub transient_work_bytes: u64,
     /// One normalized three-component f64 frame owned by a native Query result.
@@ -1024,6 +1049,9 @@ pub enum Output {
     Study {
         report: StudyReport,
     },
+    Adapt {
+        report: AdaptReport,
+    },
     /// A file `mesh.export` produced, for the host to save.
     Export {
         format: crate::command::ExportFormat,
@@ -1037,6 +1065,26 @@ pub enum Output {
     Redo {
         steps: u32,
     },
+}
+
+/// Adaptive spatial-error study. The retained Result owns the final element field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdaptReport {
+    pub rows: Vec<AdaptRow>,
+    pub converged: bool,
+    pub target_error: f64,
+    pub result_id: String,
+    pub refinements: Vec<Vec<crate::command::SizeBoxSpec>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdaptRow {
+    pub elements: u64,
+    pub dofs: u64,
+    pub estimated_error: f64,
+    pub time_ms: f64,
 }
 
 /// `study.converge` output.
@@ -1165,6 +1213,8 @@ pub struct ResultSurface {
     /// Shared mesh nodes retain distinct field values on their incident elements.
     pub tri_element_node: Vec<u32>,
     pub tri_body: Vec<u32>,
+    /// Global element behind each surface triangle; indexes element-based Result fields.
+    pub tri_element: Vec<u32>,
     /// First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
     pub tri_face: Vec<u32>,
     pub face_names: Vec<String>,

@@ -12,8 +12,9 @@ use std::collections::BTreeMap;
 
 use crate::command::Field;
 use crate::engine::OnProgress;
-use crate::error::Error;
-use crate::fem::problem::Problem;
+use crate::error::{Error, ErrorCode};
+use crate::fem::contact::{self, ActiveSet};
+use crate::fem::problem::{Coupling, Problem};
 use crate::fem::{assembly, checks, loads, mpc};
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
@@ -155,8 +156,166 @@ pub async fn run(
     gpu: Option<&crate::gpu::Gpu>,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
+    if p.couplings.iter().any(Coupling::is_frictionless) {
+        return run_contact(p, opts, dt, t_end, amplitude, output_every, pool, gpu, progress).await;
+    }
     let s = statics(p, opts, pool, gpu, &mut progress).await?;
     post(p, s, opts, dt, t_end, amplitude, output_every, pool, gpu, progress).await
+}
+
+/// The same Constraints with every prescribed value scaled by `g`: what an amplitude does to
+/// them at one instant.
+fn scaled(rc: &assembly::ResolvedConstraints, g: f64) -> assembly::ResolvedConstraints {
+    assembly::ResolvedConstraints {
+        fixed: rc.fixed.iter().map(|&(d, v)| (d, g * v)).collect(),
+        owner: rc.owner.clone(),
+        inert: rc.inert.clone(),
+    }
+}
+
+/// Everything one converged active-set solve leaves behind.
+struct Settled {
+    u: Vec<f64>,
+    mpc: mpc::Mpc,
+    red: assembly::Reduced,
+    solver: SolveInfo,
+    factored: Option<Direct>,
+}
+
+/// Linear contact: solve `TᵀKT v = Tᵀ(f − K g)` with the rows of the current active set,
+/// move the set by what that solution says, and repeat until it stops moving.
+///
+/// `set` comes in as the starting guess and goes out as the settled set, so an amplitude's
+/// increments each start from where the previous one ended. A reduced system that has lost
+/// positive definiteness on the way is a part the contact alone was holding that has lifted
+/// off: `contact.open`, rather than the solver's own complaint about a mechanism.
+#[allow(clippy::too_many_arguments)]
+async fn active_set_solve(
+    p: &Problem<'_>,
+    a: &assembly::Assembled,
+    f: &[f64],
+    rc: &assembly::ResolvedConstraints,
+    base: &mpc::Mpc,
+    set: &mut ActiveSet,
+    opts: &SolveOptions,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    progress: &mut OnProgress<'_>,
+) -> Result<Settled, Error> {
+    let dpn = p.dofs_per_node();
+    let stiffness = a.k.diag().into_iter().fold(0.0f64, f64::max);
+    loop {
+        let m = base.with_active(&set.active, true, dpn);
+        let (kt, ft) = pool.install(|| mpc::transform(&a.k, f, &m));
+        let red = assembly::reduce(&kt, &ft, rc, &m.slaves);
+        let (u_f, solver, factored) = match solve_reusable(&red.k_ff, &red.f_f, opts, pool, gpu, progress).await {
+            Ok(s) => s,
+            Err(e) if e.code == ErrorCode::SolveNotPositiveDefinite => return Err(contact::lifted_off(p, &m, set)),
+            Err(e) => return Err(e),
+        };
+        let mut u = assembly::expand(&red, &u_f);
+        mpc::recover(&m, &mut u);
+        let r = contact::residual(&a.k, &u, f);
+        // Two things end a pass early, chatter and the host saying stop, and both are one
+        // structured error out of the same place.
+        let moved = set.update(p, &m, &u, &r, stiffness).and_then(|moved| {
+            if moved {
+                let text =
+                    format!("active set changed: {} of {} paired nodes in contact", set.count(), set.active.len());
+                report(progress, "contact", 0.5, &text)?;
+            }
+            Ok(moved)
+        })?;
+        if !moved {
+            return Ok(Settled { u, mpc: m, red, solver, factored });
+        }
+    }
+}
+
+/// A static Step with a frictionless contact: the active-set solve of [`active_set_solve`],
+/// once at full load or once per increment of the amplitude's schedule.
+///
+/// The schedule is a real increment loop rather than [`ramp`]'s scaling of two solved vectors,
+/// because the active set — and with it the operator — depends on the load level; every
+/// increment starts from the set the previous one settled on, which is what lets a gap close
+/// partway through a Step and stay closed.
+#[allow(clippy::too_many_arguments)]
+async fn run_contact(
+    p: &Problem<'_>,
+    opts: &SolveOptions,
+    dt: f64,
+    t_end: f64,
+    amplitude: Option<&Amplitude>,
+    output_every: usize,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    mut progress: OnProgress<'_>,
+) -> Result<StepResult, Error> {
+    if let Some(e) = checks::all(p).into_iter().next() {
+        return Err(e);
+    }
+    report(&mut progress, "assemble", 0.1, "building the sparsity pattern")?;
+    let dpn = p.dofs_per_node();
+    let pat = assembly::pattern(p.mesh, dpn);
+    let (a, mut applied, f) = pool.install(|| {
+        assembly::assemble_stiffness(p, &pat).and_then(|a| {
+            let mut f = a.f_thermal.clone();
+            loads::assemble_loads(p, &mut f).map(|applied| (a, applied, f))
+        })
+    })?;
+    let rc = assembly::resolve(p).expect("the checks resolved the constraints");
+    let base = mpc::build(p).expect("the checks built the multipoint constraints");
+    let mut set = ActiveSet::initial(&base);
+    let mut scalars = BTreeMap::new();
+    let mut history = None;
+    let (settled, f_end, rc_end, g_end) = match amplitude {
+        None => (active_set_solve(p, &a, &f, &rc, &base, &mut set, opts, pool, gpu, &mut progress).await?, f, rc, 1.0),
+        Some(amp) => {
+            let (steps, dt) = time_grid(dt, t_end)?;
+            let every = output_every.max(1);
+            let frames = retained_frame_count(steps, every).expect("time_grid bounds the retained-frame count");
+            let mut h: Option<History> = None;
+            let mut last = None;
+            for step in 0..=steps {
+                // The last increment lands on the requested endpoint exactly, not on `steps · dt`.
+                let time = if step == steps { t_end } else { step as f64 * dt };
+                let g = amp.at(time);
+                // The thermal load is never scaled: the temperature is a field, not a Load.
+                let f_t: Vec<f64> = f.iter().zip(&a.f_thermal).map(|(v, th)| th + g * (v - th)).collect();
+                let rc_t = scaled(&rc, g);
+                let s = active_set_solve(p, &a, &f_t, &rc_t, &base, &mut set, opts, pool, gpu, &mut progress).await?;
+                match h.as_mut() {
+                    None => h = Some(History::with_initial(Field::Displacement, s.u.clone(), frames)),
+                    Some(h) if step % every == 0 || step == steps => {
+                        h.times.push(time);
+                        h.values.push(s.u.clone());
+                    }
+                    Some(_) => {}
+                }
+                last = Some((s, f_t, rc_t, g));
+                report(&mut progress, "solve", 0.1 + 0.8 * step as f64 / steps as f64, "solving an increment")?;
+            }
+            scalars.insert("increments".to_string(), steps as f64);
+            scalars.insert("dt".to_string(), dt);
+            history = h;
+            last.expect("a time grid has at least one step")
+        }
+    };
+    for v in applied.force.iter_mut() {
+        *v *= g_end;
+    }
+    let r = contact::residual(&a.k, &settled.u, &f_end);
+    let Settled { u, mpc: m, red, solver, factored } = settled;
+    let s = Statics { pat, a, applied, f: f_end, rc: rc_end, mpc: m, red, u, solver, factored };
+    let mut res = post(p, s, opts, dt, t_end, None, output_every, pool, gpu, progress).await?;
+    let (pressure, contacts) = contact::finish(p, &base, &set, &r, &mut res.warnings);
+    res.extremes.extend(extremes(&pressure, p.mesh).into_iter().map(|e| (Field::ContactPressure, e)));
+    res.fields.insert(Field::ContactPressure, pressure);
+    res.contacts = contacts;
+    res.history = history;
+    res.scalars.extend(scalars);
+    res.scalars.insert("contact_changes".to_string(), set.changes as f64);
+    Ok(res)
 }
 
 /// The amplitude schedule, the reactions and the recovered fields of a solved static state.
@@ -250,12 +409,14 @@ pub(crate) async fn post(
         frequencies: Vec::new(),
         buckling_factors: Vec::new(),
         modes: Vec::new(),
+        modal_dofs: Vec::new(),
         history,
         sweep: None,
         prestress_from: None,
         solver,
         warnings: mpc.warnings,
         assumptions: Vec::new(),
+        contacts: Vec::new(),
     })
 }
 
@@ -301,6 +462,16 @@ pub fn run_history(
 ) -> Result<StepResult, Error> {
     if let Some(e) = checks::all(p).into_iter().next() {
         return Err(e);
+    }
+    // One factorisation serves every frame here, and a frictionless pair would need a new one
+    // per frame per active-set pass; that is a loop this path was built not to have.
+    if let Some(c) = p.couplings.iter().find(|c| c.is_frictionless()) {
+        return Err(Error::unsupported(&format!(
+            "frictionless contact '{}' in a static Step solved once per retained frame of a transient temperature",
+            c.name()
+        ))
+        .at("after")
+        .suggest("step.add after a steady heat Step, or contact.add with kind bonded"));
     }
     report(&mut progress, "assemble", 0.1, "building the sparsity pattern")?;
     let dpn = p.dofs_per_node();
@@ -404,6 +575,7 @@ pub fn run_history(
         reactions,
         frequencies: Vec::new(),
         modes: Vec::new(),
+        modal_dofs: Vec::new(),
         history: Some(History { field: Field::VonMises, times, values: von_mises_frames }),
         buckling_factors: Vec::new(),
         sweep: None,
@@ -411,5 +583,6 @@ pub fn run_history(
         solver,
         warnings: mpc.warnings,
         assumptions: Vec::new(),
+        contacts: Vec::new(),
     })
 }

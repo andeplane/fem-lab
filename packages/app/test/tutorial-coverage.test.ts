@@ -7,9 +7,11 @@ const root = path.resolve(import.meta.dirname, '../../..');
 const tutorials = readTutorials();
 
 // The sub-issues epic #432 lists (Landed, In review, Not started, in that order). Copied from the
-// issue body: a `needs` number outside this list is a mapping mistake, not a new capability.
+// issue body plus the #83 scope follow-up attached to the epic: a `needs` number
+// outside this list is a mapping mistake, not a new capability.
 const EPIC_SUB_ISSUES = [
   4, 354, 79, 78, 61, 350, 66, 59, 397, 368, 370, 371, 440, 67, 372, 72, 85, 71, 369, 68, 58, 373, 84, 22, 81, 82, // landed
+  479, // time-coupled adaptation follow-up to #83
   396, // in review
   62, 64, 351, 80, 60, 65, 347, 63, 73, 74, 75, 344, 346, 77, 83, 345, 69, 76, 343, 70, 431, // not started
 ];
@@ -62,6 +64,13 @@ describe('docs/tutorial-coverage.json', () => {
       if (t.status_written === 'can-do' || t.status_written === 'variant') expect(t.needs, `tutorial ${t.id}`).toEqual([]);
       else expect(t.needs.length, `tutorial ${t.id}`).toBeGreaterThan(0);
     }
+  });
+
+  it('keeps time-coupled transient adaptation pending when spatial adaptation lands', () => {
+    const heat = tutorials.find(t => t.id === 70)!;
+    expect(heat.status_written).toBe('partial');
+    expect(rank([heat], new Set([83])).summary).toEqual({ total: 1, doable: 0, partly: 1, blocked: 0 });
+    expect(rank([heat], new Set([83, 479])).summary).toEqual({ total: 1, doable: 1, partly: 0, blocked: 0 });
   });
 
   it('rejects a broken tracker', () => {

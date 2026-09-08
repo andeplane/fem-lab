@@ -111,3 +111,30 @@ it('keeps separate element-node colours at a shared mesh node', () => {
   viewer.setSurface(surface);
   expect(() => viewer.setField(Float32Array.of(1), [0, 1], 'elementNode')).toThrow('no element-node field mapping');
 });
+
+it('colours each triangle by its element id and restores nodal colouring afterwards', () => {
+  const { viewer, objects } = setup();
+  viewer.setSurface({ ...surface,
+    positions: Float32Array.from([0,0,0, 1,0,0, 1,1,0, 0,1,0]),
+    indices: Uint32Array.from([0,1,2, 0,2,3]),
+    triBody: Uint32Array.of(0,0), triFace: Uint32Array.of(0,0),
+    // Reversed deliberately: triangle number and node number are not element id.
+    triElement: Uint32Array.of(1,0),
+  });
+  viewer.setMode('results');
+  viewer.setField(Float32Array.of(0.1,0.9), [0,1], 'element');
+  const attribute = objects.mesh.geometry.getAttribute('color');
+  const colour = (i: number) => [attribute.getX(i), attribute.getY(i), attribute.getZ(i)];
+  expect(colour(0)).toEqual(colour(1));
+  expect(colour(1)).toEqual(colour(2));
+  expect(colour(3)).toEqual(colour(4));
+  expect(colour(4)).toEqual(colour(5));
+  expect(colour(0)).not.toEqual(colour(3));
+  const first = colour(0), second = colour(3);
+  viewer.setField(Float32Array.of(0.9,0.1), [0,1], 'element');
+  expect(colour(0)).toEqual(second);
+  expect(colour(3)).toEqual(first);
+  viewer.setField(Float32Array.of(0,1,0.5,0.2), [0,1]);
+  expect(colour(0)).not.toEqual(colour(1));
+  expect(colour(0)).toEqual(colour(3)); // shared node, not shared element
+});

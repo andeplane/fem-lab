@@ -299,6 +299,15 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<f64>,
     },
+    /// A frictionless contact: the Constraint's own Set is the slave, `master` names the face
+    /// Set it can press on, and `tol` is the search distance in metres (`None` scales with the
+    /// Mesh). Its own variant rather than a flag on `Bonded`, so every saved bonded contact
+    /// serialises byte-for-byte as it did before this kind existed.
+    Frictionless {
+        master: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
     /// A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector
     /// face, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`
     /// (metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales
@@ -339,7 +348,7 @@ impl Constraint {
     pub fn sets(&self) -> Vec<&str> {
         let mut out = vec![self.on.as_str()];
         match &self.kind {
-            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Bonded { master, .. } | ConstraintKind::Frictionless { master, .. } => out.push(master),
             ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
@@ -355,7 +364,7 @@ impl Constraint {
     pub fn sets_mut(&mut self) -> Vec<&mut String> {
         let mut out = vec![&mut self.on];
         match &mut self.kind {
-            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Bonded { master, .. } | ConstraintKind::Frictionless { master, .. } => out.push(master),
             ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
@@ -563,6 +572,8 @@ pub struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damping_ratios: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd: Option<Vec<[f64; 2]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rayleigh_alpha: Option<f64>,
@@ -675,6 +686,16 @@ pub struct MeshSettings {
     /// Split the chosen mesher's quads/hexes into triangles/tetrahedra.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub simplices: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refinement: Option<LocalRefinement>,
+}
+
+/// Local mesher size field in SI, retained so replay reconstructs the exact mesh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRefinement {
+    pub boxes: Vec<femlab_geometry::SizeBox>,
+    pub max_elements: u32,
 }
 
 /// A Plugin used by the Model (phase P).
@@ -957,6 +978,7 @@ mod tests {
             sweep: None,
             damping_ratio: None,
             damping_ratios: None,
+            psd: None,
             alpha: None,
             rayleigh_alpha: None,
             rayleigh_beta: None,

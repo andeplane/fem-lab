@@ -1,0 +1,125 @@
+{
+  "name": "frictionless-block-liftoff",
+  "reference": "Benchmark F5c, lift-off. A 1 m square block a million times stiffer than the 10 mm bed it stands on (plane strain, nu = 0 so the bed is a Winkler foundation to within its thickness) carries a 1 kN point load at e = 0.3 m from its centre, outside the kern of B/6. Rigid-block statics on a linear bed: the pressure is a triangle over c = 3(B/2 - e) = 0.6 m from the loaded edge, peaking at 2P/c = 3333.3 Pa, and the block lifts off the remaining 0.4 m. The bed's top is the slave (2.5 mm elements against the block's 50 mm), the contact resultant is the load, the open part carries nothing and the pressure follows the triangle everywhere but within a bed thickness of the lift-off point, where the continuum smooths the kink a spring bed would have.",
+  "journal": [
+    { "cmd": "model.new", "name": "block-liftoff" },
+    { "cmd": "model.setUnits", "units": { "length": "m", "stress": "Pa", "force": "kN" } },
+    { "cmd": "model.setIdealisation", "idealisation": { "kind": "planeStrain" } },
+    {
+      "cmd": "geometry.add",
+      "name": "bed",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            { "kind": "line", "to": ["1 m", "0 m"], "tag": "ymin" },
+            { "kind": "line", "to": ["1 m", "10 mm"], "tag": "xmax" },
+            { "kind": "line", "to": ["0 m", "10 mm"], "tag": "ymax" },
+            { "kind": "line", "to": ["0 m", "0 m"], "tag": "xmin" }
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "geometry.add",
+      "name": "block",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            { "kind": "line", "to": ["1 m", "10 mm"], "tag": "ymin" },
+            { "kind": "line", "to": ["1 m", "1010 mm"], "tag": "xmax" },
+            { "kind": "line", "to": ["0 m", "1010 mm"], "tag": "ymax" },
+            { "kind": "line", "to": ["0 m", "10 mm"], "tag": "xmin" }
+          ]
+        }
+      }
+    },
+    { "cmd": "material.add", "name": "soft", "E": "1 MPa", "nu": 0.0 },
+    { "cmd": "material.add", "name": "rigid", "E": "1000 GPa", "nu": 0.0 },
+    { "cmd": "material.assign", "material": "soft", "bodies": ["bed"] },
+    { "cmd": "material.assign", "material": "rigid", "bodies": ["block"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": "50 mm", "sizes": { "bed": "2.5 mm" } },
+      "order": 1,
+      "formulation": "full"
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "at",
+      "where": { "kind": "bbox", "min": ["0.799 m", "1.009 m", "-1 m"], "max": ["0.801 m", "1.011 m", "1 m"] }
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "corner",
+      "where": { "kind": "bbox", "min": ["-0.001 m", "1.009 m", "-1 m"], "max": ["0.001 m", "1.011 m", "1 m"] }
+    },
+    { "cmd": "constraint.fix", "name": "base", "on": "bed.ymin", "dofs": ["ux", "uy"] },
+    { "cmd": "constraint.fix", "name": "hold", "on": "corner", "dofs": ["ux"] },
+    { "cmd": "contact.add", "name": "seat", "master": "block.ymin", "slave": "bed.ymax", "kind": "frictionless" },
+    { "cmd": "load.force", "name": "weight", "on": "at", "total": ["0 N", "-1 kN", "0 N"] },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["base", "hold", "seat"],
+      "loads": ["weight"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "contactPressure", "at": ["1 m", "10 mm", "0 m"] },
+      "path": "/value/value",
+      "expect": 3333.3333333333335,
+      "tol": 0.02,
+      "rel": true,
+      "note": "2P/c at the loaded edge: the peak of the triangle"
+    },
+    {
+      "query": { "query": "query.probe", "field": "contactPressure", "at": ["0.7 m", "10 mm", "0 m"] },
+      "path": "/value/value",
+      "expect": 1666.6666666666667,
+      "tol": 33.3,
+      "note": "halfway along the contact length the triangle is at half its peak (1 % of the peak, absolute)"
+    },
+    {
+      "query": { "query": "query.probe", "field": "contactPressure", "at": ["0.5 m", "10 mm", "0 m"] },
+      "path": "/value/value",
+      "expect": 555.5555555555555,
+      "tol": 33.3,
+      "note": "0.1 m past the lift-off point, one sixth of the peak"
+    },
+    {
+      "query": { "query": "query.probe", "field": "contactPressure", "at": ["0.2 m", "10 mm", "0 m"] },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 33.3,
+      "note": "and nothing on the open part"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/contacts/0/activeFraction",
+      "expect": 0.6,
+      "tol": 0.01,
+      "note": "0.6 of the bed's 401 paired nodes are held: the contact length c = 0.6 m"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/contacts/0/force/1/value",
+      "expect": -1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the block presses the whole 1 kN into the bed"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-08,
+      "note": "the bed's base carries the load; the stiffness ratio of a million leaves the direct solve at 1e-8"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false }
+  ]
+}

@@ -1,4 +1,4 @@
-//! Sampling a nodal field where the user points: one value at a point, or a line of them
+//! Sampling a nodal or element field where the user points: one value at a point, or a line of them
 //! (plan A §8).
 //!
 //! Point location is a bounding-box scan followed by a Newton inversion of the isoparametric
@@ -8,13 +8,14 @@
 use femlab_geometry::{ElementKind, Mesh};
 
 use crate::fem::element::{element_for, InverseMap};
-use crate::post::FieldData;
+use crate::post::{FieldData, Per};
 
 /// How far outside its own bounding box an element is still considered, relative to the box.
 const BBOX_SLACK: f64 = 1e-9;
 
 /// The element containing `x` and the nodal field interpolated there, or `None` when the point
-/// is outside the mesh. Ties (a point on a shared face) go to the lowest element id.
+/// is outside the mesh. Element fields return the containing element’s constant value.
+/// Ties (a point on a shared face) go to the lowest element id.
 pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)> {
     probe_checked(mesh, f, x).ok().flatten()
 }
@@ -41,6 +42,10 @@ pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(
                 continue;
             }
         };
+        if f.per == Per::Element {
+            let start = elem as usize * f.comps;
+            return Ok(Some((elem, f.data[start..start + f.comps].to_vec())));
+        }
         shape.resize(kind.n_nodes(), 0.0);
         element.shape_at(xi, &mut shape);
         let mut out = vec![0.0; f.comps];

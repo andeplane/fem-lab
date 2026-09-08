@@ -10,6 +10,7 @@
 pub mod assembly;
 pub mod beam;
 pub mod checks;
+pub mod contact;
 pub mod element;
 pub mod heat;
 pub mod loads;

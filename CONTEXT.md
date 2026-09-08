@@ -86,7 +86,7 @@ A four-node MITC4 midsurface element (`shell4`) with three displacements and thr
 rotations per node. A shell Section supplies its thickness; a director at each
 corner identifies the positive (top) side. Transverse shear uses mixed covariant
 interpolation so thin plates do not shear-lock. A small drilling penalty couples
-rotation about the normal to the surface's in-plane spin (ADR 0023). Top and bottom
+rotation about the normal to the surface's in-plane spin (ADR 0024). Top and bottom
 stress refer to offsets of plus and minus half the thickness from the midsurface.
 The `stressTop` and `stressBottom` fields retain global Cartesian stresses per
 element node. `shellMoment` is the stress first moment `∫ z σ dz`, in global
@@ -100,7 +100,7 @@ meshed midsurface. Each ply references a Material and supplies a thickness and
 angle. Its material axes follow the shell surface, with an optional projected
 reference axis from `section.assign`. Ply materials replace the Body material.
 The common MITC4 displacement field integrates each ply separately, preserving
-extension–bending coupling, thermal mismatch and eccentric mass (ADR 0023).
+extension–bending coupling, thermal mismatch and eccentric mass (ADR 0024).
 `stressPly:k:bottom` and `stressPly:k:top` retain separate global stresses on
 each ply face, with k counting from 1 at the bottom. The fields use the same
 unaveraged element-node layout as outer shell stresses and carry zeros on
@@ -123,6 +123,16 @@ beam joint a *clamp* (`constraint.fix` with no rotation named) holds all six DOF
 (`constraint.pin`) the three displacements only; a symmetry plane holds its normal displacement
 and the two rotations in the plane.
 _Avoid_: BC, boundary condition, support, fixture, restraint, encastre
+
+**Contact**:
+A connection between two face Sets of different Bodies, made by `contact.add`: *bonded* ties every
+slave node to the master point it projects onto and behaves as one part; *frictionless* lets the
+faces press, open and slide — a slave node within the search distance is held on the master surface
+only while the normal force there is compressive, and transmits nothing along it. Both are applied
+by elimination, never by a penalty spring, and a contact is listed in a Step's constraints like a
+Constraint. The *active set* is the set of slave nodes currently held; the Result reports it as an
+active fraction and a `contactPressure` field.
+_Avoid_: interaction, glue, tie (that is the bonded kind), gap element
 
 **Load**:
 A prescribed force-like condition on a Set: pressure, traction, point force, moment (on beam
@@ -254,3 +264,26 @@ its mesh and display units, even after edits. The default per-Step selection ret
 stale-field safeguards. A supplied Step must match the id. Missing/evicted ids are errors;
 old values are never attached to current geometry. The existing FrameSample time/index rules
 remain canonical. See ADR0018 and issue #280.
+
+**Adaptive refinement study**:
+`study.adapt` solves a Step, estimates local spatial error through ZZ recovery,
+and refines the largest contributions until a target or iteration limit. Its
+Journal entry records geometric refinement regions so replay reconstructs the
+same mesh without making new numerical decisions. `errorEstimate` contains one
+dimensionless contribution per element; the sum of their squares equals the
+squared global relative estimate. The viewer colours each element without nodal
+interpolation; `query.probe` returns the containing element’s constant value. The
+Results tab lists each adaptive solve and whether the requested target was reached.
+This is an error indicator, not a certified bound. See [ADR 0023](docs/adr/0023-adaptive-refinement-records-local-size-fields.md).
+
+**Random vibration**:
+A stationary, zero-mean response to a spatial Load pattern multiplied by one random process.
+A `randomVibration` Step consumes a current modal Result through `after`, with identical
+Constraints. Its `psd` knots carry frequency and the one-sided density of that dimensionless
+multiplier (1/Hz, equivalently seconds); physical force units and amplitudes belong to the
+Loads. Density is piecewise linear and zero outside the supplied band. Positive damping is
+required for every mode. The Result's displacement and stress components are 1σ standard
+deviations, not a signed equilibrium field. Beam stresses are the largest standard deviation
+among the four extreme fibres at each member end, with cross-modal correlation retained until
+after integration. Von Mises and principal stress are nonlinear quantities and are not
+reported as standard deviations of the componentwise RMS tensor.

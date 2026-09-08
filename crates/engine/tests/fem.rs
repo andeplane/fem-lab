@@ -8445,7 +8445,7 @@ fn mat_mul_t(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
 /// One `Mpc` built by hand, without a Mesh: the rows are the whole definition of `T`.
 fn hand_mpc(rows: Vec<Row>) -> Mpc {
     let slaves = rows.iter().map(|r| r.slave).collect();
-    Mpc { rows, slaves, contact: Vec::new(), warnings: Vec::new() }
+    Mpc { rows, slaves, contact: Vec::new(), candidates: Vec::new(), gap_tol: 0.0, warnings: Vec::new() }
 }
 
 /// The dense `T` of an `Mpc`: identity on the retained DOFs, the row's coefficients on a slave
@@ -8476,7 +8476,7 @@ fn transform_is_the_dense_t_transpose_k_t() {
        -0.5,  1.0, -1.5,  7.0,
     ];
     let f = vec![1.0, -2.0, 3.0, 5.0];
-    let mpc = hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25), (1, 0.75)], owner: 0 }]);
+    let mpc = hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25), (1, 0.75)], g: 0.0, owner: 0 }]);
     let t = dense_t(&mpc, n);
     let want = mat_mul_t(&t, &mat_mul(&k, &t, n), n);
     let (kt, ft) = mpc::transform(&dense_csr(n, &k), &f, &mpc);
@@ -8515,8 +8515,8 @@ fn an_empty_mpc_transforms_nothing() {
     assert_eq!(u, vec![7.0, 8.0]);
     // Node 0 tied to nodes 1 and 2 couples those node pairs, whatever the component.
     let mpc = hand_mpc(vec![
-        Row { slave: 0, masters: vec![(3, 0.5), (6, 0.5)], owner: 0 },
-        Row { slave: 1, masters: vec![(4, 0.5), (7, 0.5)], owner: 0 },
+        Row { slave: 0, masters: vec![(3, 0.5), (6, 0.5)], g: 0.0, owner: 0 },
+        Row { slave: 1, masters: vec![(4, 0.5), (7, 0.5)], g: 0.0, owner: 0 },
     ]);
     assert_eq!(mpc.pairs(3), vec![[0, 1], [0, 2]]);
 }
@@ -8537,8 +8537,8 @@ proptest::proptest! {
         // Two slaves, each leaning on masters that are neither slaves nor each other.
         let (a0, a1) = (r.unit(), r.unit());
         let mpc = hand_mpc(vec![
-            Row { slave: 4, masters: vec![(0, a0), (1, 1.0 - a0)], owner: 0 },
-            Row { slave: 5, masters: vec![(2, a1), (3, 1.0 - a1)], owner: 0 },
+            Row { slave: 4, masters: vec![(0, a0), (1, 1.0 - a0)], g: 0.0, owner: 0 },
+            Row { slave: 5, masters: vec![(2, a1), (3, 1.0 - a1)], g: 0.0, owner: 0 },
         ]);
         let (kt, _) = mpc::transform(&dense_csr(n, &k), &vec![0.0; n], &mpc);
         let d = to_dense(&kt);
@@ -9413,7 +9413,7 @@ fn cyclic_rows_rotate_a_structural_dof_and_leave_a_heat_dof_alone() {
         heat_problem(&mesh, &sets, &body, Idealisation::Solid3d, conductor(1.0, 1.0, 1.0), Vec::new(), Vec::new());
     hp.couplings = vec![cyclic(2, angle)];
     let hm = mpc::build(&hp).expect("the rotated node still lands on `to`");
-    assert_eq!(hm.rows, vec![Row { slave: 1, masters: vec![(0, 1.0)], owner: 0 }]);
+    assert_eq!(hm.rows, vec![Row { slave: 1, masters: vec![(0, 1.0)], g: 0.0, owner: 0 }]);
 }
 
 /// A `from` node whose rotated image lands nowhere near a `to` node is `contact.unpaired`,
@@ -14563,6 +14563,30 @@ fn cantilever_beam_modes_converge_to_euler_bernoulli_at_fourth_order_and_shear_s
         for (f, e) in res.frequencies.iter().zip(&exact) {
             assert!(f / e - 1.0 > -1e-9, "a conforming element is stiffer than the continuum: {f} vs {e}");
         }
+        // Post-modal stress recovery needs the rotations as well as displayed translations.
+        // The retained vectors must still satisfy the generalized eigenproblem and unit mass.
+        let pat = pattern(&mesh, 6);
+        let k = assemble_stiffness(&p, &pat).unwrap().k;
+        let m = assemble_mass(&p, &pat, false).unwrap();
+        assert_eq!(res.modal_dofs.len(), res.modes.len());
+        for (mode, u) in res.modal_dofs.iter().enumerate() {
+            assert_eq!(u.len(), p.n_dofs());
+            assert!(u.chunks_exact(6).any(|v| v[3..].iter().any(|x| x.abs() > 0.0)));
+            let (mut ku, mut mu) = (vec![0.0; u.len()], vec![0.0; u.len()]);
+            k.spmv(u, &mut ku);
+            m.spmv(u, &mut mu);
+            let mass: f64 = u.iter().zip(&mu).map(|(a, b)| a * b).sum();
+            assert!((mass - 1.0).abs() < 1e-10, "modal mass {mass}");
+            let lambda = (2.0 * PI * res.frequencies[mode]).powi(2);
+            let error: f64 = ku[6..].iter().zip(&mu[6..]).map(|(a, b)| (a - lambda * b).powi(2)).sum();
+            // Backward residual: this slender section has a stiffness condition number
+            // above 1e8, so scaling only by K u magnifies roundoff in the soft bending mode.
+            let scale = k.vals.iter().map(|a| a * a).sum::<f64>() * u.iter().map(|a| a * a).sum::<f64>();
+            assert!((error / scale).sqrt() < 1e-10, "retained eigenvector residual {}", (error / scale).sqrt());
+            for (v, display) in u.chunks_exact(6).zip(res.modes[mode].data.chunks_exact(3)) {
+                assert_eq!(&v[..3], display);
+            }
+        }
         errors.push((res.frequencies[0] / exact[0] - 1.0).abs());
         hs.push(1.0 / f64::from(n));
         if n == 8 {
@@ -14654,6 +14678,19 @@ fn a_solid_next_to_a_beam_keeps_its_own_answer_and_the_beam_keeps_its_own() {
     assert_eq!((p.dofs_per_node(), p.node_dofs(ElementKind::Hex8), p.node_dofs(ElementKind::Beam2)), (6, 3, 6));
     assert_eq!(p.inert_dofs().len(), 3 * base as usize);
     assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let modes =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let zero_psd = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, 0.0], [100.0, 0.0]] },
+        damping: vec![0.02],
+        rayleigh: (0.0, 0.0),
+    };
+    let zero_response = run_after(&p, &zero_psd, Some(&modes)).unwrap();
+    assert!(
+        zero_response.fields.values().all(|f| f.data.iter().all(|v| *v == 0.0)),
+        "zero PSD vanishes in both solid and beam channels"
+    );
     let res = run_step(&p, &static_step(SolveOptions::default())).expect("a mixed model solves");
     let u = &res.fields[&Field::Displacement];
     let rot = &res.fields[&Field::Rotation];
@@ -15460,4 +15497,1420 @@ fn a_load_past_the_collapse_load_is_a_cutback_and_then_newton_diverged() {
     let e = squash(1.2, 2).expect_err("past the yield load a perfectly plastic bar carries nothing more");
     assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
     assert!(e.cause.contains("after 2 cutbacks"), "{}", e.cause);
+}
+
+// ---------------------------------------------------------------- ZZ recovery (#83)
+
+#[test]
+fn zz_two_triangles_have_the_exact_integrated_flux_error() {
+    use femlab_engine::post::estimator::zz;
+    let mesh = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.],
+        blocks: vec![femlab_geometry::mesh::ElementBlock {
+            kind: ElementKind::Tri3,
+            conn: vec![0, 1, 2, 0, 2, 3],
+            first_elem: 0,
+        }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["sheet".into()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+    p.heat = true;
+    let field = FieldData::new(Per::Node, 1, vec![0., 0., 1., 0.]);
+    let estimate = zz(&p, &field).unwrap();
+    // T=xy at the four corners gives gradients (0,1), (1,0). Shared-corner
+    // recovery is (1/2,1/2). ∫_K (1-N_unshared)^2 = area/2, so η_K²=k/8.
+    for value in &estimate.squared_errors {
+        assert!((value - 45. / 8.).abs() < 1e-12);
+    }
+    assert!((estimate.squared_norm - 45.).abs() < 1e-12);
+    assert!((estimate.relative() - 0.2_f64.sqrt()).abs() < 1e-14);
+    assert_eq!(Pool::new(1).install(|| zz(&p, &field).unwrap()), Pool::new(4).install(|| zz(&p, &field).unwrap()));
+    let zero = FieldData::new(Per::Node, 1, vec![0.; 4]);
+    assert_eq!(zz(&p, &zero).unwrap().relative(), 0.);
+
+    // u=(xy,0): the two constant strains are (0,0,1) and (1,0,0).
+    // Their recovered difference is ±(1,0,-1)/2 times the shared shape sum.
+    // Integrating its square gives (C_xxxx+G_xy)/16 per triangle.
+    p.heat = false;
+    let displacement = FieldData::new(Per::Node, 2, vec![0., 0., 0., 0., 1., 0., 0., 0.]);
+    let shear = YOUNG / (2. * (1. + POISSON));
+    for (idealisation, axial, thickness) in [
+        (Idealisation::PlaneStress { thickness: THICKNESS }, YOUNG / (1. - POISSON * POISSON), THICKNESS),
+        (Idealisation::PlaneStrain, YOUNG * (1. - POISSON) / ((1. + POISSON) * (1. - 2. * POISSON)), 1.),
+    ] {
+        p.idealisation = idealisation;
+        let estimate = zz(&p, &displacement).unwrap();
+        let expected = thickness * (axial + shear) / 16.;
+        for value in &estimate.squared_errors {
+            assert!((value / expected - 1.).abs() < 1e-13);
+        }
+        assert!((estimate.squared_norm / (8. * expected) - 1.).abs() < 1e-13);
+        assert!((estimate.relative() - 0.2_f64.sqrt()).abs() < 1e-13);
+    }
+}
+
+#[test]
+fn zz_affine_thermal_and_elastic_patches_are_exact_in_two_and_three_dimensions() {
+    use femlab_engine::post::estimator::zz;
+    for (kind, id) in [
+        (ElementKind::Tri3, Idealisation::PlaneStrain),
+        (ElementKind::Tri3, Idealisation::PlaneStress { thickness: 0.3 }),
+        (ElementKind::Tet4, Idealisation::Solid3d),
+    ] {
+        let mesh = patch_mesh(kind);
+        let sets = BTreeMap::new();
+        let bodies = vec!["patch".into(); mesh.blocks.len()];
+        let mut p = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, vec![]);
+        let strain = [1e-3, 2e-3, 0., 3e-3, 0., 0.];
+        let u = FieldData::new(Per::Node, p.dofs_per_node(), patch_mesh_field(&mesh, &id, &strain));
+        assert!(zz(&p, &u).unwrap().relative() < 1e-13);
+        p.heat = true;
+        let t = FieldData::new(
+            Per::Node,
+            1,
+            (0..mesh.n_nodes())
+                .map(|i| {
+                    let x = mesh.node(i as u32);
+                    7. + x[0] + 2. * x[1] + 3. * x[2]
+                })
+                .collect(),
+        );
+        assert!(zz(&p, &t).unwrap().relative() < 1e-13);
+    }
+}
+
+#[test]
+fn zz_quadratic_temperature_has_first_order_energy_convergence() {
+    use femlab_engine::post::estimator::zz;
+    let mut errors = Vec::new();
+    for n in [8, 16, 32] {
+        let mesh = Structured { kind: ElementKind::Tri3, n: [n, n, 1] }.box_([1., 1., 0.]);
+        let sets = BTreeMap::new();
+        let bodies = vec!["sheet".into(); mesh.blocks.len()];
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+        p.heat = true;
+        let t = FieldData::new(Per::Node, 1, (0..mesh.n_nodes()).map(|i| mesh.node(i as u32)[0].powi(2)).collect());
+        let estimate = zz(&p, &t).unwrap();
+        let eta = estimate.squared_errors.iter().sum::<f64>().sqrt();
+        // For the nodal interpolant of x², ∫ k|∇(T-IhT)|² = k h²/3 exactly.
+        let exact = (45.0_f64 / 3.).sqrt() / n as f64;
+        assert!((eta / exact - 1.).abs() < 0.15, "n={n}: effectivity {}", eta / exact);
+        errors.push(eta);
+    }
+    for pair in errors.windows(2) {
+        let rate = (pair[0] / pair[1]).log2();
+        assert!((rate - 1.).abs() < 0.1, "rate {rate}");
+    }
+}
+
+#[test]
+fn zz_material_patches_do_not_smooth_physical_jumps() {
+    use femlab_engine::post::estimator::zz;
+    let mesh = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 1., 0., 0., 1., 1., 0., 0., 1., 0.],
+        blocks: vec![
+            femlab_geometry::mesh::ElementBlock { kind: ElementKind::Tri3, conn: vec![0, 1, 2], first_elem: 0 },
+            femlab_geometry::mesh::ElementBlock { kind: ElementKind::Tri3, conn: vec![0, 2, 3], first_elem: 1 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["first".into(), "second".into()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+    p.heat = true;
+    p.materials.push(steel());
+    p.materials[1].k = [90.; 3];
+    p.material_of_block[1] = Some(1);
+    let field = FieldData::new(Per::Node, 1, vec![0., 0., 1., 0.]);
+    assert!(zz(&p, &field).unwrap().relative() < 1e-14);
+    p.materials[1].k = [-1.; 3];
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::MaterialProps);
+    p.material_of_block[1] = None;
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::ModelNoMaterial);
+}
+
+#[test]
+fn zz_rejects_unsupported_elements_and_invalid_primary_fields() {
+    use femlab_engine::post::estimator::zz;
+    let mesh = patch_mesh(ElementKind::Tri3);
+    let sets = BTreeMap::new();
+    let bodies = vec!["sheet".into(); mesh.blocks.len()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, vec![]);
+    p.heat = true;
+    for field in [
+        FieldData::new(Per::ElemNode, 1, vec![0.; mesh.n_nodes()]),
+        FieldData::new(Per::Node, 2, vec![0.; mesh.n_nodes() * 2]),
+        FieldData::new(Per::Node, 1, vec![]),
+        FieldData::new(Per::Node, 1, vec![f64::NAN; mesh.n_nodes()]),
+    ] {
+        assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Schema);
+    }
+    let huge = FieldData::new(Per::Node, 1, (0..mesh.n_nodes()).map(|i| 1e300 * mesh.node(i as u32)[0]).collect());
+    let overflow = zz(&p, &huge).unwrap_err();
+    assert_eq!(overflow.code, ErrorCode::SolveStalled);
+    assert!(overflow.cause.contains("energy overflowed"));
+    // Material-plugin errors must escape both stress recovery and the metric's
+    // tangent evaluation, rather than returning an apparently small estimate.
+    p.heat = false;
+    let displacement = FieldData::new(Per::Node, 2, vec![0.; 2 * mesh.n_nodes()]);
+    for call in [1, mesh.n_elems() + 1] {
+        p.materials[0] = fail_on(call).1;
+        let failure = zz(&p, &displacement).unwrap_err();
+        assert_eq!(failure.code, ErrorCode::MaterialProps);
+        assert_eq!(failure.cause, "asked to fail");
+    }
+    p.heat = true;
+    let mut degenerate = mesh.clone();
+    degenerate.coords.fill(0.);
+    p.mesh = &degenerate;
+    let field = FieldData::new(Per::Node, 1, vec![0.; mesh.n_nodes()]);
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::MeshInverted);
+    p.mesh = &mesh;
+    p.idealisation = Idealisation::Axisymmetric { twist: false };
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Unsupported);
+    let quad = patch_mesh(ElementKind::Quad4);
+    p.mesh = &quad;
+    p.idealisation = Idealisation::PlaneStrain;
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Unsupported);
+}
+
+#[test]
+fn random_vibration_sdof_displacement_and_stress_match_stationary_energy_balance() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let e = p.materials[0].props[0];
+    let nu = p.materials[0].props[1];
+    let modulus = e * (1.0 - nu) / ((1.0 + nu) * (1.0 - 2.0 * nu));
+    let omega = (3.0 * modulus / p.materials[0].rho).sqrt();
+    let density = 0.01;
+    let damping = 0.02;
+    let step = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, density], [omega * 10000.0, density]] },
+        damping: vec![damping],
+        rayleigh: (0.0, 0.0),
+    };
+    let result = run_after(&p, &step, Some(&modal)).unwrap();
+    let exact = 1e6 / modulus * (density * omega / (8.0 * damping)).sqrt();
+    for &node in &sets["xmax"].nodes {
+        let got = result.fields[&Field::Displacement].data[node as usize * 3];
+        assert!((got / exact - 1.0).abs() < 1e-7, "RMS displacement {got} vs {exact}");
+    }
+    for stress in result.fields[&Field::Stress].data.chunks_exact(6) {
+        assert!((stress[0] / (modulus * exact) - 1.0).abs() < 1e-7);
+    }
+    assert_eq!(result.scalars["sigma_level"], 1.0);
+    assert!(!result.fields.contains_key(&Field::VonMises));
+    assert!(!result.fields.contains_key(&Field::Reaction));
+    assert_eq!(step.name(), "randomVibration");
+}
+
+/// VM19 reproduces NAFEMS R0016 Test 5R: 10 m long, 2 m square, E=200 GPa,
+/// nu=0.3, rho=8000 kg/m3, uniform load PSD (1e6 N/m)^2/Hz, zeta=0.02.
+/// Published targets: 42.65 Hz, 180.90 mm²/Hz, 58515.60 (N/mm²)²/Hz.
+#[test]
+fn vm19_random_vibration_deep_beam_converges_to_nafems_5r() {
+    let mut displacement_psds = Vec::new();
+    for divisions in [10, 20, 40] {
+        let mesh =
+            femlab_geometry::line(&[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &[[0, 1]], divisions, ElementKind::Beam2)
+                .unwrap();
+        let mut sets = BTreeMap::new();
+        let mut loads = Vec::new();
+        for node in 0..mesh.n_nodes() {
+            let x = mesh.node(node as u32)[0];
+            let name = format!("n{node}");
+            sets.insert(
+                name.clone(),
+                ResolvedSet { kind: SetKind::Node, faces: vec![], nodes: vec![node as u32], elems: vec![] },
+            );
+            let factor = if x == 0.0 || x == 10.0 { 0.5 } else { 1.0 };
+            loads.push(Load::NodalForce { nodes: name, f: [0.0, factor * 1e6 * 10.0 / f64::from(divisions), 0.0] });
+        }
+        let bodies = vec!["beam".into()];
+        let section =
+            properties(&SectionSpec::Rectangle { width: Q::new(2.0, "m"), height: Q::new(2.0, "m") }).unwrap();
+        let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, section);
+        p.constraints = vec![
+            Constraint {
+                name: "left".into(),
+                nodes: "n0".into(),
+                dofs: [true, true, true, true, false, false],
+                value: 0.0,
+            },
+            Constraint {
+                name: "right".into(),
+                nodes: "n1".into(),
+                dofs: [false, true, true, false, false, false],
+                value: 0.0,
+            },
+        ];
+        p.materials[0].props = vec![200e9, 0.3];
+        p.materials[0].rho = 8000.0;
+        p.loads = loads;
+        let modal =
+            run_step(&p, &Step::Modal { n_modes: 9, shift: None, solver: SolveOptions::default(), prestress: None })
+                .unwrap();
+        let mut f = vec![0.0; p.n_dofs()];
+        assemble_loads(&p, &mut f).unwrap();
+        let participation: Vec<f64> =
+            modal.modal_dofs.iter().map(|u| u.iter().zip(&f).map(|(u, f)| u * f).sum()).collect();
+        let t =
+            procedure::random_vibration::transfer(modal.frequencies[0], &modal.frequencies, &[0.02; 9], &participation);
+        let mid = node_at(&mesh, [5.0, 0.0, 0.0]) as usize;
+        let mut displacement = [0.0; 2];
+        let mut bending = [0.0; 2];
+        let beam_end = (0..mesh.n_elems())
+            .find_map(|e| mesh.elem_nodes(e as u32).iter().position(|n| *n as usize == mid).map(|end| e * 2 + end))
+            .unwrap();
+        for (mode, coefficients) in modal.modal_dofs.iter().zip(&t) {
+            let (_, moments) = section_fields(&p, mode).unwrap();
+            for c in 0..2 {
+                displacement[c] += mode[mid * 6 + 1] * coefficients[c];
+                bending[c] += moments.data[beam_end * 3 + 2] / p.sections[0].i_z * coefficients[c];
+            }
+        }
+        let dpsd = displacement.iter().map(|x| x * x).sum::<f64>() * 1e6;
+        displacement_psds.push(dpsd);
+        let spsd = bending.iter().map(|x| x * x).sum::<f64>() / 1e12;
+        eprintln!("VM19 n={divisions}: f={}, displacement PSD={dpsd}, bending PSD={spsd}", modal.frequencies[0]);
+        assert!((modal.frequencies[0] / 42.65 - 1.0).abs() < 0.02);
+        assert!((dpsd / 180.90 - 1.0).abs() < 0.02);
+        assert!((spsd / 58515.60 - 1.0).abs() < 0.01);
+        let random = Step::RandomVibration {
+            spectrum: procedure::random_vibration::Spectrum { table: vec![[0.1, 1.0], [70.0, 1.0]] },
+            damping: vec![0.02],
+            rayleigh: (0.0, 0.0),
+        };
+        let response = run_after(&p, &random, Some(&modal)).unwrap();
+        // Eigenvector signs are arbitrary. Recovering absolute modal fibre stress before
+        // covariance would make the answer depend on the eigensolver's sign convention.
+        let mut flipped = modal.clone();
+        for value in &mut flipped.modal_dofs[0] {
+            *value = -*value;
+        }
+        let reversed = run_after(&p, &random, Some(&flipped)).unwrap();
+        assert_eq!(response.fields, reversed.fields, "modal sign cannot change RMS fields");
+
+        // Independent narrow-band estimate: Lorentzian peak area = peak PSD * pi*zeta*f_n.
+        // This is an approximation, not a published RMS target (the published gates are PSD).
+        let bandwidth = PI * 0.02 * 42.65;
+        let rms = response.fields[&Field::Displacement].data[mid * 3 + 1];
+        let stress_rms = response.fields[&Field::StressUnaveraged].data[beam_end * 6];
+        assert!((rms / (180.90e-6 * bandwidth).sqrt() - 1.0).abs() < 0.03, "RMS displacement {rms}");
+        assert!((stress_rms / (58515.60e12 * bandwidth).sqrt() - 1.0).abs() < 0.03, "RMS stress {stress_rms}");
+    }
+    let rate = ((displacement_psds[1] - displacement_psds[0]) / (displacement_psds[2] - displacement_psds[1])).log2();
+    assert!(rate > 1.9 && rate < 2.1, "second-order displacement PSD refinement: {rate}");
+}
+
+#[test]
+fn random_vibration_refuses_missing_modes_nonzero_constraints_and_supports_cancellation() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = sdof_bar(&mesh, &sets, &bodies);
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let step = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, 1.0], [10000.0, 1.0]] },
+        damping: vec![0.02],
+        rayleigh: (0.0, 0.0),
+    };
+    assert_eq!(run_after(&p, &step, None).unwrap_err().where_.as_deref(), Some("after"));
+    let mut bad = modal.clone();
+    bad.modal_dofs[0].pop();
+    assert_eq!(run_after(&p, &step, Some(&bad)).unwrap_err().where_.as_deref(), Some("after"));
+    p.constraints[0].value = 1.0;
+    assert_eq!(run_after(&p, &step, Some(&modal)).unwrap_err().where_.as_deref(), Some("constraints"));
+    p.constraints[0].value = 0.0;
+    for phase in ["assemble", "solve", "post"] {
+        let mut stop = |progress: Progress| progress.phase != phase;
+        let error =
+            pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, Some(&modal), &mut stop)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+    }
+    let one = pollster::block_on(procedure::run(&p, &step, &Pool::new(1), None, Some(&modal), &mut nop)).unwrap();
+    let two = run_after(&p, &step, Some(&modal)).unwrap();
+    assert_eq!(one, two, "thread count cannot alter modal covariance or RMS recovery");
+    let mut stop_after_integration = |p: Progress| p.message != "integrated the correlated modal covariance";
+    assert_eq!(
+        pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, Some(&modal), &mut stop_after_integration))
+            .unwrap_err()
+            .code,
+        ErrorCode::Cancelled
+    );
+    p.loads = vec![Load::NodalForce { nodes: "missing".into(), f: [1.0, 0.0, 0.0] }];
+    assert!(run_after(&p, &step, Some(&modal)).unwrap_err().cause.contains("missing"));
+    p.loads.clear();
+    p.constraints[0].nodes = "missing".into();
+    assert!(run_after(&p, &step, Some(&modal)).unwrap_err().cause.contains("missing"));
+    p.constraints[0].nodes = "xmin".into();
+    let mut oversized = modal.clone();
+    for mode in &mut oversized.modal_dofs {
+        for value in mode {
+            *value *= 1e160;
+        }
+    }
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e-154, 0.0, 0.0] }];
+    let overflow = run_after(&p, &step, Some(&oversized)).unwrap_err();
+    assert!(overflow.cause.contains("field variance exceeded"), "{overflow:?}");
+}
+
+#[test]
+fn random_vibration_propagates_material_errors_from_every_recovery_pass() {
+    let mesh = femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1, ElementKind::Beam2).unwrap();
+    let sets = root_set();
+    let bodies = vec!["beam".into()];
+    let mut p = beam_cantilever_problem(&mesh, &sets, &bodies, beam_section());
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .unwrap();
+    let random = Step::RandomVibration {
+        spectrum: procedure::random_vibration::Spectrum { table: vec![[0.0, 1.0], [100.0, 1.0]] },
+        damping: vec![0.02],
+        rayleigh: (0.0, 0.0),
+    };
+    // Mean stress, mean section force, modal stress, modal section force. The MaterialLaw
+    // extension point can fail at any of them; no partially recovered Result may escape.
+    for pass in 1..=4 {
+        let (_, material) = fail_on(pass);
+        p.materials[0].law = material.law;
+        let error = run_after(&p, &random, Some(&modal)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::MaterialProps);
+        assert!(error.cause.contains("asked to fail"));
+    }
+}
+
+// ------------------------------------ frictionless contact (Benchmarks F5, F5b, F5c, F5d, F5e)
+
+/// A frictionless contact between two Sets.
+fn slide(name: &str, master: &str, slave: &str, tol: f64) -> Coupling {
+    Coupling::Frictionless { name: name.into(), master: master.into(), slave: slave.into(), tol }
+}
+
+/// `join` for any number of parts: every Set of a part is prefixed with the part's name.
+fn join_named(parts: &[(&str, &Mesh, [f64; 3])]) -> Mesh {
+    let mut out = Mesh {
+        dim: parts[0].1.dim,
+        coords: Vec::new(),
+        blocks: Vec::new(),
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    for &(name, m, shift) in parts {
+        let node_offset = (out.coords.len() / 3) as u32;
+        let elem_offset = out.n_elems() as u32;
+        for (i, x) in m.coords.iter().enumerate() {
+            out.coords.push(x + shift[i % 3]);
+        }
+        for blk in &m.blocks {
+            out.blocks.push(ElementBlock {
+                kind: blk.kind,
+                conn: blk.conn.iter().map(|n| n + node_offset).collect(),
+                first_elem: blk.first_elem + elem_offset,
+            });
+        }
+        for (set, faces) in &m.face_sets {
+            let shifted = faces.iter().map(|f| Face { elem: f.elem + elem_offset, local: f.local }).collect();
+            out.face_sets.insert(format!("{name}.{set}"), shifted);
+        }
+    }
+    out
+}
+
+/// The largest magnitude in a slice.
+fn largest(v: &[f64]) -> f64 {
+    v.iter().fold(0.0f64, |m, x| m.max(x.abs()))
+}
+
+/// Benchmark F5: the frictionless patch test. Two stacked blocks pressed together give the
+/// bonded F4 field exactly — the same displacements, a uniform stress on both sides and a
+/// contact pressure equal to it on every slave node — and the same blocks with the top one
+/// dragged sideways transmit nothing at all: zero shear, zero reaction, zero pressure, where a
+/// bonded tie carries `Gγ`.
+#[test]
+fn a_frictionless_pair_carries_compression_like_a_bond_and_no_shear_at_all() {
+    let mesh = two_blocks(ElementKind::Hex8, [2, 2, 2], [2, 2, 2], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let a_held = || {
+        vec![
+            fix("root", "a.xmin", [true, false, false], 0.0),
+            fix("symy", "a.ymin", [false, true, false], 0.0),
+            fix("symz", "a.zmin", [false, false, true], 0.0),
+        ]
+    };
+    let sigma = 1e6;
+    // A bonded top block is held through the tie; a sliding one needs its own rollers, which
+    // the tie would refuse on its slave nodes (`tied_and_held`) and symmetry makes redundant.
+    let compress = |coupling: Coupling, rollers: bool| {
+        let mut held = a_held();
+        if rollers {
+            held.push(fix("symy_b", "b.ymin", [false, true, false], 0.0));
+            held.push(fix("symz_b", "b.zmin", [false, false, true], 0.0));
+        }
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+        p.couplings = vec![coupling];
+        p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [-sigma, 0.0, 0.0] }];
+        run_step(&p, &static_step(SolveOptions::default())).expect("the pressed blocks solve")
+    };
+    let bonded = compress(bond(1e-9), false);
+    let free = compress(slide("press", "a.xmax", "b.xmin", 1e-9), true);
+    let (ub, uf) = (&bonded.fields[&Field::Displacement].data, &free.fields[&Field::Displacement].data);
+    let umax = largest(ub);
+    for (i, (b, f)) in ub.iter().zip(uf).enumerate() {
+        assert!((b - f).abs() <= 1e-8 * umax, "dof {i}: bonded {b} against frictionless {f}");
+    }
+    let s = &free.fields[&Field::Stress];
+    for node in 0..mesh.n_nodes() {
+        for c in 0..6 {
+            let want = if c == 0 { -sigma } else { 0.0 };
+            let got = s.data[node * 6 + c];
+            assert!((got - want).abs() <= 1e-8 * sigma, "node {node} component {c}: {got}");
+        }
+    }
+    let pressure = &free.fields[&Field::ContactPressure];
+    assert_eq!((pressure.per, pressure.comps, pressure.len()), (Per::Node, 1, mesh.n_nodes()));
+    for (node, &pv) in pressure.data.iter().enumerate() {
+        let want = if sets["b.xmin"].nodes.contains(&(node as u32)) { sigma } else { 0.0 };
+        assert!((pv - want).abs() <= 1e-8 * sigma, "node {node}: pressure {pv}, want {want}");
+    }
+    assert!(free.extremes.iter().any(|(f, e)| *f == Field::ContactPressure && (e.max - sigma).abs() <= 1e-8 * sigma));
+    assert_eq!(free.contacts.len(), 1);
+    let c = &free.contacts[0];
+    assert_eq!((c.name.as_str(), c.active, c.paired), ("press", 9, 9));
+    assert!((c.force[0] - sigma).abs() <= 1e-8 * sigma, "the master pushes the slave back: {:?}", c.force);
+    assert!(c.force[1].abs() <= 1e-8 * sigma && c.force[2].abs() <= 1e-8 * sigma, "{:?}", c.force);
+    reaction_balance(&free, [-sigma, 0.0, 0.0], sigma);
+    assert_eq!(free.scalars["contact_changes"], 0.0, "a closed pair in compression never moves");
+    assert!(free.warnings.is_empty(), "{:?}", free.warnings);
+    assert!(bonded.contacts.is_empty() && !bonded.fields.contains_key(&Field::ContactPressure));
+
+    // The top block dragged sideways by its far face, free to slide on the bottom one.
+    let gamma = 1e-3;
+    let shear = |coupling: Coupling, rollers: bool| {
+        let mut held = a_held();
+        if rollers {
+            held.push(fix("symz_b", "b.zmin", [false, false, true], 0.0));
+        }
+        held.push(fix("drag", "b.xmax", [false, true, false], gamma));
+        held.push(fix("flat", "b.xmax", [false, false, true], 0.0));
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+        p.couplings = vec![coupling];
+        run_step(&p, &static_step(SolveOptions::default())).expect("the dragged block solves")
+    };
+    let force_scale = YOUNG * gamma;
+    let welded = shear(bond(1e-9), false);
+    let held_y: f64 = welded.reactions.iter().filter(|(n, _)| n != "drag").map(|(_, r)| r[1]).sum();
+    assert!(held_y.abs() > 0.05 * force_scale, "a bonded tie carries the shear down to the bottom block: {held_y}");
+    let sliding = shear(slide("slip", "a.xmax", "b.xmin", 1e-9), true);
+    for (name, r) in &sliding.reactions {
+        assert!(largest(r) <= 1e-10 * force_scale, "'{name}' carries {r:?} through a frictionless face");
+    }
+    let u = &sliding.fields[&Field::Displacement];
+    for node in 0..mesh.n_nodes() {
+        let top = mesh.node(node as u32)[0] > 1.0 - 1e-9 && !sets["a.xmax"].nodes.contains(&(node as u32));
+        let want = if top { [0.0, gamma, 0.0] } else { [0.0; 3] };
+        for (c, w) in want.iter().enumerate() {
+            let got = u.data[node * 3 + c];
+            assert!((got - w).abs() <= 1e-10 * gamma, "node {node} component {c}: {got}, want {w}");
+        }
+    }
+    assert!(largest(&sliding.fields[&Field::Stress].data) <= 1e-10 * force_scale);
+    assert!(largest(&sliding.fields[&Field::ContactPressure].data) <= 1e-10 * force_scale);
+    let c = &sliding.contacts[0];
+    assert_eq!((c.active, c.paired), (9, 9), "nothing pulls the faces apart, so nothing is released");
+    assert!(largest(&c.force) <= 1e-10 * force_scale, "{:?}", c.force);
+    assert_eq!(sliding.scalars["contact_changes"], 0.0);
+}
+
+/// The same patch test on an interface inclined to the axes, so the master normal has two
+/// components and the row is eliminated on whichever is larger — `uy` at 30°, `ux` at 60° —
+/// with the other slave component among its masters. The exact linear field is reproduced at
+/// every node and the pressure is uniform either way.
+#[test]
+fn a_frictionless_pair_on_an_inclined_face_passes_the_patch_test_whichever_component_it_eliminates() {
+    for (deg, want_comp) in [(30.0f64, 1usize), (60.0, 0)] {
+        let (c, s) = (libm::cos(deg.to_radians()), libm::sin(deg.to_radians()));
+        let rot = move |x: f64, y: f64| [c * x - s * y, s * x + c * y, 0.0];
+        let a = Structured { kind: ElementKind::Quad4, n: [2, 2, 1] }.build(|p| rot(p[0], p[1]));
+        let b = Structured { kind: ElementKind::Quad4, n: [2, 2, 1] }.build(|p| rot(p[0], p[1] + 1.0));
+        let mesh = join(&a, &b, [0.0; 3]);
+        let sets = sets_of(&mesh);
+        let bodies = two_bodies();
+        let eps = 1e-4;
+        // The master's outward normal is the rotated +y, and the exact field is a uniform
+        // compression along it from a base held at zero.
+        let en = [-s, c];
+        let top = -2.0 * eps;
+        let held = vec![
+            fix("base", "a.ymin", [true, true, false], 0.0),
+            fix("top_x", "b.ymax", [true, false, false], top * en[0]),
+            fix("top_y", "b.ymax", [false, true, false], top * en[1]),
+        ];
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, held);
+        p.materials[0].props = vec![YOUNG, 0.0];
+        p.couplings = vec![slide("press", "a.ymax", "b.ymin", 1e-9)];
+        let base = mpc::build(&p).expect("the inclined pair pairs");
+        assert_eq!(base.candidates.len(), 3);
+        for cand in &base.candidates {
+            assert_eq!(cand.comp, want_comp, "at {deg} degrees");
+            assert!(
+                (cand.normal[0] - en[0]).abs() < 1e-12 && (cand.normal[1] - en[1]).abs() < 1e-12,
+                "{:?}",
+                cand.normal
+            );
+            assert!(cand.gap.abs() < 1e-12);
+            assert_eq!(cand.masters.len(), 1, "a matched node lands on a master node");
+        }
+        let res = run_step(&p, &static_step(SolveOptions::default())).expect("the inclined blocks solve");
+        let u = &res.fields[&Field::Displacement];
+        for node in 0..mesh.n_nodes() {
+            let x = mesh.node(node as u32);
+            let d = x[0] * en[0] + x[1] * en[1];
+            for (k, e) in en.iter().enumerate() {
+                let want = -eps * d * e;
+                let got = u.data[node * 3 + k];
+                assert!(
+                    (got - want).abs() <= 1e-10 * 2.0 * eps,
+                    "{deg} deg, node {node} component {k}: {got} vs {want}"
+                );
+            }
+        }
+        let sigma = YOUNG * eps;
+        let pressure = &res.fields[&Field::ContactPressure];
+        for &n in &sets["b.ymin"].nodes {
+            let got = pressure.data[n as usize];
+            assert!((got - sigma).abs() <= 1e-8 * sigma, "{deg} deg, node {n}: pressure {got}");
+        }
+        let f = res.contacts[0].force;
+        assert!((f[0] - sigma * en[0]).abs() <= 1e-8 * sigma && (f[1] - sigma * en[1]).abs() <= 1e-8 * sigma, "{f:?}");
+        assert_eq!((res.contacts[0].active, res.contacts[0].paired), (3, 3));
+    }
+}
+
+/// Benchmark F5b: gap closure. Two collinear bars, the first split in two and welded (so a
+/// bonded tie and a frictionless pair share one Model), start `g₀` apart; the far end of the
+/// first is pushed by a prescribed displacement ramped over four increments. The force is
+/// exactly zero until the gap closes — one increment lands exactly on closure — and
+/// `(δ − g₀)/(L₁/E₁A + L₂/E₂A)` after it, on every retained frame. A single solve short of
+/// closure ends the pair fully open, which is a warning, not an error.
+#[test]
+fn two_bars_with_a_gap_carry_nothing_until_it_closes_and_the_series_stiffness_after() {
+    let (g0, delta, l, side) = (1e-3, 2e-3, 1.0, 0.1);
+    let area = side * side;
+    let e2 = 70e9;
+    let half = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([0.5 * l, side, side]);
+    let bar = Structured { kind: ElementKind::Hex8, n: [4, 1, 1] }.box_([l, side, side]);
+    let mesh =
+        join_named(&[("a", &half, [0.0; 3]), ("b", &half, [0.5 * l, 0.0, 0.0]), ("c", &bar, [l + g0, 0.0, 0.0])]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let held = vec![
+        fix("push", "a.xmin", [true, false, false], delta),
+        fix("ay", "a.ymin", [false, true, false], 0.0),
+        fix("az", "a.zmin", [false, false, true], 0.0),
+        fix("cy", "c.ymin", [false, true, false], 0.0),
+        fix("cz", "c.zmin", [false, false, true], 0.0),
+        fix("end", "c.xmax", [true, false, false], 0.0),
+    ];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.materials.push(Material { props: vec![e2, POISSON], ..steel() });
+    p.material_of_block = vec![Some(0), Some(0), Some(1)];
+    p.couplings = vec![tie("weld", "a.xmax", "b.xmin", 1e-9), slide("gap", "c.xmin", "b.xmax", 5.0 * g0)];
+    let base = mpc::build(&p).expect("both couplings pair");
+    assert_eq!(base.candidates.len(), 4);
+    for cand in &base.candidates {
+        assert!((cand.gap - g0).abs() <= 1e-12, "the initial gap is g0: {}", cand.gap);
+        assert_eq!(cand.normal, [-1.0, 0.0, 0.0], "the master faces −x");
+    }
+    let flex = l / (YOUNG * area) + l / (e2 * area);
+    let force = |d: f64| (d - g0).max(0.0) / flex;
+    let step = Step::Static {
+        solver: SolveOptions::default(),
+        dt: 0.25,
+        t_end: 1.0,
+        amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 1.0], value: vec![0.0, 1.0] }),
+        output_every: 1,
+    };
+    let res = run_step(&p, &step).expect("the bars close the gap");
+    let h = res.history.as_ref().expect("an amplitude retains frames");
+    assert_eq!(h.times, vec![0.0, 0.25, 0.5, 0.75, 1.0]);
+    let tip_b = nearest_node(&mesh, [l, 0.5 * side, 0.5 * side]);
+    let tip_c = nearest_node(&mesh, [l + g0, 0.5 * side, 0.5 * side]);
+    assert_ne!(tip_b, tip_c);
+    let c_nodes: Vec<usize> = (0..mesh.n_nodes()).filter(|&n| mesh.node(n as u32)[0] >= l + g0 - 1e-9).collect();
+    for (i, frame) in h.values.iter().enumerate() {
+        let d = delta * h.times[i];
+        let f = force(d);
+        let (ub, uc) = (frame[tip_b * 3], frame[tip_c * 3]);
+        assert!((uc - f * l / (e2 * area)).abs() <= 1e-8 * delta, "frame {i}: bar 2 moved {uc} at force {f}");
+        assert!((ub - (d - f * l / (YOUNG * area))).abs() <= 1e-8 * delta, "frame {i}: bar 1 end at {ub}");
+        if d <= g0 {
+            assert!(c_nodes.iter().all(|&n| frame[n * 3..n * 3 + 3] == [0.0; 3]), "frame {i}: bar 2 is untouched");
+        }
+    }
+    let f_end = force(delta);
+    let of = |name: &str| res.reactions.iter().find(|(n, _)| n == name).expect("named").1;
+    assert!((of("end")[0] + f_end).abs() <= 1e-8 * f_end, "end carries {:?}", of("end"));
+    assert!((of("push")[0] - f_end).abs() <= 1e-8 * f_end, "push carries {:?}", of("push"));
+    let c = &res.contacts[0];
+    assert_eq!((c.name.as_str(), c.active, c.paired), ("gap", 4, 4));
+    assert!((c.force[0] + f_end).abs() <= 1e-8 * f_end, "the master pushes the slave back in −x: {:?}", c.force);
+    let pressure = &res.fields[&Field::ContactPressure];
+    for &n in &sets["b.xmax"].nodes {
+        assert!((pressure.data[n as usize] - f_end / area).abs() <= 1e-8 * f_end / area);
+    }
+    assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+    assert_eq!(res.scalars["increments"], 4.0);
+    assert!(res.scalars["contact_changes"] >= 1.0, "the set moved when the gap closed");
+    assert!((res.fields[&Field::Displacement].data[tip_c * 3] - f_end * l / (e2 * area)).abs() <= 1e-8 * delta);
+
+    // Short of closure the pair ends fully open: reported, not refused.
+    p.constraints[0].value = 0.5 * g0;
+    let open = run_step(&p, &static_step(SolveOptions::default())).expect("an open pair still solves");
+    let w = open.warnings.iter().find(|w| w.code == "contact.open").expect("a fully open pair warns");
+    assert!(w.text.contains("contact 'gap' ended fully open") && w.text.contains("4 paired nodes"), "{}", w.text);
+    assert_eq!(w.where_.as_deref(), Some("contact 'gap'"));
+    assert_eq!((open.contacts[0].active, open.contacts[0].paired), (0, 4));
+    assert_eq!(open.contacts[0].force, [0.0; 3]);
+    assert!(open.fields[&Field::ContactPressure].data.iter().all(|v| *v == 0.0));
+    let u = &open.fields[&Field::Displacement].data;
+    assert!(c_nodes.iter().all(|&n| u[n * 3..n * 3 + 3] == [0.0; 3]));
+    assert_eq!(open.scalars["contact_changes"], 0.0);
+    assert!(open.history.is_none());
+}
+
+/// Benchmark F5c: lift-off. A block far stiffer than the thin foundation it stands on (a
+/// Winkler bed to within `h/B`), loaded outside its kern at `e = 0.3 B`, stays in contact
+/// over `c = 3(B/2 − e) = 0.6 B` from the loaded edge and lifts off the rest: rigid-block
+/// statics on a linear bed. The contact resultant equals the load and passes through it, the
+/// pressure is the triangle `2P/c · (x − open)/c`, and the open part carries nothing.
+#[test]
+fn a_stiff_block_loaded_outside_the_kern_lifts_off_by_rigid_block_statics() {
+    let (width, h_bed, h_block) = (1.0, 0.01, 1.0);
+    let bed = Structured { kind: ElementKind::Quad4, n: [400, 2, 1] }.box_([width, h_bed, 0.0]);
+    let block = Structured { kind: ElementKind::Quad4, n: [20, 20, 1] }.box_([width, h_block, 0.0]);
+    let mesh = join(&bed, &block, [0.0, h_bed, 0.0]);
+    let mut sets = sets_of(&mesh);
+    let (e, load) = (0.3, 1e3);
+    let at = nearest_node(&mesh, [0.5 * width + e, h_bed + h_block, 0.0]) as u32;
+    let corner = nearest_node(&mesh, [0.0, h_bed + h_block, 0.0]) as u32;
+    let point = |n: u32| ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![n], elems: Vec::new() };
+    sets.insert("load".into(), point(at));
+    sets.insert("hold".into(), point(corner));
+    let bodies = two_bodies();
+    let held = vec![fix("base", "a.ymin", [true, true, false], 0.0), fix("hold", "hold", [true, false, false], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, held);
+    p.materials = vec![Material { props: vec![1e6, 0.0], ..steel() }, Material { props: vec![1e12, 0.0], ..steel() }];
+    p.material_of_block = vec![Some(0), Some(1)];
+    p.loads = vec![Load::NodalForce { nodes: "load".into(), f: [0.0, -load, 0.0] }];
+    p.couplings = vec![slide("seat", "b.ymin", "a.ymax", 1e-9)];
+    let res = run_step(&p, &static_step(SolveOptions::default())).expect("the block settles");
+    let c = 3.0 * (0.5 * width - e);
+    let open = width - c;
+    let p_max = 2.0 * load / c;
+    let summary = &res.contacts[0];
+    assert_eq!(summary.paired, 401);
+    // The block's underside faces −y, so what it exerts on the bed is the load, downwards.
+    assert!((summary.force[1] + load).abs() <= 1e-8 * load, "the bed carries the load: {:?}", summary.force);
+    assert!(summary.force[0].abs() <= 1e-8 * load, "and nothing sideways: {:?}", summary.force);
+    // A stiffness ratio of a million between the two Bodies leaves the direct solve a little
+    // short of the usual 1e-9 balance; 1e-8 of the load is what it reaches.
+    let sum: Vec<f64> = (0..3).map(|c| res.reactions.iter().map(|(_, r)| r[c]).sum()).collect();
+    assert!(sum[0].abs() <= 1e-8 * load && (sum[1] - load).abs() <= 1e-8 * load, "reactions {sum:?}");
+    // The pressure on the bed's top, node by node, against the triangle; the kink at the
+    // lift-off point is smoothed over a bed thickness, so nodes within 2h of it are not gated.
+    let pressure = &res.fields[&Field::ContactPressure];
+    let mut moment = 0.0;
+    let mut total = 0.0;
+    let mut nodes: Vec<u32> = sets["a.ymax"].nodes.clone();
+    nodes.sort_by(|&a, &b| mesh.node(a)[0].total_cmp(&mesh.node(b)[0]));
+    let h = width / 400.0;
+    // The lift-off point is where the straight part of the pressure reaches zero: a least
+    // squares line through the nodes well inside the contact, extrapolated.
+    let (mut sx, mut sy, mut sxx, mut sxy, mut count) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    for (i, &n) in nodes.iter().enumerate() {
+        let x = mesh.node(n)[0];
+        let got = pressure.data[n as usize];
+        let want = (p_max * (x - open) / c).max(0.0);
+        if (x - open).abs() > 2.0 * h_bed {
+            assert!((got - want).abs() <= 0.01 * p_max, "x = {x}: pressure {got}, triangle {want}");
+        }
+        if x > open + 0.15 * width && x < width - 0.05 * width {
+            sx += x;
+            sy += got;
+            sxx += x * x;
+            sxy += x * got;
+            count += 1.0;
+        }
+        // trapezoid weights: the resultant and its moment about the load point
+        let w = if i == 0 || i + 1 == nodes.len() { 0.5 * h } else { h };
+        total += w * got;
+        moment += w * got * (x - (0.5 * width + e));
+    }
+    let slope = (count * sxy - sx * sy) / (count * sxx - sx * sx);
+    let lift_off = (sx - sy / slope) / count;
+    assert!((lift_off - open).abs() <= 0.01 * open, "lift-off at {lift_off}, statics say {open}");
+    assert!((slope - p_max / c).abs() <= 0.01 * p_max / c, "pressure gradient {slope}, statics say {}", p_max / c);
+    assert!((total - load).abs() <= 0.01 * load, "the pressure integrates to {total}");
+    assert!(moment.abs() <= 0.01 * load * width, "the resultant passes through the load: moment {moment}");
+    assert!(summary.active < summary.paired, "part of the bed is open: {} of {}", summary.active, summary.paired);
+    assert!(res.scalars["contact_changes"] >= 1.0);
+    assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+}
+
+/// A body `size` square whose underside is a spherical cap of radius `radius` around the pole
+/// at the origin (a cylindrical one in plane strain), flat beyond half the radius, meshed with
+/// quad8 graded so the first element at the pole is `first` wide in both directions: the
+/// half-space of a Hertz problem with its own curvature.
+fn bump_mesh(n: [usize; 2], first: f64, size: f64, radius: f64) -> Mesh {
+    // The geometric ratio `g` with `first · (gⁿ − 1)/(g − 1) = len`, by bisection.
+    let ratio = |n: usize, len: f64| -> f64 {
+        let (mut lo, mut hi) = (1.0 + 1e-9, 4.0f64);
+        for _ in 0..200 {
+            let g = 0.5 * (lo + hi);
+            if first * (g.powi(n as i32) - 1.0) / (g - 1.0) < len {
+                lo = g;
+            } else {
+                hi = g;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+    let (gx, gy) = (ratio(n[0], size), ratio(n[1], size));
+    let graded = |u: f64, g: f64, n: usize| first * (libm::pow(g, n as f64 * u) - 1.0) / (g - 1.0);
+    let cap = 0.5 * radius;
+    Structured { kind: ElementKind::Quad8, n: [n[0], n[1], 1] }.build(|p| {
+        let x = graded(p[0], gx, n[0]);
+        let r = x.min(cap);
+        let bottom = radius - (radius * radius - r * r).sqrt();
+        [x, bottom + graded(p[1], gy, n[1]) * (size - bottom) / size, 0.0]
+    })
+}
+
+/// The Hertz half-space pressed onto a rigid flat by a prescribed far-field approach `delta`:
+/// the bump of [`bump_mesh`] over a fully fixed slab, held on its axis, its top face driven.
+fn hertz_problem<'a>(
+    mesh: &'a Mesh,
+    sets: &'a BTreeMap<String, ResolvedSet>,
+    bodies: &'a [String],
+    id: Idealisation,
+    delta: f64,
+    radius: f64,
+) -> Problem<'a> {
+    let held = vec![
+        fix("axis", "a.xmin", [true, false, false], 0.0),
+        fix("push", "a.ymax", [false, true, false], -delta),
+        fix("flat_bottom", "b.ymin", [true, true, false], 0.0),
+        fix("flat_top", "b.ymax", [true, true, false], 0.0),
+    ];
+    let mut p = problem(mesh, sets, bodies, id, Formulation::Full, held);
+    p.materials[0].props = vec![1e9, POISSON];
+    p.couplings = vec![slide("hertz", "b.ymax", "a.ymin", 0.05 * radius)];
+    p
+}
+
+/// What one Hertz solve measured: the load, the pole pressure and the contact radius, the
+/// last halfway between the outermost node the solve holds and the first candidate it does not.
+struct HertzMeasured {
+    load: f64,
+    p0: f64,
+    a: f64,
+    active: usize,
+    changes: f64,
+}
+
+fn hertz_measure(p: &Problem<'_>, mesh: &Mesh, res: &StepResult) -> HertzMeasured {
+    let load = -res.reactions.iter().find(|(n, _)| n == "push").expect("push").1[1];
+    let x_of = |n: u32| mesh.node(n)[0];
+    let pole = p.set("a.ymin").unwrap().nodes.iter().copied().min_by(|&a, &b| x_of(a).total_cmp(&x_of(b))).unwrap();
+    let p0 = res.fields[&Field::ContactPressure].data[pole as usize];
+    let held = &res.contacts[0].nodes;
+    let outermost = held.iter().map(|&n| x_of(n)).fold(0.0f64, f64::max);
+    let base = mpc::build(p).unwrap();
+    let next = base.candidates.iter().map(|c| x_of(c.node)).filter(|&x| x > outermost).fold(f64::INFINITY, f64::min);
+    HertzMeasured { load, p0, a: 0.5 * (outermost + next), active: held.len(), changes: res.scalars["contact_changes"] }
+}
+
+/// Benchmark F5d: Hertz, sphere on a rigid flat in the axisymmetric idealisation. The body is
+/// a half-space with a spherical cap (radius `R`) at its pole, ten radii square so its far
+/// boundary is out of the picture, pushed onto a rigid flat by a prescribed approach `δ`.
+/// Hertz says `a = √(Rδ)`, `P = (4/3) E* √R δ^{3/2}`, `p₀ = 3P/(2πa²)` with
+/// `E* = E/(1 − ν²)`, and the coarse-to-fine pair shows every error falling.
+#[test]
+fn hertz_sphere_on_a_rigid_flat_matches_the_closed_form_and_converges() {
+    let (radius, delta) = (1.0f64, 4e-4f64);
+    let e_star = 1e9 / (1.0 - POISSON * POISSON);
+    let a_ref = (radius * delta).sqrt();
+    let p_ref = 4.0 / 3.0 * e_star * radius.sqrt() * libm::pow(delta, 1.5);
+    let p0_ref = 3.0 * p_ref / (2.0 * PI * a_ref * a_ref);
+    let run = |n: [usize; 2], first: f64| {
+        let body = bump_mesh(n, first, 10.0 * radius, radius);
+        let flat = Structured { kind: ElementKind::Quad8, n: [10, 1, 1] }.box_([0.5 * radius, 0.05 * radius, 0.0]);
+        let mesh = join(&body, &flat, [0.0, -0.05 * radius, 0.0]);
+        let sets = sets_of(&mesh);
+        let bodies = two_bodies();
+        let p = hertz_problem(&mesh, &sets, &bodies, Idealisation::Axisymmetric { twist: false }, delta, radius);
+        let res = run_step(&p, &static_step(SolveOptions::default())).expect("the sphere presses on the flat");
+        assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+        let m = hertz_measure(&p, &mesh, &res);
+        let c = &res.contacts[0];
+        // Two readings of one force — the top face's reaction and the contact resultant — that
+        // agree to the direct solve's residual, not to roundoff, on a 15k-equation system.
+        assert!((c.force[1] - m.load).abs() <= 1e-6 * m.load, "the flat carries the load: {:?}", c.force);
+        assert_eq!(m.active, c.active);
+        eprintln!(
+            "F5d {n:?}: P {:.6e} ({:+.3}%), p0 {:.6e} ({:+.3}%), a {:.5} ({:+.3}%), {} held, {} set changes",
+            m.load,
+            100.0 * (m.load / p_ref - 1.0),
+            m.p0,
+            100.0 * (m.p0 / p0_ref - 1.0),
+            m.a,
+            100.0 * (m.a / a_ref - 1.0),
+            m.active,
+            m.changes
+        );
+        m
+    };
+    let coarse = run([30, 20], 0.002);
+    let fine = run([60, 40], 0.001);
+    let err = |got: f64, want: f64| (got / want - 1.0).abs();
+    // δ from the measured load by Hertz, against the δ that was prescribed.
+    let delta_of = |load: f64| libm::cbrt(9.0 * load * load / (16.0 * radius * e_star * e_star));
+    assert!(err(delta_of(fine.load), delta) <= 0.02, "delta {} vs {delta}", delta_of(fine.load));
+    assert!(err(fine.p0, p0_ref) <= 0.05, "p0 {} vs {p0_ref}", fine.p0);
+    assert!(err(fine.a, a_ref) <= 0.05, "a {} vs {a_ref}", fine.a);
+    assert!(err(fine.p0, p0_ref) < err(coarse.p0, p0_ref), "p0 error falls under refinement");
+    assert!(err(fine.load, p_ref) < err(coarse.load, p_ref), "load error falls under refinement");
+    assert!(fine.changes <= 10.0 && coarse.changes <= 10.0, "the set settles in a few passes");
+    assert!(fine.active > coarse.active);
+}
+
+/// Benchmark F5e: the same Hertz half-space, as a cylinder in plane strain (the finite-strain
+/// kernel has no axisymmetric form), pressed by an approach small enough for the strains to be
+/// of order 1e-3, through the linear `static` and the `static-nonlinear` procedures. The two
+/// agree on the displacement, the load, the pole pressure and the held set, and the Newton
+/// loop's active set settles in a bounded number of changes.
+#[test]
+fn a_nonlinear_hertz_cylinder_agrees_with_the_linear_one_at_small_load() {
+    let (radius, delta) = (1.0f64, 4e-7f64);
+    let body = bump_mesh([40, 30], 0.0004, 10.0 * radius, radius);
+    let flat = Structured { kind: ElementKind::Quad8, n: [10, 1, 1] }.box_([0.5 * radius, 0.05 * radius, 0.0]);
+    let mesh = join(&body, &flat, [0.0, -0.05 * radius, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let p = hertz_problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, delta, radius);
+    let linear = run_step(&p, &static_step(SolveOptions::default())).expect("the linear cylinder");
+    let nonlinear = run_nonlinear(&p, nl_options(2), &mut nop).expect("the nonlinear cylinder");
+    let (ml, mn) = (hertz_measure(&p, &mesh, &linear), hertz_measure(&p, &mesh, &nonlinear));
+    eprintln!(
+        "F5e: linear P {:.6e} p0 {:.6e} held {} changes {}; nonlinear P {:.6e} p0 {:.6e} held {} changes {}",
+        ml.load, ml.p0, ml.active, ml.changes, mn.load, mn.p0, mn.active, mn.changes
+    );
+    assert!(((mn.load - ml.load) / ml.load).abs() <= 1e-3, "load {} vs {}", mn.load, ml.load);
+    assert!(((mn.p0 - ml.p0) / ml.p0).abs() <= 1e-3, "p0 {} vs {}", mn.p0, ml.p0);
+    assert_eq!(mn.active, ml.active);
+    assert_eq!(nonlinear.contacts[0].active, linear.contacts[0].active);
+    let (ul, un) = (&linear.fields[&Field::Displacement].data, &nonlinear.fields[&Field::Displacement].data);
+    let scale = largest(ul);
+    for (i, (l, n)) in ul.iter().zip(un).enumerate() {
+        assert!((l - n).abs() <= 1e-3 * scale, "dof {i}: linear {l} against nonlinear {n}");
+    }
+    assert!(mn.changes <= 10.0, "the Newton loop's set settled in {} changes", mn.changes);
+    assert_eq!(nonlinear.scalars["cutbacks"], 0.0);
+    assert!(nonlinear.warnings.iter().all(|w| w.code != "contact.open"), "{:?}", nonlinear.warnings);
+}
+
+/// A frictionless pair reports what it cannot pair: no node within the search distance at
+/// all, and a slave that is a node Set rather than a face Set (there would be nothing to
+/// carry a pressure on).
+#[test]
+fn a_frictionless_pair_needs_a_candidate_and_a_slave_face() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.05);
+    let mut sets = sets_of(&mesh);
+    let nodes = sets["b.xmin"].nodes.clone();
+    sets.insert("loose".into(), ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes, elems: Vec::new() });
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![slide("press", "a.xmax", "b.xmin", 0.01)];
+    let far = mpc::build(&p).expect_err("0.05 m is beyond a 0.01 m search distance");
+    assert_eq!(far.code, ErrorCode::ContactUnpaired);
+    assert!(far.cause.contains("no node of set 'b.xmin' is within the search distance 0.01 m"), "{}", far.cause);
+    assert_eq!(far.where_.as_deref(), Some("contact 'press'"));
+    assert!(far.suggestion.as_deref().is_some_and(|s| s.contains("larger tol")));
+    assert_eq!(checks::all(&p).first().map(|e| e.code), Some(ErrorCode::ContactUnpaired));
+    assert_eq!(
+        run_step(&p, &static_step(SolveOptions::default())).expect_err("the solve refuses on it").code,
+        ErrorCode::ContactUnpaired
+    );
+
+    p.couplings = vec![slide("press", "a.xmax", "loose", 0.1)];
+    let bare = mpc::build(&p).expect_err("a node Set has no faces to carry a pressure");
+    assert_eq!(bare.code, ErrorCode::Schema);
+    assert!(bare.cause.contains("set 'loose', which has no faces to carry a pressure on"), "{}", bare.cause);
+    assert_eq!(bare.where_.as_deref(), Some("contact 'press'"));
+
+    // The checks common to both kinds hold for this one too: a master needs faces, the two
+    // Sets may not share a node, and a slave coarser than its master is a warning.
+    p.couplings = vec![slide("press", "loose", "b.xmin", 0.1)];
+    assert_eq!(mpc::build(&p).expect_err("a node Set cannot be a master").code, ErrorCode::Schema);
+    p.couplings = vec![slide("press", "b.xmin", "loose", 0.1)];
+    assert_eq!(mpc::build(&p).expect_err("the same nodes on both sides").code, ErrorCode::ModelIllPosed);
+    let coarse = two_blocks(ElementKind::Hex8, [2, 2, 2], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let coarse_sets = sets_of(&coarse);
+    let mut q = problem(&coarse, &coarse_sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    q.couplings = vec![slide("press", "a.xmax", "b.xmin", 1e-9)];
+    let m = mpc::build(&q).expect("the coarse slave pairs");
+    assert_eq!(m.warnings.iter().map(|w| w.code.as_str()).collect::<Vec<_>>(), vec!["contact.slave-coarser"]);
+    assert_eq!(m.candidates.len(), 4);
+    assert_eq!(m.rows.len(), 4, "one row per candidate, every one built and active");
+}
+
+/// Every procedure without an active set refuses a frictionless pair by name: heat (through
+/// the checks, where the pair builds no candidate at all), modal, buckling, harmonic, the
+/// two dynamic ones (as they refuse every multipoint constraint) and a static Step chained to
+/// a transient temperature.
+#[test]
+fn every_procedure_without_an_active_set_refuses_a_frictionless_pair_by_name() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let press = || slide("press", "a.xmax", "b.xmin", 1e-9);
+    let held = || {
+        vec![
+            fix("root", "a.xmin", [true, true, true], 0.0),
+            fix("by", "b.ymin", [false, true, false], 0.0),
+            fix("bz", "b.zmin", [false, false, true], 0.0),
+        ]
+    };
+    let unsupported = |e: Error, procedure: &str| {
+        assert_eq!(e.code, ErrorCode::Unsupported, "{e:?}");
+        assert!(e.cause.contains("frictionless contact 'press'"), "{}", e.cause);
+        assert!(e.cause.contains(procedure), "{procedure}: {}", e.cause);
+        assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("bonded")), "{e:?}");
+    };
+
+    let mut hp = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        steel(),
+        vec![hold("hot", "a.xmin", 400.0)],
+        Vec::new(),
+    );
+    hp.couplings = vec![press()];
+    let m = mpc::build(&hp).expect("a heat Problem builds no candidate for it");
+    assert!(m.candidates.is_empty() && m.rows.is_empty());
+    let e = checks::all(&hp).into_iter().find(|e| e.code == ErrorCode::Unsupported).expect("the checks refuse it");
+    unsupported(e.clone(), "heat");
+    assert_eq!(e.where_.as_deref(), Some("contact 'press'"));
+    assert_eq!(run_step(&hp, &steady()).expect_err("refused").code, ErrorCode::Unsupported);
+
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held());
+    p.couplings = vec![press()];
+    p.materials[0].rho = DENSITY;
+    let modal = Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None };
+    unsupported(run_step(&p, &modal).expect_err("modal"), "modal");
+    unsupported(
+        run_step(&p, &Step::Buckling { n_modes: 1, solver: SolveOptions::default() }).expect_err("buckling"),
+        "buckling",
+    );
+    unsupported(run_step(&p, &harmonic_step(10.0, 100.0, 5, 0.02, 1)).expect_err("harmonic"), "harmonic");
+    let explicit = Step::Explicit { t_end: 1e-4, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &explicit).expect_err("explicit");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.cause.contains("'press' ties two parts"), "{}", e.cause);
+    let e = run_step(&p, &implicit_step(1e-4, 1e-3, 0.0, (0.0, 0.0), None, 1)).expect_err("implicit");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.cause.contains("'press' ties two parts"), "{}", e.cause);
+
+    // A static Step chained to a transient temperature of the same two blocks.
+    let sheet = two_blocks(ElementKind::Quad4, [2, 1, 1], [2, 1, 1], [1.0, 0.2, 0.0], 0.0);
+    let sheet_sets = sets_of(&sheet);
+    let id = Idealisation::PlaneStress { thickness: 0.2 };
+    let history = {
+        let material = Material { rho: 2.0, alpha: [0.0; 3], k: [6.0; 3], cp: 3.0, ..steel() };
+        let hp = heat_problem(
+            &sheet,
+            &sheet_sets,
+            &bodies,
+            id.clone(),
+            material,
+            vec![hold("a", "a.xmin", 400.0), hold("b", "b.xmax", 400.0)],
+            Vec::new(),
+        );
+        let transient = Step::HeatTransient {
+            dt: 0.1,
+            t_end: 0.2,
+            theta: 0.5,
+            initial: 300.0,
+            output_every: 1,
+            amplitude: None,
+            solver: SolveOptions::default(),
+            control: NonlinearControl::default(),
+        };
+        run_step(&hp, &transient).expect("the blocks warm up").history.expect("retained")
+    };
+    let mut chained = problem(
+        &sheet,
+        &sheet_sets,
+        &bodies,
+        id,
+        Formulation::Full,
+        vec![fix("a", "a.xmin", [true, true, false], 0.0), fix("b", "b.xmax", [true, true, false], 0.0)],
+    );
+    chained.couplings = vec![press()];
+    let mut compose = |values: &[f64]| Ok(Some((values.to_vec(), 300.0)));
+    let e = run_chained(&mut chained, &history, &mut compose, &mut nop).expect_err("per-frame static");
+    unsupported(e.clone(), "retained frame");
+    assert_eq!(e.where_.as_deref(), Some("after"));
+}
+
+/// A part that only a frictionless contact holds and that lifts off entirely is a mechanism:
+/// `contact.open`, naming the pair and how much of it is left, rather than the solver's
+/// complaint about a matrix.
+#[test]
+fn a_part_that_lifts_off_with_nothing_else_holding_it_is_contact_open() {
+    let bed = Structured { kind: ElementKind::Quad4, n: [10, 1, 1] }.box_([1.0, 0.1, 0.0]);
+    let block = Structured { kind: ElementKind::Quad4, n: [10, 4, 1] }.box_([1.0, 0.4, 0.0]);
+    let mesh = join(&bed, &block, [0.0, 0.1, 0.0]);
+    let mut sets = sets_of(&mesh);
+    let corner = nearest_node(&mesh, [0.0, 0.5, 0.0]) as u32;
+    sets.insert(
+        "hold".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![corner], elems: Vec::new() },
+    );
+    let bodies = two_bodies();
+    let held = vec![fix("base", "a.ymin", [true, true, false], 0.0), fix("hold", "hold", [true, false, false], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, held);
+    p.couplings = vec![slide("seat", "b.ymin", "a.ymax", 1e-9)];
+    p.loads = vec![Load::Traction { faces: "b.ymax".into(), t: [0.0, 1e6, 0.0] }];
+    let e = run_step(&p, &static_step(SolveOptions::default())).expect_err("the block flies away");
+    assert_eq!(e.code, ErrorCode::ContactOpen, "{e:?}");
+    assert!(e.cause.contains("'seat' holds 0 of 11 paired nodes"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("constraints"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("constraint.fix")));
+    // Pressed down instead, the same Model is fine and fully closed.
+    p.loads = vec![Load::Traction { faces: "b.ymax".into(), t: [0.0, -1e6, 0.0] }];
+    let res = run_step(&p, &static_step(SolveOptions::default())).expect("pressed together");
+    assert_eq!((res.contacts[0].active, res.contacts[0].paired), (11, 11));
+    assert_eq!(res.contacts[0].nodes, sets["a.ymax"].nodes);
+}
+
+/// A node that keeps joining and leaving the set is chatter, reported after `MAX_FLIPS`
+/// moves with the nodes named; the rule itself is driven here by hand-made states, tensile
+/// whenever the node is held and penetrating whenever it is free.
+#[test]
+fn a_node_that_never_settles_is_contact_chatter() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![slide("press", "a.xmax", "b.xmin", 1e-9)];
+    let base = mpc::build(&p).expect("pairs");
+    let n = p.n_dofs();
+    let mut set = femlab_engine::fem::contact::ActiveSet::initial(&base);
+    assert_eq!(set.count(), 4, "touching faces start held");
+    assert!(!set.is_empty());
+    let zero = vec![0.0; n];
+    // Held: every slave DOF carries a tensile force (the master faces +x). Free: the slave
+    // nodes have moved into the master.
+    let tensile: Vec<f64> = (0..n).map(|d| if base.slaves.contains(&(d as u32)) { -1.0 } else { 0.0 }).collect();
+    let mut penetrating = vec![0.0; n];
+    for c in &base.candidates {
+        penetrating[c.node as usize * 3] = -1e-3;
+    }
+    for pass in 0..femlab_engine::fem::contact::MAX_FLIPS {
+        let held = set.count() > 0;
+        let moved = if held {
+            set.update(&p, &base, &zero, &tensile, 1.0)
+        } else {
+            set.update(&p, &base, &penetrating, &zero, 1.0)
+        };
+        assert!(moved.expect("not yet chatter"), "pass {pass}");
+        assert_eq!(set.count(), if held { 0 } else { 4 });
+    }
+    assert_eq!(set.changes, femlab_engine::fem::contact::MAX_FLIPS as usize);
+    let e = set.update(&p, &base, &zero, &tensile, 1.0).expect_err("one move too many");
+    assert_eq!(e.code, ErrorCode::ContactChatter);
+    assert!(
+        e.cause.starts_with("contact 'press': nodes ") && e.cause.contains(" keep joining and leaving"),
+        "{}",
+        e.cause
+    );
+    assert_eq!(e.where_.as_deref(), Some("contact 'press'"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("amplitude")));
+
+    // One candidate reads in the singular.
+    let mut one = base.clone();
+    one.candidates.truncate(1);
+    let mut set = femlab_engine::fem::contact::ActiveSet::initial(&one);
+    for _ in 0..=femlab_engine::fem::contact::MAX_FLIPS {
+        let held = set.count() > 0;
+        let _ = if held {
+            set.update(&p, &one, &zero, &tensile, 1.0)
+        } else {
+            set.update(&p, &one, &penetrating, &zero, 1.0)
+        };
+    }
+    let e = set.update(&p, &one, &zero, &tensile, 1.0).expect_err("chatter");
+    assert!(e.cause.contains(&format!("node {} keeps joining", one.candidates[0].node)), "{}", e.cause);
+
+    // Nothing moves on a residual within rounding of zero: the stiffness floor keeps a
+    // force-free state from releasing anything.
+    let mut set = femlab_engine::fem::contact::ActiveSet::initial(&base);
+    let noise: Vec<f64> = tensile.iter().map(|v| v * 1e-20).collect();
+    assert!(!set.update(&p, &base, &penetrating, &noise, 1e11).expect("quiet"));
+    assert_eq!(set.changes, 0);
+}
+
+/// `transform` on an inhomogeneous row is `Tᵀ(f − K g)`, checked against the dense
+/// definition; `recover` adds `g` back; `with_active` keeps the rows of every held candidate
+/// and every non-contact row, and zeroes `g` for a correction.
+#[test]
+fn an_inhomogeneous_row_moves_k_g_to_the_load_and_comes_back_in_recover() {
+    let n = 4;
+    #[rustfmt::skip]
+    let k = vec![
+        4.0, -1.0,  0.5, -0.5,
+       -1.0,  5.0, -2.0,  1.0,
+        0.5, -2.0,  6.0, -1.5,
+       -0.5,  1.0, -1.5,  7.0,
+    ];
+    let f = vec![1.0, -2.0, 3.0, 5.0];
+    let g = 0.3;
+    let mpc = hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25), (1, 0.75)], g, owner: 0 }]);
+    assert!(mpc.inhomogeneous());
+    assert!(!hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25)], g: 0.0, owner: 0 }]).inhomogeneous());
+    let t = dense_t(&mpc, n);
+    let kg: Vec<f64> = (0..n).map(|i| k[i * n + 3] * g).collect();
+    let want_f: Vec<f64> = (0..n).map(|r| (0..n).map(|i| t[i * n + r] * (f[i] - kg[i])).sum()).collect();
+    let (kt, ft) = mpc::transform(&dense_csr(n, &k), &f, &mpc);
+    let want_k = mat_mul_t(&t, &mat_mul(&k, &t, n), n);
+    for (i, (got, w)) in to_dense(&kt).iter().zip(&want_k).enumerate() {
+        assert!((got - w).abs() <= 1e-12, "entry {i}: got {got}, want {w}");
+    }
+    for (got, w) in ft.iter().zip(&want_f) {
+        assert!((got - w).abs() <= 1e-12, "got {got}, want {w}");
+    }
+    let mut u = vec![2.0, -6.0, 1.0, 0.0];
+    mpc::recover(&mpc, &mut u);
+    assert!((u[3] - (0.25 * 2.0 + 0.75 * -6.0 + g)).abs() <= 1e-15);
+
+    // A candidate row and a plain row: the plain one survives any set, the candidate's
+    // follows `active`, and a homogeneous view drops `g`.
+    let cand = femlab_engine::fem::mpc::Candidate {
+        node: 1,
+        masters: vec![(0, 1.0)],
+        normal: [1.0, 0.0, 0.0],
+        gap: 0.5,
+        comp: 0,
+        owner: 1,
+    };
+    let rows = vec![
+        Row { slave: 1, masters: vec![(0, 1.0)], g: -0.5, owner: 1 },
+        Row { slave: 3, masters: vec![(2, 1.0)], g: 0.0, owner: 0 },
+    ];
+    let mut full = hand_mpc(rows);
+    full.candidates = vec![cand];
+    let held = full.with_active(&[true], true, 1);
+    assert_eq!(held.rows, full.rows);
+    assert_eq!(held.slaves, vec![1, 3]);
+    let corr = full.with_active(&[true], false, 1);
+    assert_eq!(corr.rows[0].g, 0.0);
+    assert_eq!(corr.slaves, vec![1, 3]);
+    let free = full.with_active(&[false], true, 1);
+    assert_eq!(free.slaves, vec![3]);
+    assert_eq!(free.candidates.len(), 1, "the candidates stay, whatever the set");
+    assert_eq!(full.candidates[0].slave_dof(1), 1);
+    assert!((full.candidates[0].relative_normal(&[0.1, -0.2, 0.0, 0.0], 1) + 0.3).abs() <= 1e-15);
+}
+
+/// A host that says stop cancels a contact solve at every phase it reports: the assembly,
+/// the solve, an active-set change, an increment, the recovery; and the Newton loop's own
+/// active-set report cancels too.
+#[test]
+fn a_contact_solve_cancels_at_every_phase() {
+    let (g0, delta, l, side) = (1e-3, 2e-3, 1.0, 0.1);
+    let bar = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([l, side, side]);
+    let mesh = join(&bar, &bar, [l + g0, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let held = vec![
+        fix("push", "a.xmin", [true, false, false], delta),
+        fix("ay", "a.ymin", [false, true, false], 0.0),
+        fix("az", "a.zmin", [false, false, true], 0.0),
+        fix("by", "b.ymin", [false, true, false], 0.0),
+        fix("bz", "b.zmin", [false, false, true], 0.0),
+        fix("end", "b.xmax", [true, false, false], 0.0),
+    ];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.couplings = vec![slide("gap", "b.xmin", "a.xmax", 5.0 * g0)];
+    let step = Step::Static {
+        solver: SolveOptions::default(),
+        dt: 0.5,
+        t_end: 1.0,
+        amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 1.0], value: vec![0.0, 1.0] }),
+        output_every: 2,
+    };
+    let full = run_step(&p, &step).expect("the ramp closes the gap");
+    assert_eq!(full.history.as_ref().expect("frames").times, vec![0.0, 1.0], "outputEvery strides the frames");
+    assert!(full.scalars["contact_changes"] >= 1.0);
+    let mut cancelled = 0;
+    loop {
+        let mut stop = cancel_on(cancelled);
+        match pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut stop)) {
+            Err(e) => assert_eq!(e.code, ErrorCode::Cancelled, "at report {cancelled}"),
+            Ok(_) => break,
+        }
+        cancelled += 1;
+    }
+    assert!(cancelled >= 8, "assembly, three increments of solve and contact reports, recovery: {cancelled}");
+    // The two failures the contact path meets after the checks: a time grid it cannot build,
+    // and a material the stiffness integral refuses (the checks never read the props).
+    let Step::Static { amplitude, .. } = &step else { panic!() };
+    let bad_grid = Step::Static {
+        solver: SolveOptions::default(),
+        dt: 0.0,
+        t_end: 1.0,
+        amplitude: amplitude.clone(),
+        output_every: 1,
+    };
+    assert_eq!(run_step(&p, &bad_grid).expect_err("dt = 0").code, ErrorCode::Schema);
+    let mut short = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, p.constraints.clone());
+    short.couplings = p.couplings.clone();
+    short.materials[0].props = vec![YOUNG];
+    assert_eq!(run_step(&short, &step).expect_err("one prop").code, ErrorCode::MaterialProps);
+
+    // The Newton loop: the gap closes in the first increment, so its set changes there.
+    let mut cancelled = 0;
+    loop {
+        let mut stop = cancel_on(cancelled);
+        match run_nonlinear(&p, nl_options(2), &mut stop) {
+            Err(e) => assert_eq!(e.code, ErrorCode::Cancelled, "at report {cancelled}"),
+            Ok(res) => {
+                assert!(res.scalars["contact_changes"] >= 1.0);
+                assert_eq!(res.contacts[0].active, 4);
+                break;
+            }
+        }
+        cancelled += 1;
+    }
+    assert!(cancelled >= 6, "{cancelled}");
+}
+
+/// The master normal a candidate is held along points out of the master element for every
+/// face of every element kind, straight from the node order and without a sign check: the
+/// convention [`mpc::outward_normal`] relies on.
+#[test]
+fn every_face_of_every_kind_faces_out() {
+    for kind in [
+        ElementKind::Hex8,
+        ElementKind::Hex20,
+        ElementKind::Tet4,
+        ElementKind::Tet10,
+        ElementKind::Quad4,
+        ElementKind::Quad8,
+        ElementKind::Tri3,
+        ElementKind::Tri6,
+    ] {
+        let n = if kind.dim() == 3 { [2, 2, 2] } else { [2, 2, 1] };
+        let mesh = Structured { kind, n }.build(|p| [p[0] + 0.3 * p[1], p[1] + 0.2 * p[0] * p[2], p[2] - 0.1 * p[0]]);
+        let mut faces = 0;
+        for elem in 0..mesh.n_elems() as u32 {
+            let nodes = mesh.elem_nodes(elem);
+            let mut inside = [0.0; 3];
+            for &node in nodes {
+                let x = mesh.node(node);
+                for k in 0..3 {
+                    inside[k] += x[k] / nodes.len() as f64;
+                }
+            }
+            for local in 0..kind.n_faces() as u8 {
+                let face = Face { elem, local };
+                let fk = kind.face_kind();
+                let s = match fk {
+                    FaceKind::Tri3 | FaceKind::Tri6 => [1.0 / 3.0, 1.0 / 3.0],
+                    _ => [0.0, 0.0],
+                };
+                let n = mpc::outward_normal(&mesh, face, s);
+                let mut c = [0.0; 3];
+                let mut count = 0.0;
+                for node in mesh.face_nodes(face) {
+                    let x = mesh.node(node);
+                    for k in 0..3 {
+                        c[k] += x[k];
+                    }
+                    count += 1.0;
+                }
+                let dot: f64 = (0..3).map(|k| n[k] * (c[k] / count - inside[k])).sum();
+                assert!(dot > 0.0, "{kind:?} element {elem} face {local}: normal {n:?} points in");
+                assert!(((0..3).map(|k| n[k] * n[k]).sum::<f64>() - 1.0).abs() < 1e-12);
+                faces += 1;
+            }
+        }
+        assert!(faces > 0);
+    }
+}
+
+/// A Newton increment whose active set moves at the end of its iteration budget is cut back
+/// like one whose residual is still moving, retried from the last converged set, and when no
+/// budget carries it the Step ends with `newton.diverged` as any other stuck increment would.
+#[test]
+fn a_set_that_moves_past_the_newton_budget_is_cut_back() {
+    let (g0, delta, l, side) = (1e-3, 4e-3, 1.0, 0.1);
+    let bar = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([l, side, side]);
+    let mesh = join(&bar, &bar, [l + g0, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let held = vec![
+        fix("push", "a.xmin", [true, false, false], delta),
+        fix("ay", "a.ymin", [false, true, false], 0.0),
+        fix("az", "a.zmin", [false, false, true], 0.0),
+        fix("by", "b.ymin", [false, true, false], 0.0),
+        fix("bz", "b.zmin", [false, false, true], 0.0),
+        fix("end", "b.xmax", [true, false, false], 0.0),
+    ];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.couplings = vec![slide("gap", "b.xmin", "a.xmax", 5.0 * g0)];
+    // The closing increment converges in some number of corrections k and then moves its set,
+    // which costs one more: a budget of exactly k is cut back on the set change, a smaller one
+    // on the residual. Sweeping the budget lands on both, and with cutbacks allowed every
+    // halved retry still closes the gap in the end.
+    let mut cut_back = 0;
+    for max_newton in 2..=8 {
+        let mut o = nl_options(2);
+        o.converge = NlConverge { tolerance: 1e-8, max_newton };
+        o.max_cutbacks = 4;
+        match run_nonlinear(&p, o, &mut nop) {
+            Ok(res) => {
+                assert_eq!(res.contacts[0].active, 4, "budget {max_newton}");
+                assert_eq!(res.scalars["load_factor"], 1.0);
+                cut_back += usize::from(res.scalars["cutbacks"] > 0.0);
+            }
+            Err(e) => assert_eq!(e.code, ErrorCode::NewtonDiverged, "budget {max_newton}: {e:?}"),
+        }
+    }
+    assert!(cut_back >= 1, "some budget was cut back and recovered");
+    // With room to iterate the same Step closes the gap and carries the series force.
+    let res = run_nonlinear(&p, nl_options(2), &mut nop).expect("the gap closes");
+    assert_eq!(res.contacts[0].active, 4);
+    assert!(res.scalars["contact_changes"] >= 1.0);
 }

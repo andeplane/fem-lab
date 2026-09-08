@@ -11,13 +11,18 @@
 //! `TᵀKT` is symmetric for any `T` and positive definite whenever `T` has full column rank,
 //! which the dependency check below enforces, and κ(K') ≈ κ(K).
 //!
-//! Only homogeneous relations are built: every constraint in scope (bonded contact, and the
-//! couplings and cyclic symmetry that come later) is `u_s − Σ a u_m = 0`, so there is no
-//! `Tᵀ(f − Kg)` branch and no arm no test can reach.
+//! A bonded tie, a coupling and a cyclic tie are homogeneous, `u_s − Σ a u_m = 0`. A
+//! frictionless contact (#62) is the one inhomogeneous relation: an active slave node is held
+//! on the master surface by `(u_s − Σ a u_m)·n = −g₀`, so `u = T v + g` and the solved system is
+//! `TᵀKT v = Tᵀ(f − K g)` with [`recover`] adding `g` back. `g` is exactly zero on every other
+//! row, and [`transform`] takes the homogeneous path when no row carries one, so a bonded
+//! fixture is bit-identical to what it was before this branch existed.
 //!
-//! [`build`] is a pure function of the [`Problem`] and its Mesh with no cached state, because
-//! frictionless contact will call it inside a Newton loop where the active set changes between
-//! iterations.
+//! [`build`] is a pure function of the [`Problem`] and its Mesh with no cached state. It pairs
+//! every frictionless candidate once, at the reference configuration, and builds the rows of
+//! *all* of them — the most constrained set, which is what the well-posedness checks want to
+//! see; [`Mpc::with_active`] then hands the procedures the rows of whichever subset the active
+//! set of [`crate::fem::contact`] currently holds, as often as it changes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,13 +49,76 @@ const GAP_WARN: f64 = 1e-9;
 /// them keeps a matched tie exactly node-to-node, which is what makes it cost nothing.
 const WEIGHT_EPS: f64 = 1e-12;
 
-/// One eliminated DOF: `u[slave] = Σ coeff · u[master]`. Homogeneous by construction.
+/// One eliminated DOF: `u[slave] = Σ coeff · u[master] + g`. `g` is zero on every row but an
+/// active frictionless candidate's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub slave: u32,
     pub masters: Vec<(u32, f64)>,
+    /// The inhomogeneous part: `−g₀ / n_k` for a contact row, `0` otherwise.
+    pub g: f64,
     /// Index into [`Problem::couplings`], so every error and warning names its Command.
     pub owner: usize,
+}
+
+/// One slave node of a frictionless contact that the search found within `tol` of its master:
+/// where it projects, which way the master faces there, and how far apart the two are before
+/// any load. All of it is fixed at the reference configuration (small sliding).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Candidate {
+    pub node: u32,
+    /// `(master node, shape-function weight)` of the projection point.
+    pub masters: Vec<(u32, f64)>,
+    /// Unit normal of the master face at the projection, pointing out of the master Body —
+    /// towards the slave when the gap is open.
+    pub normal: [f64; 3],
+    /// The initial gap along `normal`, positive when open, in metres.
+    pub gap: f64,
+    /// The slave component the relation is eliminated on: the one with the largest `|n_k|`, so
+    /// the coefficients `n_j / n_k` are all at most one in magnitude.
+    pub comp: usize,
+    /// Index into [`Problem::couplings`].
+    pub owner: usize,
+}
+
+impl Candidate {
+    /// The row that holds this node on the master surface: `u_s,k` in terms of the other slave
+    /// components and the master DOFs, with `g = −gap / n_k` ([`Mpc::with_active`] zeroes it for
+    /// a correction).
+    fn row(&self, dpn: usize) -> Row {
+        let nk = self.normal[self.comp];
+        let dpn32 = dpn as u32;
+        let comps = dpn.min(3);
+        let mut masters = Vec::new();
+        for j in (0..comps).filter(|&j| j != self.comp) {
+            let a = -self.normal[j] / nk;
+            if a.abs() > WEIGHT_EPS {
+                masters.push((self.node * dpn32 + j as u32, a));
+            }
+        }
+        for &(m, w) in &self.masters {
+            for j in 0..comps {
+                let a = w * self.normal[j] / nk;
+                if a.abs() > WEIGHT_EPS {
+                    masters.push((m * dpn32 + j as u32, a));
+                }
+            }
+        }
+        Row { slave: self.node * dpn32 + self.comp as u32, masters, g: -self.gap / nk, owner: self.owner }
+    }
+
+    /// The DOF the row eliminates.
+    pub fn slave_dof(&self, dpn: usize) -> u32 {
+        self.node * dpn as u32 + self.comp as u32
+    }
+
+    /// `(u_s − Σ a·u_m)·n`: how much the pair has closed (negative) or opened (positive) under
+    /// the displacement `u`, before the initial gap is added.
+    pub fn relative_normal(&self, u: &[f64], dpn: usize) -> f64 {
+        let comps = dpn.min(3);
+        let at = |node: u32| -> f64 { (0..comps).map(|j| self.normal[j] * u[node as usize * dpn + j]).sum::<f64>() };
+        at(self.node) - self.masters.iter().map(|&(m, w)| w * at(m)).sum::<f64>()
+    }
 }
 
 /// Every multipoint constraint of one Problem, sorted by slave DOF.
@@ -66,6 +134,12 @@ pub struct Mpc {
     /// unknown rather than an eliminated one, and `heat::assemble` reads these rows directly to
     /// add that conductance to `K` (plan B §5). Empty for every Problem without one.
     pub contact: Vec<Row>,
+    /// Every paired node of every frictionless contact, in coupling order then slave-node
+    /// order. [`build`] puts all of their rows in `rows`; [`Mpc::with_active`] keeps a subset.
+    pub candidates: Vec<Candidate>,
+    /// A gap smaller than this is closed: the pairing's own rounding, `1e-9` of the Mesh
+    /// diagonal.
+    pub gap_tol: f64,
     pub warnings: Vec<Warning>,
 }
 
@@ -77,6 +151,36 @@ impl Mpc {
 
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
+    }
+
+    /// Does any row carry an inhomogeneous part, so [`transform`] has a `K g` to subtract.
+    pub fn inhomogeneous(&self) -> bool {
+        self.rows.iter().any(|r| r.g != 0.0)
+    }
+
+    /// The same constraints with only the frictionless candidates `active` marks kept, their
+    /// rows carrying `g = −g₀/n_k` when `inhomogeneous` (the solve for `u` itself) and zero
+    /// otherwise (a Newton correction, which must leave a satisfied constraint satisfied).
+    ///
+    /// Every row [`build`] made for a candidate is in `rows`, so this is a filter, not a
+    /// rebuild: the dependency check has already passed on the superset.
+    pub fn with_active(&self, active: &[bool], inhomogeneous: bool, dpn: usize) -> Mpc {
+        let of: BTreeMap<u32, usize> = self.candidates.iter().enumerate().map(|(i, c)| (c.slave_dof(dpn), i)).collect();
+        let rows: Vec<Row> = self
+            .rows
+            .iter()
+            .filter(|r| of.get(&r.slave).is_none_or(|&i| active[i]))
+            .map(|r| Row { g: if inhomogeneous { r.g } else { 0.0 }, ..r.clone() })
+            .collect();
+        let slaves = rows.iter().map(|r| r.slave).collect();
+        Mpc {
+            rows,
+            slaves,
+            contact: self.contact.clone(),
+            candidates: self.candidates.clone(),
+            gap_tol: self.gap_tol,
+            warnings: self.warnings.clone(),
+        }
     }
 
     /// Every `[slave node, master node]` pair the rows couple, ascending and unique. This is
@@ -149,13 +253,26 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
     };
     let mut rows: Vec<Row> = Vec::new();
     let mut contact: Vec<Row> = Vec::new();
+    let mut candidates: Vec<Candidate> = Vec::new();
     let mut warnings: Vec<Warning> = Vec::new();
+    let dpn = p.dofs_per_node();
+    let (lo, hi) = p.mesh.bbox();
+    let diag = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    let gap_tol = GAP_WARN * diag;
     for (owner, c) in p.couplings.iter().enumerate() {
         let mut produced: Vec<Row> = Vec::new();
         match c {
             Coupling::Bonded { name, master, slave, tol } => {
                 bonded_rows(p, name, master, slave, *tol, owner, &mut produced, &mut warnings)?;
             }
+            // A heat Step refuses a frictionless pair by name (`checks::all`), so its
+            // candidates are not built there: a temperature has no gap to open.
+            Coupling::Frictionless { name, master, slave, tol } if !p.heat => {
+                let first = candidates.len();
+                frictionless_candidates(p, name, master, slave, *tol, owner, &mut candidates, &mut warnings)?;
+                produced.extend(candidates[first..].iter().map(|c| c.row(dpn)));
+            }
+            Coupling::Frictionless { .. } => {}
             Coupling::Cyclic { name, from, to, axis, through, angle, tol } => {
                 cyclic_rows(p, name, from, to, *axis, *through, *angle, *tol, owner, &mut rows)?;
             }
@@ -173,7 +290,6 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
     }
     rows.sort_by_key(|r| r.slave);
     contact.sort_by_key(|r| r.slave);
-    let dpn = p.dofs_per_node();
     let mut slaves: Vec<u32> = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
         if i > 0 && rows[i - 1].slave == row.slave {
@@ -190,7 +306,7 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
             }
         }
     }
-    Ok(Mpc { rows, slaves, contact, warnings })
+    Ok(Mpc { rows, slaves, contact, candidates, gap_tol, warnings })
 }
 
 /// The `constraint.dependent` error: a DOF that two couplings both eliminate, or that one
@@ -206,19 +322,16 @@ fn dependent(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize,
     .suggest("constraint.remove one of them, or tie faces that do not overlap")
 }
 
-/// The rows of one bonded contact: every node of `slave` tied to the point it projects onto in
-/// `master`, in every component.
-#[allow(clippy::too_many_arguments)]
-fn bonded_rows(
-    p: &Problem<'_>,
+/// The two Sets of a contact pair, checked: the master has faces to project onto, and the two
+/// share no node. A slave side coarser than its master is the `contact.slave-coarser` warning,
+/// for either kind of contact.
+fn pair_sets<'p>(
+    p: &'p Problem<'_>,
     name: &str,
     master: &str,
     slave: &str,
-    tol: f64,
-    owner: usize,
-    out: &mut Vec<Row>,
     warnings: &mut Vec<Warning>,
-) -> Result<(), Error> {
+) -> Result<(&'p [Face], &'p ResolvedSet), Error> {
     let at = || format!("contact '{name}'");
     let faces = &p.set(master).map_err(|e| e.at(at()))?.faces;
     let slave_set = p.set(slave).map_err(|e| e.at(at()))?;
@@ -248,6 +361,128 @@ fn bonded_rows(
             where_: Some(at()),
         });
     }
+    Ok((faces.as_slice(), slave_set))
+}
+
+/// The candidates of one frictionless contact: every node of the face Set `slave` within `tol`
+/// of `master`, paired with its projection, the master normal there and the initial gap.
+///
+/// A node further away than `tol` is not an error — the search distance is what `tol` means
+/// for this kind — but a pair with no candidate at all is `contact.unpaired`: two faces that
+/// can never touch are a Model mistake, not a load case.
+#[allow(clippy::too_many_arguments)]
+fn frictionless_candidates(
+    p: &Problem<'_>,
+    name: &str,
+    master: &str,
+    slave: &str,
+    tol: f64,
+    owner: usize,
+    out: &mut Vec<Candidate>,
+    warnings: &mut Vec<Warning>,
+) -> Result<(), Error> {
+    let at = || format!("contact '{name}'");
+    let (faces, slave_set) = pair_sets(p, name, master, slave, warnings)?;
+    if slave_set.faces.is_empty() {
+        return Err(Error::schema(format!(
+            "the slave of frictionless contact '{name}' is set '{slave}', which has no faces to carry a pressure on"
+        ))
+        .at(at())
+        .suggest("contact.add with a face Set as the slave, from geometry.nameFace or an auto face"));
+    }
+    let first = out.len();
+    let comps = p.dofs_per_node().min(3);
+    for &node in &slave_set.nodes {
+        let x = p.mesh.node(node);
+        let (distance, face, s) = nearest(p.mesh, faces, x);
+        // Written as a negated `<=` on purpose: `NaN <= tol` is false, so a degenerate master
+        // face pairs nothing rather than something wrong, with no second arm to cover.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(distance <= tol) {
+            continue;
+        }
+        let fk = p.mesh.kind_of(face.elem).face_kind();
+        let mut w = vec![0.0; fk.n_nodes()];
+        face_shape_of(fk, s, &mut w);
+        let nodes: Vec<u32> = p.mesh.face_nodes(face).collect();
+        let normal = outward_normal(p.mesh, face, s);
+        let projected: [f64; 3] = {
+            let mut y = [0.0; 3];
+            for (&n, &wi) in nodes.iter().zip(&w) {
+                let c = p.mesh.node(n);
+                for k in 0..3 {
+                    y[k] += wi * c[k];
+                }
+            }
+            y
+        };
+        let gap = dot3([x[0] - projected[0], x[1] - projected[1], x[2] - projected[2]], normal);
+        let comp = (0..comps).max_by(|&a, &b| normal[a].abs().total_cmp(&normal[b].abs())).expect("a component");
+        let masters = nodes.iter().zip(&w).filter(|(_, &wi)| wi.abs() > WEIGHT_EPS).map(|(&m, &wi)| (m, wi)).collect();
+        out.push(Candidate { node, masters, normal, gap, comp, owner });
+    }
+    if out.len() == first {
+        return Err(Error::new(
+            ErrorCode::ContactUnpaired,
+            format!(
+                "contact '{name}': no node of set '{slave}' is within the search distance {tol} m of set '{master}'"
+            ),
+        )
+        .at(at())
+        .suggest("contact.add with a larger tol, or move the two Bodies until their faces are near each other"));
+    }
+    Ok(())
+}
+
+/// The unit normal of `face` at face coordinates `s`, pointing out of its element.
+///
+/// A face's nodes run counter-clockwise seen from outside the element (the Abaqus order the
+/// Mesh keeps for every kind), so the cross product of its two tangents points out, and so
+/// does the in-plane normal `(t_y, −t_x)` of a 2D element's edge; `every_face_of_every_kind_
+/// faces_out` in the engine tests holds the convention for each kind.
+pub fn outward_normal(mesh: &Mesh, face: Face, s: [f64; 2]) -> [f64; 3] {
+    let fk = mesh.kind_of(face.elem).face_kind();
+    let coords: Vec<[f64; 3]> = mesh.face_nodes(face).map(|n| mesh.node(n)).collect();
+    let mut ds = vec![[0.0; 2]; fk.n_nodes()];
+    face_dshape_of(fk, s, &mut ds);
+    let mut t = [[0.0; 3]; 2];
+    for (c, g) in coords.iter().zip(&ds) {
+        for k in 0..3 {
+            t[0][k] += g[0] * c[k];
+            t[1][k] += g[1] * c[k];
+        }
+    }
+    let mut n = if n_par(fk) == 1 {
+        [t[0][1], -t[0][0], 0.0]
+    } else {
+        [
+            t[0][1] * t[1][2] - t[0][2] * t[1][1],
+            t[0][2] * t[1][0] - t[0][0] * t[1][2],
+            t[0][0] * t[1][1] - t[0][1] * t[1][0],
+        ]
+    };
+    let len = dot3(n, n).sqrt();
+    for v in &mut n {
+        *v /= len;
+    }
+    n
+}
+
+/// The rows of one bonded contact: every node of `slave` tied to the point it projects onto in
+/// `master`, in every component.
+#[allow(clippy::too_many_arguments)]
+fn bonded_rows(
+    p: &Problem<'_>,
+    name: &str,
+    master: &str,
+    slave: &str,
+    tol: f64,
+    owner: usize,
+    out: &mut Vec<Row>,
+    warnings: &mut Vec<Warning>,
+) -> Result<(), Error> {
+    let at = || format!("contact '{name}'");
+    let (faces, slave_set) = pair_sets(p, name, master, slave, warnings)?;
     let dpn = p.dofs_per_node();
     let (lo, hi) = p.mesh.bbox();
     let diag = ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
@@ -285,7 +520,7 @@ fn bonded_rows(
                 .filter(|(_, &wi)| wi.abs() > WEIGHT_EPS)
                 .map(|(&m, &wi)| (m * dpn as u32 + c as u32, wi))
                 .collect();
-            out.push(Row { slave: node * dpn as u32 + c as u32, masters, owner });
+            out.push(Row { slave: node * dpn as u32 + c as u32, masters, g: 0.0, owner });
         }
     }
     if worst.0 > GAP_WARN * diag {
@@ -369,7 +604,7 @@ fn cyclic_rows(
                 .filter(|&d| row[d].abs() > WEIGHT_EPS)
                 .map(|d| (node * dpn as u32 + d as u32, row[d]))
                 .collect();
-            out.push(Row { slave: t * dpn as u32 + c as u32, masters, owner });
+            out.push(Row { slave: t * dpn as u32 + c as u32, masters, g: 0.0, owner });
         }
     }
     Ok(())
@@ -411,7 +646,7 @@ fn couple_rows(
         CoupleKind::Rigid => {
             for &n in &set.nodes {
                 for c in 0..translations {
-                    out.push(Row { slave: n * dpn + c, masters: vec![(node * dpn + c, 1.0)], owner });
+                    out.push(Row { slave: n * dpn + c, masters: vec![(node * dpn + c, 1.0)], g: 0.0, owner });
                 }
             }
         }
@@ -420,7 +655,7 @@ fn couple_rows(
             let total: f64 = area.values().sum();
             for c in 0..translations {
                 let masters = area.iter().map(|(&n, &a)| (n * dpn + c, a / total)).collect();
-                out.push(Row { slave: node * dpn + c, masters, owner });
+                out.push(Row { slave: node * dpn + c, masters, g: 0.0, owner });
             }
         }
     }
@@ -604,11 +839,15 @@ fn face_centroid(mesh: &Mesh, face: Face) -> [f64; 3] {
     [c[0] / n, c[1] / n, c[2] / n]
 }
 
-/// `(TᵀKT, Tᵀf)`, built row by row rather than through `assembly::pattern`.
+/// `(TᵀKT, Tᵀ(f − K g))`, built row by row rather than through `assembly::pattern`.
 ///
 /// The transformed operator couples nodes that share no element, so its sparsity is not the
 /// element pattern's; building it directly is what lets interface fill-in cost the pattern
 /// builder nothing. Slave rows and columns come out empty, and `assembly::reduce` drops them.
+///
+/// `g` is the inhomogeneous part of the rows, non-zero only for an active frictionless
+/// candidate; when every row is homogeneous the load is `Tᵀf` exactly as before, with no
+/// arithmetic on it.
 ///
 /// Every row is accumulated in ascending column order under a `BTreeMap`, and the rows are
 /// independent, so `vals` is bit-identical at one and at N threads.
@@ -618,6 +857,17 @@ pub fn transform(k: &Csr, f: &[f64], mpc: &Mpc) -> (Csr, Vec<f64>) {
     if mpc.is_empty() {
         return (k.clone(), f.to_vec());
     }
+    let load: Vec<f64> = if mpc.inhomogeneous() {
+        let mut g = vec![0.0; k.n];
+        for row in &mpc.rows {
+            g[row.slave as usize] = row.g;
+        }
+        let mut kg = vec![0.0; k.n];
+        k.spmv(&g, &mut kg);
+        f.iter().zip(&kg).map(|(a, b)| a - b).collect()
+    } else {
+        f.to_vec()
+    };
     let mut reverse: BTreeMap<u32, Vec<(u32, f64)>> = BTreeMap::new();
     for row in &mpc.rows {
         for &(m, a) in &row.masters {
@@ -644,7 +894,7 @@ pub fn transform(k: &Csr, f: &[f64], mpc: &Mpc) -> (Csr, Vec<f64>) {
         vals.extend_from_slice(&v);
         row_ptr[r + 1] = col_idx.len() as u32;
     }
-    (Csr { n: k.n, row_ptr, col_idx, vals }, transpose_load(mpc, f))
+    (Csr { n: k.n, row_ptr, col_idx, vals }, transpose_load(mpc, &load))
 }
 
 /// `Tᵀf`: the slave entries emptied and each one added into its masters. The right-hand side
@@ -676,12 +926,15 @@ fn add_row(k: &Csr, mpc: &Mpc, i: u32, scale: f64, acc: &mut BTreeMap<u32, f64>)
     }
 }
 
-/// Put the eliminated DOFs back: `u[slave] = Σ a·u[master]`.
+/// Put the eliminated DOFs back: `u[slave] = Σ a·u[master] + g`.
 ///
 /// One pass is exact because a master is never itself a slave — [`build`] refuses a chain.
+/// `g` is added only where it is non-zero, so a homogeneous row's value is the bare sum it
+/// always was, sign of zero included.
 pub fn recover(mpc: &Mpc, u: &mut [f64]) {
     for row in &mpc.rows {
-        u[row.slave as usize] = row.masters.iter().map(|&(m, a)| a * u[m as usize]).sum();
+        let v: f64 = row.masters.iter().map(|&(m, a)| a * u[m as usize]).sum();
+        u[row.slave as usize] = if row.g != 0.0 { v + row.g } else { v };
     }
 }
 

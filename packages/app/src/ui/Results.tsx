@@ -191,6 +191,26 @@ function Convergence({ s }: { s: UiState }) {
   );
 }
 
+/** Each solve reports the remaining relative spatial error against the requested target. */
+function Adaptation({ s }: { s: UiState }) {
+  const report = s.adaptation;
+  if (!report || report.resultId !== s.result?.resultId) return null;
+  return (
+    <>
+      <div class="section-label">Adaptive refinement</div>
+      <div class="rule-note mono">
+        {report.converged ? 'Target reached' : 'Target not reached'} · target {formatNumber(100 * report.targetError)}%
+      </div>
+      <table>
+        <thead><tr><th>Elements</th><th>DOFs</th><th>Estimated error</th></tr></thead>
+        <tbody>{report.rows.map((row, i) => (
+          <tr key={i}><td>{row.elements}</td><td>{row.dofs}</td><td>{formatNumber(100 * row.estimatedError)}%</td></tr>
+        ))}</tbody>
+      </table>
+    </>
+  );
+}
+
 const P0 = ['0 mm', '0 mm', '0 mm'];
 
 /** The probe and the path, side by side: one point, and a line of them as an inline plot. */
@@ -519,6 +539,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <History s={s} />
         <Sweep s={s} />
         <Convergence s={s} />
+        <Adaptation s={s} />
       </div>
     </div>
   );

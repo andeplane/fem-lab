@@ -92,7 +92,7 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let mut directors = Vec::new();
-    let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
+    let (mut mesh, body_of_block, mut body_faces) = match &settings.mesher {
         MesherSettings::Surface { body, patches } => {
             if quadratic || settings.simplices {
                 return Err(Error::new(
@@ -128,6 +128,21 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
             one_body(&body, part, dim, mesher)?
         }
     };
+    if let Some(refinement) = &settings.refinement {
+        // Carry each Body's boundary through the same face ancestry as named Sets,
+        // including interfaces that are not part of the assembly's exterior skin.
+        for (body, faces) in &body_faces {
+            mesh.face_sets.insert(format!("\0{body}"), faces.clone());
+        }
+        mesh = femlab_geometry::refine(&mesh, &refinement.boxes, refinement.max_elements as usize).map_err(|e| {
+            Error::new(ErrorCode::MeshFailed, e.0)
+                .at("refinement")
+                .suggest("mesh.set with a larger local size or element budget")
+        })?;
+        for (body, faces) in &mut body_faces {
+            *faces = mesh.face_sets.remove(&format!("\0{body}")).expect("refinement preserves every face Set");
+        }
+    }
     mesh.elem_sets.insert("all".into(), (0..mesh.n_elems() as u32).collect());
 
     let mut sets: BTreeMap<String, ResolvedSet> = BTreeMap::new();
@@ -710,4 +725,40 @@ fn surface_point(p: &[Q<Length>; 3], at: &str) -> Result<[f64; 3], Error> {
         out[i] = q.si().map_err(|e| e.at(format!("{at}[{i}]")))?;
     }
     Ok(out)
+}
+
+/// Scale element lengths for a uniform convergence study, including local sizing.
+pub(crate) fn scale_settings(settings: &crate::model::MeshSettings, from: f64, to: f64) -> crate::model::MeshSettings {
+    let mut scaled = settings.clone();
+    scaled.mesher = scale_mesher(&settings.mesher, from, to);
+    if let Some(field) = &mut scaled.refinement {
+        for region in &mut field.boxes {
+            region.size *= to / from;
+        }
+    }
+    scaled
+}
+
+/// Validate unit-bearing local sizing before it enters the Model.
+pub(crate) fn local_refinement(
+    spec: &crate::command::LocalRefinementSpec,
+) -> Result<crate::model::LocalRefinement, Error> {
+    if spec.max_elements == 0 {
+        return Err(Error::schema("maxElements must be positive").at("refinement.maxElements"));
+    }
+    let boxes = spec
+        .boxes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            let box_ = femlab_geometry::SizeBox {
+                min: crate::queries::si3(&b.min)?,
+                max: crate::queries::si3(&b.max)?,
+                size: b.size.si()?,
+            };
+            box_.check().map_err(|e| Error::schema(e.0).at(format!("refinement.boxes[{i}]")))?;
+            Ok(box_)
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(crate::model::LocalRefinement { boxes, max_elements: spec.max_elements })
 }

@@ -22,6 +22,7 @@ use crate::command::{Field, SweepSpacing};
 use crate::engine::OnProgress;
 use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::resolve;
+use crate::fem::checks;
 use crate::fem::loads;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
@@ -126,6 +127,7 @@ pub fn run(
     // every well-posedness check to produce its frequencies, and `solve.run` refuses a stale
     // predecessor. So the checks are not repeated here: what is new in this Step is its own
     // Loads and Constraints, and those two report their own failures below.
+    checks::no_frictionless(p, "harmonic")?;
     let modal = previous.filter(|r| !r.frequencies.is_empty()).ok_or_else(|| needs_modes(previous.is_some()))?;
     let grid = sweep_grid(f_start, f_stop, points, spacing)?;
     let keep = retained_indices(points, output_every);

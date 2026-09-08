@@ -51,6 +51,11 @@ pub enum Coupling {
     /// A bonded contact: every node of `slave` follows the point it projects onto in the face
     /// Set `master`, in every component. `tol` is the largest gap that still pairs, in metres.
     Bonded { name: String, master: String, slave: String, tol: f64 },
+    /// A frictionless contact: every node of the face Set `slave` within `tol` metres of the
+    /// face Set `master` is a candidate that the active set of [`crate::fem::contact`] holds on
+    /// the master surface while it is pressed against it. Pairing, normal and initial gap are
+    /// fixed at the reference configuration (small sliding).
+    Frictionless { name: String, master: String, slave: String, tol: f64 },
     /// A cyclic symmetry tie: every node of `to` is tied to the node it rotates onto in `from`,
     /// `angle` (radians) about the coordinate axis `axis` (0 = x, 1 = y, 2 = z) through
     /// `through`. The zero-harmonic condition (plan B §4): a structural DOF mixes its
@@ -66,14 +71,17 @@ impl Coupling {
     /// The name the Command gave it, which every error and warning quotes.
     pub fn name(&self) -> &str {
         match self {
-            Coupling::Bonded { name, .. } | Coupling::Cyclic { name, .. } | Coupling::Couple { name, .. } => name,
+            Coupling::Bonded { name, .. }
+            | Coupling::Frictionless { name, .. }
+            | Coupling::Cyclic { name, .. }
+            | Coupling::Couple { name, .. } => name,
         }
     }
 
     /// What an error calls it: a tie between Bodies is a contact, a point attachment a coupling.
     pub fn label(&self) -> &'static str {
         match self {
-            Coupling::Bonded { .. } => "contact",
+            Coupling::Bonded { .. } | Coupling::Frictionless { .. } => "contact",
             Coupling::Cyclic { .. } => "cyclic",
             Coupling::Couple { .. } => "coupling",
         }
@@ -82,7 +90,7 @@ impl Coupling {
     /// The Sets it names, so `checks::all` can report an empty one before the pairing runs.
     pub fn sets(&self) -> [&str; 2] {
         match self {
-            Coupling::Bonded { master, slave, .. } => [master, slave],
+            Coupling::Bonded { master, slave, .. } | Coupling::Frictionless { master, slave, .. } => [master, slave],
             Coupling::Cyclic { from, to, .. } => [from, to],
             Coupling::Couple { point, faces, .. } => [faces, point],
         }
@@ -91,9 +99,14 @@ impl Coupling {
     /// The point mass it attaches, if it attaches one.
     pub fn point(&self) -> Option<&str> {
         match self {
-            Coupling::Bonded { .. } | Coupling::Cyclic { .. } => None,
+            Coupling::Bonded { .. } | Coupling::Frictionless { .. } | Coupling::Cyclic { .. } => None,
             Coupling::Couple { point, .. } => Some(point),
         }
+    }
+
+    /// Is it a frictionless contact: the one Coupling whose rows change with the load.
+    pub fn is_frictionless(&self) -> bool {
+        matches!(self, Coupling::Frictionless { .. })
     }
 }
 

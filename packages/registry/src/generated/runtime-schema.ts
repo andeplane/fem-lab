@@ -761,6 +761,17 @@ const commands = {
             "null"
           ]
         },
+        "refinement": {
+          "description": "Optional local size field on the resulting linear simplex mesh. A new\nmesh.set replaces this field; omit it to return to the base mesh.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalRefinementSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cmd": {
           "type": "string",
           "const": "mesh.set"
@@ -932,7 +943,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+      "description": "Connect two face Sets. `bonded` ties them so the parts behave as one: every node of\n`slave` is constrained to the point it projects onto in `master`, in every displacement\ncomponent. It is a linear constraint inside the same operator — no iteration, no gap\nopening, no sliding — so a bonded assembly costs a static solve, not a contact search.\n`tol` is then the largest gap that still pairs, defaulting to 1e-4 of the Mesh diagonal;\na node further from the master than that is `contact.unpaired`. In a heat Step a bonded\ntie carries temperature, so the two parts are in perfect thermal contact.\n`frictionless` lets the faces press, open and slide: `tol` is then the *search distance*\n(same default), every slave node within it is paired and its initial gap along the master\nnormal recorded (positive when open, so faces may start apart and close under load), and\nthe solve keeps a node on the master surface only while the normal force there is\ncompressive. A node beyond `tol` is simply not a candidate. Hold each Body against the\nmotions the contact cannot stop: a frictionless face transmits no tangential force, so a\npart held only by it can still slide. The Result carries a `contactPressure` field on the\nslave nodes and query.result lists every frictionless pair with its active fraction and\nthe resultant it carries; a pair that ends fully open is a `contact.open` warning, a part\nthat lifts off entirely with nothing else holding it a `contact.open` error, and a set\nthat never settles a `contact.chatter` error naming the nodes. Put the *finer* mesh on\nthe slave side either way: a node-to-face constraint passes the patch test that way\nround. A contact is listed in a Step's `constraints` like any other, and is removed with\nconstraint.remove. Contacts add stiffness between Bodies that share no element, which\nquery.cost does not count.",
       "type": "object",
       "properties": {
         "name": {
@@ -1698,6 +1709,16 @@ const commands = {
             "format": "double"
           }
         },
+        "psd": {
+          "description": "One-sided PSD table for randomVibration. All Loads form one spatial pattern\nmultiplied by the same zero-mean stationary random process. Use density \"1 s\"\n(1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,\n`after` naming a solved modal Step, identical constraints, and positive damping.\nOutputs are componentwise standard deviations, never a signed equilibrium state.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PsdPoint"
+          }
+        },
         "cmd": {
           "type": "string",
           "const": "step.add"
@@ -1826,6 +1847,66 @@ const commands = {
         "step",
         "sizes",
         "quantity"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
+      "description": "Solve, estimate local spatial error with ZZ recovery, refine the largest\ncontributions, and repeat until targetError or maxIterations is reached.\nLeaves the last solved mesh and Result installed. Supports planar tri3/solid\ntet4 with static, heat-steady or heat-transient Steps without after. Transient\nruns restart at the configured initial state and estimate the final field;\nthis does not estimate time error or adapt/coarsen within a time integration.\nerrorEstimate is a dimensionless element field; its squared sum is the squared\nglobal relative estimate. Recovery is an indicator, not a certified error bound.\nRefines the existing boundary approximation without CAD projection. Exceeding\nmaxElements or cancellation rolls back the entire Command.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "targetError": {
+          "type": "number",
+          "format": "double"
+        },
+        "maxIterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxElements": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "markingFraction": {
+          "description": "Fraction of squared error selected by bulk marking; default 0.5.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "refinements": {
+          "description": "Recorded refinement regions per iteration. Omit for a new study. The\nengine fills this in its Journal so replay follows the original choices;\nopening with skipped solves applies the same regions without solving.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SizeBoxSpec"
+            }
+          }
+        },
+        "cmd": {
+          "type": "string",
+          "const": "study.adapt"
+        }
+      },
+      "required": [
+        "cmd",
+        "step",
+        "targetError"
       ],
       "x-execution": "modelWrite"
     },
@@ -3753,6 +3834,57 @@ const commands = {
         }
       ]
     },
+    "LocalRefinementSpec": {
+      "description": "Local maximum edge lengths applied after the chosen mesher. Bounds are world\ncoordinates; touching element boxes obey the finest overlapping size. Only\nlinear triangles/tetrahedra are supported. Boundary edges are bisected without\nprojection onto CAD, so this controls discretisation error on the base geometry.",
+      "type": "object",
+      "properties": {
+        "boxes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SizeBoxSpec"
+          }
+        },
+        "maxElements": {
+          "description": "Maximum final element count, checked before refinement allocations grow past it.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "boxes",
+        "maxElements"
+      ]
+    },
+    "SizeBoxSpec": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "max": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "size": {
+          "$ref": "#/$defs/Q_length"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "size"
+      ]
+    },
     "ExportFormat": {
       "description": "A file format `mesh.export` writes.",
       "oneOf": [
@@ -3804,9 +3936,14 @@ const commands = {
       "description": "How two faces interact where they meet.",
       "oneOf": [
         {
-          "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+          "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear: one solve, no contact search.",
           "type": "string",
           "const": "bonded"
+        },
+        {
+          "description": "The faces can press on each other, open, and slide without friction. A slave node\nwithin `tol` of the master is paired with the point it projects onto and its initial gap\nalong the master normal is recorded; in the solve it is held on the master surface while\nthe normal force there is compressive, released the moment that force turns tensile, and\nheld again the moment its gap would go negative. Tangential motion is free, so nothing\nis transmitted along the surface. Small sliding: the pairing and the normal are those of\nthe undeformed Mesh. `static` solves this by repeated linear solves (an active set),\n`static-nonlinear` updates the set inside every Newton iteration; heat, modal, buckling,\nharmonic, explicit and implicit Steps refuse it.",
+          "type": "string",
+          "const": "frictionless"
         }
       ]
     },
@@ -3902,11 +4039,16 @@ const commands = {
           "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
           "type": "string",
           "const": "harmonic"
+        },
+        {
+          "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
+          "type": "string",
+          "const": "randomVibration"
         }
       ]
     },
     "Field": {
-      "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. A static Result with\nbeams or shells includes `rotation` (every node's rotation about the global axes, radians,\nzero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
+      "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. A static Result with\nbeams or shells includes `rotation` (every node's rotation about the global axes, radians,\nzero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces. `contactPressure` is the normal pressure a\nfrictionless contact carries, one component, positive in compression, on the slave nodes of\nevery frictionless pair and zero on every other node; only a Step with such a pair has it.",
       "oneOf": [
         {
           "type": "string",
@@ -3922,7 +4064,8 @@ const commands = {
             "temperature",
             "rotation",
             "sectionForce",
-            "sectionMoment"
+            "sectionMoment",
+            "contactPressure"
           ]
         },
         {
@@ -3939,6 +4082,11 @@ const commands = {
           "description": "Shell stress first moment through thickness, integral z*sigma dz, in N (moment\nper unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for\ntension on the +director side; these are tensor components, not moment-axis\ncomponents. Extrapolated per element node, unaveraged; zero on non-shells.",
           "type": "string",
           "const": "shellMoment"
+        },
+        {
+          "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
+          "type": "string",
+          "const": "errorEstimate"
         }
       ]
     },
@@ -4046,6 +4194,22 @@ const commands = {
           "type": "string",
           "const": "log"
         }
+      ]
+    },
+    "PsdPoint": {
+      "description": "One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.\nDensities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation\nis linear in Hz and density, with zero input outside the table's finite band.",
+      "type": "object",
+      "properties": {
+        "frequency": {
+          "$ref": "#/$defs/Q_frequency"
+        },
+        "density": {
+          "$ref": "#/$defs/Q_time"
+        }
+      },
+      "required": [
+        "frequency",
+        "density"
       ]
     },
     "Solver": {
@@ -4495,7 +4659,7 @@ const queries = {
       "x-returns": "FrameResult"
     },
     {
-      "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+      "description": "A field value at a point (default: the last solved Step). Nodal fields are\ninterpolated; errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
       "type": "object",
       "properties": {
         "resultId": {
@@ -4986,6 +5150,8 @@ const queries = {
     "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
     "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
     "Formulation": commands.$defs["Formulation"],
+    "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
+    "SizeBoxSpec": commands.$defs["SizeBoxSpec"],
     "ExportFormat": commands.$defs["ExportFormat"],
     "Dof": commands.$defs["Dof"],
     "Q_temperature": commands.$defs["Q_temperature"],
@@ -5003,6 +5169,7 @@ const queries = {
     "InitialVelocitySpec": commands.$defs["InitialVelocitySpec"],
     "Q_velocity": commands.$defs["Q_velocity"],
     "SweepSpacing": commands.$defs["SweepSpacing"],
+    "PsdPoint": commands.$defs["PsdPoint"],
     "Solver": commands.$defs["Solver"],
     "QuantityOfInterest": commands.$defs["QuantityOfInterest"],
     "PluginKind": commands.$defs["PluginKind"],

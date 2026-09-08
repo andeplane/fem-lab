@@ -134,7 +134,7 @@ const enumOf = (node: JsonSchema): string[] | null => {
   if (typeof node['const'] === 'string') return [node['const']];
   const one = node['oneOf'] as JsonSchema[] | undefined;
   if (one) {
-    const options = one.map(enumOf);
+    const options = one.map(v => typeof v['const'] === 'string' ? [v['const'] as string] : enumOf(v));
     if (options.every((v): v is string[] => v !== null)) return options.flat();
   }
   return null;

@@ -285,6 +285,7 @@ impl SessionEngine {
                     ("indices", &mut surface.indices),
                     ("triElementNode", &mut surface.tri_element_node),
                     ("triBody", &mut surface.tri_body),
+                    ("triElement", &mut surface.tri_element),
                     ("triFace", &mut surface.tri_face),
                     ("triSetOffsets", &mut surface.tri_set_offsets),
                     ("triSets", &mut surface.tri_sets),

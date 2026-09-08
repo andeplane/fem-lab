@@ -82,6 +82,10 @@ pub enum ErrorCode {
     ConstraintDependent,
     #[serde(rename = "contact.unpaired")]
     ContactUnpaired,
+    #[serde(rename = "contact.chatter")]
+    ContactChatter,
+    #[serde(rename = "contact.open")]
+    ContactOpen,
     #[serde(rename = "solve.not-positive-definite")]
     SolveNotPositiveDefinite,
     #[serde(rename = "solve.stalled")]

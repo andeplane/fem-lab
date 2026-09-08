@@ -31,6 +31,7 @@ use std::cmp::Ordering;
 use crate::engine::OnProgress;
 use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::{reduce, Csr, Pattern};
+use crate::fem::checks;
 use crate::fem::element::element_for;
 use crate::fem::mpc;
 use crate::fem::problem::Problem;
@@ -215,6 +216,7 @@ pub async fn run(
     gpu: Option<&crate::gpu::Gpu>,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
+    checks::no_frictionless(p, "buckling")?;
     let mut s = static_::statics(p, opts, pool, gpu, &mut progress).await?;
     let n = s.red.k_ff.n;
     if n == 0 {

@@ -741,10 +741,8 @@
       "vendor": "deal.II and FEniCSx",
       "title": "step-8: The Elasticity Equations",
       "url": "https://dealii.org/current/doxygen/deal.II/step_8.html",
-      "status_written": "partial",
-      "needs": [
-        83
-      ]
+      "status_written": "can-do",
+      "needs": []
     },
     {
       "id": 68,
@@ -775,7 +773,8 @@
       "url": "https://dealii.org/current/doxygen/deal.II/step_26.html",
       "status_written": "partial",
       "needs": [
-        83
+        83,
+        479
       ]
     },
     {
@@ -854,10 +853,8 @@
       "vendor": "SolidWorks Simulation",
       "title": "SOLIDWORKS Is Discontinuing Adaptive Meshing – What Does This Mean?",
       "url": "https://www.goengineer.com/blog/solidworks-discontinuing-adaptive-meshing",
-      "status_written": "partial",
-      "needs": [
-        83
-      ]
+      "status_written": "can-do",
+      "needs": []
     },
     {
       "id": 79,

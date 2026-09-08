@@ -32,6 +32,9 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
     out.extend(unknown_thermal_contacts(p));
+    if p.heat {
+        out.extend(no_frictionless(p, "heat").err());
+    }
     // The couplings are checked whatever the physics: a tie a heat Step cannot pair is as
     // broken as one a static Step cannot. Without a valid `Mpc` the rigid-body test would be
     // answering a different question, so it waits for the next run.
@@ -43,6 +46,22 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
         }
     }
     out
+}
+
+/// A frictionless contact in a Step whose procedure has no active set to move it with, refused
+/// by name. Heat has no gap to open; a modal, buckling or harmonic Step linearises about one
+/// state and cannot say which nodes touch; explicit and implicit dynamics refuse every
+/// multipoint constraint already.
+pub fn no_frictionless(p: &Problem<'_>, procedure: &str) -> Result<(), Error> {
+    match p.couplings.iter().find(|c| c.is_frictionless()) {
+        None => Ok(()),
+        Some(c) => Err(Error::unsupported(&format!(
+            "frictionless contact '{}' in a {procedure} Step (the active set moves only in a static or static-nonlinear Step)",
+            c.name()
+        ))
+        .at(format!("contact '{}'", c.name()))
+        .suggest("step.add with procedure 'static', or contact.add with kind bonded")),
+    }
 }
 
 /// A DOF that a Constraint prescribes and a coupling also eliminates: the two ask for different

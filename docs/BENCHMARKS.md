@@ -68,6 +68,9 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
 | explicit-wave-bar | green | 4/4 | 1.001437 | 1 | 0.14 % |
+| frictionless-block-liftoff | green | 8/8 | 3335.09957 | 3333.333333 | 0.05 % |
+| frictionless-gap-closure | green | 11/11 | -525 | -525 | 0.00 % |
+| frictionless-two-block-patch | green | 15/15 | -0.009524 | -0.009524 | 0.00 % |
 | harmonic-cantilever-sweep | green | 7/7 | 42 | 41.9107 | 0.21 % |
 | harmonic-sdof-magnification | green | 29/29 | 3.5731e-6 | 3.5731e-6 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
@@ -108,6 +111,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | prestressed-beam-modal | green | 10/10 | 46.876071 | 46.90661 | 0.07 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
+| random-vibration-sdof | green | 2/2 | 9.0305e-5 | 9.0305e-5 | 0.00 % |
 | restrained-strip-transient-thermal-stress | green | 29/29 | 2 | 2 | 0.00 % |
 | taut-string-modal | green | 4/4 | 38.928994 | 38.8929 | 0.09 % |
 | thermal-contact-series | green | 5/5 | 327.777778 | 327.777778 | 0.00 % |
@@ -410,6 +414,9 @@ Hermitian-cubic one without rotary inertia, so the reference is Euler–Bernoull
 slender enough (`r_g/L = 1e-4`) for the element's shear flexibility to be a 1e-8 effect: mode 1
 errors 4.75e-3, 4.83e-4, 3.27e-5 and 2.03e-6 at 1, 2, 4 and 8 elements, an observed rate of 3.95
 on the last three, mode 2 within 1e-3 at eight, and every discrete frequency above the exact one.
+The retained full modal vectors are also checked on every mesh for unit generalized mass,
+the free-DOF eigenproblem residual, nonzero beam rotations, and agreement with the displayed
+translations (#73). Post-modal stress recovery needs those rotations.
 The same test then solves a beam with `r_g/L = 0.1` and checks that its first frequency comes
 out *below* Euler–Bernoulli — at 0.948 of it — which is the shear flexibility showing. B27
 (`a_beam_element_has_exactly_six_zero_energy_modes`) is the rank test: `K v = 0` on the six
@@ -909,6 +916,11 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4e | `contact.thermal` on a bonded pair: two conductors in series with a finite interface resistance | `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, interface jump `q/hc` | 1e-9 rel | thermal contact resistance (#85) | green |
 | F4f | A 60° sector of Benchmark C2's pressurised thick annulus, revolved and tied to itself with `constraint.cyclic` instead of a symmetry plane, free ends | C2's own free-ends (SimScale) number: σθθ(a) = 100 MPa, σrr(a) = −60 MPa, u_r(a) = 5.90e-5 m | 1 % | cyclic symmetry (#81) is exact for a harmonic-0 load | green |
 | F4g | The same sector against a full 360° revolution of the same cross-section at the same angular density, three probes | equivalence, not a published number | 1e-8 rel | the cyclic elimination reproduces the full model exactly | engine test |
+| F4h | Frictionless contact patch test (#62): F4's two blocks pressed together by 1 MN through a `frictionless` `contact.add`, then the top block dragged 1 mm sideways | compression: the bonded F4 field exactly, a contact pressure of 1 MPa on every slave node and a 1 MN contact resultant; shear: zero stress, zero reaction and zero pressure everywhere, where a bonded tie carries `Gγ` | 1e-8 (compression), 1e-10 (shear) | a closed frictionless pair is the bonded tie; an open direction transmits nothing; inclined interfaces at 30° and 60° pick the right eliminated component | green + engine test |
+| F4i | Gap closure: two collinear bars (steel, aluminium) 1 mm apart, the far end pushed 2 mm over four increments | force exactly zero until closure (one increment lands exactly on it), `(δ − g₀)/(L₁/E₁A + L₂/E₂A)` = 262.5 kN and 525 kN after, on every retained frame | 1e-8 rel | the active set opens and closes inside a static amplitude schedule, next to a bonded tie in the same Model | green + engine test |
+| F4j | Lift-off: a block a million times stiffer than the 10 mm bed under it (plane strain, ν = 0), a point load at `e = 0.3 B` outside the kern | rigid-block statics on a Winkler bed: contact over `c = 3(B/2 − e) = 0.6 B`, a triangular pressure peaking at `2P/c`, the open 0.4 B carrying nothing, the resultant equal to the load and through it | 1 % on the lift-off point, the pressure gradient and the resultant; 1 % of the peak pointwise outside `2h` of the kink | nodes release under tension and stay released; the pressure projection is exact for a linear profile | green + engine test |
+| F4k | Hertz: sphere on a rigid flat, axisymmetric — a half-space ten radii square with a spherical cap of radius R at its pole, pressed by a prescribed approach δ, graded quad8 with the first element at a/20 and a/10 | `a = √(Rδ)`, `P = (4/3) E* √R δ^{3/2}`, `p₀ = 3P/(2πa²)`, `E* = E/(1 − ν²)` | 2 % on δ (from the measured P), 5 % on `p₀` and `a`; every error smaller on the finer mesh | measured: P −0.12 %, p₀ +0.16 %, a +2.7 % (coarse: −0.46 %, +1.6 %, +10 %) — the set settles in 3–4 passes | engine test |
+| F4l | The same half-space as a cylinder in plane strain, approach 4e-7 R (strains of 3e-4), through `static` and `static-nonlinear` | equivalence: the two procedures agree on the displacement field, the load, the pole pressure and the held set | 1e-3 | the active set moves inside the Newton loop and settles in a bounded number of changes (one here) | engine test |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
 | F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
 | F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
@@ -923,9 +935,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F14 | Damped harmonic magnification of one degree of freedom, r = f/f_n from 0.1 to 3.0, ζ = 0.02, 0.05 and 0.2 | `\|u\|/u_static = 1/√((1−r²)² + (2ζr)²)` and `phase = atan2(2ζr, 1−r²)` — exact for one degree of freedom, so mode superposition is exact too | 1e-8 on magnitude and phase | harmonic response by mode superposition (ADR 0020) | green + engine test |
 | F15 | Harmonic sweep on B1's cantilever, ζ = 0.02, 30–55 Hz at 0.5 Hz | the peak row sits on B4's Euler–Bernoulli f₁ = 41.91 Hz; its phase is the quadrature π/2 a resonance produces; its amplitude is the static tip deflection amplified by 1/(2ζ) | 1 % in frequency, 5 % in phase, 4 % in amplitude | the sweep finds the real resonance of a real structure | green |
 | F16 | NAFEMS R0016 case 5H, forced harmonic response of the simply-supported thin plate | the published peak displacement and stress table | — | | **resolve** — needs the published table |
-| F17 | NAFEMS R0016 case 5R, random response of the same plate | the published RMS table | — | | **resolve** — needs the published table |
+| F17 | #73, NAFEMS R0016 Test 5R / Ansys VM19: simply-supported deep beam, 10/20/40 elements | f₁ = 42.65 Hz; peak displacement PSD = 180.90 mm²/Hz; peak bending stress PSD = 58515.60 (N/mm²)²/Hz | 2 % frequency and displacement PSD, 1 % stress PSD | correlated modal response; signed extreme-fibre stress; mesh refinement | engine test |
 | F18 | #346, logarithmic decrement: F3's SDOF hex8 released with an initial velocity (no load) at ζ = 0.05, Rayleigh pair `α = ζω, β = ζ/ω` | `δ = 2πζ/√(1−ζ²)`, measured from two parabolically-interpolated peaks four damped periods apart, `ln(peak₀/peak₄)/4` | 1 % | free-decay damping reaches the ratio the pair was chosen for, independent of F3's step-load closed form | engine test |
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
+| F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
 
 The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
 10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
@@ -993,6 +1006,49 @@ Bodies of different conductivity, joined by `contact.add` and overridden by `con
 reproduce `q = ΔT / (L1/k1 + 1/hc + L2/k2)` to roundoff at every node on both sides, with the
 temperature dropping by exactly `q/hc` at the interface — an oracle from series thermal
 resistance, not a comparison against the engine's own perfect-tie or convection paths.
+
+**Frictionless contact (#62) is the same elimination with an active set.** A slave node of a
+`frictionless` `contact.add` within `tol` of the master is paired once, at the reference
+configuration, with its projection, the master normal `n` there and its initial gap `g₀` along it
+(small sliding). While it is *active* it carries the one scalar relation `(u_s − Σ a·u_m)·n = −g₀`,
+eliminated on the slave component with the largest `|n_k|` so the other slave components and the
+master DOFs are its masters — the inhomogeneous branch `u = T v + g`, `TᵀKT v = Tᵀ(f − K g)`, that
+`mpc` reserves for exactly this; a bonded row keeps `g = 0` and takes the old path bit for bit,
+which every F4 fixture still checks. The set moves by the Signorini condition read off the solved
+state: the contact force at an active node is the residual `K u − f` of the *original* system at
+its eliminated DOF (along `n` by construction, since the row makes the slave's other components
+masters), and a node whose force turns tensile is released while a free node whose gap
+`g₀ + (u_s − Σ a·u_m)·n` goes negative is held. The linear `static` procedure repeats whole linear
+solves until nothing moves — once per increment of an amplitude, each starting from the set the
+previous one settled on, which is what lets F4i's gap close partway through a Step;
+`static-nonlinear` reads the set at every converged Newton state and accepts an increment only
+when the residual and the set have both stopped moving. A node that moves more than eight times is
+`contact.chatter`, a part left with nothing holding it when its pair opens is `contact.open`, and
+a pair that ends fully open is a warning. Tangential motion is never constrained, which is what F4h's
+shear half checks: a dragged block slides off with zero shear, zero reaction and zero pressure.
+
+The `contactPressure` field is an L2 projection of the nodal contact forces onto the slave faces,
+`M p = λ` with `M = ∫ NᵀN dS`, rather than a division by lumped areas: a quad8 corner on the axis of
+an axisymmetric Model has a lumped area of exactly zero (`∫ N₀ 2πr ds = 0`), and F4k's `p₀` is read
+at precisely that node. `query.result` lists every frictionless pair with its active fraction and
+the resultant it carries; that resultant is what one part pushes on the other with, so it is not
+among the `reactions` and does not enter `balance`.
+
+F4k's oracle is Hertz with the approach prescribed rather than the load: the half-space's far
+boundary is ten radii away, so the elastic displacement there is 0.15 % of δ and the prescribed
+top-face motion *is* the Hertz approach to that accuracy, while a load-controlled sphere has no
+unambiguous δ to compare against (its whole-body compression is of the same order as the
+half-space correction). `a` is halfway between the outermost held node and the first free one, so
+its error is the mesh's resolution — 2.7 % at a/20, 10 % at a/10 — which is why the refinement pair
+is part of the gate. F4l is the finite-strain kernel's own check: it has no axisymmetric form, so
+the same half-space runs as a cylinder in plane strain, at an approach small enough that the
+Green–Lagrange and small-strain answers coincide to 1e-3, and agrees with the linear procedure on
+everything including which nodes are held.
+
+The Journal cases are `frictionless-two-block-patch` (F4h, both halves as two Steps of one Model),
+`frictionless-gap-closure` (F4i, its frames read back by `query.probe` with a frame sample) and
+`frictionless-block-liftoff` (F4j); F4k and F4l need meshes graded towards a point, which only the
+engine's own mapped builder makes, so they are engine tests.
 
 F12 and F13 are the point mass and the coupling of #67. A `distributed` coupling weights its face
 by the lumped areas `a_i = ∫ N_i dS` the heat kernel's face integral already produces, and
@@ -1106,11 +1162,28 @@ occupies is identified three ways, not one: its frequency is Euler–Bernoulli's
 phase is 1.526 rad against π/2, and its amplitude is 73.52 mm against the 75.77 mm the
 amplification identity predicts.
 
-**F16 and F17 are not claimed.** NAFEMS R0016, *Selected Benchmarks for Forced Vibration*, is the
-right published set for both harmonic and random response and covers them on one plate. Nobody on
-this change has read the publication, and BENCHMARKS' own rule forbids hard-coding a remembered
-number, so the rows say **resolve** and the harmonic PR is gated on F14 and F15, which are closed
-forms.
+**F17 (#73)** uses the published [Ansys VM19 description](https://ansyshelp.ansys.com/public/Views/Secured/corp/v251/en/ans_vm/Hlp_V_VM19.html)
+and [input listing](https://ansyshelp.ansys.com/public/Views/Secured/corp/v251/en/ans_vm/Hlp_V_VM19TXT.html),
+which identify the case as NAFEMS R0016 Test 5R. This is a deep beam, not a plate.
+The test uses L = 10 m, a 2 m square section, E = 200 GPa, ν = 0.3, ρ = 8000 kg/m³,
+2 % damping and spatially correlated transverse line-load PSD (10⁶ N/m)²/Hz.
+The input band is 0.1–70 Hz. On 10/20/40 elements, displacement PSD is
+179.855/181.891/182.401 mm²/Hz and stress PSD is 58561.90/58524.86/58512.53 (N/mm²)²/Hz.
+The beam's existing Hermitian mass omits rotary inertia; frequencies approach 43.183 Hz,
+1.25 % above the published 42.65 Hz. The frequency gate includes that documented approximation;
+it does not claim convergence to the rotary-inertia reference. The procedure's integrated
+RMS fields are separately compared within 3 % to the narrow-band Lorentzian area estimate
+`variance ≈ peak PSD · π ζ f_n`. Those RMS estimates are analytical approximations, not
+published VM19 targets. F16's harmonic case still needs its published reference table.
+
+**F20 (#73)** additionally runs a finite-element SDOF bar (`random-vibration-sdof`) through the randomVibration
+procedure. With its transverse motion constrained, `C₁₁ = E(1−ν)/((1+ν)(1−2ν))`,
+`ω_n² = 3 C₁₁/(ρL²)` and `u_static = traction L/C₁₁`. The independent stationary
+energy balance gives `σ_u² = u_static² S ω_n/(8ζ)` and `σ_stress = C₁₁ σ_u/L`.
+The canonical CLI case checks both fields at 1e-7 relative.
+`tools/test-random-vibration-replay.mjs` verifies its Journal hashes and complete RMS fields
+in WASM and native hosts at one and four threads. Covariance integration alone is gated at 1e-8
+for damping down to 1e-5. Equal modes with opposite participation cancel exactly.
 
 F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).
 Every retained nodal displacement equals `v₀ t + g t²/2` within `1e-10 tEnd` m for all eight
@@ -1919,3 +1992,71 @@ verify detachment and repeated exact f64 reads, and isolate f32 casts to rendere
 `surface()` retains the current geometry-preview route; `surface({})` and
 `query.surface` require a compatible solved Result, while explicit IDs permit stale
 retained solves. Replies identify the immutable solve even when selected by Step.
+
+### ZZ recovery estimator (#83)
+
+Energy is evaluated as ||L⁻¹q||² with C=LLᵀ, avoiding cancellation in an
+explicit inverse quadratic form. Nonfinite energy and constitutive-plugin
+failures are structured errors, never small error estimates.
+
+The same two-triangle square has the exact displacement interpolant u=(xy,0).
+The two constant engineering strains are (0,0,1) and (1,0,0), giving local
+squared recovery error t(C_xxxx+G_xy)/16 and total field energy
+t(C_xxxx+G_xy)/2. Both plane stress (including thickness) and plane strain
+are checked against these closed forms, including η_rel=sqrt(1/5).
+
+
+`zz_two_triangles_have_the_exact_integrated_flux_error` uses the unit square split
+along its diagonal, with nodal temperatures sampled from T=xy and k=45 W/(m K).
+The two constant element gradients are (0,1) and (1,0); volume-weighted recovery
+at the shared corners is (1/2,1/2). Exact integration gives each squared error
+k/8, total field norm squared k, and relative estimate sqrt(1/5). This checks the
+energy integral, including the variation of the recovered field within an element.
+
+Affine temperature and displacement patches on distorted tri3/tet4 meshes have
+relative estimates below 1e-13, including plane stress with thickness, plane strain,
+and 3D. Two material patches keep independent recovered fluxes at their common
+nodes, so physical interface jumps do not become recovery error. One and four
+threads give identical estimates.
+
+For T=x² on unit-square tri3 meshes with 8, 16 and 32 divisions per side, the
+independent exact energy error of the nodal interpolant is sqrt(k/3)/n. The ZZ
+estimate has effectivity within 15% and first-order energy convergence within
+0.1 of the theoretical rate. This is an estimator benchmark on a manufactured
+field; adaptive solved-problem benchmarks are separate gates.
+
+The method uses volume-weighted, material-separated recovered stress/heat flux
+and the inverse elastic/conductivity tensor in the energy integral; see the
+[MFEM ZZ estimator contract](https://docs.mfem.org/html/classmfem_1_1ZienkiewiczZhuEstimator.html).
+An estimate is not a guaranteed bound on the true discretisation error.
+
+Local simplex refinement is checked on tri3 and tet4 boxes at target edge lengths
+0.4 m and 0.2 m. Area/volume stays exact to 1e-12, every child has positive
+orientation, every unpaired face remains on the original box boundary, and named
+face Sets retain their geometric planes. All edges in the requested region obey
+the bound; a remote region retains coarser elements. Refining an already compliant
+mesh is idempotent. An irregular three-triangle patch also forces all three edges
+of its central triangle to split in one pass: it must retain area 2.2 m² and
+satisfy Euler’s disk identity with exactly six boundary edges and no hanging faces.
+Invalid size fields and element budgets return errors without
+changing the input mesh. New boundary nodes bisect the existing mesh edges; these
+tests assert conservation of that boundary approximation, not improved CAD fidelity.
+
+`adaptive_heat_reduces_error_against_the_exact_parabolic_solution` solves the
+unit-square conduction problem with k=1 W/(m K), source 2 W/m³, T=300 K at
+x=0 and x=1, and insulated horizontal edges. Its independent exact solution is
+T=300+x(1−x) K. One, two and three adaptive solves must each reduce the sampled
+RMS temperature error by at least 30%. The element field's squared sum must equal
+the report's squared relative error. A separate registry test replays the recorded
+refinement choices with and without solves and compares exact meshes and Models,
+then checks undo and redo.
+
+The 3D adaptive cantilever also checks that the refined support reaction balances
+the 1000 N applied load to 1e-5 N. Transient adaptive conduction uses the same
+square, unit density/capacity, T(0)=300 K, θ=1/2, dt=0.01 s and tEnd=0.2 s.
+Its final probe is checked to 0.012 K against the independent odd-sine-series
+solution, ensuring spatial iterations restart rather than accumulate physical time.
+`tools/test-adaptive-replay.mjs` runs the recorded adaptive heat Journal through
+native execution at one/four threads and WASM, with exact per-entry hashes and
+surface topology and 1e-9 agreement of temperature/error fields. Both hosts also
+verify the same Model hashes when replay skips the solves.

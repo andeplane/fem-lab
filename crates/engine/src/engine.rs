@@ -80,6 +80,7 @@ pub struct Engine {
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
+    pub(crate) adaptations: BTreeMap<String, crate::query::AdaptReport>,
 }
 
 impl Engine {
@@ -99,6 +100,7 @@ impl Engine {
             retained: std::collections::VecDeque::new(),
             next_result: "0".into(),
             studies: BTreeMap::new(),
+            adaptations: BTreeMap::new(),
         }
     }
 
@@ -139,7 +141,7 @@ impl Engine {
     }
 
     /// Apply a Command transactionally: on error nothing changed and nothing was recorded.
-    pub async fn dispatch(&mut self, cmd: Command, on_progress: OnProgress<'_>) -> Result<Ack, Error> {
+    pub async fn dispatch(&mut self, mut cmd: Command, on_progress: OnProgress<'_>) -> Result<Ack, Error> {
         let before = self.model.clone();
         let solids_before = self.solids.clone();
         // The Mesh is derived from the Model, so any Command can stale it; it rebuilds lazily.
@@ -150,6 +152,9 @@ impl Engine {
                 Ok(Ack { seq: self.revision(), revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Ok(output) => {
+                if let (Command::StudyAdapt { refinements, .. }, Output::Adapt { report }) = (&mut cmd, &output) {
+                    *refinements = Some(report.refinements.clone());
+                }
                 let (seq, hash) = self.record(cmd, before);
                 Ok(Ack { seq, revision: self.revision(), hash, warnings: self.warnings(), output })
             }
@@ -247,6 +252,7 @@ impl Engine {
         self.redo.clear();
         self.clear_results();
         self.studies.clear();
+        self.adaptations.clear();
         self.invalidate_geometry();
         Ok(())
     }
@@ -269,27 +275,33 @@ impl Engine {
         self.invalidate_geometry();
         self.clear_results();
         self.studies.clear();
+        self.adaptations.clear();
         let mut hashes = Vec::with_capacity(entries.len());
         let mut nop = |_p: Progress| true;
         for e in entries {
             let skip = skip_solves
                 && matches!(
                     e.cmd,
-                    Command::SolveRun { .. } | Command::StudyConverge { .. } | Command::MeshExport { .. }
+                    Command::SolveRun { .. }
+                        | Command::StudyConverge { .. }
+                        | Command::StudyAdapt { .. }
+                        | Command::MeshExport { .. }
                 );
             let hash = if skip {
                 let before = self.model.clone();
                 if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
                     let (settings, h) =
                         self.study_mesh(sizes).map_err(|err| err.at(format!("journal entry {}", e.seq)))?;
-                    self.model.mesh = Some(MeshSettings {
-                        mesher: crate::mesh::scale_mesher(
-                            &settings.mesher,
-                            h[0],
-                            *h.last().expect("at least two sizes"),
-                        ),
-                        ..settings
-                    });
+                    self.model.mesh =
+                        Some(crate::mesh::scale_settings(&settings, h[0], *h.last().expect("at least two sizes")));
+                }
+                if let Command::StudyAdapt { refinements, max_elements, .. } = &e.cmd {
+                    let choices = refinements
+                        .as_ref()
+                        .ok_or_else(|| Error::schema("skipped adaptive replay requires recorded refinements"))?;
+                    for boxes in choices {
+                        self.apply_adaptive_refinement(boxes, max_elements.unwrap_or(100_000))?;
+                    }
                 }
                 self.mesh = None;
                 self.record(e.cmd.clone(), before).1
@@ -848,7 +860,7 @@ impl Engine {
                 self.model.sections.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
-            Command::MeshSet { mesher, order, formulation, simplices } => {
+            Command::MeshSet { mesher, order, formulation, simplices, refinement } => {
                 let order = order.unwrap_or(1);
                 if !(1..=2).contains(&order) {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
@@ -883,6 +895,7 @@ impl Engine {
                     order,
                     formulation: formulation.unwrap_or_default(),
                     simplices: simplices.unwrap_or(false),
+                    refinement: refinement.as_ref().map(crate::mesh::local_refinement).transpose()?,
                 });
                 Ok(Output::None)
             }
@@ -954,12 +967,11 @@ impl Engine {
                     .suggest("contact.add with the facing Sets of two different Bodies"));
                 }
                 let t = tol.as_ref().map(|q| q.si().map_err(|e| e.at("tol"))).transpose()?;
-                let ContactKind::Bonded = kind;
-                let c = Constraint {
-                    name: name.clone(),
-                    on: slave.clone(),
-                    kind: ConstraintKind::Bonded { master: master.clone(), tol: t },
+                let kind = match kind {
+                    ContactKind::Bonded => ConstraintKind::Bonded { master: master.clone(), tol: t },
+                    ContactKind::Frictionless => ConstraintKind::Frictionless { master: master.clone(), tol: t },
                 };
+                let c = Constraint { name: name.clone(), on: slave.clone(), kind };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
             Command::ConstraintCyclic { name, from, to, axis, angle_deg, through, tol } => {
@@ -1200,6 +1212,7 @@ impl Engine {
                 sweep,
                 damping_ratio,
                 damping_ratios,
+                psd,
                 alpha,
                 rayleigh_alpha,
                 rayleigh_beta,
@@ -1288,6 +1301,22 @@ impl Engine {
                     sweep: *sweep,
                     damping_ratio: *damping_ratio,
                     damping_ratios: damping_ratios.clone(),
+                    psd: psd
+                        .as_ref()
+                        .map(|points| {
+                            let table = points
+                                .iter()
+                                .map(|p| {
+                                    Ok([
+                                        p.frequency.si().map_err(|e| e.at("psd.frequency"))?,
+                                        p.density.si().map_err(|e| e.at("psd.density"))?,
+                                    ])
+                                })
+                                .collect::<Result<Vec<_>, Error>>()?;
+                            crate::procedure::random_vibration::Spectrum { table: table.clone() }.check()?;
+                            Ok::<_, Error>(table)
+                        })
+                        .transpose()?,
                     alpha: *alpha,
                     rayleigh_alpha: non_negative(opt_si(rayleigh_alpha, "rayleighAlpha")?, "rayleighAlpha")?,
                     rayleigh_beta: non_negative(opt_si(rayleigh_beta, "rayleighBeta")?, "rayleighBeta")?,
@@ -1356,6 +1385,18 @@ impl Engine {
             }
             Command::StudyConverge { step, sizes, quantity, restore } => {
                 self.study_converge(step, sizes, quantity, *restore, on_progress).await
+            }
+            Command::StudyAdapt { step, target_error, max_iterations, max_elements, marking_fraction, refinements } => {
+                self.study_adapt(
+                    step,
+                    *target_error,
+                    *max_iterations,
+                    *max_elements,
+                    *marking_fraction,
+                    refinements.as_deref(),
+                    on_progress,
+                )
+                .await
             }
             Command::PluginLoad { .. } => Err(Error::unsupported("plugin.load (phase P)")),
             Command::JournalUndo { steps, expected_journal } => {

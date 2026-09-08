@@ -1,0 +1,151 @@
+{
+  "name": "frictionless-two-block-patch",
+  "reference": "Benchmark F5, the frictionless patch test. The two 1 m cubes of tie-two-block-patch, meshed as separate Bodies with no shared node, are joined by a frictionless contact.add instead of a bonded one. Step 'press' pushes the assembly together by 1 MN over its 1 m^2 end face: a closed frictionless pair in compression is the bonded tie exactly, so the answer is F4's uniform state with the sign reversed, sigma_xx = -1 MPa on both sides, u_x = -2 MPa*m/210 GPa = -0.0095238095 mm at the pushed end, the contact pressure 1 MPa on every slave node and the contact resultant the whole 1 MN. Step 'slide' drags the top block's far face 1 mm sideways instead: a frictionless face transmits nothing along itself, so the top block translates rigidly, the bottom block sees no load, every reaction and the whole stress field are zero, and the pair stays closed with zero pressure. A bonded tie would carry G*gamma. The elimination is exact, so the tolerances are roundoff, not physics.",
+  "journal": [
+    { "cmd": "model.new", "name": "frictionless-patch" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "a", "size": ["1 m", "1 m", "1 m"] },
+    { "cmd": "geometry.addBox", "name": "b", "size": ["1 m", "1 m", "1 m"], "at": ["1 m", "0 m", "0 m"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["a", "b"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": "500 mm" },
+      "order": 1,
+      "formulation": "full"
+    },
+    { "cmd": "constraint.fix", "name": "root", "on": "a.xmin", "dofs": ["ux"] },
+    { "cmd": "constraint.fix", "name": "symy", "on": "a.ymin", "dofs": ["uy"] },
+    { "cmd": "constraint.fix", "name": "symz", "on": "a.zmin", "dofs": ["uz"] },
+    { "cmd": "constraint.fix", "name": "symy_b", "on": "b.ymin", "dofs": ["uy"] },
+    { "cmd": "constraint.fix", "name": "symz_b", "on": "b.zmin", "dofs": ["uz"] },
+    { "cmd": "constraint.prescribe", "name": "drag", "on": "b.xmax", "dof": "uy", "value": "1 mm" },
+    { "cmd": "constraint.fix", "name": "flat", "on": "b.xmax", "dofs": ["uz"] },
+    { "cmd": "contact.add", "name": "seat", "master": "a.xmax", "slave": "b.xmin", "kind": "frictionless" },
+    { "cmd": "load.traction", "name": "push", "on": "b.xmax", "total": ["-1 MN", "0 N", "0 N"] },
+    {
+      "cmd": "step.add",
+      "name": "press",
+      "procedure": "static",
+      "constraints": ["root", "symy", "symz", "symy_b", "symz_b", "seat"],
+      "loads": ["push"]
+    },
+    {
+      "cmd": "step.add",
+      "name": "slide",
+      "procedure": "static",
+      "constraints": ["root", "symy", "symz", "symz_b", "drag", "flat", "seat"],
+      "loads": []
+    },
+    { "cmd": "solve.run", "step": "press" },
+    { "cmd": "solve.run", "step": "slide" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "step": "press", "field": "displacement", "component": 0, "at": ["2 m", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": -0.009523809523809525,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "u_x = -sigma L / E at the pushed end, in mm: F4's value with the sign of compression"
+    },
+    {
+      "query": { "query": "query.probe", "step": "press", "field": "vonMises", "at": ["500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "1 MPa on the master side of the contact"
+    },
+    {
+      "query": { "query": "query.probe", "step": "press", "field": "vonMises", "at": ["1500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "and the same 1 MPa on the slave side: the stress is continuous across a closed contact"
+    },
+    {
+      "query": { "query": "query.probe", "step": "press", "field": "contactPressure", "at": ["1250 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 0.5,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the contact pressure is 1 MPa on the slave face and zero on every other node, so halfway across the first element of the slave block the interpolant reads half"
+    },
+    {
+      "query": { "query": "query.result", "step": "press" },
+      "path": "/contacts/0/activeFraction",
+      "expect": 1.0,
+      "tol": 0.0,
+      "note": "every paired node is held: the pair is closed"
+    },
+    {
+      "query": { "query": "query.result", "step": "press" },
+      "path": "/contacts/0/force/0/value",
+      "expect": 1000.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the master pushes the whole 1 MN back into the slave, in the model's kN"
+    },
+    {
+      "query": { "query": "query.result", "step": "press" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the supports balance the applied load; the contact force is internal and not among them"
+    },
+    {
+      "query": { "query": "query.result", "step": "press" },
+      "path": "/reactions/0/total/0/value",
+      "expect": 1000.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the held end carries all of it"
+    },
+    {
+      "query": { "query": "query.probe", "step": "slide", "field": "displacement", "component": 1, "at": ["1500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "the dragged block translates rigidly by the whole 1 mm: nothing holds it back"
+    },
+    {
+      "query": { "query": "query.probe", "step": "slide", "field": "displacement", "component": 1, "at": ["500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-10,
+      "note": "and the bottom block does not move at all"
+    },
+    {
+      "query": { "query": "query.probe", "step": "slide", "field": "vonMises", "at": ["500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-10,
+      "note": "zero shear anywhere: a bonded tie would carry G*gamma = 40 MPa here"
+    },
+    {
+      "query": { "query": "query.result", "step": "slide" },
+      "path": "/reactions/1/total/1/value",
+      "expect": 0.0,
+      "tol": 1e-08,
+      "note": "the bottom block's supports carry no tangential reaction (kN)"
+    },
+    {
+      "query": { "query": "query.result", "step": "slide" },
+      "path": "/contacts/0/force/0/value",
+      "expect": 0.0,
+      "tol": 1e-08,
+      "note": "the pair carries no force"
+    },
+    {
+      "query": { "query": "query.result", "step": "slide" },
+      "path": "/contacts/0/activeFraction",
+      "expect": 1.0,
+      "tol": 0.0,
+      "note": "and stays closed: nothing pulls the faces apart"
+    },
+    { "query": { "query": "query.result", "step": "slide" }, "path": "/stale", "expect": false }
+  ]
+}

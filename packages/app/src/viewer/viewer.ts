@@ -357,7 +357,9 @@ export class Viewer {
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
-          const [r, g, b] = sample(this.colormap, (this.field[this.fieldPer === 'elementNode' ? s.triElementNode![t * 3 + k]! : this.vert[vertex]!]! - lo) / span);
+          const entity = this.fieldPer === 'elementNode' ? s.triElementNode?.[t * 3 + k] : this.fieldPer === 'element' ? s.triElement?.[t] : this.vert[vertex];
+          const value = entity === undefined ? lo : this.field[entity] ?? lo;
+          const [r, g, b] = sample(this.colormap, (value - lo) / span);
           c.setRGB(r, g, b);
         } else if (this.mode === 'mesh') {
           c.setScalar(grey);
@@ -450,12 +452,12 @@ export class Viewer {
   }
 
   setField(values: Float32Array | null, range: [number, number], per = 'node'): void {
-    if (values && per !== 'node' && per !== 'elementNode') throw new FemError('unsupported', `cannot contour ${per} fields`);
+    if (values && per !== 'node' && per !== 'elementNode' && per !== 'element') throw new FemError('unsupported', `cannot contour ${per} fields`);
     if (values && per === 'elementNode' && this.surface?.triElementNode?.length !== this.surface?.indices.length) {
       throw new FemError('internal', 'the Result surface has no element-node field mapping');
     }
-    this.fieldPer = per;
     this.field = values;
+    this.fieldPer = per;
     this.range = range;
     this.paint();
     this.render();
@@ -792,7 +794,7 @@ export class Viewer {
     const t = this.tri[hit.faceIndex]!;
     const node = this.nearestNode(hit.faceIndex, hit.point);
     const corner = [0, 1, 2].find(k => s.indices[t * 3 + k] === node);
-    const fieldIndex = this.fieldPer === 'elementNode' && corner !== undefined ? s.triElementNode?.[t * 3 + corner] : node;
+    const fieldIndex = this.fieldPer === 'elementNode' && corner !== undefined ? s.triElementNode?.[t * 3 + corner] : this.fieldPer === 'element' ? s.triElement?.[t] : node;
     return {
       face: s.faceNames[s.triFace[t]!] ?? null,
       body: s.bodyNames[s.triBody[t]!] ?? null,

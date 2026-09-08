@@ -294,19 +294,22 @@ impl Engine {
             .constraints
             .iter()
             .filter_map(|c| match &c.kind {
-                ConstraintKind::Bonded { master, tol } => Some(ConnectionRow {
-                    name: c.name.clone(),
-                    kind: "bonded".into(),
-                    master: master.clone(),
-                    slave: c.on.clone(),
-                    summary: match tol {
-                        None => "bonded, pairing tolerance from the mesh size".to_string(),
-                        Some(t) => {
-                            let v = display(m, *t, Length::DIM);
-                            format!("bonded, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
-                        }
-                    },
-                }),
+                ConstraintKind::Bonded { master, tol } | ConstraintKind::Frictionless { master, tol } => {
+                    let kind = if matches!(c.kind, ConstraintKind::Bonded { .. }) { "bonded" } else { "frictionless" };
+                    Some(ConnectionRow {
+                        name: c.name.clone(),
+                        kind: kind.into(),
+                        master: master.clone(),
+                        slave: c.on.clone(),
+                        summary: match tol {
+                            None => format!("{kind}, pairing tolerance from the mesh size"),
+                            Some(t) => {
+                                let v = display(m, *t, Length::DIM);
+                                format!("{kind}, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
+                            }
+                        },
+                    })
+                }
                 ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
                     name: c.name.clone(),
                     kind: "cyclic".into(),
@@ -355,9 +358,10 @@ impl Engine {
                 let summary = match &c.kind {
                     // A tie, a cyclic tie or a coupling prescribes nothing and names two Sets: they are the
                     // Connections above.
-                    ConstraintKind::Bonded { .. } | ConstraintKind::Cyclic { .. } | ConstraintKind::Couple { .. } => {
-                        return None
-                    }
+                    ConstraintKind::Bonded { .. }
+                    | ConstraintKind::Frictionless { .. }
+                    | ConstraintKind::Cyclic { .. }
+                    | ConstraintKind::Couple { .. } => return None,
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
@@ -605,8 +609,8 @@ impl Engine {
             }
             None => (record.named_field(&crate::solve_run::field_name(field))?.0.clone(), None),
         };
-        if f.per != crate::post::Per::Node {
-            return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
+        if f.per != crate::post::Per::Node && f.per != crate::post::Per::Element {
+            return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal or element field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let model = if id.is_some() { &record.model } else { &self.model };
@@ -644,7 +648,12 @@ impl Engine {
             Engine::pick(&v, component),
             crate::solve_run::field_dimension(field, record.result.reaction_quantity),
         );
-        Ok(ProbeResult { sample, value: Valued { value: value.value, unit }, element: elem, interpolated: true })
+        Ok(ProbeResult {
+            sample,
+            value: Valued { value: value.value, unit },
+            element: elem,
+            interpolated: f.per == crate::post::Per::Node,
+        })
     }
 
     /// `query.path`: a field sampled along a line.
@@ -686,13 +695,19 @@ impl Engine {
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
         let dofs_per_node = crate::fem::problem::mesh_dofs_per_node(&built.mesh, &self.model.idealisation);
+        let modal_modes = step
+            .after
+            .as_deref()
+            .and_then(|name| self.model.step(name))
+            .map_or(0, |source| source.n_modes.unwrap_or(6) as usize)
+            .min(built.mesh.n_nodes().saturating_mul(dofs_per_node));
         if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
-            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure, modal_modes)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         } else {
-            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, None, &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, None, &procedure, modal_modes)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         }

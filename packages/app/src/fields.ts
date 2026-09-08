@@ -30,11 +30,13 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   vonMises: 'stress',
   principal: 'stress',
   strain: 'dimensionless',
+  errorEstimate: 'dimensionless',
   plasticStrain: 'dimensionless',
   temperature: 'temperature',
   rotation: 'dimensionless',
   sectionForce: 'force',
   sectionMoment: 'torque',
+  contactPressure: 'stress',
 };
 
 /** `mode:3` is a displacement; a safety factor and a utilisation are pure numbers. */
@@ -101,7 +103,9 @@ export const FIELD_CHOICES: FieldChoice[] = [
   ...VOIGT.map((a, i) => ({ key: `shellM${a}`, label: `M${a} / width`, field: 'shellMoment', component: i })),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
   { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
+  { key: 'contactPressure', label: 'p_c', field: 'contactPressure', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
+  { key: 'errorEstimate', label: 'Estimated spatial error', field: 'errorEstimate', component: 0 },
 ];
 
 /** `yield / σ_vM` and its reciprocal: the two numbers a check is actually written against. */

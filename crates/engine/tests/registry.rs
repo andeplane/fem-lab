@@ -11707,3 +11707,573 @@ fn shell_surface_validation_reports_locations_and_rejects_incompatible_meshes() 
     ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 mm"}}"#);
     assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::ModelIllPosed);
 }
+
+// ---------------------------------------------------------------- adaptive refinement (#83)
+
+fn adaptive_heat(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"adaptive heat"}"#);
+    ok(e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(
+        e,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[{"kind":"line","to":["1 m","0 m"],"tag":"ymin"},{"kind":"line","to":["1 m","1 m"],"tag":"xmax"},{"kind":"line","to":["0 m","1 m"],"tag":"ymax"},{"kind":"line","to":["0 m","0 m"],"tag":"xmin"}]}}}"#,
+    );
+    ok(e, r#"{"cmd":"material.add","name":"conductor","E":"1 Pa","nu":0.3,"k":"1 W/(m K)"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"conductor","bodies":["plate"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":2,"nz":1}},"simplices":true}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"left","on":"plate.xmin","value":"300 K"}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"right","on":"plate.xmax","value":"300 K"}"#);
+    ok(e, r#"{"cmd":"load.heatSource","name":"source","bodies":["plate"],"q":"2 W/m^3"}"#);
+    ok(
+        e,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["left","right"],"loads":["source"],"output":["temperature","errorEstimate"]}"#,
+    );
+}
+
+#[test]
+fn adaptive_heat_reduces_error_against_the_exact_parabolic_solution() {
+    let mut errors = Vec::new();
+    for passes in 1..=3 {
+        let mut e = engine();
+        adaptive_heat(&mut e);
+        let ack = ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"study.adapt","step":"heat","targetError":0.001,"maxIterations":{passes},"maxElements":10000}}"#
+            ),
+        );
+        let Output::Adapt { report } = ack.output else { panic!("adaptive report") };
+        assert_eq!(report.rows.len(), passes);
+        assert!(!report.converged);
+        assert_eq!(report.refinements.len(), passes - 1);
+        let indicator = e.field(Some("heat"), Field::ErrorEstimate).unwrap().clone();
+        assert_eq!(indicator.per, femlab_engine::post::Per::Element);
+        let relative = indicator.data.iter().map(|x| x * x).sum::<f64>().sqrt();
+        assert!((relative - report.rows.last().unwrap().estimated_error).abs() < 1e-14);
+        let field = e.field(Some("heat"), Field::Temperature).unwrap().clone();
+        let mesh = &e.mesh().unwrap().mesh;
+        assert_eq!(indicator.len(), mesh.n_elems());
+        let mut squared = 0.0;
+        for ix in 0..19 {
+            for iy in 0..17 {
+                let x = (ix as f64 + 0.5) / 19.;
+                let y = (iy as f64 + 0.5) / 17.;
+                let (_, t) = femlab_engine::post::probe::probe(mesh, &field, [x, y, 0.]).unwrap();
+                squared += (t[0] - (300. + x * (1. - x))).powi(2);
+            }
+        }
+        errors.push((squared / (19. * 17.)).sqrt());
+    }
+    assert!(errors[1] < errors[0] * 0.7, "{errors:?}");
+    assert!(errors[2] < errors[1] * 0.7, "{errors:?}");
+}
+
+#[test]
+fn adaptive_journal_replays_exact_mesh_choices_and_supports_undo() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    let original = e.model().clone();
+    ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.01,"maxIterations":3,"maxElements":10000}"#);
+    let file = e.export_file();
+    let final_mesh = e.mesh().unwrap().clone();
+    for skip in [false, true] {
+        let mut copy = engine();
+        pollster::block_on(copy.replay(&file.journal.entries, skip, true)).unwrap();
+        assert_eq!(copy.model(), e.model());
+        assert_eq!(copy.mesh().unwrap(), &final_mesh);
+        ok(&mut copy, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(copy.model(), &original);
+        ok(&mut copy, r#"{"cmd":"journal.redo"}"#);
+        assert_eq!(copy.mesh().unwrap(), &final_mesh);
+    }
+}
+
+#[test]
+fn adaptive_failures_and_cancellation_preserve_the_previous_model_and_result() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    let previous = e.export_file();
+    let field = e.field(Some("heat"), Field::Temperature).unwrap().clone();
+    for extra in [
+        r#""targetError":0"#,
+        r#""targetError":1"#,
+        r#""targetError":0.01,"maxIterations":0"#,
+        r#""targetError":0.01,"maxIterations":101"#,
+        r#""targetError":0.01,"maxElements":0"#,
+        r#""targetError":0.01,"markingFraction":0"#,
+        r#""targetError":0.01,"markingFraction":1.01"#,
+        r#""targetError":0.01,"maxIterations":1,"refinements":[[]]"#,
+    ] {
+        assert_eq!(err(&mut e, &format!(r#"{{"cmd":"study.adapt","step":"heat",{extra}}}"#)).code, ErrorCode::Schema);
+        assert_eq!(e.export_file(), previous);
+    }
+    for limit in [1, 9] {
+        assert_eq!(
+            err(&mut e, &format!(r#"{{"cmd":"study.adapt","step":"heat","targetError":0.01,"maxElements":{limit}}}"#))
+                .code,
+            ErrorCode::MeshFailed
+        );
+        assert_eq!(e.export_file(), previous);
+        assert_eq!(e.field(Some("heat"), Field::Temperature).unwrap(), &field);
+    }
+    let command: Command = serde_json::from_str(r#"{"cmd":"study.adapt","step":"heat","targetError":0.01}"#).unwrap();
+    let mut passes = 0;
+    let mut cancel = |p: Progress| {
+        if p.phase == "study" {
+            passes += 1;
+        }
+        passes < 2
+    };
+    let failure = pollster::block_on(e.dispatch(command, &mut cancel)).unwrap_err();
+    assert_eq!(failure.code, ErrorCode::Cancelled);
+    assert_eq!(passes, 2);
+    assert_eq!(e.export_file(), previous);
+    assert_eq!(e.field(Some("heat"), Field::Temperature).unwrap(), &field);
+}
+
+#[test]
+fn adaptive_target_termination_and_the_element_query_are_explicit() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    let Output::Adapt { report } = ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.99}"#).output
+    else {
+        panic!("adaptive report")
+    };
+    assert!(report.converged);
+    assert_eq!(report.rows.len(), 1);
+    assert!(report.refinements.is_empty());
+    let query = serde_json::from_str(r#"{"query":"query.field","step":"heat","field":"errorEstimate"}"#).unwrap();
+    let QueryResult::Field(field) = e.query(query).unwrap() else { panic!("field") };
+    assert_eq!(field.per, "element");
+    assert_eq!(field.components, 1);
+    assert_eq!(field.entity_count, 8);
+    assert_eq!(field.result_id, report.result_id);
+    let query = serde_json::from_str(r#"{"query":"query.report","step":"heat"}"#).unwrap();
+    let QueryResult::Report(text) = e.query(query).unwrap() else { panic!("report") };
+    assert!(text.markdown.contains("Adaptive refinement"));
+    assert!(text.markdown.contains("Target reached"));
+}
+
+#[test]
+fn adaptive_three_dimensional_elasticity_keeps_balanced_reactions() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":1,"nz":1}},"simplices":true}"#);
+    let Output::Adapt { report } = ok(
+        &mut e,
+        r#"{"cmd":"study.adapt","step":"static","targetError":0.001,"maxIterations":2,"maxElements":10000}"#,
+    )
+    .output
+    else {
+        panic!("adaptive report")
+    };
+    assert_eq!(report.rows.len(), 2);
+    assert!(report.rows[1].elements > report.rows[0].elements);
+    let QueryResult::Result(result) =
+        e.query(serde_json::from_str(r#"{"query":"query.result","step":"static"}"#).unwrap()).unwrap()
+    else {
+        panic!("result")
+    };
+    assert!(result.extremes.iter().any(|v| v.field == "errorEstimate"));
+    let reaction = e.field(Some("static"), Field::Reaction).unwrap();
+    let total_z: f64 = reaction.data.chunks_exact(3).map(|v| v[2]).sum();
+    assert!((total_z - 1000.).abs() < 1e-5, "reaction {total_z}");
+}
+
+#[test]
+fn adaptive_transient_heat_repeats_the_configured_time_interval() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"conductor","E":"1 Pa","nu":0.3,"k":"1 W/(m K)","rho":"1 kg/m^3","cp":"1 J/(kg K)"}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"dt":"0.01 s","tEnd":"0.2 s","theta":0.5,"initial":"300 K","outputEvery":10}"#,
+    );
+    let Output::Adapt { report } =
+        ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.001,"maxIterations":3,"maxElements":10000}"#)
+            .output
+    else {
+        panic!("adaptive report")
+    };
+    assert_eq!(report.rows.len(), 3);
+    let t = e.field(Some("heat"), Field::Temperature).unwrap().clone();
+    let mesh = &e.mesh().unwrap().mesh;
+    let x = 0.37;
+    let (_, value) = femlab_engine::post::probe::probe(mesh, &t, [x, 0.43, 0.]).unwrap();
+    // Exact separation-of-variables solution for constant source and zero excess
+    // initial/end temperatures. Time is the configured endpoint, never accumulated
+    // across spatial iterations.
+    let pi = std::f64::consts::PI;
+    let decay: f64 = (1..100)
+        .step_by(2)
+        .map(|n| {
+            let n = n as f64;
+            8. / (pi * n).powi(3) * libm::sin(pi * n * x) * libm::exp(-pi * pi * n * n * 0.2)
+        })
+        .sum();
+    let exact = 300. + x * (1. - x) - decay;
+    assert!((value[0] - exact).abs() < 0.012, "{} vs {exact}", value[0]);
+}
+
+#[test]
+fn convergence_studies_preserve_requested_error_fields_and_scale_local_sizes() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":2,"nz":1}},"simplices":true,
+        "refinement":{"maxElements":10000,"boxes":[{"min":["0 m","0 m","0 m"],"max":["0.2 m","1 m","0 m"],"size":"0.3 m"}]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"heat","sizes":["0.5 m","0.25 m"],"quantity":{"kind":"max","field":"temperature"},"restore":false}"#,
+    );
+    assert!(e.field(Some("heat"), Field::ErrorEstimate).is_ok());
+    assert_eq!(e.model().mesh.as_ref().unwrap().refinement.as_ref().unwrap().boxes[0].size, 0.15);
+    let file = e.export_file();
+    let mesh = e.mesh().unwrap().clone();
+    let mut copy = engine();
+    pollster::block_on(copy.replay(&file.journal.entries, true, true)).unwrap();
+    assert_eq!(copy.mesh().unwrap(), &mesh);
+}
+
+#[test]
+fn adaptive_error_probes_use_the_containing_element_and_surface_identity() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.01,"maxIterations":2}"#);
+    let field = e.field(Some("heat"), Field::ErrorEstimate).unwrap().clone();
+    let query = serde_json::from_str(
+        r#"{"query":"query.probe","step":"heat","field":"errorEstimate","at":["0.37 m","0.43 m","0 m"]}"#,
+    )
+    .unwrap();
+    let QueryResult::Probe(probe) = e.query(query).unwrap() else { panic!("probe") };
+    assert!(!probe.interpolated);
+    assert_eq!(probe.value.value, field.data[probe.element as usize]);
+    let query = serde_json::from_str(r#"{"query":"query.surface","step":"heat"}"#).unwrap();
+    let QueryResult::Surface(surface) = e.query(query).unwrap() else { panic!("surface") };
+    let mesh = &e.mesh().unwrap().mesh;
+    for (triangle, &element) in surface.indices.chunks_exact(3).zip(&surface.tri_element) {
+        assert_eq!(triangle, mesh.elem_nodes(element));
+    }
+    assert_eq!(surface.tri_element.len(), mesh.n_elems());
+}
+
+#[test]
+fn adaptive_studies_refuse_unsupported_steps_without_changing_the_journal() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":[],"loads":[]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"coupled","procedure":"static","after":"heat","constraints":[],"loads":[]}"#,
+    );
+    let before = e.export_file();
+    for step in ["modes", "coupled"] {
+        let failure = err(&mut e, &format!(r#"{{"cmd":"study.adapt","step":"{step}","targetError":0.1}}"#));
+        assert_eq!(failure.code, ErrorCode::Unsupported);
+        assert!(failure.cause.contains("without after"));
+        assert_eq!(e.export_file(), before);
+    }
+    assert_eq!(err(&mut e, r#"{"cmd":"study.adapt","step":"missing","targetError":0.1}"#).code, ErrorCode::NotFound);
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
+fn adaptive_size_fields_validate_units_bounds_and_skipped_replay() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    let before = e.export_file();
+    let valid = serde_json::json!({"maxElements":1000,"boxes":[{"min":["0 m","0 m","0 m"],"max":["1 m","1 m","0 m"],"size":"0.1 m"}]});
+    let mut cases = Vec::new();
+    let mut bad = valid.clone();
+    bad["maxElements"] = 0.into();
+    cases.push(bad);
+    for (key, value) in [
+        ("min", serde_json::json!(["0 s", "0 m", "0 m"])),
+        ("max", serde_json::json!(["1 s", "1 m", "0 m"])),
+        ("size", serde_json::json!("1 s")),
+        ("size", serde_json::json!("0 m")),
+        ("min", serde_json::json!(["2 m", "0 m", "0 m"])),
+    ] {
+        let mut bad = valid.clone();
+        bad["boxes"][0][key] = value;
+        cases.push(bad);
+    }
+    for refinement in cases {
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"},"simplices":true,"refinement":refinement});
+        let failure = err(&mut e, &command.to_string());
+        assert!(!failure.cause.is_empty());
+        assert_eq!(e.export_file(), before);
+    }
+    for command in [
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1}"#,
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1,"refinements":[[]]}"#,
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1,"maxElements":0,"refinements":[[]]}"#,
+    ] {
+        let entry = femlab_engine::journal::JournalEntry {
+            seq: 0,
+            cmd: serde_json::from_str(command).unwrap(),
+            hash_after: String::new(),
+        };
+        let mut copy = engine();
+        assert!(pollster::block_on(copy.replay(&[entry], true, false)).is_err());
+        assert!(copy.export_file().journal.entries.is_empty());
+    }
+    let invalid = r#"{"cmd":"study.adapt","step":"heat","targetError":0.1,"maxIterations":2,"refinements":[[{"min":["0 m","0 m","0 m"],"max":["1 m","1 m","0 m"],"size":"0 m"}]]}"#;
+    assert_eq!(err(&mut e, invalid).code, ErrorCode::Schema);
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
+fn adaptive_error_outputs_reject_unsupported_meshes_and_procedures() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"}}"#);
+    let before = e.export_file();
+    for cmd in [
+        r#"{"cmd":"solve.run","step":"heat"}"#,
+        r#"{"cmd":"study.converge","step":"heat","sizes":["0.5 m","0.25 m"],"quantity":{"kind":"max","field":"temperature"}}"#,
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1}"#,
+    ] {
+        assert_eq!(err(&mut e, cmd).code, ErrorCode::Unsupported);
+        assert_eq!(e.export_file(), before);
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":[],"loads":[],"output":["errorEstimate"]}"#,
+    );
+    let before = e.export_file();
+    for cmd in [
+        r#"{"cmd":"solve.run","step":"dynamic"}"#,
+        r#"{"cmd":"study.converge","step":"dynamic","sizes":["0.5 m","0.25 m"],"quantity":{"kind":"max","field":"displacement"}}"#,
+    ] {
+        assert_eq!(err(&mut e, cmd).code, ErrorCode::Unsupported);
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+#[test]
+fn adaptive_zero_energy_and_iteration_limited_reports_are_distinct() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.001,"maxIterations":1}"#);
+    let QueryResult::Report(report) = e
+        .query(serde_json::from_str(r#"{"query":"query.report","step":"heat","sections":["results"]}"#).unwrap())
+        .unwrap()
+    else {
+        panic!("report")
+    };
+    assert!(report.markdown.contains("Iteration limit reached; target not reached"));
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"plate.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"plate.xmax","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["plate"],"q":"0 W/m^3"}"#);
+    let Output::Adapt { report } = ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.001}"#).output
+    else {
+        panic!("adapt")
+    };
+    assert!(report.converged);
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].estimated_error, 0.);
+    assert!(e.field(Some("heat"), Field::ErrorEstimate).unwrap().data.iter().all(|v| *v == 0.));
+}
+
+#[test]
+fn adaptive_transient_preflight_and_solver_cancellation_leave_no_partial_study() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"conductor","E":"1 Pa","nu":0.3,"k":"1 W/(m K)","rho":"1 kg/m^3","cp":"1 J/(kg K)"}"#,
+    );
+    for timing in ["", r#", "dt":"0 s","tEnd":"1 s""#, r#", "dt":"1e-9 s","tEnd":"1 s""#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"transient","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"initial":"300 K"{timing}}}"#
+            ),
+        );
+        let before = e.export_file();
+        let failure = err(&mut e, r#"{"cmd":"study.adapt","step":"transient","targetError":0.01}"#);
+        assert!(!failure.cause.is_empty());
+        assert_eq!(e.export_file(), before);
+        assert!(e.field(Some("transient"), Field::Temperature).is_err());
+    }
+    ok(&mut e, r#"{"cmd":"load.traction","name":"nowhere","on":"plate.side","total":["1 N","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"missing-boundary","procedure":"static","constraints":[],"loads":["nowhere"]}"#,
+    );
+    let before = e.export_file();
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"study.adapt","step":"missing-boundary","targetError":0.01}"#).code,
+        ErrorCode::SetEmpty
+    );
+    assert_eq!(e.export_file(), before);
+    let command = serde_json::from_str(r#"{"cmd":"study.adapt","step":"heat","targetError":0.01}"#).unwrap();
+    let mut cancel = |p: Progress| p.phase == "study";
+    assert_eq!(pollster::block_on(e.dispatch(command, &mut cancel)).unwrap_err().code, ErrorCode::Cancelled);
+    assert_eq!(e.export_file(), before);
+    assert!(e.field(Some("heat"), Field::Temperature).is_err());
+}
+
+#[test]
+fn random_vibration_registry_replays_psd_and_rejects_invalid_inputs() {
+    let mut e = engine();
+    harmonic_bar(&mut e, ",\"fStart\":\"1 Hz\",\"fStop\":\"2 Hz\",\"points\":2");
+    let add = r#"{"cmd":"step.add","name":"random","procedure":"randomVibration","constraints":["root","guide"],"loads":["pull"],"after":"modes","dampingRatio":0.02,"psd":[{"frequency":"0 Hz","density":"0.01 s"},{"frequency":"1 MHz","density":"0.01 s"}]}"#;
+    ok(&mut e, add);
+    assert_eq!(e.model().step("random").unwrap().psd.as_ref().unwrap()[1], [1e6, 0.01]);
+    for bad in [
+        add.replace("0.01 s", "1 N"),
+        add.replace("1 MHz", "0 Hz"),
+        add.replace("0.01 s", "-1 s"),
+        add.replace("1 MHz", "1 m"),
+    ] {
+        assert!(run(&mut e, &bad).is_err());
+    }
+    let QueryResult::Definition(definition) =
+        e.query(Query::Definition { kind: ObjectKind::Step, name: "random".into() }).unwrap()
+    else {
+        panic!("Step definition")
+    };
+    let hash = e.model_hash();
+    ok(&mut e, &serde_json::to_string(&definition.command).unwrap());
+    assert_eq!(e.model_hash(), hash);
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "random".into() }).unwrap() else { panic!("cost") };
+    assert_eq!((cost.nnz, cost.assembly_bytes), (0, 0));
+    assert!(cost.retained_bytes > 0);
+    assert!(cost.note.contains("4 modes"));
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"random"}"#).code, ErrorCode::NotFound);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"random"}"#);
+    let displacement = e.field(Some("random"), Field::Displacement).unwrap().clone();
+    assert!(displacement.data.iter().any(|v| *v > 0.0));
+    assert!(e.field(Some("random"), Field::Stress).is_ok());
+    let QueryResult::Results(results) = e.query(Query::Results {}).unwrap() else { panic!("retained Results") };
+    assert_eq!(results.records.last().unwrap().field_bytes, cost.retained_bytes);
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(replayed.field(Some("random"), Field::Displacement).unwrap(), &displacement);
+    assert_eq!(replayed.model_hash(), e.model_hash());
+}
+
+#[test]
+fn random_vibration_checks_predecessor_constraints_and_requires_a_psd() {
+    let mut e = engine();
+    harmonic_bar(&mut e, ",\"fStart\":\"1 Hz\",\"fStop\":\"2 Hz\",\"points\":2");
+    let input = serde_json::json!({"cmd":"step.add","name":"noise","procedure":"randomVibration","constraints":["root","guide"],"loads":["pull"],"after":"modes","dampingRatio":0.02,"psd":[{"frequency":"0 Hz","density":"1 s"},{"frequency":"100 Hz","density":"1 s"}]});
+    let mut missing = input.clone();
+    missing.as_object_mut().unwrap().remove("psd");
+    ok(&mut e, &missing.to_string());
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"noise"}"#).where_.as_deref(), Some("psd"));
+    for after in ["modes", "sweep"] {
+        let mut bad = input.clone();
+        bad["after"] = after.into();
+        bad["constraints"] = serde_json::json!(["root"]);
+        ok(&mut e, &bad.to_string());
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+        let error = err(&mut e, r#"{"cmd":"solve.run","step":"noise"}"#);
+        assert_eq!(error.where_.as_deref(), Some("after"));
+        assert!(error.cause.contains("identical constraints"));
+    }
+}
+
+/// `contact.add` with `kind: frictionless` (#62) is a Connection of its own kind, keeps its
+/// search distance, is not a bonded contact for `contact.thermal`, and a solved Step reports the
+/// pair in `query.result` and its pressure as a field — the Command path of Benchmark F5.
+#[test]
+fn a_frictionless_contact_is_reported_by_query_result_and_carries_a_pressure_field() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    ok(&mut e, r#"{"cmd":"contact.add","name":"seat","master":"a.xmax","slave":"b.xmin","kind":"frictionless"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.constraints.is_empty());
+    assert_eq!(
+        (m.connections[0].kind.as_str(), m.connections[0].summary.as_str()),
+        ("frictionless", "frictionless, pairing tolerance from the mesh size")
+    );
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"contact.add","name":"seat","master":"a.xmax","slave":"b.xmin","kind":"frictionless","tol":"2 mm"}"#,
+    );
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].summary, "frictionless, pairing within 2 mm");
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+    let not_bonded =
+        err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"seat","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(not_bonded.code, ErrorCode::ModelIllPosed);
+    assert!(not_bonded.cause.contains("'seat' is not a bonded contact"), "{}", not_bonded.cause);
+    let text = serde_json::to_string(e.model()).unwrap();
+    assert!(text.contains(r#""kind":"frictionless""#), "{text}");
+    // Both Sets follow a rename and hold their Bodies in use, as a bonded contact's do.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"left"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!((m.connections[0].master.as_str(), m.connections[0].slave.as_str()), ("left.xmax", "b.xmin"));
+    assert_eq!(err(&mut e, r#"{"cmd":"geometry.remove","name":"left"}"#).code, ErrorCode::InUse);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"left","to":"a"}"#);
+
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"a.xmin","dofs":["ux"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symy","on":"a.ymin","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symz","on":"a.zmin","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symy_b","on":"b.ymin","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symz_b","on":"b.zmin","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"push","on":"b.xmax","total":["-1 MN","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root","symy","symz","symy_b","symz_b","seat"],"loads":["push"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let r = result(&mut e);
+    assert_eq!(r.contacts.len(), 1);
+    let c = &r.contacts[0];
+    assert_eq!((c.contact.as_str(), c.active, c.paired, c.active_fraction), ("seat", 9, 9, 1.0));
+    assert!((c.force[0].value - 1e6).abs() <= 1e-6, "the master pushes 1 MN back: {:?}", c.force);
+    assert_eq!(c.force[0].unit, "N");
+    assert!(c.force[1].value.abs() <= 1e-6 && c.force[2].value.abs() <= 1e-6);
+    assert!(r.balance <= 1e-9, "the contact force is internal: {}", r.balance);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert!(
+        r.extremes.iter().any(|x| x.field == "contactPressure" && (x.max.value - 1e6).abs() <= 1.0),
+        "{:?}",
+        r.extremes
+    );
+    let json = serde_json::to_value(&r).unwrap();
+    assert_eq!(json["contacts"][0]["activeFraction"], 1.0);
+    let QueryResult::Field(pressure) =
+        e.query(Query::Field { step: None, result_id: None, field: "contactPressure".into() }).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!((pressure.components, pressure.unit.as_str()), (1, "Pa"));
+    let on_face = pressure.values.iter().filter(|v| (**v - 1e6).abs() <= 1.0).count();
+    let off_face = pressure.values.iter().filter(|v| v.abs() <= 1.0).count();
+    assert_eq!((on_face, off_face), (9, pressure.values.len() - 9), "1 MPa on the nine slave nodes, zero elsewhere");
+
+    // A bonded Result has no contact rows and no pressure field: the shape is unchanged.
+    ok(&mut e, r#"{"cmd":"contact.add","name":"seat","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"welded","procedure":"static","constraints":["root","symy","symz","seat"],"loads":["push"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"welded"}"#);
+    let QueryResult::Result(w) = e.query(Query::Result { result_id: None, step: Some("welded".into()) }).unwrap()
+    else {
+        panic!()
+    };
+    assert!(w.contacts.is_empty());
+    let json = serde_json::to_value(&w).unwrap();
+    assert!(json.get("contacts").is_none(), "an empty list is left out of the wire form");
+    assert_eq!(
+        e.query(Query::Field { step: Some("welded".into()), result_id: None, field: "contactPressure".into() })
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+}

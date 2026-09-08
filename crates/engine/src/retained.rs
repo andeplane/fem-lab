@@ -48,6 +48,7 @@ fn next_sequence(sequence: &str) -> String {
 fn field_location(per: crate::post::Per) -> &'static str {
     match per {
         crate::post::Per::Node => "node",
+        crate::post::Per::Element => "element",
         crate::post::Per::ElemGp => "elementGaussPoint",
         crate::post::Per::ElemNode => "elementNode",
     }
@@ -126,6 +127,7 @@ impl ResultRecord {
         let values = r.fields.values().map(|f| f.data.len()).sum::<usize>()
             + r.ply_stresses.iter().flat_map(|p| &p.faces).map(|f| f.data.len()).sum::<usize>()
             + r.modes.iter().map(|f| f.data.len()).sum::<usize>()
+            + r.modal_dofs.iter().map(Vec::len).sum::<usize>()
             + r.frequencies.len()
             + r.buckling_factors.len()
             + r.history.as_ref().map_or(0, |h| h.times.len() + h.values.iter().map(Vec::len).sum::<usize>())
@@ -347,6 +349,7 @@ impl Engine {
             indices: surface.triangles.iter().flatten().copied().collect(),
             tri_element_node,
             tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
+            tri_element: surface.tri_elem.clone(),
             tri_face: surface
                 .tri_face
                 .iter()
@@ -562,6 +565,7 @@ mod tests {
     #[test]
     fn field_entity_layout_is_explicit_for_each_storage_location() {
         assert_eq!(field_location(crate::post::Per::Node), "node");
+        assert_eq!(field_location(crate::post::Per::Element), "element");
         assert_eq!(field_location(crate::post::Per::ElemGp), "elementGaussPoint");
         assert_eq!(field_location(crate::post::Per::ElemNode), "elementNode");
     }

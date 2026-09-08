@@ -767,3 +767,39 @@ describe('Assistant observations remain distinct from engine checks', () => {
     expect(verificationState({ ...record, journalHash: null }, state)).toContain('unconfirmed');
   });
 });
+
+it('opens the adaptive solve with its element error contour and refuses missing element identities', async () => {
+  const result = { ...RESULT, step: 'heat', extremes: [{ ...RESULT.extremes[0]!, field: 'errorEstimate' }] };
+  const { store, viewer, results, transport } = harness(result);
+  const surface = await transport.surface();
+  const values = Float32Array.of(0.1,0.2);
+  transport.surface.mockImplementation(async () => ({ ...surface, indices: Uint32Array.of(0,1,2,0,2,3), triElement: Uint32Array.of(1,0) }));
+  transport.field.mockImplementation(async () => ({ per: 'element', values, min: 0.1, max: 0.2, unit: '' }));
+  await results.onAck({ output: { type: 'adapt', report: { resultId: result.resultId } } });
+  expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', resultId: result.resultId });
+  expect(store.state.fieldKey).toBe('errorEstimate');
+  expect(store.state.tab).toBe('results');
+  expect(viewer.current.setField).toHaveBeenLastCalledWith(values, [values[0], values[1]], 'element');
+  expect(fieldChoices(['errorEstimate']).map(c => c.key)).toEqual(['errorEstimate']);
+  expect(siUnitOf('errorEstimate')).toBe('');
+  transport.surface.mockImplementation(async () => surface);
+  await expect(results.showField({ field: 'errorEstimate' })).rejects.toMatchObject({ code: 'unsupported' });
+});
+
+it('shows adaptive progress only for the corresponding retained result', () => {
+  const adaptation = { resultId: RESULT.resultId, targetError: 0.01, converged: false, refinements: [], rows: [
+    { elements: 8, dofs: 9, estimatedError: 0.2, timeMs: 1 },
+    { elements: 32, dofs: 25, estimatedError: 0.1, timeMs: 2 },
+  ] };
+  const root = document.createElement('div');
+  const show = (report: typeof adaptation) => render(<Results s={{ ...initialState, result: RESULT, adaptation: report }} dispatch={vi.fn()} query={vi.fn()} />, root);
+  show(adaptation);
+  expect(root.textContent).toContain('Target not reached · target 1%');
+  const table = [...root.querySelectorAll('table')].find(t => t.textContent?.includes('Estimated error'))!;
+  expect([...table.querySelectorAll('tbody tr')].map(r => r.textContent)).toEqual(['8920%', '322510%']);
+  show({ ...adaptation, converged: true });
+  expect(root.textContent).toContain('Target reached');
+  show({ ...adaptation, resultId: 'other-result' });
+  expect(root.textContent).not.toContain('Adaptive refinement');
+  render(null, root);
+});

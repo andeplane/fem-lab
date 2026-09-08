@@ -393,6 +393,11 @@ export type Command =
       order?: number | null;
       formulation?: Formulation | null;
       simplices?: boolean | null;
+      /**
+       * Optional local size field on the resulting linear simplex mesh. A new
+       * mesh.set replaces this field; omit it to return to the base mesh.
+       */
+      refinement?: LocalRefinementSpec | null;
       cmd: "mesh.set";
     }
   | {
@@ -951,6 +956,14 @@ export type Command =
        * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
        */
       dampingRatios?: number[] | null;
+      /**
+       * One-sided PSD table for randomVibration. All Loads form one spatial pattern
+       * multiplied by the same zero-mean stationary random process. Use density "1 s"
+       * (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+       * `after` naming a solved modal Step, identical constraints, and positive damping.
+       * Outputs are componentwise standard deviations, never a signed equilibrium state.
+       */
+      psd?: PsdPoint[] | null;
       cmd: "step.add";
     }
   | {
@@ -983,6 +996,23 @@ export type Command =
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
+    }
+  | {
+      step: string;
+      targetError: number;
+      maxIterations?: number | null;
+      maxElements?: number | null;
+      /**
+       * Fraction of squared error selected by bulk marking; default 0.5.
+       */
+      markingFraction?: number | null;
+      /**
+       * Recorded refinement regions per iteration. Omit for a new study. The
+       * engine fills this in its Journal so replay follows the original choices;
+       * opening with skipped solves applies the same regions without solving.
+       */
+      refinements?: SizeBoxSpec[][] | null;
+      cmd: "study.adapt";
     }
   | {
       steps?: number | null;
@@ -2073,7 +2103,7 @@ export type Dof = "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
 /**
  * How two faces interact where they meet.
  */
-export type ContactKind = "bonded";
+export type ContactKind = "bonded" | "frictionless";
 /**
  * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
  * transmits a moment.
@@ -2091,7 +2121,8 @@ export type Procedure =
   | "heat-transient"
   | "explicit"
   | "implicit"
-  | "harmonic";
+  | "harmonic"
+  | "randomVibration";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -2103,7 +2134,9 @@ export type Procedure =
  * member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
  * triple at each end of every beam and zeros on every other element. `plasticStrain` is the
  * equivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with
- * an elastic–plastic Material produces.
+ * an elastic–plastic Material produces. `contactPressure` is the normal pressure a
+ * frictionless contact carries, one component, positive in compression, on the slave nodes of
+ * every frictionless pair and zero on every other node; only a Step with such a pair has it.
  */
 export type Field =
   | (
@@ -2119,10 +2152,12 @@ export type Field =
       | "rotation"
       | "sectionForce"
       | "sectionMoment"
+      | "contactPressure"
     )
   | "stressTop"
   | "stressBottom"
-  | "shellMoment";
+  | "shellMoment"
+  | "errorEstimate";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a
@@ -2661,6 +2696,10 @@ export type Output =
       type: "study";
     }
   | {
+      report: AdaptReport;
+      type: "adapt";
+    }
+  | {
       format: ExportFormat;
       filename: string;
       mime: string;
@@ -2960,6 +2999,11 @@ export type Constraint1 =
       master: string;
       tol?: number | null;
       kind: "bonded";
+    }
+  | {
+      master: string;
+      tol?: number | null;
+      kind: "frictionless";
     }
   | {
       from: string;
@@ -3470,6 +3514,11 @@ export type ModelFile_Command =
       order?: number | null;
       formulation?: Formulation | null;
       simplices?: boolean | null;
+      /**
+       * Optional local size field on the resulting linear simplex mesh. A new
+       * mesh.set replaces this field; omit it to return to the base mesh.
+       */
+      refinement?: LocalRefinementSpec | null;
       cmd: "mesh.set";
     }
   | {
@@ -4028,6 +4077,14 @@ export type ModelFile_Command =
        * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
        */
       dampingRatios?: number[] | null;
+      /**
+       * One-sided PSD table for randomVibration. All Loads form one spatial pattern
+       * multiplied by the same zero-mean stationary random process. Use density "1 s"
+       * (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+       * `after` naming a solved modal Step, identical constraints, and positive damping.
+       * Outputs are componentwise standard deviations, never a signed equilibrium state.
+       */
+      psd?: PsdPoint[] | null;
       cmd: "step.add";
     }
   | {
@@ -4060,6 +4117,23 @@ export type ModelFile_Command =
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
+    }
+  | {
+      step: string;
+      targetError: number;
+      maxIterations?: number | null;
+      maxElements?: number | null;
+      /**
+       * Fraction of squared error selected by bulk marking; default 0.5.
+       */
+      markingFraction?: number | null;
+      /**
+       * Recorded refinement regions per iteration. Omit for a new study. The
+       * engine fills this in its Journal so replay follows the original choices;
+       * opening with skipped solves applies the same regions without solving.
+       */
+      refinements?: SizeBoxSpec[][] | null;
+      cmd: "study.adapt";
     }
   | {
       steps?: number | null;
@@ -4798,6 +4872,11 @@ export type DocumentSnapshot_Command =
       order?: number | null;
       formulation?: Formulation | null;
       simplices?: boolean | null;
+      /**
+       * Optional local size field on the resulting linear simplex mesh. A new
+       * mesh.set replaces this field; omit it to return to the base mesh.
+       */
+      refinement?: LocalRefinementSpec | null;
       cmd: "mesh.set";
     }
   | {
@@ -5356,6 +5435,14 @@ export type DocumentSnapshot_Command =
        * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
        */
       dampingRatios?: number[] | null;
+      /**
+       * One-sided PSD table for randomVibration. All Loads form one spatial pattern
+       * multiplied by the same zero-mean stationary random process. Use density "1 s"
+       * (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+       * `after` naming a solved modal Step, identical constraints, and positive damping.
+       * Outputs are componentwise standard deviations, never a signed equilibrium state.
+       */
+      psd?: PsdPoint[] | null;
       cmd: "step.add";
     }
   | {
@@ -5388,6 +5475,23 @@ export type DocumentSnapshot_Command =
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
+    }
+  | {
+      step: string;
+      targetError: number;
+      maxIterations?: number | null;
+      maxElements?: number | null;
+      /**
+       * Fraction of squared error selected by bulk marking; default 0.5.
+       */
+      markingFraction?: number | null;
+      /**
+       * Recorded refinement regions per iteration. Omit for a new study. The
+       * engine fills this in its Journal so replay follows the original choices;
+       * opening with skipped solves applies the same regions without solving.
+       */
+      refinements?: SizeBoxSpec[][] | null;
+      cmd: "study.adapt";
     }
   | {
       steps?: number | null;
@@ -6006,6 +6110,88 @@ export interface SurfacePatchSpec {
   projection?: SurfaceProjectionSpec | null;
 }
 /**
+ * Local maximum edge lengths applied after the chosen mesher. Bounds are world
+ * coordinates; touching element boxes obey the finest overlapping size. Only
+ * linear triangles/tetrahedra are supported. Boundary edges are bisected without
+ * projection onto CAD, so this controls discretisation error on the base geometry.
+ */
+export interface LocalRefinementSpec {
+  boxes: SizeBoxSpec[];
+  /**
+   * Maximum final element count, checked before refinement allocations grow past it.
+   */
+  maxElements: number;
+}
+export interface SizeBoxSpec {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  min: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  max: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  size:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
  * A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
  * from rest. Constrained components are held at zero whatever this says; two entries that
  * give one node different velocities are `model.ill-posed`.
@@ -6041,6 +6227,31 @@ export interface InitialVelocitySpec {
         }
     )
   ];
+}
+/**
+ * One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.
+ * Densities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation
+ * is linear in Hz and density, with zero input outside the table's finite band.
+ */
+export interface PsdPoint {
+  /**
+   * A frequency with unit, e.g. "50 Hz". Any unit of the right dimension is accepted.
+   */
+  frequency:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+   */
+  density:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
 }
 /**
  * One explicit retained field used by `query.difference`.
@@ -6417,6 +6628,7 @@ export interface MeshSettings {
    * Split the chosen mesher's quads/hexes into triangles/tetrahedra.
    */
   simplices?: boolean;
+  refinement?: LocalRefinement | null;
 }
 /**
  * One oriented quadrilateral patch. Corners run counter-clockwise when seen from
@@ -6490,6 +6702,31 @@ export interface RefineBox {
    * @maxItems 2
    */
   max: [number, number];
+  size: number;
+}
+/**
+ * Local mesher size field in SI, retained so replay reconstructs the exact mesh.
+ */
+export interface LocalRefinement {
+  boxes: SizeBox[];
+  maxElements: number;
+}
+/**
+ * A local maximum edge length in an axis-aligned world-coordinate box, SI.
+ * Elements whose bounding boxes intersect this box obey its size. Overlapping
+ * boxes use the smallest size; closure may also split adjacent elements.
+ */
+export interface SizeBox {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  min: [number, number, number];
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  max: [number, number, number];
   size: number;
 }
 /**
@@ -6671,8 +6908,16 @@ export interface ResultSummary {
    */
   balance: number;
   /**
+   * One row per frictionless contact the Step listed: how much of the paired slave face
+   * ended in contact and the resultant it carries. Empty for a Step without one. These forces
+   * are internal to the assembly — they are what one part pushes on the other with — so they
+   * are not in `reactions` and do not enter `balance`.
+   */
+  contacts?: ContactRow[];
+  /**
    * What the solve wanted the user to know but would not stop for: a bonded contact tied
-   * across a gap, a slave face coarser than its master. Retained with the Result.
+   * across a gap, a slave face coarser than its master, a frictionless pair that ended fully
+   * open. Retained with the Result.
    */
   warnings?: Warning[];
 }
@@ -6738,6 +6983,32 @@ export interface SweepRow {
   amplitude: Valued;
   phase: Valued;
 }
+/**
+ * One frictionless contact of a solved Step.
+ */
+export interface ContactRow {
+  contact: string;
+  /**
+   * Slave nodes held on the master surface at the end of the Step.
+   */
+  active: number;
+  /**
+   * Slave nodes the search found within `tol` of the master: the ones that could touch.
+   */
+  paired: number;
+  /**
+   * `active / paired`: 1 is a face fully in contact, 0 a pair that has opened completely.
+   */
+  activeFraction: number;
+  /**
+   * The resultant of the normal forces the master exerts on the slave, in the Model's force
+   * unit: the load the contact transmits.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  force: [Valued, Valued, Valued];
+}
 export interface RetainedResults {
   limit: number;
   records: RetainedResult[];
@@ -6793,6 +7064,10 @@ export interface ResultSurface {
    */
   triElementNode: number[];
   triBody: number[];
+  /**
+   * Global element behind each surface triangle; indexes element-based Result fields.
+   */
+  triElement: number[];
   /**
    * First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
    */
@@ -6977,11 +7252,11 @@ export interface CostEstimate {
    */
   retainedFrames: number;
   /**
-   * Logical f64 bytes for retained times and unpadded primary values.
+   * Logical f64 bytes for retained times and unpadded primary values, or random-response RMS fields.
    */
   retainedBytes: number;
   /**
-   * Conservative full-field allowance for procedure working f64 vectors live with History.
+   * Conservative full-field allowance for procedure working f64 vectors live with History or RMS fields.
    * Free-DOF vectors are charged at the full nodal length.
    */
   transientWorkBytes: number;
@@ -7294,6 +7569,22 @@ export interface StudyRow {
   timeMs: number;
 }
 /**
+ * Adaptive spatial-error study. The retained Result owns the final element field.
+ */
+export interface AdaptReport {
+  rows: AdaptRow[];
+  converged: boolean;
+  targetError: number;
+  resultId: string;
+  refinements: SizeBoxSpec[][];
+}
+export interface AdaptRow {
+  elements: number;
+  dofs: number;
+  estimatedError: number;
+  timeMs: number;
+}
+/**
  * Every failure the engine reports. Hosts serialise it as-is; the AI reads the same text.
  */
 export interface EngineError {
@@ -7330,6 +7621,8 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "constraint.dependent"
     | "contact.unpaired"
+    | "contact.chatter"
+    | "contact.open"
     | "solve.not-positive-definite"
     | "solve.stalled"
     | "solve.diverged"
@@ -7644,6 +7937,7 @@ export interface Step {
   sweep?: SweepSpacing | null;
   dampingRatio?: number | null;
   dampingRatios?: number[] | null;
+  psd?: [number, number][] | null;
   alpha?: number | null;
   rayleighAlpha?: number | null;
   rayleighBeta?: number | null;

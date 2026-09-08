@@ -153,7 +153,7 @@ use crate::fem::quadrature::QUAD_2X2;
 use femlab_geometry::mesh::ElementKind;
 
 /// Dimensionless penalty for the difference between drilling rotation and surface spin.
-/// It vanishes for rigid motion and constant membrane/bending patch fields (ADR 0023).
+/// It vanishes for rigid motion and constant membrane/bending patch fields (ADR 0024).
 const DRILL: f64 = 1e-3;
 const SHEAR: f64 = 5.0 / 6.0;
 

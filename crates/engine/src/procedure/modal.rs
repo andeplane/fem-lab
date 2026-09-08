@@ -168,6 +168,7 @@ pub fn run(
     pool: &Pool,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
+    checks::no_frictionless(p, "modal")?;
     // A free body is a legitimate modal model, so the rigid-mode check is not run here: its six
     // zero frequencies are the answer, not a failure. Everything else still applies.
     if let Some(e) = checks::all(p).into_iter().find(|e| e.code != ErrorCode::ConstraintRigidModes) {
@@ -218,6 +219,7 @@ pub fn run(
         }
         mpc::recover(&mpc, &mut full);
         res.modes.push(vector_field(&full, dpn));
+        res.modal_dofs.push(full);
     }
     res.warnings = mpc.warnings;
     res.fields.insert(Field::Displacement, res.modes[0].clone());

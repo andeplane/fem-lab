@@ -16,6 +16,7 @@ pub mod heat;
 pub mod implicit;
 pub mod modal;
 pub mod nonlinear;
+pub mod random_vibration;
 pub mod static_;
 
 use std::collections::BTreeMap;
@@ -212,6 +213,8 @@ pub enum Step {
         /// Keep one retained frequency every this many grid points.
         output_every: usize,
     },
+    /// Stationary random response on a retained modal basis.
+    RandomVibration { spectrum: random_vibration::Spectrum, damping: Vec<f64>, rayleigh: (f64, f64) },
     /// Explicit dynamics by central differences on a lumped mass (plan A §6).
     Explicit {
         t_end: f64,
@@ -251,6 +254,7 @@ impl Step {
             Step::HeatSteady { .. } => "heat-steady",
             Step::HeatTransient { .. } => "heat-transient",
             Step::Harmonic { .. } => "harmonic",
+            Step::RandomVibration { .. } => "randomVibration",
             Step::Explicit { .. } => "explicit",
             Step::Implicit { .. } => "implicit",
         }
@@ -354,6 +358,9 @@ pub struct StepResult {
     /// shape to unit peak. Mode `k` is `modes[k - 1]`, which hosts reach as the field name
     /// `mode:k`.
     pub modes: Vec<FieldData>,
+    /// Complete M-normalised modal vectors, including beam rotations, in Problem DOF order.
+    /// Post-modal procedures use these; `modes` remains the three-component display field.
+    pub modal_dofs: Vec<Vec<f64>>,
     /// Times and fields a transient Step kept.
     pub history: Option<History>,
     /// Frequencies and response fields a harmonic Step kept; `None` for every other procedure.
@@ -367,6 +374,22 @@ pub struct StepResult {
     /// Solver-used optional material defaults, captured by the Model-to-Problem boundary only
     /// after this procedure succeeds.
     pub assumptions: Vec<ResultAssumption>,
+    /// One entry per frictionless contact the Step listed, in Step order; empty otherwise.
+    pub contacts: Vec<ContactSummary>,
+}
+
+/// What one frictionless contact ended the Step with (`query.result` reports it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContactSummary {
+    pub name: String,
+    /// Slave nodes held on the master surface.
+    pub active: usize,
+    /// Slave nodes the search paired, active or not.
+    pub paired: usize,
+    /// The resultant of the normal forces on the slave side, N.
+    pub force: [f64; 3],
+    /// The slave nodes held on the master surface, ascending: the contact patch.
+    pub nodes: Vec<u32>,
 }
 
 /// Run one Step.
@@ -385,6 +408,9 @@ pub async fn run(
     match step {
         Step::Static { solver, dt, t_end, amplitude, output_every } => {
             static_::run(p, solver, *dt, *t_end, amplitude.as_ref(), *output_every, pool, gpu, progress).await
+        }
+        Step::RandomVibration { spectrum, damping, rayleigh } => {
+            random_vibration::run(p, prev, spectrum, damping, *rayleigh, pool, progress)
         }
         Step::StaticNonlinear(options) => nonlinear::run(p, options, pool, gpu, progress).await,
         Step::Modal { n_modes, shift, solver, prestress } => {
@@ -487,12 +513,14 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         frequencies: Vec::new(),
         buckling_factors: Vec::new(),
         modes: Vec::new(),
+        modal_dofs: Vec::new(),
         history: None,
         sweep: None,
         prestress_from: None,
         solver,
         warnings: Vec::new(),
         assumptions: Vec::new(),
+        contacts: Vec::new(),
     }
 }
 
