@@ -290,19 +290,22 @@ impl Engine {
             .constraints
             .iter()
             .filter_map(|c| match &c.kind {
-                ConstraintKind::Bonded { master, tol } => Some(ConnectionRow {
-                    name: c.name.clone(),
-                    kind: "bonded".into(),
-                    master: master.clone(),
-                    slave: c.on.clone(),
-                    summary: match tol {
-                        None => "bonded, pairing tolerance from the mesh size".to_string(),
-                        Some(t) => {
-                            let v = display(m, *t, Length::DIM);
-                            format!("bonded, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
-                        }
-                    },
-                }),
+                ConstraintKind::Bonded { master, tol } | ConstraintKind::Frictionless { master, tol } => {
+                    let kind = if matches!(c.kind, ConstraintKind::Bonded { .. }) { "bonded" } else { "frictionless" };
+                    Some(ConnectionRow {
+                        name: c.name.clone(),
+                        kind: kind.into(),
+                        master: master.clone(),
+                        slave: c.on.clone(),
+                        summary: match tol {
+                            None => format!("{kind}, pairing tolerance from the mesh size"),
+                            Some(t) => {
+                                let v = display(m, *t, Length::DIM);
+                                format!("{kind}, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
+                            }
+                        },
+                    })
+                }
                 ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
                     name: c.name.clone(),
                     kind: "cyclic".into(),
@@ -351,9 +354,10 @@ impl Engine {
                 let summary = match &c.kind {
                     // A tie, a cyclic tie or a coupling prescribes nothing and names two Sets: they are the
                     // Connections above.
-                    ConstraintKind::Bonded { .. } | ConstraintKind::Cyclic { .. } | ConstraintKind::Couple { .. } => {
-                        return None
-                    }
+                    ConstraintKind::Bonded { .. }
+                    | ConstraintKind::Frictionless { .. }
+                    | ConstraintKind::Cyclic { .. }
+                    | ConstraintKind::Couple { .. } => return None,
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")

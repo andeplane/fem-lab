@@ -8417,7 +8417,7 @@ fn mat_mul_t(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
 /// One `Mpc` built by hand, without a Mesh: the rows are the whole definition of `T`.
 fn hand_mpc(rows: Vec<Row>) -> Mpc {
     let slaves = rows.iter().map(|r| r.slave).collect();
-    Mpc { rows, slaves, contact: Vec::new(), warnings: Vec::new() }
+    Mpc { rows, slaves, contact: Vec::new(), candidates: Vec::new(), gap_tol: 0.0, warnings: Vec::new() }
 }
 
 /// The dense `T` of an `Mpc`: identity on the retained DOFs, the row's coefficients on a slave
@@ -8448,7 +8448,7 @@ fn transform_is_the_dense_t_transpose_k_t() {
        -0.5,  1.0, -1.5,  7.0,
     ];
     let f = vec![1.0, -2.0, 3.0, 5.0];
-    let mpc = hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25), (1, 0.75)], owner: 0 }]);
+    let mpc = hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25), (1, 0.75)], g: 0.0, owner: 0 }]);
     let t = dense_t(&mpc, n);
     let want = mat_mul_t(&t, &mat_mul(&k, &t, n), n);
     let (kt, ft) = mpc::transform(&dense_csr(n, &k), &f, &mpc);
@@ -8487,8 +8487,8 @@ fn an_empty_mpc_transforms_nothing() {
     assert_eq!(u, vec![7.0, 8.0]);
     // Node 0 tied to nodes 1 and 2 couples those node pairs, whatever the component.
     let mpc = hand_mpc(vec![
-        Row { slave: 0, masters: vec![(3, 0.5), (6, 0.5)], owner: 0 },
-        Row { slave: 1, masters: vec![(4, 0.5), (7, 0.5)], owner: 0 },
+        Row { slave: 0, masters: vec![(3, 0.5), (6, 0.5)], g: 0.0, owner: 0 },
+        Row { slave: 1, masters: vec![(4, 0.5), (7, 0.5)], g: 0.0, owner: 0 },
     ]);
     assert_eq!(mpc.pairs(3), vec![[0, 1], [0, 2]]);
 }
@@ -8509,8 +8509,8 @@ proptest::proptest! {
         // Two slaves, each leaning on masters that are neither slaves nor each other.
         let (a0, a1) = (r.unit(), r.unit());
         let mpc = hand_mpc(vec![
-            Row { slave: 4, masters: vec![(0, a0), (1, 1.0 - a0)], owner: 0 },
-            Row { slave: 5, masters: vec![(2, a1), (3, 1.0 - a1)], owner: 0 },
+            Row { slave: 4, masters: vec![(0, a0), (1, 1.0 - a0)], g: 0.0, owner: 0 },
+            Row { slave: 5, masters: vec![(2, a1), (3, 1.0 - a1)], g: 0.0, owner: 0 },
         ]);
         let (kt, _) = mpc::transform(&dense_csr(n, &k), &vec![0.0; n], &mpc);
         let d = to_dense(&kt);
@@ -9385,7 +9385,7 @@ fn cyclic_rows_rotate_a_structural_dof_and_leave_a_heat_dof_alone() {
         heat_problem(&mesh, &sets, &body, Idealisation::Solid3d, conductor(1.0, 1.0, 1.0), Vec::new(), Vec::new());
     hp.couplings = vec![cyclic(2, angle)];
     let hm = mpc::build(&hp).expect("the rotated node still lands on `to`");
-    assert_eq!(hm.rows, vec![Row { slave: 1, masters: vec![(0, 1.0)], owner: 0 }]);
+    assert_eq!(hm.rows, vec![Row { slave: 1, masters: vec![(0, 1.0)], g: 0.0, owner: 0 }]);
 }
 
 /// A `from` node whose rotated image lands nowhere near a `to` node is `contact.unpaired`,

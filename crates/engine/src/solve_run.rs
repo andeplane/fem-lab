@@ -20,8 +20,8 @@ use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
-    AssumedMaterialProperty, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary, StudyReport,
-    StudyRow, SweepRow, Valued,
+    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary,
+    StudyReport, StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
 use crate::units::{
@@ -105,7 +105,9 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
         },
         Field::Temperature => Temperature::DIM,
         Field::Strain | Field::Rotation | Field::PlasticStrain | Field::ErrorEstimate => Dimension::NONE,
-        Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
+        Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal | Field::ContactPressure => {
+            Stress::DIM
+        }
         Field::SectionForce => Force::DIM,
         Field::SectionMoment => Torque::DIM,
     }
@@ -161,6 +163,15 @@ fn build_problem_with_temperature<'a>(
         let (dofs, value) = match &c.kind {
             ConstraintKind::Bonded { master, tol } => {
                 couplings.push(Coupling::Bonded {
+                    name: c.name.clone(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Frictionless { master, tol } => {
+                couplings.push(Coupling::Frictionless {
                     name: c.name.clone(),
                     master: master.clone(),
                     slave: c.on.clone(),
@@ -1308,6 +1319,17 @@ impl Engine {
                 .collect(),
             sweep: res.sweep.iter().flat_map(|s| sweep_rows(m, s)).collect(),
             balance: residual / biggest,
+            contacts: res
+                .contacts
+                .iter()
+                .map(|c| ContactRow {
+                    contact: c.name.clone(),
+                    active: c.active,
+                    paired: c.paired,
+                    active_fraction: c.active as f64 / c.paired.max(1) as f64,
+                    force: vec3(m, c.force, Force::DIM),
+                })
+                .collect(),
             warnings: res.warnings.clone(),
         })
     }
@@ -1508,6 +1530,7 @@ mod tests {
             (Field::Principal, "principal", Stress::DIM),
             (Field::SectionForce, "sectionForce", Force::DIM),
             (Field::SectionMoment, "sectionMoment", Torque::DIM),
+            (Field::ContactPressure, "contactPressure", Stress::DIM),
         ];
         for (field, name, dim) in all {
             assert_eq!(field_name(field), name);

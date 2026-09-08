@@ -929,12 +929,11 @@ impl Engine {
                     .suggest("contact.add with the facing Sets of two different Bodies"));
                 }
                 let t = tol.as_ref().map(|q| q.si().map_err(|e| e.at("tol"))).transpose()?;
-                let ContactKind::Bonded = kind;
-                let c = Constraint {
-                    name: name.clone(),
-                    on: slave.clone(),
-                    kind: ConstraintKind::Bonded { master: master.clone(), tol: t },
+                let kind = match kind {
+                    ContactKind::Bonded => ConstraintKind::Bonded { master: master.clone(), tol: t },
+                    ContactKind::Frictionless => ConstraintKind::Frictionless { master: master.clone(), tol: t },
                 };
+                let c = Constraint { name: name.clone(), on: slave.clone(), kind };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
             Command::ConstraintCyclic { name, from, to, axis, angle_deg, through, tol } => {

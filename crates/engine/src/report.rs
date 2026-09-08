@@ -725,6 +725,7 @@ mod tests {
             history: vec![],
             sweep: vec![],
             balance: 0.0,
+            contacts: vec![],
             warnings: vec![],
         };
         assert!(hand_calc(&model, &result).unwrap().contains("| Hand calculation | 0.19048 mm |"));

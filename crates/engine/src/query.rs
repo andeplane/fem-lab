@@ -705,10 +705,33 @@ pub struct ResultSummary {
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
     /// Zero is perfect balance; values above 1e-9 fail the report's conservation check.
     pub balance: f64,
+    /// One row per frictionless contact the Step listed: how much of the paired slave face
+    /// ended in contact and the resultant it carries. Empty for a Step without one. These forces
+    /// are internal to the assembly — they are what one part pushes on the other with — so they
+    /// are not in `reactions` and do not enter `balance`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<ContactRow>,
     /// What the solve wanted the user to know but would not stop for: a bonded contact tied
-    /// across a gap, a slave face coarser than its master. Retained with the Result.
+    /// across a gap, a slave face coarser than its master, a frictionless pair that ended fully
+    /// open. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// One frictionless contact of a solved Step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactRow {
+    pub contact: String,
+    /// Slave nodes held on the master surface at the end of the Step.
+    pub active: usize,
+    /// Slave nodes the search found within `tol` of the master: the ones that could touch.
+    pub paired: usize,
+    /// `active / paired`: 1 is a face fully in contact, 0 a pair that has opened completely.
+    pub active_fraction: f64,
+    /// The resultant of the normal forces the master exerts on the slave, in the Model's force
+    /// unit: the load the contact transmits.
+    pub force: [Valued; 3],
 }
 
 /// One retained frequency of a harmonic sweep.
