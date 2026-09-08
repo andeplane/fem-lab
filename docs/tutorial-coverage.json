@@ -773,7 +773,8 @@
       "url": "https://dealii.org/current/doxygen/deal.II/step_26.html",
       "status_written": "partial",
       "needs": [
-        83
+        83,
+        479
       ]
     },
     {

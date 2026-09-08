@@ -152,7 +152,7 @@ against the official `FreeCAD/FreeCAD-documentation` markdown mirror of the same
 | 67 | [step-8: The Elasticity Equations](https://dealii.org/current/doxygen/deal.II/step_8.html) | Vector elasticity (FESystem), body force, adaptive refinement driven by a Kelly error estimator | **can do** — linear-simplex elasticity and `load.gravity` with ZZ error-estimator-driven `study.adapt` (#83); the estimator differs from the tutorial’s Kelly indicator |
 | 68 | [step-18: The quasistatic elasticity equations with large deformations](https://dealii.org/current/doxygen/deal.II/step_18.html) | Quasistatic large-deformation elasticity, Lagrangian mesh update, incremental stress with rotation correction | **cannot** — no geometric nonlinearity |
 | 69 | [step-44: Nonlinear Solid Mechanics (three-field formulation)](https://dealii.org/current/doxygen/deal.II/step_44.html) | Compressible neo-Hookean, quasi-incompressible, three-field (u, p̃, J̃) mixed formulation, Newton–Raphson | **cannot** — no hyperelasticity, no geometric nonlinearity, no mixed u/p element |
-| 70 | [step-26: The heat equation](https://dealii.org/current/doxygen/deal.II/step_26.html) | Transient conduction by the θ-scheme, adaptive refinement and coarsening coupled to time stepping | **partial** — the θ-scheme and final-field spatial `study.adapt` are available (#83); refinement/coarsening coupled to individual time steps is still missing |
+| 70 | [step-26: The heat equation](https://dealii.org/current/doxygen/deal.II/step_26.html) | Transient conduction by the θ-scheme, adaptive refinement and coarsening coupled to time stepping | **partial** — the θ-scheme and final-field spatial `study.adapt` are available (#83); refinement/coarsening coupled to individual time steps is tracked in #479 |
 | 71 | [Elasticity using algebraic multigrid](https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_elasticity.html) (DOLFINx demo) | 3D linear elasticity, near-nullspace rigid body modes, CG with an AMG preconditioner, von Mises post-processing | **can do** — `static` + `solve.run{solver: 'gpu-pcg' or 'cpu-pcg'}` + `query.cost`; the preconditioner is Jacobi rather than AMG (PLAN 2.2), so the stiffest cases converge more slowly |
 
 ### SimScale
@@ -461,7 +461,7 @@ toward a relative-error target. Linear tri3/tet4 planar/3D static and thermal St
 `mesh.set.refinement` exposes the same size field. Journal entries preserve the chosen regions
 for deterministic replay. The base mesh still controls curved-boundary geometry error.
 Transient heat adapts the final spatial field by repeating the complete Step, so tutorial 70’s
-within-time-step refinement/coarsening remains outside this capability.
+within-time-step refinement/coarsening remains outside this capability and is tracked in #479.
 
 ### Post-processing and UX
 
