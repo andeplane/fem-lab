@@ -16337,7 +16337,9 @@ fn hertz_sphere_on_a_rigid_flat_matches_the_closed_form_and_converges() {
         assert!(res.warnings.is_empty(), "{:?}", res.warnings);
         let m = hertz_measure(&p, &mesh, &res);
         let c = &res.contacts[0];
-        assert!((c.force[1] - m.load).abs() <= 1e-8 * m.load, "the flat carries the load: {:?}", c.force);
+        // Two readings of one force — the top face's reaction and the contact resultant — that
+        // agree to the direct solve's residual, not to roundoff, on a 15k-equation system.
+        assert!((c.force[1] - m.load).abs() <= 1e-6 * m.load, "the flat carries the load: {:?}", c.force);
         assert_eq!(m.active, c.active);
         eprintln!(
             "F5d {n:?}: P {:.6e} ({:+.3}%), p0 {:.6e} ({:+.3}%), a {:.5} ({:+.3}%), {} held, {} set changes",
