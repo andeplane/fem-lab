@@ -16,6 +16,7 @@ pub mod heat;
 pub mod implicit;
 pub mod modal;
 pub mod nonlinear;
+pub mod random_vibration;
 pub mod static_;
 
 use std::collections::BTreeMap;
@@ -352,6 +353,9 @@ pub struct StepResult {
     /// shape to unit peak. Mode `k` is `modes[k - 1]`, which hosts reach as the field name
     /// `mode:k`.
     pub modes: Vec<FieldData>,
+    /// Complete M-normalised modal vectors, including beam rotations, in Problem DOF order.
+    /// Post-modal procedures use these; `modes` remains the three-component display field.
+    pub modal_dofs: Vec<Vec<f64>>,
     /// Times and fields a transient Step kept.
     pub history: Option<History>,
     /// Frequencies and response fields a harmonic Step kept; `None` for every other procedure.
@@ -484,6 +488,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         frequencies: Vec::new(),
         buckling_factors: Vec::new(),
         modes: Vec::new(),
+        modal_dofs: Vec::new(),
         history: None,
         sweep: None,
         prestress_from: None,

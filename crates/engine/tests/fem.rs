@@ -14529,6 +14529,30 @@ fn cantilever_beam_modes_converge_to_euler_bernoulli_at_fourth_order_and_shear_s
         for (f, e) in res.frequencies.iter().zip(&exact) {
             assert!(f / e - 1.0 > -1e-9, "a conforming element is stiffer than the continuum: {f} vs {e}");
         }
+        // Post-modal stress recovery needs the rotations as well as displayed translations.
+        // The retained vectors must still satisfy the generalized eigenproblem and unit mass.
+        let pat = pattern(&mesh, 6);
+        let k = assemble_stiffness(&p, &pat).unwrap().k;
+        let m = assemble_mass(&p, &pat, false).unwrap();
+        assert_eq!(res.modal_dofs.len(), res.modes.len());
+        for (mode, u) in res.modal_dofs.iter().enumerate() {
+            assert_eq!(u.len(), p.n_dofs());
+            assert!(u.chunks_exact(6).any(|v| v[3..].iter().any(|x| x.abs() > 0.0)));
+            let (mut ku, mut mu) = (vec![0.0; u.len()], vec![0.0; u.len()]);
+            k.spmv(u, &mut ku);
+            m.spmv(u, &mut mu);
+            let mass: f64 = u.iter().zip(&mu).map(|(a, b)| a * b).sum();
+            assert!((mass - 1.0).abs() < 1e-10, "modal mass {mass}");
+            let lambda = (2.0 * PI * res.frequencies[mode]).powi(2);
+            let error: f64 = ku[6..].iter().zip(&mu[6..]).map(|(a, b)| (a - lambda * b).powi(2)).sum();
+            // Backward residual: this slender section has a stiffness condition number
+            // above 1e8, so scaling only by K u magnifies roundoff in the soft bending mode.
+            let scale = k.vals.iter().map(|a| a * a).sum::<f64>() * u.iter().map(|a| a * a).sum::<f64>();
+            assert!((error / scale).sqrt() < 1e-10, "retained eigenvector residual {}", (error / scale).sqrt());
+            for (v, display) in u.chunks_exact(6).zip(res.modes[mode].data.chunks_exact(3)) {
+                assert_eq!(&v[..3], display);
+            }
+        }
         errors.push((res.frequencies[0] / exact[0] - 1.0).abs());
         hs.push(1.0 / f64::from(n));
         if n == 8 {

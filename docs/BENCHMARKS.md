@@ -410,6 +410,9 @@ Hermitian-cubic one without rotary inertia, so the reference is Euler–Bernoull
 slender enough (`r_g/L = 1e-4`) for the element's shear flexibility to be a 1e-8 effect: mode 1
 errors 4.75e-3, 4.83e-4, 3.27e-5 and 2.03e-6 at 1, 2, 4 and 8 elements, an observed rate of 3.95
 on the last three, mode 2 within 1e-3 at eight, and every discrete frequency above the exact one.
+The retained full modal vectors are also checked on every mesh for unit generalized mass,
+the free-DOF eigenproblem residual, nonzero beam rotations, and agreement with the displayed
+translations (#73). Post-modal stress recovery needs those rotations.
 The same test then solves a beam with `r_g/L = 0.1` and checks that its first frequency comes
 out *below* Euler–Bernoulli — at 0.948 of it — which is the shear flexibility showing. B27
 (`a_beam_element_has_exactly_six_zero_energy_modes`) is the rank test: `K v = 0` on the six
@@ -926,6 +929,7 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F17 | NAFEMS R0016 case 5R, random response of the same plate | the published RMS table | — | | **resolve** — needs the published table |
 | F18 | #346, logarithmic decrement: F3's SDOF hex8 released with an initial velocity (no load) at ζ = 0.05, Rayleigh pair `α = ζω, β = ζ/ω` | `δ = 2πζ/√(1−ζ²)`, measured from two parabolically-interpolated peaks four damped periods apart, `ln(peak₀/peak₄)/4` | 1 % | free-decay damping reaches the ratio the pair was chosen for, independent of F3's step-load closed form | engine test |
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
+| F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
 
 The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
 10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
