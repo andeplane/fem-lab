@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 
-use faer::linalg::solvers::DenseSolveCore;
 use femlab_geometry::ElementKind;
 
 use crate::error::{Error, ErrorCode};
@@ -37,7 +36,7 @@ impl Estimate {
 
 struct Cell {
     flux: Vec<f64>,
-    compliance: Vec<f64>,
+    cholesky: Vec<f64>,
     volume: f64,
     material: Option<usize>,
 }
@@ -118,9 +117,9 @@ pub fn zz(p: &Problem<'_>, primary: &FieldData) -> Result<Estimate, Error> {
                 .at(format!("element {e}"))
                 .suggest("material.add with positive elastic moduli or conductivity")
         })?;
-        let inverse = factor.inverse();
-        let compliance = (0..nc).flat_map(|a| (0..nc).map(move |b| (a, b))).map(|(a, b)| inverse[(a, b)]).collect();
-        Ok(Cell { flux, compliance, volume, material: p.material_of_block[p.mesh.block_of(e).0] })
+        let lower = factor.L();
+        let cholesky = (0..nc).flat_map(|a| (0..nc).map(move |b| (a, b))).map(|(a, b)| lower[(a, b)]).collect();
+        Ok(Cell { flux, cholesky, volume, material: p.material_of_block[p.mesh.block_of(e).0] })
     })
     .into_iter()
     .collect();
@@ -153,11 +152,11 @@ pub fn zz(p: &Problem<'_>, primary: &FieldData) -> Result<Estimate, Error> {
                     *d += shape * s / weight;
                 }
             }
-            error += w * c.volume / reference_volume * energy(&delta, &c.compliance);
+            error += w * c.volume / reference_volume * energy(&delta, &c.cholesky);
         }
         error
     });
-    let squared_norm: f64 = cells.iter().map(|c| c.volume * energy(&c.flux, &c.compliance)).sum();
+    let squared_norm: f64 = cells.iter().map(|c| c.volume * energy(&c.flux, &c.cholesky)).sum();
     let total = squared_norm + squared_errors.iter().sum::<f64>();
     if !total.is_finite() {
         return Err(Error::new(ErrorCode::SolveStalled, "the recovery energy overflowed")
@@ -167,16 +166,16 @@ pub fn zz(p: &Problem<'_>, primary: &FieldData) -> Result<Estimate, Error> {
     Ok(Estimate { squared_errors, squared_norm })
 }
 
-fn energy(q: &[f64], compliance: &[f64]) -> f64 {
-    let mut value = 0.0;
+/// qᵀ C⁻¹q = ||L⁻¹q||² for C=LLᵀ. Triangular substitution avoids the
+/// cancellation of an explicit inverse quadratic form and is nonnegative by construction.
+fn energy(q: &[f64], lower: &[f64]) -> f64 {
+    let mut transformed = vec![0.; q.len()];
     for a in 0..q.len() {
-        for b in 0..q.len() {
-            value += q[a] * compliance[a * q.len() + b] * q[b];
+        let mut value = q[a];
+        for b in 0..a {
+            value -= lower[a * q.len() + b] * transformed[b];
         }
+        transformed[a] = value / lower[a * q.len() + a];
     }
-    if value < 0.0 {
-        0.0
-    } else {
-        value
-    }
+    transformed.iter().map(|x| x * x).sum()
 }

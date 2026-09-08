@@ -11543,3 +11543,23 @@ fn adaptive_error_probes_use_the_containing_element_and_surface_identity() {
     }
     assert_eq!(surface.tri_element.len(), mesh.n_elems());
 }
+
+#[test]
+fn adaptive_studies_refuse_unsupported_steps_without_changing_the_journal() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":[],"loads":[]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"coupled","procedure":"static","after":"heat","constraints":[],"loads":[]}"#,
+    );
+    let before = e.export_file();
+    for step in ["modes", "coupled"] {
+        let failure = err(&mut e, &format!(r#"{{"cmd":"study.adapt","step":"{step}","targetError":0.1}}"#));
+        assert_eq!(failure.code, ErrorCode::Unsupported);
+        assert!(failure.cause.contains("without after"));
+        assert_eq!(e.export_file(), before);
+    }
+    assert_eq!(err(&mut e, r#"{"cmd":"study.adapt","step":"missing","targetError":0.1}"#).code, ErrorCode::NotFound);
+    assert_eq!(e.export_file(), before);
+}

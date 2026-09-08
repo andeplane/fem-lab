@@ -15582,7 +15582,27 @@ fn zz_rejects_unsupported_elements_and_invalid_primary_fields() {
     ] {
         assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Schema);
     }
+    let huge = FieldData::new(Per::Node, 1, (0..mesh.n_nodes()).map(|i| 1e300 * mesh.node(i as u32)[0]).collect());
+    let overflow = zz(&p, &huge).unwrap_err();
+    assert_eq!(overflow.code, ErrorCode::SolveStalled);
+    assert!(overflow.cause.contains("energy overflowed"));
+    // Material-plugin errors must escape both stress recovery and the metric's
+    // tangent evaluation, rather than returning an apparently small estimate.
+    p.heat = false;
+    let displacement = FieldData::new(Per::Node, 2, vec![0.; 2 * mesh.n_nodes()]);
+    for call in [1, mesh.n_elems() + 1] {
+        p.materials[0] = fail_on(call).1;
+        let failure = zz(&p, &displacement).unwrap_err();
+        assert_eq!(failure.code, ErrorCode::MaterialProps);
+        assert_eq!(failure.cause, "asked to fail");
+    }
+    p.heat = true;
+    let mut degenerate = mesh.clone();
+    degenerate.coords.fill(0.);
+    p.mesh = &degenerate;
     let field = FieldData::new(Per::Node, 1, vec![0.; mesh.n_nodes()]);
+    assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::MeshInverted);
+    p.mesh = &mesh;
     p.idealisation = Idealisation::Axisymmetric { twist: false };
     assert_eq!(zz(&p, &field).unwrap_err().code, ErrorCode::Unsupported);
     let quad = patch_mesh(ElementKind::Quad4);

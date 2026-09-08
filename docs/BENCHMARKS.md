@@ -1793,6 +1793,10 @@ retained solves. Replies identify the immutable solve even when selected by Step
 
 ### ZZ recovery estimator (#83)
 
+Energy is evaluated as ||L⁻¹q||² with C=LLᵀ, avoiding cancellation in an
+explicit inverse quadratic form. Nonfinite energy and constitutive-plugin
+failures are structured errors, never small error estimates.
+
 The same two-triangle square has the exact displacement interpolant u=(xy,0).
 The two constant engineering strains are (0,0,1) and (1,0,0), giving local
 squared recovery error t(C_xxxx+G_xy)/16 and total field energy
