@@ -1203,7 +1203,45 @@ symmetry boundaries and the pole's vertical restraint remove rigid motion, follo
 [the Abaqus LE3 benchmark](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-le3.htm).
 With 4/8/16 divisions per patch edge (48/192/768 elements), displacement at A is
 0.1749358 / 0.1831415 / 0.1840576 m against 0.185 m (5.44 / 1.00 / 0.51 % error).
-Browser output integration, G4–G7, and full coverage remain pending. The shear interpolation follows §2 of
+G4 (LE2) preserves the distorted four-patch layout of the
+[Abaqus LE2 bending test](https://abaqus.uclouvain.be/English/SIMACAEBMKRefMap/simabmk-c-le2.htm):
+R=1 m, opening=30°, axial length=0.5 m, t=0.01 m, internal point E at θ=20°, z=0.3 m.
+One angular edge is clamped and both axial edges have symmetry supports. At 1/2/4/8
+divisions per patch edge, outer circumferential stress under a 1000 N m/m edge
+moment is 55.396 / 58.911 / 58.946 / 59.423 MPa. The second LE2 case (0.6 MPa
+outward midsurface pressure and 60 MPa tangential end traction) gives
+62.508 / 62.295 / 60.930 / 60.318 MPa. Both target 60 MPa; final errors are 0.96% and 0.53%.
+G5 follows the [Abaqus LE5 Z-section](https://abaqus.uclouvain.be/English/SIMACAEBMKRefMap/simabmk-c-le5.htm),
+length 10 m, web width 2 m, two 1 m flanges, t=0.1 m, E=210 GPa, ν=0.3.
+The root is clamped and uniform opposing 0.6 MN flange shears apply 1.2 MN m torque.
+The midsurface axial stress at x=2.5 m on the outer lower-flange edge is
+−98.473 / −108.353 / −110.569 MPa on 24/96/384 elements. Refinement increments
+shrink; the finest error against −108 MPa is 2.38%, within the 3% tolerance.
+G7 uses the pinched-cylinder and full-hemisphere references in §§3.3 and 3.8 of
+[Ko, Lee and Bathe (2017), Performance of the MITC3+ and MITC4+ shell elements](https://web.mit.edu/kjb/www/Principal_Publications/Performance_of_the_MITC3%2B_and_MITC4%2B_shell_elements_in_widely_used_benchmark_problems.pdf).
+That paper attributes these references to Belytschko et al. (1985); the former
+MacNeal–Harder attribution in this table was not supported. The 0.0924 target is
+for a **full hemisphere**, not the 18° cut-out problem (whose reference is 0.093).
+For the cylinder, R=300, L=600, t=3, E=3e6, ν=0.3 and P=1; the octant carries P/4,
+with rigid end diaphragms and three symmetry boundaries. At 8/16/32/64 divisions,
+displacement is 1.4491683e−5 / 1.7344691e−5 / 1.8162686e−5 / 1.8409473e−5.
+Refinement increments shrink and the final error against 1.8248e−5 is 0.89%.
+As in the published MITC4 results, the sequence crosses the approximate reference.
+The full hemisphere uses the G3 geometry with E=6.825e7, unit forces on the quarter
+model, and a vertical datum at loaded point A. Displacements at 4/8/16 divisions
+per cube-face patch are 0.0874679 / 0.0915707 / 0.0920288, with final error 0.40%.
+Top/bottom fields reach browser contours with element-node identities retained,
+including at shared nodes and when bodies are hidden.
+G6 follows the [Abaqus FV12 setup and reference table](https://ceae-server.colorado.edu/v2016/books/bmk/ch04s04anf18.html):
+a 10 m square, t=0.05 m, E=200 GPa, ν=0.3, ρ=8000 kg/m³. All nodes hold ux, uy
+and rz; no transverse supports are added. Three bending rigid modes remain below
+4e−5 Hz. The seven elastic frequencies on the 32×32 mesh are
+1.621789 / 2.362091 / 2.927366 / 4.194654 / 4.194654 / 7.395800 / 7.395800 Hz.
+The largest relative error decreases from 8.31% (8×8) to 1.43% (16×16) to 0.91%
+(32×32). The source lists six elastic reference frequencies; the repeated seventh
+7.416 Hz target here also checks the degenerate pair required by square symmetry.
+All G1–G7 cases now run in the shell test module. Full coverage and remaining
+host verification are still pending. The shear interpolation follows §2 of
 [Ko, Lee and Bathe (2017)](https://doi.org/10.1016/j.compstruc.2016.11.004),
 which reviews the original MITC4 formulation before introducing MITC4+.
 
@@ -1215,7 +1253,7 @@ which reviews the original MITC4 formulation before introducing MITC4+.
 | G4 | NAFEMS LE2 cylindrical shell patch | 60 MPa | 2 % |
 | G5 | NAFEMS LE5 Z-section cantilever | −108 MPa | 3 % |
 | G6 | NAFEMS FV12 free thin square plate, modal | 1.622, 2.360, 2.922, 4.233, 4.233, 7.416, 7.416 Hz | 1 % |
-| G7 | Pinched cylinder / hemisphere (MacNeal–Harder) | 1.8248e-5 / 0.0924 — **verify against the paper** | 2 % |
+| G7 | Pinched cylinder / full hemisphere (Belytschko et al.; Ko–Lee–Bathe verification above) | 1.8248e-5 / 0.0924 | 2 % |
 
 ## H. Plugins (phase P)
 

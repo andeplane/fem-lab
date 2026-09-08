@@ -617,6 +617,15 @@ fn g2_scordelis_lo_roof_converges_with_analytic_directors() {
 /// projected cube faces cover the octant without a collapsed element at the pole.
 #[test]
 fn g3_nafems_le3_hemisphere_converges_under_point_loads() {
+    hemisphere_convergence(68.25e9, 2000.0, 0.185, "pole");
+}
+
+#[test]
+fn g7_full_hemisphere_converges_to_the_published_pinching_displacement() {
+    hemisphere_convergence(68.25e6, 1.0, 0.0924, "a");
+}
+
+fn hemisphere_convergence(young: f64, force: f64, reference: f64, vertical_support: &str) {
     use femlab_engine::command::{Field, Formulation};
     use femlab_engine::fem::{loads::Load, problem::Constraint};
     use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
@@ -655,26 +664,309 @@ fn g3_nafems_le3_hemisphere_converges_under_point_loads() {
         let constraints = [
             ("x", [true, false, false, false, true, true]),
             ("y", [false, true, false, true, false, true]),
-            ("pole", [false, false, true, false, false, false]),
+            (vertical_support, [false, false, true, false, false, false]),
         ]
         .map(|(name, dofs)| Constraint { name: name.into(), nodes: name.into(), dofs, value: 0.0 })
         .to_vec();
         let bodies = ["hemisphere".into()];
         let mut p = super::problem(mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
         p.directors = &built.directors;
-        p.materials[0].props = vec![68.25e9, 0.3];
+        p.materials[0].props = vec![young, 0.3];
         p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.04, "m") }).unwrap()];
         p.section_of_block = vec![Some(0)];
         p.loads = vec![
-            Load::NodalForce { nodes: "a".into(), f: [2000.0, 0.0, 0.0] },
-            Load::NodalForce { nodes: "c".into(), f: [0.0, -2000.0, 0.0] },
+            Load::NodalForce { nodes: "a".into(), f: [force, 0.0, 0.0] },
+            Load::NodalForce { nodes: "c".into(), f: [0.0, -force, 0.0] },
         ];
         let result = super::run_static(&p, &mut |_| true).unwrap();
         let displacement = result.fields[&Field::Displacement].data[3 * sets["a"].nodes[0] as usize];
-        let error = (displacement / 0.185 - 1.0).abs();
-        eprintln!("G3 n={n}, displacement={displacement}, relative error={error}");
+        let error = (displacement / reference - 1.0).abs();
+        eprintln!("hemisphere E={young}, F={force}, n={n}, displacement={displacement}, relative error={error}");
         errors.push(error);
     }
     assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
     assert!(errors[2] < 0.02, "{errors:?}");
+}
+
+/// LE2's four distorted patches, including the internal node at 20°, z=.3.
+/// Both the constant moment and pressure/edge-traction cases target sigma_theta=60 MPa.
+#[test]
+fn g4_nafems_le2_distorted_cylinder_patch_converges_for_bending_and_pressure() {
+    use femlab_engine::command::{Field, Formulation};
+    use femlab_engine::fem::{loads::Load, problem::Constraint};
+    use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
+    use femlab_geometry::{surface, Projection, SurfacePatch};
+    let parameters = [
+        [[0.0, 0.0], [15.0, 0.0], [20.0, 0.3], [0.0, 0.25]],
+        [[15.0, 0.0], [30.0, 0.0], [30.0, 0.25], [20.0, 0.3]],
+        [[0.0, 0.25], [20.0, 0.3], [15.0, 0.5], [0.0, 0.5]],
+        [[20.0, 0.3], [30.0, 0.25], [30.0, 0.5], [15.0, 0.5]],
+    ];
+    let mut errors = [Vec::new(), Vec::new()];
+    for n in [1, 2, 4, 8] {
+        let patches = parameters.map(|p| SurfacePatch {
+            corners: p.map(|[a, z]: [f64; 2]| {
+                let a = a.to_radians();
+                [libm::cos(a), libm::sin(a), z]
+            }),
+            n: [n, n],
+            tags: [None, None, None, None],
+            projection: Some(Projection::Cylinder { center: [0.0; 3], axis: [0.0, 0.0, 1.0], radius: 1.0 }),
+        });
+        let built = surface(&patches).unwrap();
+        let mesh = &built.mesh;
+        let mut sets = super::sets_of(mesh);
+        for name in ["root", "z0", "z1"] {
+            let nodes = (0..mesh.n_nodes() as u32)
+                .filter(|&node| {
+                    let [_, y, z] = mesh.node(node);
+                    match name {
+                        "root" => y.abs() < 1e-9,
+                        "z0" => z.abs() < 1e-9,
+                        _ => z > 0.5 - 1e-9,
+                    }
+                })
+                .collect();
+            sets.insert(name.into(), ResolvedSet { kind: SetKind::Node, nodes, faces: vec![], elems: vec![] });
+        }
+        let mut end: Vec<_> =
+            (0..mesh.n_nodes() as u32).filter(|&node| (mesh.node(node)[1] - 0.5).abs() < 1e-9).collect();
+        end.sort_by(|&a, &b| mesh.node(a)[2].total_cmp(&mesh.node(b)[2]));
+        let mut weights = vec![0.0; end.len()];
+        for i in 0..end.len() - 1 {
+            let dz = 0.5 * (mesh.node(end[i + 1])[2] - mesh.node(end[i])[2]);
+            weights[i] += dz;
+            weights[i + 1] += dz;
+        }
+        for (i, &node) in end.iter().enumerate() {
+            sets.insert(
+                format!("end{i}"),
+                ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: vec![], elems: vec![] },
+            );
+        }
+        let constraints = [
+            ("root", [true; 6]),
+            ("z0", [false, false, true, true, true, false]),
+            ("z1", [false, false, true, true, true, false]),
+        ]
+        .map(|(name, dofs)| Constraint { name: name.into(), nodes: name.into(), dofs, value: 0.0 })
+        .to_vec();
+        let bodies = ["patch".into()];
+        let mut p = super::problem(mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.directors = &built.directors;
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        let a = 20.0f64.to_radians();
+        let (sin, cos) = (libm::sin(a), libm::cos(a));
+        for (case, error_list) in errors.iter_mut().enumerate() {
+            p.loads.clear();
+            for (i, &weight) in weights.iter().enumerate() {
+                if case == 0 {
+                    p.loads.push(Load::NodalMoment { nodes: format!("end{i}"), m: [0.0, 0.0, 1000.0 * weight] });
+                } else {
+                    p.loads.push(Load::NodalForce {
+                        nodes: format!("end{i}"),
+                        f: [-0.5 * 600000.0 * weight, libm::sqrt(0.75) * 600000.0 * weight, 0.0],
+                    });
+                }
+            }
+            if case == 1 {
+                // The physical top radius is 1.005; scale the surface pressure to the
+                // reference force per midsurface area (normal pressure has no eccentric moment).
+                p.loads.push(Load::Pressure { faces: "top".into(), p: -600000.0 / 1.005 });
+            }
+            let result = super::run_static(&p, &mut |_| true).unwrap();
+            let field = &result.fields[&Field::StressTop];
+            let mut stress = 0.0;
+            let mut count = 0;
+            for (local, &node) in mesh.blocks[0].conn.iter().enumerate() {
+                let [x, y, z] = mesh.node(node);
+                if (x - cos).abs() < 1e-9 && (y - sin).abs() < 1e-9 && (z - 0.3).abs() < 1e-9 {
+                    let sig = &field.data[6 * local..6 * local + 6];
+                    stress += sin * sin * sig[0] + cos * cos * sig[1] - 2.0 * sin * cos * sig[3];
+                    count += 1;
+                }
+            }
+            assert_eq!(count, 4);
+            stress /= count as f64;
+            let error = (stress / 60e6 - 1.0).abs();
+            eprintln!("G4 n={n}, case={case}, sigma={stress}, relative error={error}");
+            error_list.push(error);
+        }
+    }
+    for error in errors {
+        assert!(error.windows(2).all(|e| e[1] < e[0]), "{error:?}");
+        assert!(error[3] < 0.02, "{error:?}");
+    }
+}
+
+/// LE5: open Z section, clamped warping, uniform opposing flange shears.
+/// A beam-style torsion model cannot reproduce the axial warping stress at A.
+#[test]
+fn g5_nafems_le5_z_section_warping_stress_converges() {
+    use femlab_engine::command::{Field, Formulation};
+    use femlab_engine::fem::{loads::Load, problem::Constraint};
+    use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
+    use femlab_geometry::{surface, SurfacePatch};
+    let mut values = Vec::new();
+    for refinement in [1, 2, 4] {
+        let patches = [
+            [[0.0, -1.0, -1.0], [10.0, -1.0, -1.0], [10.0, -1.0, 0.0], [0.0, -1.0, 0.0]],
+            [[0.0, -1.0, 0.0], [10.0, -1.0, 0.0], [10.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 1.0, 0.0], [10.0, 1.0, 0.0], [10.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
+        ]
+        .map(|corners| SurfacePatch {
+            corners,
+            n: [8 * refinement, refinement],
+            tags: [None, None, None, Some("root".into())],
+            projection: None,
+        });
+        let built = surface(&patches).unwrap();
+        let mesh = &built.mesh;
+        let mut sets = super::sets_of(mesh);
+        sets.insert(
+            "root".into(),
+            ResolvedSet { kind: SetKind::Node, nodes: mesh.node_sets["root"].clone(), faces: vec![], elems: vec![] },
+        );
+        let constraints = vec![Constraint { name: "root".into(), nodes: "root".into(), dofs: [true; 6], value: 0.0 }];
+        let mut loads = Vec::new();
+        for node in 0..mesh.n_nodes() as u32 {
+            let [x, y, z] = mesh.node(node);
+            if x > 10.0 - 1e-9 && y.abs() > 1.0 - 1e-9 {
+                let endpoint = z.abs() < 1e-9 || z.abs() > 1.0 - 1e-9;
+                let weight = if endpoint { 0.5 } else { 1.0 } / refinement as f64;
+                let name = format!("load{node}");
+                sets.insert(
+                    name.clone(),
+                    ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: vec![], elems: vec![] },
+                );
+                loads.push(Load::NodalForce { nodes: name, f: [0.0, 0.0, y * 600000.0 * weight] });
+            }
+        }
+        let bodies = ["z".into()];
+        let mut p = super::problem(mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.directors = &built.directors;
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.1, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.loads = loads;
+        let result = super::run_static(&p, &mut |_| true).unwrap();
+        let node = (0..mesh.n_nodes() as u32)
+            .find(|&n| {
+                let [x, y, z] = mesh.node(n);
+                (x - 2.5).abs() < 1e-9 && y < -1.0 + 1e-9 && z < -1.0 + 1e-9
+            })
+            .unwrap();
+        let sigma = result.fields[&Field::Stress].data[6 * node as usize];
+        eprintln!("G5 refinement={refinement}, sigma={sigma}, relative error={}", (sigma / (-108e6) - 1.0).abs());
+        values.push(sigma);
+    }
+    assert!((values[2] / (-108e6) - 1.0).abs() < 0.03, "{values:?}");
+    assert!((values[2] - values[1]).abs() < (values[1] - values[0]).abs(), "{values:?}");
+}
+
+/// Pinched cylinder with rigid end diaphragms: Ko/Lee/Bathe 2017, section 3.3,
+/// Fig.9 and Table8. The octant carries one quarter of the unit pinching force.
+#[test]
+fn g7_pinched_cylinder_converges_with_rigid_end_diaphragms() {
+    use femlab_engine::command::{Field, Formulation};
+    use femlab_engine::fem::{loads::Load, problem::Constraint};
+    use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
+    use femlab_geometry::{surface, Projection, SurfacePatch};
+    let mut values = Vec::new();
+    for n in [8, 16, 32, 64] {
+        let built = surface(&[SurfacePatch {
+            corners: [[300.0, 0.0, 0.0], [300.0, 300.0, 0.0], [0.0, 300.0, 300.0], [0.0, 0.0, 300.0]],
+            n: [n, n],
+            tags: ["z0", "end", "x0", "middle"].map(|name| Some(name.into())),
+            projection: Some(Projection::Cylinder { center: [0.0; 3], axis: [0.0, 1.0, 0.0], radius: 300.0 }),
+        }])
+        .unwrap();
+        let mesh = &built.mesh;
+        let mut sets = super::sets_of(mesh);
+        for (name, nodes) in &mesh.node_sets {
+            sets.insert(
+                name.clone(),
+                ResolvedSet { kind: SetKind::Node, nodes: nodes.clone(), faces: vec![], elems: vec![] },
+            );
+        }
+        let node = mesh.node_sets["x0"].iter().find(|&&node| mesh.node(node)[1].abs() < 1e-9).copied().unwrap();
+        sets.insert(
+            "load".into(),
+            ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: vec![], elems: vec![] },
+        );
+        let constraints = [
+            ("z0", [false, false, true, true, true, false]),
+            ("x0", [true, false, false, false, true, true]),
+            ("middle", [false, true, false, true, false, true]),
+            ("end", [true, false, true, false, true, false]),
+        ]
+        .map(|(name, dofs)| Constraint { name: name.into(), nodes: name.into(), dofs, value: 0.0 })
+        .to_vec();
+        let bodies = ["cylinder".into()];
+        let mut p = super::problem(mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.directors = &built.directors;
+        p.materials[0].props = vec![3e6, 0.3];
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(3.0, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.loads = vec![Load::NodalForce { nodes: "load".into(), f: [0.0, 0.0, -0.25] }];
+        let result = super::run_static(&p, &mut |_| true).unwrap();
+        let w = -result.fields[&Field::Displacement].data[3 * node as usize + 2];
+        let error = (w / 1.8248e-5 - 1.0).abs();
+        eprintln!("G7 cylinder n={n}, displacement={w}, relative error={error}");
+        values.push(w);
+    }
+    // The published reference is approximate: the finer solutions cross it,
+    // as does MITC4 in the source table. Successive refinements must still settle.
+    assert!(values.windows(3).all(|v| (v[2] - v[1]).abs() < (v[1] - v[0]).abs()), "{values:?}");
+    assert!((values[3] / 1.8248e-5 - 1.0).abs() < 0.02, "{values:?}");
+}
+
+/// FV12: 10m square, .05m thick, E=200GPa, nu=.3, rho=8000. In-plane
+/// displacements and drilling rotations are held, leaving three bending rigid modes.
+#[test]
+fn g6_nafems_fv12_free_plate_modes_converge() {
+    use femlab_engine::command::Formulation;
+    use femlab_engine::fem::problem::Constraint;
+    use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
+    use femlab_engine::{procedure::Step, solve::SolveOptions};
+    let reference = [1.622, 2.360, 2.922, 4.233, 4.233, 7.416, 7.416];
+    let mut errors = Vec::new();
+    for n in [8, 16, 32] {
+        let mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [n, n, 1] }
+            .build(|[x, y, z]| [10.0 * x, 10.0 * y, z]);
+        let mut sets = super::sets_of(&mesh);
+        sets.insert(
+            "plane".into(),
+            ResolvedSet {
+                kind: SetKind::Node,
+                nodes: (0..mesh.n_nodes() as u32).collect(),
+                faces: vec![],
+                elems: vec![],
+            },
+        );
+        let constraints = vec![Constraint {
+            name: "plane".into(),
+            nodes: "plane".into(),
+            dofs: [true, true, false, false, false, true],
+            value: 0.0,
+        }];
+        let bodies = ["plate".into()];
+        let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.materials[0].props = vec![200e9, 0.3];
+        p.materials[0].rho = 8000.0;
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.05, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        let result = super::run_step(
+            &p,
+            &Step::Modal { n_modes: 10, shift: None, solver: SolveOptions::default(), prestress: None },
+        )
+        .unwrap();
+        let frequencies = &result.frequencies;
+        eprintln!("G6 n={n}, frequencies={frequencies:?}");
+        assert!(frequencies[..3].iter().all(|f| f.abs() < 1e-3), "{frequencies:?}");
+        let max_error = frequencies[3..].iter().zip(reference).map(|(f, r)| (f / r - 1.0).abs()).fold(0.0, f64::max);
+        errors.push(max_error);
+    }
+    assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
+    assert!(errors[2] < 0.01, "{errors:?}");
 }
