@@ -1777,11 +1777,6 @@ export type Axis = "x" | "y" | "z";
  */
 export type MesherSpec =
   | {
-      body?: string | null;
-      patches: SurfacePatchSpec[];
-      kind: "surface";
-    }
-  | {
       size: LatticeSize;
       /**
        * Optional positive element lengths keyed by existing Body name. Each entry overrides
@@ -1841,98 +1836,11 @@ export type MesherSpec =
           };
       maxElements?: number | null;
       kind: "tet";
-    };
-/**
- * Radial projection of a bilinear shell patch. Geometry and derivatives are projected
- * together; the resulting unit normals become the MITC4 corner directors.
- */
-export type SurfaceProjectionSpec =
-  | {
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      center: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "sphere";
     }
   | {
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      center: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      /**
-       * @minItems 3
-       * @maxItems 3
-       */
-      axis: [number, number, number];
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "cylinder";
+      body?: string | null;
+      patches: SurfacePatchSpec[];
+      kind: "surface";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -2051,6 +1959,98 @@ export type SweepSpec =
       segments: number;
       angleDeg: number;
       kind: "revolve";
+    };
+/**
+ * Radial projection of a bilinear shell patch. Geometry and derivatives are projected
+ * together; the resulting unit normals become the MITC4 corner directors.
+ */
+export type SurfaceProjectionSpec =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "sphere";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      axis: [number, number, number];
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "cylinder";
     };
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
@@ -5693,122 +5693,6 @@ export interface HardeningPoint {
       };
 }
 /**
- * Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
- * normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
- * name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
- */
-export interface SurfacePatchSpec {
-  /**
-   * @minItems 4
-   * @maxItems 4
-   */
-  corners: [
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ],
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ],
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ],
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ]
-  ];
-  /**
-   * @minItems 2
-   * @maxItems 2
-   */
-  n: [number, number];
-  /**
-   * @minItems 4
-   * @maxItems 4
-   */
-  tags?: [string | null, string | null, string | null, string | null] | null;
-  projection?: SurfaceProjectionSpec | null;
-}
-/**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
  * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
@@ -5970,6 +5854,122 @@ export interface RefineBoxSpec {
         value: number;
         unit: string;
       };
+}
+/**
+ * Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
+ * normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
+ * name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
+ */
+export interface SurfacePatchSpec {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ]
+  ];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags?: [string | null, string | null, string | null, string | null] | null;
+  projection?: SurfaceProjectionSpec | null;
 }
 /**
  * A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
@@ -6753,6 +6753,11 @@ export interface ResultSurface {
    * Triangle node indices, three per triangle, oriented outward.
    */
   indices: number[];
+  /**
+   * Index into element-node fields for each triangle corner, in the same order as indices.
+   * Shared mesh nodes retain distinct field values on their incident elements.
+   */
+  triElementNode: number[];
   triBody: number[];
   /**
    * First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).

@@ -1158,6 +1158,9 @@ pub struct ResultSurface {
     pub positions: Vec<f64>,
     /// Triangle node indices, three per triangle, oriented outward.
     pub indices: Vec<u32>,
+    /// Index into element-node fields for each triangle corner, in the same order as indices.
+    /// Shared mesh nodes retain distinct field values on their incident elements.
+    pub tri_element_node: Vec<u32>,
     pub tri_body: Vec<u32>,
     /// First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
     pub tri_face: Vec<u32>,

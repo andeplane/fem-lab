@@ -13,6 +13,8 @@ export interface Progress {
 export type ResultSelector = Pick<Extract<Query, { query: 'query.surface' }>, 'resultId' | 'step'>;
 
 export interface Surface {
+  /** Triangle-corner indices into unaveraged element-node fields. */
+  triElementNode?: Uint32Array;
   /** Present for a selected retained solve; absent on current geometry/Mesh previews. */
   resultId?: string;
   step?: string;
@@ -32,6 +34,7 @@ export interface Surface {
   bodyNames: string[];
 }
 export interface FieldData {
+  per?: string;
   /** Immutable solve identity, carried by retained Result rendering routes. */
   resultId?: string;
   step?: string;

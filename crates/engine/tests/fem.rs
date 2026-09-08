@@ -3888,6 +3888,13 @@ fn field_data_slices_by_component_and_extremes_carry_their_location() {
     let per = [Per::Node, Per::ElemGp, Per::ElemNode];
     assert_eq!(format!("{per:?}"), "[Node, ElemGp, ElemNode]");
     assert_ne!(Per::Node, Per::ElemNode);
+    let two = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 2.0, 3.0]);
+    let mut discontinuous = vec![0.0; 16];
+    discontinuous[8] = -3.0;
+    discontinuous[12] = 10.0;
+    let ex = extremes(&FieldData::new(Per::ElemNode, 1, discontinuous), &two);
+    assert_eq!((ex[0].min, ex[0].min_at), (-3.0, [0.5, 0.0, 0.0]));
+    assert_eq!((ex[0].max, ex[0].max_at), (10.0, [0.5, 0.0, 3.0]));
 }
 
 // ---------------------------------------------------------------------- loads

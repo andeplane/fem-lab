@@ -1817,32 +1817,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "The mesher and its settings.",
   "oneOf": [
     {
-      "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
-      "type": "object",
-      "properties": {
-        "body": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "patches": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SurfacePatchSpec"
-          }
-        },
-        "kind": {
-          "type": "string",
-          "const": "surface"
-        }
-      },
-      "required": [
-        "kind",
-        "patches"
-      ]
-    },
-    {
       "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
       "type": "object",
       "properties": {
@@ -1966,6 +1940,32 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "kind",
         "size"
+      ]
+    },
+    {
+      "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SurfacePatchSpec"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "surface"
+        }
+      },
+      "required": [
+        "kind",
+        "patches"
       ]
     }
   ]
@@ -7018,32 +7018,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "The mesher and its settings.",
   "oneOf": [
     {
-      "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
-      "type": "object",
-      "properties": {
-        "body": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "patches": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/SurfacePatchSpec"
-          }
-        },
-        "kind": {
-          "type": "string",
-          "const": "surface"
-        }
-      },
-      "required": [
-        "kind",
-        "patches"
-      ]
-    },
-    {
       "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
       "type": "object",
       "properties": {
@@ -7167,6 +7141,32 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "kind",
         "size"
+      ]
+    },
+    {
+      "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SurfacePatchSpec"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "surface"
+        }
+      },
+      "required": [
+        "kind",
+        "patches"
       ]
     }
   ]

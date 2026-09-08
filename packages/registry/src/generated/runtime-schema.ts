@@ -3156,32 +3156,6 @@ const commands = {
       "description": "The mesher and its settings.",
       "oneOf": [
         {
-          "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
-          "type": "object",
-          "properties": {
-            "body": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "patches": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/SurfacePatchSpec"
-              }
-            },
-            "kind": {
-              "type": "string",
-              "const": "surface"
-            }
-          },
-          "required": [
-            "kind",
-            "patches"
-          ]
-        },
-        {
           "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
           "type": "object",
           "properties": {
@@ -3306,127 +3280,31 @@ const commands = {
             "kind",
             "size"
           ]
-        }
-      ]
-    },
-    "SurfacePatchSpec": {
-      "description": "Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive\nnormal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags\nname node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.",
-      "type": "object",
-      "properties": {
-        "corners": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Q_length"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          },
-          "minItems": 4,
-          "maxItems": 4
         },
-        "n": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "minItems": 2,
-          "maxItems": 2
-        },
-        "tags": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "minItems": 4,
-          "maxItems": 4
-        },
-        "projection": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SurfaceProjectionSpec"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "corners",
-        "n"
-      ]
-    },
-    "SurfaceProjectionSpec": {
-      "description": "Radial projection of a bilinear shell patch. Geometry and derivatives are projected\ntogether; the resulting unit normals become the MITC4 corner directors.",
-      "oneOf": [
         {
+          "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
           "type": "object",
           "properties": {
-            "center": {
+            "body": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "patches": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/Q_length"
-              },
-              "minItems": 3,
-              "maxItems": 3
-            },
-            "radius": {
-              "$ref": "#/$defs/Q_length"
+                "$ref": "#/$defs/SurfacePatchSpec"
+              }
             },
             "kind": {
               "type": "string",
-              "const": "sphere"
+              "const": "surface"
             }
           },
           "required": [
             "kind",
-            "center",
-            "radius"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "center": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Q_length"
-              },
-              "minItems": 3,
-              "maxItems": 3
-            },
-            "axis": {
-              "type": "array",
-              "items": {
-                "type": "number",
-                "format": "double"
-              },
-              "minItems": 3,
-              "maxItems": 3
-            },
-            "radius": {
-              "$ref": "#/$defs/Q_length"
-            },
-            "kind": {
-              "type": "string",
-              "const": "cylinder"
-            }
-          },
-          "required": [
-            "kind",
-            "center",
-            "axis",
-            "radius"
+            "patches"
           ]
         }
       ]
@@ -3687,6 +3565,128 @@ const commands = {
             "kind",
             "segments",
             "angleDeg"
+          ]
+        }
+      ]
+    },
+    "SurfacePatchSpec": {
+      "description": "Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive\nnormal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags\nname node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.",
+      "type": "object",
+      "properties": {
+        "corners": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "n": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "projection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SurfaceProjectionSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "corners",
+        "n"
+      ]
+    },
+    "SurfaceProjectionSpec": {
+      "description": "Radial projection of a bilinear shell patch. Geometry and derivatives are projected\ntogether; the resulting unit normals become the MITC4 corner directors.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "center": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "radius": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "sphere"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "radius"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "center": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "axis": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "radius": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "cylinder"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "axis",
+            "radius"
           ]
         }
       ]
@@ -4925,13 +4925,13 @@ const queries = {
     "Q_second_moment": commands.$defs["Q_second_moment"],
     "Axis": commands.$defs["Axis"],
     "MesherSpec": commands.$defs["MesherSpec"],
-    "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
-    "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
     "LatticeSize": commands.$defs["LatticeSize"],
     "QuadBlockSpec": commands.$defs["QuadBlockSpec"],
     "CurveSpec": commands.$defs["CurveSpec"],
     "RefineBoxSpec": commands.$defs["RefineBoxSpec"],
     "SweepSpec": commands.$defs["SweepSpec"],
+    "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
+    "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
     "Formulation": commands.$defs["Formulation"],
     "ExportFormat": commands.$defs["ExportFormat"],
     "Dof": commands.$defs["Dof"],

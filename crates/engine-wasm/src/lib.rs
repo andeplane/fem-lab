@@ -283,6 +283,7 @@ impl SessionEngine {
                 arrays.push(("positions", js_sys::Float64Array::from(&positions[..]).into()));
                 for (name, values) in [
                     ("indices", &mut surface.indices),
+                    ("triElementNode", &mut surface.tri_element_node),
                     ("triBody", &mut surface.tri_body),
                     ("triFace", &mut surface.tri_face),
                     ("triSetOffsets", &mut surface.tri_set_offsets),

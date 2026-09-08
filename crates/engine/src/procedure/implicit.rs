@@ -361,7 +361,7 @@ pub fn run(
     res.scalars.insert("rel_residual".to_string(), res.solver.rel_residual);
     res.extremes = fields
         .iter()
-        .filter(|(_, fd)| fd.per == Per::Node)
+        .filter(|(_, fd)| fd.per != Per::ElemGp)
         .flat_map(|(name, fd)| extremes(fd, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     res.reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);

@@ -11340,6 +11340,24 @@ fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
     pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
     assert_eq!(e.model(), replayed.model());
     ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let QueryResult::Surface(surface) = e.query(Query::Surface { step: None, result_id: None }).unwrap() else {
+        panic!("surface")
+    };
+    assert_eq!(surface.tri_element_node.len(), surface.indices.len());
+    let mut shared: Vec<_> = surface
+        .indices
+        .iter()
+        .zip(&surface.tri_element_node)
+        .filter_map(|(&node, &local)| (node == 1).then_some(local))
+        .collect();
+    shared.sort_unstable();
+    shared.dedup();
+    assert_eq!(shared, vec![1, 4], "shared global node keeps each element's value");
+    let QueryResult::Result(summary) = e.query(Query::Result { step: None, result_id: None }).unwrap() else {
+        panic!("result")
+    };
+    assert!(summary.extremes.iter().any(|e| e.field == "stressTop"));
+    assert!(summary.extremes.iter().any(|e| e.field == "stressBottom"));
     // Constant curvature M/D: a unit-width strip has w(L)=-ML²/(2D).
     let got = probe_at(&mut e, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
     let want = -6.0 / (200e9 * 0.01f64.powi(3));

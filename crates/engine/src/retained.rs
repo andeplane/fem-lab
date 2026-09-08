@@ -303,6 +303,24 @@ impl Engine {
             }
             tri_set_offsets.push(tri_sets.len() as u32);
         }
+        let mut offsets = Vec::with_capacity(mesh.n_elems());
+        let mut offset = 0u32;
+        for e in 0..mesh.n_elems() as u32 {
+            offsets.push(offset);
+            offset += mesh.kind_of(e).n_nodes() as u32;
+        }
+        let tri_element_node = surface
+            .triangles
+            .iter()
+            .zip(&surface.tri_elem)
+            .flat_map(|(tri, &elem)| {
+                tri.map(|node| {
+                    offsets[elem as usize]
+                        + mesh.elem_nodes(elem).iter().position(|&n| n == node).expect("triangle belongs to element")
+                            as u32
+                })
+            })
+            .collect();
         Ok(crate::query::ResultSurface {
             result_id: record.id.clone(),
             step: record.step.clone(),
@@ -310,6 +328,7 @@ impl Engine {
             unit: "m".into(),
             positions: surface.positions.iter().flatten().copied().collect(),
             indices: surface.triangles.iter().flatten().copied().collect(),
+            tri_element_node,
             tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
             tri_face: surface
                 .tri_face

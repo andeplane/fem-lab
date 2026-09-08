@@ -114,6 +114,7 @@ export class Viewer {
   private mode: ViewMode = 'geometry';
   private colormap: ColormapName = 'viridis';
   private field: Float32Array | null = null;
+  private fieldPer = 'node';
   private range: [number, number] = [0, 1];
   /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
   private dim = false;
@@ -356,7 +357,7 @@ export class Viewer {
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
-          const [r, g, b] = sample(this.colormap, (this.field[this.vert[vertex]!]! - lo) / span);
+          const [r, g, b] = sample(this.colormap, (this.field[this.fieldPer === 'elementNode' ? s.triElementNode![t * 3 + k]! : this.vert[vertex]!]! - lo) / span);
           c.setRGB(r, g, b);
         } else if (this.mode === 'mesh') {
           c.setScalar(grey);
@@ -381,7 +382,7 @@ export class Viewer {
           (bodyName !== null && this.highlightedBodies.has(bodyName));
         for (let k = 0; k < 2; k++) {
           const node = s.edges?.[edge * 2 + k];
-          if (this.mode === 'results' && this.field) {
+          if (this.mode === 'results' && this.field && this.fieldPer === 'node') {
             const value = node === undefined ? lo : this.field[node] ?? lo;
             const [r, g, b] = sample(this.colormap, (value - lo) / span);
             c.setRGB(r, g, b);
@@ -448,7 +449,12 @@ export class Viewer {
     this.render();
   }
 
-  setField(values: Float32Array | null, range: [number, number]): void {
+  setField(values: Float32Array | null, range: [number, number], per = 'node'): void {
+    if (values && per !== 'node' && per !== 'elementNode') throw new FemError('unsupported', `cannot contour ${per} fields`);
+    if (values && per === 'elementNode' && this.surface?.triElementNode?.length !== this.surface?.indices.length) {
+      throw new FemError('internal', 'the Result surface has no element-node field mapping');
+    }
+    this.fieldPer = per;
     this.field = values;
     this.range = range;
     this.paint();
@@ -779,18 +785,20 @@ export class Viewer {
         body: s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null,
         point: [hit.point.x, hit.point.y, hit.point.z],
         node,
-        value: node !== null && this.field ? (this.field[node] ?? null) : null,
+        value: node !== null && this.field && this.fieldPer === 'node' ? (this.field[node] ?? null) : null,
       };
     }
     if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
     const t = this.tri[hit.faceIndex]!;
     const node = this.nearestNode(hit.faceIndex, hit.point);
+    const corner = [0, 1, 2].find(k => s.indices[t * 3 + k] === node);
+    const fieldIndex = this.fieldPer === 'elementNode' && corner !== undefined ? s.triElementNode?.[t * 3 + corner] : node;
     return {
       face: s.faceNames[s.triFace[t]!] ?? null,
       body: s.bodyNames[s.triBody[t]!] ?? null,
       point: [hit.point.x, hit.point.y, hit.point.z],
       node,
-      value: node !== null && this.field ? (this.field[node] ?? null) : null,
+      value: fieldIndex != null && this.field ? (this.field[fieldIndex] ?? null) : null,
     };
   }
 

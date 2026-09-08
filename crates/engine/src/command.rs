@@ -553,18 +553,6 @@ pub struct SurfacePatchSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSpec {
-    /// MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a
-    /// sphere or cylinder. The patches define the implicit Body (`body`, default
-    /// "shell"). Coincident patch nodes merge; shared edges need matching divisions.
-    /// Each patch retains its own directors at a crease. `<body>.top` and
-    /// `<body>.bottom` are face Sets; tagged edges are node Sets for constraints,
-    /// forces and moments. Requires order 1, no simplex split, 3D idealisation and
-    /// a shell thickness Section assigned with section.assign.
-    Surface {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        body: Option<String>,
-        patches: Vec<SurfacePatchSpec>,
-    },
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
     Lattice {
@@ -620,6 +608,18 @@ pub enum MesherSpec {
     /// the geometry is prismatic, because those are exact. `maxElements` caps the background
     /// lattice (500 000 by default) and is checked before anything is allocated.
     Tet(TetSpec),
+    /// MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a
+    /// sphere or cylinder. The patches define the implicit Body (`body`, default
+    /// "shell"). Coincident patch nodes merge; shared edges need matching divisions.
+    /// Each patch retains its own directors at a crease. `<body>.top` and
+    /// `<body>.bottom` are face Sets; tagged edges are node Sets for constraints,
+    /// forces and moments. Requires order 1, no simplex split, 3D idealisation and
+    /// a shell thickness Section assigned with section.assign.
+    Surface {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        patches: Vec<SurfacePatchSpec>,
+    },
 }
 
 /// `MesherSpec::Tet`'s settings, deserialized by hand rather than derived.

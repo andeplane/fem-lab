@@ -230,7 +230,7 @@ pub(crate) async fn post(
     scalars.insert("rel_residual".to_string(), solver.rel_residual);
     let ex = fields
         .iter()
-        .filter(|(_, f)| f.per == Per::Node)
+        .filter(|(_, f)| f.per != Per::ElemGp)
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
@@ -376,7 +376,7 @@ pub fn run_history(
     scalars.insert("rel_residual".to_string(), solver.rel_residual);
     let ex = fields
         .iter()
-        .filter(|(_, f)| f.per == Per::Node)
+        .filter(|(_, f)| f.per != Per::ElemGp)
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);

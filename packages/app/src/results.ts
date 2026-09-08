@@ -268,7 +268,7 @@ export class ResultsView {
     v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
     v.setMode(this.store.state.viewMode);
     v.setDim(result.stale);
-    v.setField(values, range);
+    v.setField(values, range, scalar.per);
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
     if (choice.mode !== undefined) this.requested = 'auto';

@@ -86,6 +86,7 @@ export const FIELD_CHOICES: FieldChoice[] = [
   { key: 'umag', label: '|u|', field: 'displacement', component: null, magnitude: true },
   ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
   ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
+  ...['Top', 'Bottom'].flatMap((side) => VOIGT.map((a, i) => ({ key: `s${side}${a}`, label: `σ${a} ${side.toLowerCase()}`, field: `stress${side}`, component: i }))),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
   { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },

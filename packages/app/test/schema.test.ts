@@ -43,7 +43,7 @@ describe('fieldsOf', () => {
     const mesher = fieldsOf(byName('mesh.set'), DEFS).find((f) => f.path[0] === 'mesher')!;
     expect(mesher.kind).toBe('union');
     if (mesher.kind !== 'union') throw new Error('unreachable');
-    expect(mesher.variants.map((v) => v.kind)).toEqual(['lattice', 'mapped', 'free', 'sweep', 'tet']);
+    expect(mesher.variants.map((v) => v.kind)).toEqual(['lattice', 'mapped', 'free', 'sweep', 'tet', 'surface']);
     // `LatticeSize` is a length or three counts; the form offers the length.
     expect(mesher.variants[0]!.fields[0]).toMatchObject({ kind: 'quantity', dimension: 'length', path: ['mesher', 'size'] });
   });
@@ -52,7 +52,7 @@ describe('fieldsOf', () => {
     const fields = fieldsOf(byName('step.add'), DEFS);
     expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'static-nonlinear', 'modal', 'buckling', 'heat-steady', 'heat-transient', 'explicit', 'implicit', 'harmonic'], multi: false });
     expect(fields.find((f) => f.path[0] === 'constraints')).toMatchObject({ kind: 'ref', refKind: 'constraint', multi: true });
-    expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true });
+    expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true, options: expect.arrayContaining(['stressTop', 'stressBottom', 'stress']) });
   });
 
   it('unwraps an optional and keeps its dimension', () => {
