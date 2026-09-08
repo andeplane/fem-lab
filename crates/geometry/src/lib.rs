@@ -17,8 +17,8 @@ pub mod solid;
 pub use imported::{MeshIndex, DEFAULT_FEATURE_ANGLE, MAX_TRIANGLES};
 pub use mesh::{merge_coincident, Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
 pub use mesher::{
-    annulus, elliptic_annulus, extrude, free, free_sheet, lattice, line, mapped, perturb_interior, revolve,
-    split_to_simplices, tet, Curve, QuadBlock, RefineBox, Structured,
+    annulus, elliptic_annulus, extrude, free, free_sheet, lattice, line, mapped, perturb_interior, refine, revolve,
+    split_to_simplices, tet, Curve, QuadBlock, RefineBox, SizeBox, Structured,
 };
 pub use predicate::{
     elem_centroid, face_centroid_normal, nearest_boundary_face, resolve_face_set, resolve_region, FacePredicate,

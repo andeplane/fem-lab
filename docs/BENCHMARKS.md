@@ -1816,3 +1816,12 @@ The method uses volume-weighted, material-separated recovered stress/heat flux
 and the inverse elastic/conductivity tensor in the energy integral; see the
 [MFEM ZZ estimator contract](https://docs.mfem.org/html/classmfem_1_1ZienkiewiczZhuEstimator.html).
 An estimate is not a guaranteed bound on the true discretisation error.
+
+Local simplex refinement is checked on tri3 and tet4 boxes at target edge lengths
+0.4 m and 0.2 m. Area/volume stays exact to 1e-12, every child has positive
+orientation, every unpaired face remains on the original box boundary, and named
+face Sets retain their geometric planes. All edges in the requested region obey
+the bound; a remote region retains coarser elements. Refining an already compliant
+mesh is idempotent. Invalid size fields and element budgets return errors without
+changing the input mesh. New boundary nodes bisect the existing mesh edges; these
+tests assert conservation of that boundary approximation, not improved CAD fidelity.
