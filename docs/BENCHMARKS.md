@@ -1199,6 +1199,10 @@ recover the independent extreme-fibre value `6M/(b t²)` through the static and 
 The unaveraged `shellMoment` field integrates `z σ dz` through the thickness; the
 same strip recovers `Mxx = M/b = 1 N` and five zero tensor components at every
 element node. Components use global tensor axes and units of moment per unit width.
+The GPU-PCG regression repeats the strip at 2/4/8 elements, checking displacement,
+rotation, both surface stresses and the moment resultant against these closed
+forms within 1e-6 relative error. It runs on Metal locally and the software adapter
+in the `gpu-tests` CI suite.
 G3 (LE3) covers a spherical octant with three projected cube-face patches, so no
 element collapses at the pole. R=10 m, t=0.04 m, E=68.25 GPa, ν=0.3; radial point
 loads at the equatorial symmetry corners are +2 kN in x and −2 kN in y. Two
