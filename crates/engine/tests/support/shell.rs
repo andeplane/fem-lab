@@ -559,6 +559,19 @@ fn every_shell_integral_rejects_bad_geometry_and_missing_physical_inputs() {
         ErrorCode::MeshInverted,
         "a valid midsurface does not excuse a thickness that crosses the focal surface"
     );
+    c.directors = Some([[0.6, 0.0, 0.8], [-0.6, 0.0, 0.8], [-0.6, 0.0, 0.8], [0.6, 0.0, 0.8]]);
+    assert_eq!(el.stiffness(&c, &mut k).unwrap_err().code, ErrorCode::MeshInverted, "the top face can invert too");
+    let thick = properties(&SectionSpec::Shell { thickness: Q::new(10.0, "m") }).unwrap();
+    let mut c = super::beam_ctx(&coords, &mat, Some(&thick), None, [0.0; 3], None);
+    let dz = libm::sqrt(0.28);
+    c.directors = Some([[0.6, 0.6, dz], [-0.6, 0.6, dz], [-0.6, -0.6, dz], [0.6, -0.6, dz]]);
+    // det J is proportional to (2 - .6z)(1 - .6z). It is positive at z=0
+    // and both faces z=±5, but negative between the two positive focal offsets.
+    assert_eq!(
+        el.stiffness(&c, &mut k).unwrap_err().code,
+        ErrorCode::MeshInverted,
+        "valid faces cannot hide an inverted interior thickness point"
+    );
 }
 
 /// Scordelis–Lo quarter roof: R=25, L/2=25, 40°, t=.25, E=4.32e8,
