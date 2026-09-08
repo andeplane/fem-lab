@@ -374,6 +374,19 @@ mod tests {
         }
     }
     #[test]
+    fn covariance_cancellation_discards_a_partially_integrated_response() {
+        let spectrum = Spectrum { table: vec![[0.0, 1.0], [20.0, 1.0]] };
+        let mut intervals = 0;
+        let error = covariance(&spectrum, &[7.0], &[0.02], &[1.0], &mut |_| {
+            intervals += 1;
+            intervals < 2
+        })
+        .unwrap_err();
+        assert_eq!(intervals, 2);
+        assert_eq!(error.code, crate::ErrorCode::Cancelled);
+    }
+
+    #[test]
     fn overflowing_covariance_is_a_structured_error() {
         let spectrum = Spectrum { table: vec![[0.0, 1.0], [20.0, 1.0]] };
         let error = covariance(&spectrum, &[1.0], &[0.02], &[f64::MAX], &mut |_| true).unwrap_err();
