@@ -240,7 +240,9 @@ pub(crate) async fn post(
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
-        ply_stresses: pool.install(|| stress::shell_ply_stresses(p, &u))?,
+        ply_stresses: pool
+            .install(|| stress::shell_ply_stresses(p, &u))
+            .expect("assembly and stress recovery accepted these shell sections"),
         fields,
         scalars,
         extremes: ex,
@@ -393,7 +395,9 @@ pub fn run_history(
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
-        ply_stresses: pool.install(|| stress::shell_ply_stresses(p, &u))?,
+        ply_stresses: pool
+            .install(|| stress::shell_ply_stresses(p, &u))
+            .expect("assembly and stress recovery accepted these shell sections"),
         fields,
         scalars,
         extremes: ex,

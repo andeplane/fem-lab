@@ -346,7 +346,9 @@ pub fn run(
     stress_fields(p, &st.u, pool, &mut fields);
 
     let mut res = blank(solver);
-    res.ply_stresses = pool.install(|| crate::post::stress::shell_ply_stresses(p, &st.u))?;
+    res.ply_stresses = pool
+        .install(|| crate::post::stress::shell_ply_stresses(p, &st.u))
+        .expect("assembly and stress recovery accepted these shell sections");
     res.scalars.insert("min_det_j".to_string(), a.min_det_j);
     res.scalars.insert("dt".to_string(), dt);
     res.scalars.insert("steps".to_string(), n_steps as f64);

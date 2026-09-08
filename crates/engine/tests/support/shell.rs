@@ -1491,3 +1491,35 @@ fn shell_recovery_and_thermal_load_validate_sections_frames_and_offsets() {
     let error = element_for(ElementKind::Shell4).thermal_load(&c, &mut load).unwrap_err();
     assert_eq!(error.where_.as_deref(), Some("section.orientation"));
 }
+
+#[test]
+fn shell_postprocessing_reports_invalid_raw_problem_inputs() {
+    use femlab_engine::command::Formulation;
+    use femlab_engine::fem::shell::Ply;
+    use femlab_engine::model::Idealisation;
+    use femlab_engine::post::stress::{shell_moments, shell_ply_stresses, shell_surface_stress};
+    let mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [1, 1, 1] }.build(|p| p);
+    let sets = super::sets_of(&mesh);
+    let bodies = ["skin".into()];
+    let directors = [[[0.6, 0.0, 0.8], [-0.6, 0.0, 0.8], [-0.6, 0.0, 0.8], [0.6, 0.0, 0.8]]];
+    for case in 0..4 {
+        let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(20.0, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.plies = vec![vec![Ply { thickness: 20.0, angle: 0.0, material: super::steel() }]];
+        match case {
+            0 => p.material_of_block = vec![None],
+            1 => p.sections[0].thickness = None,
+            2 => p.plies[0][0].material.props.clear(),
+            _ => p.directors = &directors,
+        }
+        let u = vec![0.0; mesh.n_nodes() * 6];
+        assert!(shell_surface_stress(&p, &u, 1.0).is_err(), "case {case}");
+        assert!(shell_moments(&p, &u).is_err(), "case {case}");
+        assert!(shell_ply_stresses(&p, &u).is_err(), "case {case}");
+        if case == 3 {
+            // A valid bottom face must not conceal the inverted top face of this section.
+            assert!(shell_surface_stress(&p, &u, -1.0).is_ok());
+        }
+    }
+}

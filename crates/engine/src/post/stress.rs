@@ -71,7 +71,7 @@ pub fn stress_gp(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), E
 
 /// Stress at one physical shell surface (`side` = +1 top, -1 bottom). Element
 /// nodes retain each patch's stress independently, including at shared creases.
-pub(crate) fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Result<FieldData, Error> {
+pub fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Result<FieldData, Error> {
     shell_face_stress(p, u, side, None)
 }
 
@@ -84,7 +84,7 @@ pub struct PlyStress {
 
 /// Retain every assigned laminate ply, indexed bottom to top within each section.
 /// Elements without that ply carry zeros, preserving the common element-node layout.
-pub(crate) fn shell_ply_stresses(p: &Problem<'_>, u: &[f64]) -> Result<Vec<PlyStress>, Error> {
+pub fn shell_ply_stresses(p: &Problem<'_>, u: &[f64]) -> Result<Vec<PlyStress>, Error> {
     let count = p.section_of_block.iter().flatten().map(|&s| p.plies.get(s).map_or(0, Vec::len)).max().unwrap_or(0);
     (0..count)
         .map(|ply| {
@@ -130,7 +130,7 @@ fn shell_face_stress(p: &Problem<'_>, u: &[f64], side: f64, ply: Option<usize>) 
 /// Shell stress first moment, integral z*sigma dz in global tensor axes. Two thickness
 /// Gauss points integrate a homogeneous flat section exactly. Keep each element's
 /// values separate, just as for surface stress; other element kinds carry zeros.
-pub(crate) fn shell_moments(p: &Problem<'_>, u: &[f64]) -> Result<FieldData, Error> {
+pub fn shell_moments(p: &Problem<'_>, u: &[f64]) -> Result<FieldData, Error> {
     let dpn = p.dofs_per_node();
     let mut moments = Vec::new();
     for blk in &p.mesh.blocks {

@@ -1386,7 +1386,12 @@ impl Engine {
                 let point: Vec<(&str, usize, &[f64])> = point.iter().map(|(n, c, v)| (*n, *c, v.as_slice())).collect();
                 crate::io::write_vtu(&built.mesh, &point, &[("ElementId", 1, &ids), ("Body", 1, &bodies)])
             }
-            ExportFormat::Msh => crate::io::write_msh(&self.mesh()?.mesh)?,
+            ExportFormat::Msh => {
+                // Registry meshers produce either shells or volume/member elements; only
+                // the raw Mesh writer can receive the unsupported mixture of both.
+                crate::io::write_msh(&self.mesh()?.mesh)
+                    .expect("registry meshers do not mix shell and volume/member blocks")
+            }
             ExportFormat::Inp => {
                 let mesh = self.mesh()?.mesh.clone();
                 crate::io::write_inp(&mesh, &name)
