@@ -11362,6 +11362,8 @@ fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
     let got = probe_at(&mut e, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
     let want = -6.0 / (200e9 * 0.01f64.powi(3));
     assert!((got - want).abs() < want.abs() * 1e-7, "{got} vs {want}");
+    let rotation = probe_at(&mut e, "s", Field::Rotation, Some(1), ["1 m", "0.5 m", "0 m"]);
+    assert!((rotation - 0.00006).abs() < 1e-11, "rotation {rotation}");
     for (name, sign) in [("stressTop", 1.0), ("stressBottom", -1.0)] {
         let QueryResult::Field(f) = e.query(Query::Field { step: None, result_id: None, field: name.into() }).unwrap()
         else {

@@ -512,7 +512,7 @@ pub(crate) fn vector_field(v: &[f64], dofs_per_node: usize) -> FieldData {
 }
 
 /// The rotations of a six-DOF vector as a three-component nodal field: components 3, 4 and 5
-/// of every node, which only a Problem with beams has.
+/// of every node reached by a beam or shell.
 pub(crate) fn rotation_field(v: &[f64]) -> FieldData {
     let dpn = crate::fem::problem::NODE_DOFS_MAX;
     let n = v.len() / dpn;

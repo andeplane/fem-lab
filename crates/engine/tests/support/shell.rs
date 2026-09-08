@@ -970,3 +970,36 @@ fn g6_nafems_fv12_free_plate_modes_converge() {
     assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
     assert!(errors[2] < 0.01, "{errors:?}");
 }
+
+/// Leave all six shell DOFs free: drilling stabilization must neither add a
+/// spurious low mode nor remove one of the six physical rigid-body motions.
+#[test]
+fn free_shell_modal_spectrum_keeps_six_rigid_modes_and_physical_bending_modes() {
+    use femlab_engine::command::Formulation;
+    use femlab_engine::{model::Idealisation, procedure::Step, solve::SolveOptions};
+    let mut errors = Vec::new();
+    for n in [4, 8, 16] {
+        let mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [n, n, 1] }
+            .build(|[x, y, z]| [10.0 * x, 10.0 * y, z]);
+        let sets = super::sets_of(&mesh);
+        let bodies = ["plate".into()];
+        let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+        p.materials[0].props = vec![200e9, 0.3];
+        p.materials[0].rho = 8000.0;
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.05, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        let result = super::run_step(
+            &p,
+            &Step::Modal { n_modes: 9, shift: None, solver: SolveOptions::default(), prestress: None },
+        )
+        .unwrap();
+        let f = &result.frequencies;
+        eprintln!("free shell n={n}, frequencies={f:?}");
+        assert_eq!(f.len(), 9);
+        assert!(f[..6].iter().all(|v| v.abs() < 1e-3), "{f:?}");
+        let error = f[6..].iter().zip([1.622, 2.360, 2.922]).map(|(f, r)| (f / r - 1.0).abs()).fold(0.0, f64::max);
+        errors.push(error);
+    }
+    assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
+    assert!(errors[2] < 0.01, "{errors:?}");
+}

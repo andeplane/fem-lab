@@ -2092,9 +2092,9 @@ export type Procedure =
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
  * display units. Transient thermal reactions include stored energy and refer to the last
- * θ-method integration stage, not an endpoint steady-state residual. Three fields exist only
- * on a static Result of a Model with beams: `rotation` (every node's rotation about the
- * global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
+ * θ-method integration stage, not an endpoint steady-state residual. A static Result with
+ * beams or shells includes `rotation` (every node's rotation about the global axes, radians,
+ * zero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in
  * tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
  * member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
  * triple at each end of every beam and zeros on every other element. `plasticStrain` is the

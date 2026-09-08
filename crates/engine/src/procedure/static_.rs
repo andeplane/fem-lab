@@ -218,7 +218,7 @@ pub(crate) async fn post(
 
     let mut fields = BTreeMap::new();
     fields.insert(Field::Displacement, vector_field(&u, dpn));
-    if p.has_beams() {
+    if dpn == crate::fem::problem::NODE_DOFS_MAX {
         fields.insert(Field::Rotation, rotation_field(&u));
     }
     fields.insert(Field::Reaction, vector_field(&r, dpn));
