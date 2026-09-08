@@ -383,7 +383,7 @@
         347,
         351
       ],
-      "note": "Laminates: #68 (orthotropic solids) landed, #347 carries the layered lay-up, #64 the shells."
+      "note": "Laminates: #68 supplies orthotropic elasticity; #64 implements shell lay-ups with per-ply integration and ply-face stresses. Independent layerwise kinematics and stacked solid laminates remain with #347."
     },
     {
       "id": 35,
@@ -536,7 +536,7 @@
         68,
         347
       ],
-      "note": "Laminates: #68 (orthotropic solids) landed, #347 carries the layered lay-up, #64 the shells."
+      "note": "Laminates: #68 supplies orthotropic elasticity; #64 implements shell lay-ups with per-ply integration and ply-face stresses. Independent layerwise kinematics and stacked solid laminates remain with #347."
     },
     {
       "id": 48,
@@ -634,7 +634,7 @@
         68,
         347
       ],
-      "note": "Laminates: #68 (orthotropic solids) landed, #347 carries the layered lay-up, #64 the shells."
+      "note": "Laminates: #68 supplies orthotropic elasticity; #64 implements shell lay-ups with per-ply integration and ply-face stresses. Independent layerwise kinematics and stacked solid laminates remain with #347."
     },
     {
       "id": 57,

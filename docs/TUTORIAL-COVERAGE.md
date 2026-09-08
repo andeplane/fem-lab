@@ -235,13 +235,14 @@ temperature fields instead of one field to `tInf`. Small on its own, meaningless
 
 **4. Shell elements — 13 tutorials.**
 Tutorials 4, 6, 7, 10, 25, 34, 38, 41, 47, 50, 52, 56, 65.
-Scope: PLAN 8.1's MITC4 quadrilateral shell with a section carrying thickness, plus the
-geometry/mesher path to produce a surface mesh (the `mapped` mesher already emits quads; what is
-missing is placing them in 3D and giving nodes rotational DOFs). Adds three DOFs per node, a
-drilling-DOF decision, and a new output set (top and bottom surface stress, moments). The gates
-are already written: BENCHMARKS G1–G7 (simply-supported plate, Scordelis–Lo, LE3 hemisphere, LE2
-cylindrical patch, LE5 Z-section, FV12 modal, pinched cylinder). The largest single piece of work
-in this list, and the one that turns "solid parts" into "structures".
+Implemented in #64: `shell4` has six DOFs per node, flat/cylindrical/spherical surface
+patch meshing, homogeneous thickness and laminate sections, applied moments, and unaveraged
+top/bottom stress and bending moments. ADR 0024 records the director formulation and drilling
+penalty, including its sensitivity study. BENCHMARKS G1–G7 exercise the simply supported plate,
+Scordelis–Lo, LE3 hemisphere, LE2 cylindrical patch, LE5 Z-section, FV12 modal plate and pinched
+cylinder on multiple meshes. G8 adds laminate membrane/bending coupling, ply-face stress,
+thermal mismatch and modal convergence. These are small-strain shells; nonlinear shell collapse
+and shell-to-solid coupling remain separate capabilities.
 
 **5. Beam elements — 8 tutorials.**
 Tutorials 5, 11, 12, 20, 28, 35, 42, 50.
@@ -308,12 +309,15 @@ The orthotropic *solid* half **shipped** with #68: `material.add` takes an `orth
 nine constants and an axis-and-angle `orientation`, with per-material-axis `alpha` and `k`, so
 wood, rolled steel, printed parts and a unidirectional lamina are analysable today (benchmarks
 A11–A15 and C10). Tutorial 52 additionally needs Hill orthotropic plasticity (#60).
-Laminates are **not** covered and were deliberately not faked: `mesh.rs::lattice_bodies` never
-welds coincident nodes between Bodies, so stacked plies as separate Bodies would be mechanically
-disconnected, and the mapped/swept mesher welds across blocks but gives them all one implicit
-Body, so per-ply materials are unreachable there. Filed as #347 (stacked solids need node welding
-or ties, #61); equivalent-single-layer and layerwise shell sections are deferred to #64, which
-reuses `orthotropic_d` and `voigt_rotation` unchanged in its section integral.
+The shell laminate path is implemented in #64: `section.add` accepts a bottom-to-top list of
+plies with individual material, thickness and angle; `section.assign` supplies a reference
+axis. The section integrates each ply's rotated constitutive law, thermal strain and density,
+including extension–bending coupling and eccentric mass. Both faces of every ply are retained
+as `stressPly:<1-based index>:bottom` and `:top`, so an interface can carry distinct stresses.
+BENCHMARKS G8 checks these against classical laminate integrals and analytical solutions.
+This is an equivalent-single-layer MITC4 displacement field with per-ply integration, not
+independent layerwise displacement kinematics. Stacked solid laminates and independent
+layerwise kinematics remain outside this implementation (#347).
 
 **13. Temperature-dependent properties — 1 tutorial.**
 Tutorial 23.
