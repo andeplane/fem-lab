@@ -2533,11 +2533,11 @@ fn local_refinement_rejects_bad_boxes_and_limits_without_changing_the_input() {
     ] {
         assert!(refine(&mesh, &[bad], 100).is_err());
     }
-    assert!(refine(&mesh, &[valid.clone()], 1).is_err());
-    assert!(refine(&mesh, &[valid.clone()], 2).is_err());
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 1).is_err());
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 2).is_err());
     // One shared edge splits both incident triangles: a three-element budget is
     // insufficient even though it admits the initial edge-count lower bound.
-    assert!(refine(&mesh, &[valid.clone()], 3).is_err());
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 3).is_err());
     let mut tiny = mesh.clone();
     for x in &mut tiny.coords {
         *x = 1. + *x * f64::EPSILON;

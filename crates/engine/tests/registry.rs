@@ -11493,7 +11493,7 @@ fn adaptive_transient_heat_repeats_the_configured_time_interval() {
         .step_by(2)
         .map(|n| {
             let n = n as f64;
-            8. / (pi * n).powi(3) * (pi * n * x).sin() * (-pi * pi * n * n * 0.2).exp()
+            8. / (pi * n).powi(3) * libm::sin(pi * n * x) * libm::exp(-pi * pi * n * n * 0.2)
         })
         .sum();
     let exact = 300. + x * (1. - x) - decay;
