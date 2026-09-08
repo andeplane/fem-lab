@@ -83,8 +83,9 @@ pub struct Candidate {
 
 impl Candidate {
     /// The row that holds this node on the master surface: `u_s,k` in terms of the other slave
-    /// components and the master DOFs, with `g = −gap / n_k`.
-    fn row(&self, dpn: usize, inhomogeneous: bool) -> Row {
+    /// components and the master DOFs, with `g = −gap / n_k` ([`Mpc::with_active`] zeroes it for
+    /// a correction).
+    fn row(&self, dpn: usize) -> Row {
         let nk = self.normal[self.comp];
         let dpn32 = dpn as u32;
         let comps = dpn.min(3);
@@ -103,8 +104,7 @@ impl Candidate {
                 }
             }
         }
-        let g = if inhomogeneous { -self.gap / nk } else { 0.0 };
-        Row { slave: self.node * dpn32 + self.comp as u32, masters, g, owner: self.owner }
+        Row { slave: self.node * dpn32 + self.comp as u32, masters, g: -self.gap / nk, owner: self.owner }
     }
 
     /// The DOF the row eliminates.
@@ -270,7 +270,7 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
             Coupling::Frictionless { name, master, slave, tol } if !p.heat => {
                 let first = candidates.len();
                 frictionless_candidates(p, name, master, slave, *tol, owner, &mut candidates, &mut warnings)?;
-                produced.extend(candidates[first..].iter().map(|c| c.row(dpn, true)));
+                produced.extend(candidates[first..].iter().map(|c| c.row(dpn)));
             }
             Coupling::Frictionless { .. } => {}
             Coupling::Cyclic { name, from, to, axis, through, angle, tol } => {
