@@ -89,7 +89,9 @@ interpolation so thin plates do not shear-lock. A small drilling penalty couples
 rotation about the normal to the surface's in-plane spin (ADR 0023). Top and bottom
 stress refer to offsets of plus and minus half the thickness from the midsurface.
 The `stressTop` and `stressBottom` fields retain global Cartesian stresses per
-element node. The `surface` mesher owns an implicit Body and joins bilinear,
+element node. `shellMoment` is the stress first moment `∫ z σ dz`, in global
+tensor components and N (moment per unit width), positive for tension on the top
+side. It also remains per element node. The `surface` mesher owns an implicit Body and joins bilinear,
 cylindrical or spherical patches while preserving separate directors at creases.
 
 **Section force**:

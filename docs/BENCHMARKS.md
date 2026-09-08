@@ -1203,6 +1203,8 @@ The GPU-PCG regression repeats the strip at 2/4/8 elements, checking displacemen
 rotation, both surface stresses and the moment resultant against these closed
 forms within 1e-6 relative error. It runs on Metal locally and the software adapter
 in the `gpu-tests` CI suite.
+The Chromium GPU smoke repeats these checks through the production WASM host,
+explicitly selects Dawn's SwiftShader adapter and verifies its reported identity.
 G3 (LE3) covers a spherical octant with three projected cube-face patches, so no
 element collapses at the pole. R=10 m, t=0.04 m, E=68.25 GPa, ν=0.3; radial point
 loads at the equatorial symmetry corners are +2 kN in x and −2 kN in y. Two

@@ -330,6 +330,54 @@ test.describe('@sw without server headers', () => {
 });
 
 test.describe('@gpu on SwiftShader', () => {
+  test('a shell strip retains rotations and unaveraged moments through the GPU host', async ({ page }) => {
+    test.slow();
+    await page.goto('./');
+    await ready(page);
+    const outputs = await page.evaluate(async () => {
+      const out = [];
+      for (const n of [2, 4, 8]) {
+        await window.fem.model.new({ name: 'GPU shell strip' });
+        await window.fem.mesh.set({ mesher: { kind: 'surface', body: 'skin', patches: [{
+          corners: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m'], ['1 m', '1 m', '0 m'], ['0 m', '1 m', '0 m']],
+          n: [n, 1], tags: [null, 'tip', null, 'root'],
+        }] } });
+        await window.fem.material.add({ name: 'elastic', E: '200 GPa', nu: 0 });
+        await window.fem.material.assign({ material: 'elastic', bodies: ['skin'] });
+        await window.fem.section.add({ name: 'thin', shape: { kind: 'shell', thickness: '10 mm' } });
+        await window.fem.section.assign({ section: 'thin', bodies: ['skin'] });
+        await window.fem.constraint.fix({ name: 'root', on: 'skin.root' });
+        await window.fem.load.moment({ name: 'bend', on: 'skin.tip', total: ['0 N m', '1 N m', '0 N m'] });
+        await window.fem.step.add({ name: 's', procedure: 'static', constraints: ['root'], loads: ['bend'] });
+        await window.fem.solve.run({ step: 's', solver: 'gpu-pcg' });
+        out.push({
+          result: await window.fem.query.result({}),
+          displacement: await window.fem.query.probe({ field: 'displacement', component: 2, at: ['1 m', '0.5 m', '0 m'] }),
+          rotation: await window.fem.query.probe({ field: 'rotation', component: 1, at: ['1 m', '0.5 m', '0 m'] }),
+          moment: await window.fem.query.field({ field: 'shellMoment' }),
+          top: await window.fem.query.field({ field: 'stressTop' }),
+          bottom: await window.fem.query.field({ field: 'stressBottom' }),
+        });
+      }
+      // wgpu's browser adapter name can be redacted; Chromium exposes its selected
+      // adapter description through the current WebGPU API.
+      const nav = navigator as Navigator & { gpu: { requestAdapter(): Promise<{ info: { vendor: string; architecture: string; description: string } } | null> } };
+      const adapter = await nav.gpu.requestAdapter();
+      return { adapter: [adapter?.info.vendor, adapter?.info.architecture, adapter?.info.description].join(' '), outputs: out };
+    });
+    expect(outputs.adapter).toMatch(/swiftshader/i);
+    for (const output of outputs.outputs) {
+      expect(output.result.solver).toBe('gpu-pcg');
+      expect(Math.abs(output.displacement.value.value / -0.00003 - 1)).toBeLessThan(1e-6);
+      expect(Math.abs(output.rotation.value.value / 0.00006 - 1)).toBeLessThan(1e-6);
+      for (const [field, expected] of [[output.moment, 1], [output.top, 60000], [output.bottom, -60000]] as const) {
+        expect(field.per).toBe('elementNode');
+        expect(field.components).toBe(6);
+        for (let i = 0; i < field.values.length; i += 6) expect(Math.abs(field.values[i]! / expected - 1)).toBeLessThan(1e-6);
+      }
+    }
+  });
+
   test('the engine gets a WebGPU adapter and the dot-product kernel is right', async ({ page }) => {
     await page.goto('./');
     await ready(page);
