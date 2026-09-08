@@ -612,6 +612,7 @@ pub(crate) fn planned_cost(
     dofs_per_node: usize,
     explicit_problem: Option<&Problem<'_>>,
     step: &procedure::Step,
+    modal_modes: usize,
 ) -> Result<PlannedCost, Error> {
     let mut estimate = match step {
         // An amplituded static Step retains a displacement history like any transient, so it
@@ -659,7 +660,7 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), 6, steps, *output_every, 4)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "harmonic")) });
         }
-        procedure::Step::RandomVibration { .. } => crate::solve::cost_estimate(mesh, dofs_per_node, Solver::Auto),
+        procedure::Step::RandomVibration { .. } => procedure::random_vibration::cost(mesh, dofs_per_node, modal_modes),
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
@@ -691,8 +692,18 @@ impl PlannedCost {
     }
 
     fn enforce(&self, step: &str) -> Result<(), Error> {
-        let (steps, every, procedure) = self.transient.expect("solve_run calls this only for transient Steps");
-        crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
+        if let Some((steps, every, procedure)) = self.transient {
+            crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
+        } else if self.estimate.feasible == Some(false) {
+            Err(Error::new(
+                ErrorCode::SolveTooLarge,
+                "random-response modal recovery exceeds the planning memory budget",
+            )
+            .at(format!("step '{step}'"))
+            .suggest("step.add fewer nModes on the modal predecessor, or mesh.set a coarser mesh"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -815,11 +826,18 @@ impl Engine {
                         | procedure::Step::Explicit { .. }
                         | procedure::Step::Implicit { .. }
                         | procedure::Step::Harmonic { .. }
+                        | procedure::Step::RandomVibration { .. }
                         | procedure::Step::Static { amplitude: Some(_), .. }
                 ) {
-                    planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
-                        .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
-                        .enforce(&step.name)?;
+                    planned_cost(
+                        p.mesh,
+                        p.dofs_per_node(),
+                        Some(&p),
+                        &proc_step,
+                        prev.as_ref().map_or(0, |r| r.result.modal_dofs.len()),
+                    )?
+                    .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                    .enforce(&step.name)?;
                 }
                 let mut proc_step = with_initial_velocity(proc_step, &p, &step)?;
                 // A modal Step that continues a static one is a *prestressed* modal analysis:
@@ -1263,5 +1281,34 @@ mod tests {
             assert_eq!(field_name(field), name);
             assert_eq!(field_dimension(field, ReactionQuantity::Force), dim);
         }
+    }
+    #[test]
+    fn random_vibration_cost_counts_modes_without_a_matrix_and_enforces_its_budget() {
+        let mesh = femlab_geometry::Structured { kind: femlab_geometry::ElementKind::Hex8, n: [1, 1, 1] }
+            .box_([1.0, 1.0, 1.0]);
+        let step = crate::procedure::Step::RandomVibration {
+            spectrum: crate::procedure::random_vibration::Spectrum { table: vec![[0.0, 1.0], [10.0, 1.0]] },
+            damping: vec![0.02],
+            rayleigh: (0.0, 0.0),
+        };
+        let small = super::planned_cost(&mesh, 3, None, &step, 4).unwrap();
+        assert_eq!((small.estimate.nnz, small.estimate.assembly_bytes), (0, 0));
+        assert!(small.estimate.transient_work_bytes > 4 * 4 * 8);
+        assert!(small.estimate.retained_bytes >= 8 * 3 * 8);
+        small.enforce("noise").unwrap();
+        let beam = femlab_geometry::line(
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[[0, 1]],
+            1,
+            femlab_geometry::ElementKind::Beam2,
+        )
+        .unwrap();
+        let beam_cost = super::planned_cost(&beam, 6, None, &step, 4).unwrap();
+        assert_eq!(beam_cost.estimate.retained_bytes, 384);
+        let large = super::planned_cost(&mesh, 3, None, &step, 100000).unwrap();
+        let error = large.enforce("noise").unwrap_err();
+        assert_eq!(error.code, crate::ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("step 'noise'"));
+        assert!(error.suggestion.unwrap().contains("nModes"));
     }
 }

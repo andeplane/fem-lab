@@ -25,7 +25,7 @@ impl Spectrum {
                 "PSD needs at least two strictly increasing nonnegative frequencies and finite nonnegative densities",
             )
             .at("psd")
-            .suggest("step.add with psd [[\"0 Hz\", \"1 s\"], [\"100 Hz\", \"1 s\"]]"));
+            .suggest("step.add with psd [{frequency: \"0 Hz\", density: \"1 s\"}, {frequency: \"100 Hz\", density: \"1 s\"}]"));
         }
         Ok(())
     }
@@ -60,6 +60,7 @@ pub fn covariance(
     frequencies: &[f64],
     zeta: &[f64],
     participation: &[f64],
+    mut progress: OnProgress<'_>,
 ) -> Result<Vec<f64>, Error> {
     spectrum.check()?;
     if frequencies.is_empty()
@@ -74,7 +75,7 @@ pub fn covariance(
     }
     let n = frequencies.len();
     let mut covariance = vec![0.0; n * n];
-    for pair in spectrum.table.windows(2) {
+    for (band, pair) in spectrum.table.windows(2).enumerate() {
         let (lo, hi) = (pair[0][0], pair[1][0]);
         let mut grid = vec![lo, hi];
         for (&f, &z) in frequencies.iter().zip(zeta) {
@@ -94,7 +95,9 @@ pub fn covariance(
         }
         grid.sort_by(f64::total_cmp);
         grid.dedup();
-        for bounds in grid.windows(2) {
+        for (part, bounds) in grid.windows(2).enumerate() {
+            let fraction = (band as f64 + part as f64 / (grid.len() - 1) as f64) / (spectrum.table.len() - 1) as f64;
+            report(&mut progress, "solve", 0.1 + 0.35 * fraction, "integrating modal covariance")?;
             let h = (bounds[1] - bounds[0]) / 16.0;
             for panel in 0..16 {
                 let mid = bounds[0] + (panel as f64 + 0.5) * h;
@@ -168,6 +171,37 @@ fn channels(p: &Problem<'_>, u: &[f64]) -> Result<BTreeMap<Field, Vec<FieldData>
     Ok(fields)
 }
 
+/// Count the modal recovery channels, covariance, integration grid and retained RMS fields.
+/// This is a conservative numeric-payload estimate; allocator and Model storage are additional.
+pub(crate) fn cost(mesh: &femlab_geometry::Mesh, dpn: usize, modes: usize) -> crate::query::CostEstimate {
+    let mut cost = crate::solve::cost_estimate(mesh, dpn, crate::command::Solver::Auto);
+    let nodes = mesh.n_nodes() as u64;
+    let element_nodes: u64 = mesh.blocks.iter().map(|b| b.conn.len() as u64).sum();
+    let modes = modes as u64;
+    // Four fibre channels (six components each), translations and rotations, and member
+    // forces/moments. Charge beam-sized channels even for solids and allow three scratch copies.
+    let channels = nodes.saturating_add(element_nodes).saturating_mul(30);
+    let work = channels
+        .saturating_mul(modes.saturating_add(4))
+        .saturating_add(modes.saturating_mul(modes))
+        .saturating_add(modes.saturating_mul(2200))
+        .saturating_add(nodes.saturating_mul(dpn as u64).saturating_mul(2))
+        .saturating_mul(8);
+    cost.assembly_bytes = 0;
+    cost.nnz = 0;
+    cost.nnz_lower = 0;
+    let beams = mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Beam2);
+    cost.retained_bytes = nodes
+        .saturating_mul(if beams { 12 } else { 9 })
+        .saturating_add(element_nodes.saturating_mul(if beams { 12 } else { 6 }))
+        .saturating_mul(8);
+    cost.transient_work_bytes = work;
+    cost.bytes = work.saturating_add(cost.retained_bytes);
+    cost.feasible = if cost.bytes > cost.budget_bytes { Some(false) } else { None };
+    cost.note = format!("Post-modal covariance over {modes} modes; no matrix assembly or factorisation. Conservative numeric storage for modal stress channels, covariance, integration grid and RMS fields; excludes Model, allocator and transport overhead. Fitting this estimate does not establish feasibility.");
+    cost
+}
+
 /// Post-modal stationary response; no stiffness assembly or factorisation.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -206,7 +240,7 @@ pub fn run(
     let participation: Vec<f64> =
         modal.modal_dofs.iter().map(|u| u.iter().zip(&load).map(|(u, f)| u * f).sum()).collect();
     let zeta = super::modal::damping_ratios(&modal.frequencies, damping, rayleigh);
-    let c = covariance(spectrum, &modal.frequencies, &zeta, &participation)?;
+    let c = covariance(spectrum, &modal.frequencies, &zeta, &participation, &mut progress)?;
     report(&mut progress, "solve", 0.5, "integrated the correlated modal covariance")?;
     // A thermal preload contributes a mean stress, never random stress. Modal stress recovery
     // uses only the perturbation displacement on the same materials and sections.
@@ -235,20 +269,31 @@ pub fn run(
     });
     for (&field, variants) in &basis[0] {
         let mut output = variants[0].clone();
-        output.data.fill(0.0);
-        for (corner, _) in variants.iter().enumerate() {
-            for (component, value) in output.data.iter_mut().enumerate() {
-                let mut variance = 0.0;
-                for i in 0..n {
-                    for j in 0..n {
-                        variance += basis[i][&field][corner].data[component]
-                            * c[i * n + j]
-                            * basis[j][&field][corner].data[component];
+        // Components are independent; each retains the same ordered modal sum on every
+        // thread count. Propagate non-finite variance instead of hiding it through f64::max.
+        let values = pool.install(|| {
+            crate::par::map_collect(output.data.len(), |component| {
+                let mut maximum = 0.0f64;
+                for (corner, _) in variants.iter().enumerate() {
+                    let mut variance = 0.0;
+                    for i in 0..n {
+                        for j in 0..n {
+                            variance += basis[i][&field][corner].data[component]
+                                * c[i * n + j]
+                                * basis[j][&field][corner].data[component];
+                        }
                     }
+                    if !variance.is_finite() {
+                        return Err(Error::schema("random-response field variance exceeded finite arithmetic")
+                            .at("psd")
+                            .suggest("step.add with smaller PSD densities or smaller load amplitudes"));
+                    }
+                    maximum = maximum.max(variance.max(0.0).sqrt());
                 }
-                *value = value.max(variance.max(0.0).sqrt());
-            }
-        }
+                Ok(maximum)
+            })
+        });
+        output.data = values.into_iter().collect::<Result<Vec<_>, Error>>()?;
         result.fields.insert(field, output);
     }
     for axis in ["x", "y", "z"] {
@@ -280,7 +325,7 @@ mod tests {
         for z in [0.2, 0.02, 0.00001] {
             let f = 7.0;
             let s = Spectrum { table: vec![[0.0, 3.0], [f * 10000.0, 3.0]] };
-            let got = covariance(&s, &[f], &[z], &[2.0]).unwrap()[0];
+            let got = covariance(&s, &[f], &[z], &[2.0], &mut |_| true).unwrap()[0];
             let exact = 3.0 * 4.0 / (8.0 * z * (2.0 * std::f64::consts::PI * f).powi(3));
             assert!((got / exact - 1.0).abs() < 1e-8, "zeta {z}: {got} vs {exact}");
         }
@@ -290,13 +335,13 @@ mod tests {
     fn correlated_equal_modes_cancel_and_table_partition_does_not_change_variance() {
         let s = Spectrum { table: vec![[0.0, 0.0], [20.0, 4.0]] };
         let split = Spectrum { table: vec![[0.0, 0.0], [10.0, 2.0], [20.0, 4.0]] };
-        let c = covariance(&s, &[7.0, 7.0], &[0.02, 0.02], &[1.0, -1.0]).unwrap();
+        let c = covariance(&s, &[7.0, 7.0], &[0.02, 0.02], &[1.0, -1.0], &mut |_| true).unwrap();
         assert_eq!(c[0] + c[1] + c[2] + c[3], 0.0);
         assert!(c[0] > 0.0);
-        let d = covariance(&split, &[7.0], &[0.02], &[1.0]).unwrap();
+        let d = covariance(&split, &[7.0], &[0.02], &[1.0], &mut |_| true).unwrap();
         assert!((c[0] / d[0] - 1.0).abs() < 1e-8);
         let zero = Spectrum { table: vec![[0.0, 0.0], [20.0, 0.0]] };
-        assert_eq!(covariance(&zero, &[7.0], &[0.02], &[1.0]).unwrap(), vec![0.0]);
+        assert_eq!(covariance(&zero, &[7.0], &[0.02], &[1.0], &mut |_| true).unwrap(), vec![0.0]);
     }
 
     #[test]
@@ -320,7 +365,14 @@ mod tests {
             (vec![1.0], vec![0.0], vec![1.0]),
             (vec![1.0], vec![0.02], vec![f64::INFINITY]),
         ] {
-            assert_eq!(covariance(&s, &f, &z, &p).unwrap_err().where_.as_deref(), Some("dampingRatio"));
+            assert_eq!(covariance(&s, &f, &z, &p, &mut |_| true).unwrap_err().where_.as_deref(), Some("dampingRatio"));
         }
+    }
+    #[test]
+    fn overflowing_covariance_is_a_structured_error() {
+        let spectrum = Spectrum { table: vec![[0.0, 1.0], [20.0, 1.0]] };
+        let error = covariance(&spectrum, &[1.0], &[0.02], &[f64::MAX], &mut |_| true).unwrap_err();
+        assert_eq!(error.where_.as_deref(), Some("psd"));
+        assert!(error.cause.contains("covariance exceeded"));
     }
 }

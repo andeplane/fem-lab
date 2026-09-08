@@ -15008,13 +15008,13 @@
             "minimum": 0
           },
           "retainedBytes": {
-            "description": "Logical f64 bytes for retained times and unpadded primary values.",
+            "description": "Logical f64 bytes for retained times and unpadded primary values, or random-response RMS fields.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "transientWorkBytes": {
-            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
+            "description": "Conservative full-field allowance for procedure working f64 vectors live with History or RMS fields.\nFree-DOF vectors are charged at the full nodal length.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
@@ -38999,13 +38999,13 @@
             "minimum": 0
           },
           "retainedBytes": {
-            "description": "Logical f64 bytes for retained times and unpadded primary values.",
+            "description": "Logical f64 bytes for retained times and unpadded primary values, or random-response RMS fields.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "transientWorkBytes": {
-            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
+            "description": "Conservative full-field allowance for procedure working f64 vectors live with History or RMS fields.\nFree-DOF vectors are charged at the full nodal length.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0

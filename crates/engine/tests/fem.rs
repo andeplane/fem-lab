@@ -15565,6 +15565,15 @@ fn vm19_random_vibration_deep_beam_converges_to_nafems_5r() {
             rayleigh: (0.0, 0.0),
         };
         let response = run_after(&p, &random, Some(&modal)).unwrap();
+        // Eigenvector signs are arbitrary. Recovering absolute modal fibre stress before
+        // covariance would make the answer depend on the eigensolver's sign convention.
+        let mut flipped = modal.clone();
+        for value in &mut flipped.modal_dofs[0] {
+            *value = -*value;
+        }
+        let reversed = run_after(&p, &random, Some(&flipped)).unwrap();
+        assert_eq!(response.fields, reversed.fields, "modal sign cannot change RMS fields");
+
         // Independent narrow-band estimate: Lorentzian peak area = peak PSD * pi*zeta*f_n.
         // This is an approximation, not a published RMS target (the published gates are PSD).
         let bandwidth = PI * 0.02 * 42.65;
@@ -15607,4 +15616,13 @@ fn random_vibration_refuses_missing_modes_nonzero_constraints_and_supports_cance
     let one = pollster::block_on(procedure::run(&p, &step, &Pool::new(1), None, Some(&modal), &mut nop)).unwrap();
     let two = run_after(&p, &step, Some(&modal)).unwrap();
     assert_eq!(one, two, "thread count cannot alter modal covariance or RMS recovery");
+    let mut oversized = modal.clone();
+    for mode in &mut oversized.modal_dofs {
+        for value in mode {
+            *value *= 1e160;
+        }
+    }
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e-154, 0.0, 0.0] }];
+    let overflow = run_after(&p, &step, Some(&oversized)).unwrap_err();
+    assert!(overflow.cause.contains("field variance exceeded"), "{overflow:?}");
 }

@@ -1124,11 +1124,13 @@ RMS fields are separately compared within 3 % to the narrow-band Lorentzian area
 `variance ≈ peak PSD · π ζ f_n`. Those RMS estimates are analytical approximations, not
 published VM19 targets. F16's harmonic case still needs its published reference table.
 
-**F20 (#73)** additionally runs a finite-element SDOF bar through the randomVibration
+**F20 (#73)** additionally runs a finite-element SDOF bar (`random-vibration-sdof`) through the randomVibration
 procedure. With its transverse motion constrained, `C₁₁ = E(1−ν)/((1+ν)(1−2ν))`,
 `ω_n² = 3 C₁₁/(ρL²)` and `u_static = traction L/C₁₁`. The independent stationary
 energy balance gives `σ_u² = u_static² S ω_n/(8ζ)` and `σ_stress = C₁₁ σ_u/L`.
-Both fields are gated at 1e-7 relative; covariance integration alone is gated at 1e-8
+The canonical CLI case checks both fields at 1e-7 relative.
+`tools/test-random-vibration-replay.mjs` verifies its Journal hashes and complete RMS fields
+in WASM and native hosts at one and four threads. Covariance integration alone is gated at 1e-8
 for damping down to 1e-5. Equal modes with opposite participation cancel exactly.
 
 F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).

@@ -11300,15 +11300,51 @@ fn random_vibration_registry_replays_psd_and_rejects_invalid_inputs() {
     for bad in [add.replace("0.01 s", "1 N"), add.replace("1 MHz", "0 Hz"), add.replace("0.01 s", "-1 s")] {
         assert!(run(&mut e, &bad).is_err());
     }
+    let QueryResult::Definition(definition) =
+        e.query(Query::Definition { kind: ObjectKind::Step, name: "random".into() }).unwrap()
+    else {
+        panic!("Step definition")
+    };
+    let hash = e.model_hash();
+    ok(&mut e, &serde_json::to_string(&definition.command).unwrap());
+    assert_eq!(e.model_hash(), hash);
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "random".into() }).unwrap() else { panic!("cost") };
+    assert_eq!((cost.nnz, cost.assembly_bytes), (0, 0));
+    assert!(cost.retained_bytes > 0);
+    assert!(cost.note.contains("4 modes"));
     assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"random"}"#).code, ErrorCode::NotFound);
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
     ok(&mut e, r#"{"cmd":"solve.run","step":"random"}"#);
     let displacement = e.field(Some("random"), Field::Displacement).unwrap().clone();
     assert!(displacement.data.iter().any(|v| *v > 0.0));
     assert!(e.field(Some("random"), Field::Stress).is_ok());
+    let QueryResult::Results(results) = e.query(Query::Results {}).unwrap() else { panic!("retained Results") };
+    assert_eq!(results.records.last().unwrap().field_bytes, cost.retained_bytes);
     let file = e.export_file();
     let mut replayed = engine();
     pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
     assert_eq!(replayed.field(Some("random"), Field::Displacement).unwrap(), &displacement);
     assert_eq!(replayed.model_hash(), e.model_hash());
+}
+
+#[test]
+fn random_vibration_checks_predecessor_constraints_and_requires_a_psd() {
+    let mut e = engine();
+    harmonic_bar(&mut e, ",\"fStart\":\"1 Hz\",\"fStop\":\"2 Hz\",\"points\":2");
+    let input = serde_json::json!({"cmd":"step.add","name":"noise","procedure":"randomVibration","constraints":["root","guide"],"loads":["pull"],"after":"modes","dampingRatio":0.02,"psd":[{"frequency":"0 Hz","density":"1 s"},{"frequency":"100 Hz","density":"1 s"}]});
+    let mut missing = input.clone();
+    missing.as_object_mut().unwrap().remove("psd");
+    ok(&mut e, &missing.to_string());
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"noise"}"#).where_.as_deref(), Some("psd"));
+    for after in ["modes", "sweep"] {
+        let mut bad = input.clone();
+        bad["after"] = after.into();
+        bad["constraints"] = serde_json::json!(["root"]);
+        ok(&mut e, &bad.to_string());
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+        let error = err(&mut e, r#"{"cmd":"solve.run","step":"noise"}"#);
+        assert_eq!(error.where_.as_deref(), Some("after"));
+        assert!(error.cause.contains("identical constraints"));
+    }
 }

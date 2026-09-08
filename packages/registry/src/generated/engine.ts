@@ -6705,11 +6705,11 @@ export interface CostEstimate {
    */
   retainedFrames: number;
   /**
-   * Logical f64 bytes for retained times and unpadded primary values.
+   * Logical f64 bytes for retained times and unpadded primary values, or random-response RMS fields.
    */
   retainedBytes: number;
   /**
-   * Conservative full-field allowance for procedure working f64 vectors live with History.
+   * Conservative full-field allowance for procedure working f64 vectors live with History or RMS fields.
    * Free-DOF vectors are charged at the full nodal length.
    */
   transientWorkBytes: number;
