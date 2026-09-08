@@ -1300,7 +1300,9 @@ its outer-face stresses and moment, and verify that every ply contributes to
 material assumptions and gravity. The retained fields `stressPly:1:top` and
 `stressPly:2:bottom` independently recover 50 and 10 kPa at the cross-ply
 interface and remain unchanged after section edits. Native/WASM replay checks
-cover all four ply faces as well as the outer-face fields and moment.
+cover all four ply faces as well as the outer-face fields and moment. The cross-ply
+strip also keeps these final fields and rotations when solved over a retained
+temperature history with zero thermal expansion.
 
 ## H. Plugins (phase P)
 

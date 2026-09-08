@@ -1238,6 +1238,32 @@ fn shell_cross_ply_strip_solves_coupled_extension_and_bending_at_three_meshes() 
         ]];
         p.loads.push(femlab_engine::fem::loads::Load::NodalMoment { nodes: "xmax".into(), m: [0.0, 0.5, 0.0] });
         let result = super::run_static(&p, &mut |_| true).unwrap();
+        // A retained temperature history with zero expansion must retain the same final
+        // shell fields as a single static solve, including rotations and ply interfaces.
+        let history = femlab_engine::procedure::History {
+            field: Field::Temperature,
+            times: vec![0.0, 1.0],
+            values: vec![vec![0.0; mesh.n_nodes()], vec![100.0; mesh.n_nodes()]],
+        };
+        let mut compose = |values: &[f64]| Ok(Some((values.to_vec(), 0.0)));
+        let chained = femlab_engine::procedure::static_::run_history(
+            &mut p,
+            &history,
+            &mut compose,
+            &femlab_engine::par::Pool::new(2),
+            &mut |_| true,
+        )
+        .unwrap();
+        for field in [Field::Rotation, Field::StressTop, Field::StressBottom, Field::ShellMoment] {
+            let scale = result.fields[&field].data.iter().fold(1e-12f64, |max, v| max.max(v.abs()));
+            close(&chained.fields[&field].data, &result.fields[&field].data, 1e-7 * scale);
+        }
+        for (a, b) in chained.ply_stresses.iter().zip(&result.ply_stresses) {
+            for (a, b) in a.faces.iter().zip(&b.faces) {
+                close(&a.data, &b.data, 0.01);
+            }
+        }
+
         // N=A*eps+B*kappa=0, M=B*eps+D*kappa=1; A=6e8, B=-1e6, D=5000.
         // Thus eps=5e-7, kappa=3e-4, and w(L)=-kappa*L²/2.
         for &node in &mesh.node_sets["xmax"] {
