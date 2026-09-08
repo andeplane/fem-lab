@@ -16749,6 +16749,21 @@ fn a_contact_solve_cancels_at_every_phase() {
         cancelled += 1;
     }
     assert!(cancelled >= 8, "assembly, three increments of solve and contact reports, recovery: {cancelled}");
+    // The two failures the contact path meets after the checks: a time grid it cannot build,
+    // and a material the stiffness integral refuses (the checks never read the props).
+    let Step::Static { amplitude, .. } = &step else { panic!() };
+    let bad_grid = Step::Static {
+        solver: SolveOptions::default(),
+        dt: 0.0,
+        t_end: 1.0,
+        amplitude: amplitude.clone(),
+        output_every: 1,
+    };
+    assert_eq!(run_step(&p, &bad_grid).expect_err("dt = 0").code, ErrorCode::Schema);
+    let mut short = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, p.constraints.clone());
+    short.couplings = p.couplings.clone();
+    short.materials[0].props = vec![YOUNG];
+    assert_eq!(run_step(&short, &step).expect_err("one prop").code, ErrorCode::MaterialProps);
 
     // The Newton loop: the gap closes in the first increment, so its set changes there.
     let mut cancelled = 0;
@@ -16821,9 +16836,9 @@ fn every_face_of_every_kind_faces_out() {
     }
 }
 
-/// A Newton increment whose active set keeps moving runs out of iterations like one whose
-/// residual does, and is cut back; when no increment can carry the closure the Step ends with
-/// `newton.diverged` as any other stuck increment would.
+/// A Newton increment whose active set moves at the end of its iteration budget is cut back
+/// like one whose residual is still moving, retried from the last converged set, and when no
+/// budget carries it the Step ends with `newton.diverged` as any other stuck increment would.
 #[test]
 fn a_set_that_moves_past_the_newton_budget_is_cut_back() {
     let (g0, delta, l, side) = (1e-3, 4e-3, 1.0, 0.1);
@@ -16841,14 +16856,25 @@ fn a_set_that_moves_past_the_newton_budget_is_cut_back() {
     ];
     let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
     p.couplings = vec![slide("gap", "b.xmin", "a.xmax", 5.0 * g0)];
-    // Two iterations are exactly what a linear increment needs to converge; the closure that
-    // follows is one more than the budget.
-    let mut o = nl_options(2);
-    o.converge = NlConverge { tolerance: 1e-8, max_newton: 2 };
-    o.max_cutbacks = 1;
-    let e = run_nonlinear(&p, o, &mut nop).expect_err("every attempt at the closing increment is cut back");
-    assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
-    assert!(e.cause.contains("after 1 cutbacks"), "{}", e.cause);
+    // The closing increment converges in some number of corrections k and then moves its set,
+    // which costs one more: a budget of exactly k is cut back on the set change, a smaller one
+    // on the residual. Sweeping the budget lands on both, and with cutbacks allowed every
+    // halved retry still closes the gap in the end.
+    let mut cut_back = 0;
+    for max_newton in 2..=8 {
+        let mut o = nl_options(2);
+        o.converge = NlConverge { tolerance: 1e-8, max_newton };
+        o.max_cutbacks = 4;
+        match run_nonlinear(&p, o, &mut nop) {
+            Ok(res) => {
+                assert_eq!(res.contacts[0].active, 4, "budget {max_newton}");
+                assert_eq!(res.scalars["load_factor"], 1.0);
+                cut_back += usize::from(res.scalars["cutbacks"] > 0.0);
+            }
+            Err(e) => assert_eq!(e.code, ErrorCode::NewtonDiverged, "budget {max_newton}: {e:?}"),
+        }
+    }
+    assert!(cut_back >= 1, "some budget was cut back and recovered");
     // With room to iterate the same Step closes the gap and carries the series force.
     let res = run_nonlinear(&p, nl_options(2), &mut nop).expect("the gap closes");
     assert_eq!(res.contacts[0].active, 4);

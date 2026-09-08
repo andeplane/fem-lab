@@ -204,15 +204,19 @@ async fn active_set_solve(
         let mut u = assembly::expand(&red, &u_f);
         mpc::recover(&m, &mut u);
         let r = contact::residual(&a.k, &u, f);
-        if !set.update(p, &m, &u, &r, stiffness)? {
+        // Two things end a pass early, chatter and the host saying stop, and both are one
+        // structured error out of the same place.
+        let moved = set.update(p, &m, &u, &r, stiffness).and_then(|moved| {
+            if moved {
+                let text =
+                    format!("active set changed: {} of {} paired nodes in contact", set.count(), set.active.len());
+                report(progress, "contact", 0.5, &text)?;
+            }
+            Ok(moved)
+        })?;
+        if !moved {
             return Ok(Settled { u, mpc: m, red, solver, factored });
         }
-        report(
-            progress,
-            "contact",
-            0.5,
-            &format!("active set changed: {} of {} paired nodes in contact", set.count(), set.active.len()),
-        )?;
     }
 }
 

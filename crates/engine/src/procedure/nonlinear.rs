@@ -383,7 +383,24 @@ impl Newton<'_> {
                 // Equilibrium on this set: now the slave residuals are contact forces.
                 let out_of_balance: Vec<f64> = a.f_int.iter().zip(self.f_ref).map(|(i, e)| i - lambda * e).collect();
                 let stiffness = a.k.diag().into_iter().fold(0.0f64, f64::max);
-                if !set.update(self.p, &held, &u, &out_of_balance, stiffness)? {
+                // Chatter and a host saying stop both end the increment here, as one error.
+                let moved = set.update(self.p, &held, &u, &out_of_balance, stiffness).and_then(|moved| {
+                    if moved {
+                        let text = format!(
+                            "increment {number}: active set changed, {} of {} paired nodes in contact",
+                            set.count(),
+                            set.active.len()
+                        );
+                        report(
+                            progress,
+                            "contact",
+                            0.05 + 0.85 * ((number - 1) as f64 / o.increments as f64).min(1.0),
+                            &text,
+                        )?;
+                    }
+                    Ok(moved)
+                })?;
+                if !moved {
                     return Ok(Attempt::Converged(u, Box::new(a), iteration, info));
                 }
                 held = self.base.with_active(&set.active, true, dpn);
@@ -391,16 +408,6 @@ impl Newton<'_> {
                 mpc::recover(&held, &mut u);
                 correction = f64::INFINITY;
                 iteration += 1;
-                report(
-                    progress,
-                    "contact",
-                    0.05 + 0.85 * ((number - 1) as f64 / o.increments as f64).min(1.0),
-                    &format!(
-                        "increment {number}: active set changed, {} of {} paired nodes in contact",
-                        set.count(),
-                        set.active.len()
-                    ),
-                )?;
                 if iteration > o.converge.max_newton {
                     return Ok(Attempt::CutBack(iteration, residual / scale.max(FLOOR)));
                 }
