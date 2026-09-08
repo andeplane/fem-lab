@@ -11570,3 +11570,92 @@ fn laminate_sections_reject_solid_elements_before_material_fallback() {
     assert_eq!(error.where_.as_deref(), Some("body 'solid'"));
     assert!(error.cause.contains("require shell elements"));
 }
+
+#[test]
+fn shell_surface_projection_units_and_refinement_preserve_geometry() {
+    use femlab_engine::model::MesherSettings;
+    let mut e = engine();
+    for projection in [
+        serde_json::json!({"kind":"sphere","center":["0 mm","0 m","0 m"],"radius":"1000 mm"}),
+        serde_json::json!({"kind":"cylinder","center":["0 m","0 m","0 m"],"radius":"1 m","axis":[0,0,2]}),
+    ] {
+        let sphere = projection["kind"] == "sphere";
+        let corners = if sphere {
+            serde_json::json!([
+                ["1 m", "-1 m", "-1 m"],
+                ["1 m", "1 m", "-1 m"],
+                ["1 m", "1 m", "1 m"],
+                ["1 m", "-1 m", "1 m"]
+            ])
+        } else {
+            serde_json::json!([
+                ["1 m", "0 m", "0 m"],
+                ["0.8 m", "0.6 m", "0 m"],
+                ["0.8 m", "0.6 m", "1 m"],
+                ["1 m", "0 m", "1 m"]
+            ])
+        };
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[{"corners":corners,"n":[2,2],"projection":projection}]}});
+        ok(&mut e, &command.to_string());
+        assert_eq!(e.model().implicit_body(), Some("shell"));
+        let mesh = &e.mesh().unwrap().mesh;
+        assert_eq!(mesh.n_elems(), 4);
+        for point in mesh.coords.chunks_exact(3) {
+            let radius_sq = point[0] * point[0] + point[1] * point[1] + if sphere { point[2] * point[2] } else { 0.0 };
+            assert!((radius_sq - 1.0).abs() < 1e-14);
+        }
+        let original = &e.model().mesh.as_ref().unwrap().mesher;
+        let scaled = femlab_engine::mesh::scale_mesher(original, 1.0, 0.5);
+        let MesherSettings::Surface { body, patches } = &scaled else { panic!("surface") };
+        assert_eq!(body, "shell");
+        assert_eq!(patches[0].n, [4, 4]);
+        let restored = femlab_engine::mesh::scale_mesher(&scaled, 0.5, 1.0);
+        assert_eq!(&restored, original);
+        assert!(set_info(&mut e, "shell.top").measure.value > 0.0);
+        let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+        assert_eq!(model.bodies[0].measure.unit, "m^2");
+        assert!(model.bodies[0].measure.value > 0.0);
+    }
+}
+
+#[test]
+fn shell_surface_validation_reports_locations_and_rejects_incompatible_meshes() {
+    let mut e = engine();
+    let patch = serde_json::json!({"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[1,1]});
+    for (pointer, value, location) in [
+        ("/n/0", serde_json::json!(0), "mesher.patches[0].n"),
+        ("/corners/0/1", serde_json::json!("1 N"), "mesher.patches[0].corners[0][1]"),
+        ("/corners/0/0", serde_json::json!({"value":1e308,"unit":"km"}), "mesher.patches[0].corners[0][0]"),
+    ] {
+        let mut invalid = patch.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
+        let hash = e.model_hash();
+        let error = err(&mut e, &command.to_string());
+        assert_eq!(error.where_.as_deref(), Some(location));
+        assert_eq!(e.model_hash(), hash);
+    }
+    for axis in [[0.0, 0.0, 0.0], [1e308, 0.0, 0.0]] {
+        let mut invalid = patch.clone();
+        invalid["projection"] =
+            serde_json::json!({"kind":"cylinder","center":["0 m","0 m","0 m"],"radius":"1 m","axis":axis});
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
+        assert_eq!(err(&mut e, &command.to_string()).where_.as_deref(), Some("mesher.patches[0].projection.axis"));
+    }
+    for (order, simplices) in [(2, false), (1, true)] {
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[patch]},"order":order,"simplices":simplices});
+        ok(&mut e, &command.to_string());
+        let error = e.query(Query::Mesh {}).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some("mesher"));
+    }
+    let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[]}});
+    ok(&mut e, &command.to_string());
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::MeshFailed);
+    assert_eq!(error.where_.as_deref(), Some("mesher.patches"));
+    let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[patch]}});
+    ok(&mut e, &command.to_string());
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 mm"}}"#);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::ModelIllPosed);
+}

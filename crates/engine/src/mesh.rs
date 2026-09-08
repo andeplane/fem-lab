@@ -707,11 +707,7 @@ fn surface_patch(p: &crate::command::SurfacePatchSpec, i: usize) -> Result<femla
 fn surface_point(p: &[Q<Length>; 3], at: &str) -> Result<[f64; 3], Error> {
     let mut out = [0.0; 3];
     for (i, q) in p.iter().enumerate() {
-        let v = q.si().map_err(|e| e.at(format!("{at}[{i}]")))?;
-        if !v.is_finite() {
-            return Err(Error::schema("surface coordinate must be finite").at(format!("{at}[{i}]")));
-        }
-        out[i] = v;
+        out[i] = q.si().map_err(|e| e.at(format!("{at}[{i}]")))?;
     }
     Ok(out)
 }
