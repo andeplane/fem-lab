@@ -111,6 +111,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | prestressed-beam-modal | green | 10/10 | 46.876071 | 46.90661 | 0.07 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
+| random-vibration-sdof | green | 2/2 | 9.0305e-5 | 9.0305e-5 | 0.00 % |
 | restrained-strip-transient-thermal-stress | green | 29/29 | 2 | 2 | 0.00 % |
 | taut-string-modal | green | 4/4 | 38.928994 | 38.8929 | 0.09 % |
 | thermal-contact-series | green | 5/5 | 327.777778 | 327.777778 | 0.00 % |
