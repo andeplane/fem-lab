@@ -157,7 +157,7 @@ use femlab_geometry::mesh::ElementKind;
 const DRILL: f64 = 1e-3;
 const SHEAR: f64 = 5.0 / 6.0;
 
-fn thickness(c: &ElementCtx<'_>) -> Result<f64, Error> {
+pub(crate) fn thickness(c: &ElementCtx<'_>) -> Result<f64, Error> {
     let t = c.section.and_then(|s| s.thickness).ok_or_else(|| {
         Error::new(ErrorCode::ModelNoSection, "a shell needs a thickness section")
             .at("section")
@@ -299,6 +299,9 @@ impl Element for Shell4 {
         let mut min_det = f64::INFINITY;
         for [r, s, _] in QUAD_2X2.points {
             let middle = surface.kinematics(*r, *s, 0.0)?;
+            // The physical faces must remain regular too; recovery uses z=±t/2.
+            surface.kinematics(*r, *s, -0.5 * t)?;
+            surface.kinematics(*r, *s, 0.5 * t)?;
             for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
                 let kin = surface.kinematics(*r, *s, z)?;
                 min_det = min_det.min(kin.det);

@@ -1777,6 +1777,11 @@ export type Axis = "x" | "y" | "z";
  */
 export type MesherSpec =
   | {
+      body?: string | null;
+      patches: SurfacePatchSpec[];
+      kind: "surface";
+    }
+  | {
       size: LatticeSize;
       /**
        * Optional positive element lengths keyed by existing Body name. Each entry overrides
@@ -1836,6 +1841,98 @@ export type MesherSpec =
           };
       maxElements?: number | null;
       kind: "tet";
+    };
+/**
+ * Radial projection of a bilinear shell patch. Geometry and derivatives are projected
+ * together; the resulting unit normals become the MITC4 corner directors.
+ */
+export type SurfaceProjectionSpec =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "sphere";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      axis: [number, number, number];
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "cylinder";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -2005,18 +2102,22 @@ export type Procedure =
  * an elastic–plastic Material produces.
  */
 export type Field =
-  | "displacement"
-  | "stress"
-  | "stressUnaveraged"
-  | "vonMises"
-  | "principal"
-  | "strain"
-  | "plasticStrain"
-  | "reaction"
-  | "temperature"
-  | "rotation"
-  | "sectionForce"
-  | "sectionMoment";
+  | (
+      | "displacement"
+      | "stress"
+      | "stressUnaveraged"
+      | "vonMises"
+      | "principal"
+      | "strain"
+      | "plasticStrain"
+      | "reaction"
+      | "temperature"
+      | "rotation"
+      | "sectionForce"
+      | "sectionMoment"
+    )
+  | "stressTop"
+  | "stressBottom";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a
@@ -2421,6 +2522,11 @@ export type QueryResult =
  */
 export type MesherSettings =
   | {
+      body: string;
+      patches: SurfacePatch[];
+      kind: "surface";
+    }
+  | {
       size?: number | null;
       /**
        * @minItems 3
@@ -2452,6 +2558,33 @@ export type MesherSettings =
       size: number;
       max_elements: number;
       kind: "tet";
+    };
+/**
+ * Optional radial projection of a bilinear patch, all coordinates in SI.
+ */
+export type Projection =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      center: [number, number, number];
+      radius: number;
+      kind: "sphere";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      center: [number, number, number];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      axis: [number, number, number];
+      radius: number;
+      kind: "cylinder";
     };
 /**
  * The shape of one block edge between its two corners.
@@ -5560,6 +5693,122 @@ export interface HardeningPoint {
       };
 }
 /**
+ * Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
+ * normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
+ * name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
+ */
+export interface SurfacePatchSpec {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ]
+  ];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags?: [string | null, string | null, string | null, string | null] | null;
+  projection?: SurfaceProjectionSpec | null;
+}
+/**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
  * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
@@ -6134,6 +6383,28 @@ export interface MeshSettings {
    * Split the chosen mesher's quads/hexes into triangles/tetrahedra.
    */
   simplices?: boolean;
+}
+/**
+ * One oriented quadrilateral patch. Corners run counter-clockwise when seen from
+ * its positive side. Tags name node Sets on edges 0–1, 1–2, 2–3 and 3–0.
+ */
+export interface SurfacePatch {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [[number, number, number], [number, number, number], [number, number, number], [number, number, number]];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags: [string | null, string | null, string | null, string | null];
+  projection?: Projection | null;
 }
 /**
  * One mapped block: a curvilinear quadrilateral meshed as a structured grid.
@@ -7085,6 +7356,10 @@ export interface Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  /**
+   * Thickness Section assigned to the implicit surface Body, if present.
+   */
+  mesherSection?: string | null;
   plugins?: PluginRecord[];
 }
 /**
@@ -7619,6 +7894,10 @@ export interface DocumentSnapshot_Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  /**
+   * Thickness Section assigned to the implicit surface Body, if present.
+   */
+  mesherSection?: string | null;
   plugins?: PluginRecord[];
 }
 /**

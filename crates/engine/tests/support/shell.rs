@@ -485,6 +485,15 @@ fn shell_tip_moments_reproduce_constant_curvature_through_the_static_solver() {
         p.section_of_block = vec![Some(0)];
         p.loads.push(femlab_engine::fem::loads::Load::NodalMoment { nodes: "xmax".into(), m: [0.0, 0.0005, 0.0] });
         let result = super::run_static(&p, &mut |_| true).unwrap();
+        // Extreme-fibre stress is M z/I = 6M/(b t²), positive on top here.
+        for (field, sign) in [(Field::StressTop, 1.0), (Field::StressBottom, -1.0)] {
+            let stress = &result.fields[&field];
+            assert_eq!(stress.per, femlab_engine::post::Per::ElemNode);
+            for sig in stress.data.chunks_exact(6) {
+                assert!((sig[0] - sign * 60.0).abs() < 1e-6, "{sig:?}");
+                close(&sig[1..], &[0.0; 5], 1e-6);
+            }
+        }
         let exact = -0.001 / (2.0 * (1e7 * 0.01f64.powi(3) / 12.0));
         for &node in &mesh.node_sets["xmax"] {
             let actual = result.fields[&Field::Displacement].data[3 * node as usize + 2];
@@ -545,4 +554,61 @@ fn every_shell_integral_rejects_bad_geometry_and_missing_physical_inputs() {
         ErrorCode::MeshInverted,
         "a valid midsurface does not excuse a thickness that crosses the focal surface"
     );
+}
+
+/// Scordelis–Lo quarter roof: R=25, L/2=25, 40°, t=.25, E=4.32e8,
+/// nu=0; rigid end diaphragm, two symmetry edges, vertical load 90 N/m².
+/// COMSOL's published converged result is .302 m; the benchmark target is .3024.
+#[test]
+fn g2_scordelis_lo_roof_converges_with_analytic_directors() {
+    use femlab_engine::command::{Field, Formulation};
+    use femlab_engine::fem::loads::Load;
+    use femlab_engine::fem::problem::Constraint;
+    use femlab_engine::mesh::ResolvedSet;
+    use femlab_engine::model::Idealisation;
+    use femlab_engine::SetKind;
+    use femlab_geometry::{surface, Projection, SurfacePatch};
+    let angle = 40.0f64.to_radians();
+    let (y, z) = (25.0 * libm::sin(angle), 25.0 * libm::cos(angle));
+    let mut errors = Vec::new();
+    for n in [4, 8, 16] {
+        let built = surface(&[SurfacePatch {
+            corners: [[0.0, 0.0, 25.0], [25.0, 0.0, 25.0], [25.0, y, z], [0.0, y, z]],
+            n: [n, n],
+            tags: ["crown", "end", "free", "middle"].map(|s| Some(s.into())),
+            projection: Some(Projection::Cylinder { center: [0.0; 3], axis: [1.0, 0.0, 0.0], radius: 25.0 }),
+        }])
+        .unwrap();
+        let mesh = &built.mesh;
+        let mut sets = super::sets_of(mesh);
+        for (name, nodes) in &mesh.node_sets {
+            sets.insert(
+                name.clone(),
+                ResolvedSet { kind: SetKind::Node, nodes: nodes.clone(), faces: vec![], elems: vec![] },
+            );
+        }
+        let constraints = [
+            ("crown", [false, true, false, true, false, true]),
+            ("middle", [true, false, false, false, true, true]),
+            ("end", [false, true, true, false, false, false]),
+        ]
+        .map(|(name, dofs)| Constraint { name: name.into(), nodes: name.into(), dofs, value: 0.0 })
+        .to_vec();
+        let bodies = ["roof".into()];
+        let mut p = super::problem(mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.directors = &built.directors;
+        p.materials[0].props = vec![4.32e8, 0.0];
+        p.materials[0].rho = 1.0;
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.25, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.loads.push(Load::Gravity { g: [0.0, 0.0, -360.0] });
+        let result = super::run_static(&p, &mut |_| true).unwrap();
+        let node = mesh.node_sets["middle"].iter().find(|node| mesh.node(**node)[1] > y - 1e-8).unwrap();
+        let w = -result.fields[&Field::Displacement].data[3 * *node as usize + 2];
+        let error = (w / 0.3024 - 1.0).abs();
+        eprintln!("G2 n={n}, displacement={w}, relative error={error}");
+        errors.push(error);
+    }
+    assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
+    assert!(errors[2] < 0.02, "{errors:?}");
 }

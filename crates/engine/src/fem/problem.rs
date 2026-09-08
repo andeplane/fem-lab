@@ -110,6 +110,8 @@ pub struct PointMass {
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
 /// block, and the resolved Constraints and Loads.
 pub struct Problem<'a> {
+    /// Analytic directors per shell element; empty uses the element's own corner normals.
+    pub directors: &'a [[[f64; 3]; 4]],
     pub mesh: &'a Mesh,
     /// Every Set of the built Mesh, by name.
     pub sets: &'a BTreeMap<String, ResolvedSet>,
@@ -229,7 +231,7 @@ impl Problem<'_> {
     pub fn ctx<'b>(&'b self, elem: u32, coords: &'b [f64], temperature: &'b [f64]) -> Result<ElementCtx<'b>, Error> {
         let block = self.mesh.block_of(elem).0;
         Ok(ElementCtx {
-            directors: None,
+            directors: self.directors.get(elem as usize).copied(),
             coords,
             material: self.material_of(elem)?,
             section: self.section_of_block[block].map(|i| &self.sections[i]),

@@ -47,7 +47,7 @@ _Avoid_: CAD, part file, solid model
 
 **Body**:
 One connected region of the geometry, carrying a material and a name. Explicit Bodies own
-Shapes; mapped and swept mapped meshers own an implicit Body with the same rename and
+Shapes; mapped, swept mapped and shell surface meshers own an implicit Body with the same rename and
 guarded-removal lifecycle (ADR 0016). A free mesher references an explicit Body.
 _Avoid_: part, instance, solid, volume
 
@@ -88,6 +88,9 @@ corner identifies the positive (top) side. Transverse shear uses mixed covariant
 interpolation so thin plates do not shear-lock. A small drilling penalty couples
 rotation about the normal to the surface's in-plane spin (ADR 0023). Top and bottom
 stress refer to offsets of plus and minus half the thickness from the midsurface.
+The `stressTop` and `stressBottom` fields retain global Cartesian stresses per
+element node. The `surface` mesher owns an implicit Body and joins bilinear,
+cylindrical or spherical patches while preserving separate directors at creases.
 
 **Section force**:
 The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`

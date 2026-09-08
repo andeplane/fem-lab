@@ -565,6 +565,10 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSettings {
+    Surface {
+        body: String,
+        patches: Vec<femlab_geometry::SurfacePatch>,
+    },
     Lattice {
         size: Option<f64>,
         counts: Option<[u32; 3]>,
@@ -572,13 +576,26 @@ pub enum MesherSettings {
         sizes: BTreeMap<String, f64>,
     },
     /// Mapped blocks, which are their own geometry: `body` is the implicit Body they make.
-    Mapped { body: String, blocks: Vec<QuadBlock> },
+    Mapped {
+        body: String,
+        blocks: Vec<QuadBlock>,
+    },
     /// Free triangles inside the sketch of the Body `of`.
-    Free { of: String, size: f64, refine: Vec<RefineBox> },
+    Free {
+        of: String,
+        size: f64,
+        refine: Vec<RefineBox>,
+    },
     /// A 2D mesher swept into 3D.
-    Sweep { base: Box<MesherSettings>, sweep: Sweep },
+    Sweep {
+        base: Box<MesherSettings>,
+        sweep: Sweep,
+    },
     /// Free tetrahedra filling every 3D Body of the Model.
-    Tet { size: f64, max_elements: u32 },
+    Tet {
+        size: f64,
+        max_elements: u32,
+    },
 }
 
 /// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
@@ -593,7 +610,7 @@ impl MesherSettings {
     /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
     pub fn rename_body(&mut self, from: &str, to: &str) {
         match self {
-            Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
+            Self::Surface { body, .. } | Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
                 if body == from {
                     *body = to.into();
                 }
@@ -622,7 +639,7 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
+            Self::Surface { .. } | Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
         }
     }
 
@@ -630,7 +647,7 @@ impl MesherSettings {
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
             MesherSettings::Lattice { .. } => None,
-            MesherSettings::Mapped { body, .. } => Some(body),
+            MesherSettings::Surface { body, .. } | MesherSettings::Mapped { body, .. } => Some(body),
             MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
@@ -696,6 +713,9 @@ pub struct Model {
     /// like any other and the name lands here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesher_material: Option<String>,
+    /// Thickness Section assigned to the implicit surface Body, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_section: Option<String>,
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
 }
@@ -718,6 +738,7 @@ impl Model {
             steps: vec![],
             mesh: None,
             mesher_material: None,
+            mesher_section: None,
             plugins: vec![],
         }
     }

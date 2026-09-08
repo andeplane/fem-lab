@@ -2481,3 +2481,105 @@ fn structured_shells_keep_both_sides_and_embed_the_quad_in_space() {
     assert_eq!(ElementKind::Shell4.n_corners(), 4);
     assert_eq!(ElementKind::Shell4.edges().len(), 4);
 }
+
+fn surface_patch(corners: [[f64; 3]; 4]) -> femlab_geometry::SurfacePatch {
+    femlab_geometry::SurfacePatch {
+        corners,
+        n: [2, 2],
+        tags: [Some("a".into()), Some("b".into()), Some("c".into()), Some("d".into())],
+        projection: None,
+    }
+}
+
+#[test]
+fn shell_surface_projection_supplies_exact_curved_normals() {
+    use femlab_geometry::{surface, Projection};
+    let mut p = surface_patch([[1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [1.0, 1.0, 1.0], [1.0, -1.0, 1.0]]);
+    p.projection = Some(Projection::Sphere { center: [0.0; 3], radius: 2.0 });
+    let s = surface(&[p.clone()]).unwrap();
+    assert_eq!(s.mesh.n_elems(), 4);
+    for e in 0..4 {
+        for (i, &node) in s.mesh.elem_nodes(e).iter().enumerate() {
+            let x = s.mesh.node(node);
+            assert!((dot(x, x) - 4.0).abs() < 1e-12);
+            for (k, v) in x.into_iter().enumerate() {
+                assert!((s.directors[e as usize][i][k] - v / 2.0).abs() < 1e-12);
+            }
+        }
+    }
+    p.projection = Some(Projection::Cylinder { center: [0.0; 3], axis: [0.0, 0.0, 2.0], radius: 2.0 });
+    let s = surface(&[p]).unwrap();
+    for e in 0..4 {
+        for (i, &node) in s.mesh.elem_nodes(e).iter().enumerate() {
+            let x = s.mesh.node(node);
+            assert!((x[0] * x[0] + x[1] * x[1] - 4.0).abs() < 1e-12);
+            assert!((s.directors[e as usize][i][0] - x[0] / 2.0).abs() < 1e-12);
+            assert!((s.directors[e as usize][i][1] - x[1] / 2.0).abs() < 1e-12);
+            assert!(s.directors[e as usize][i][2].abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn shell_surface_patches_merge_shared_edges_and_keep_creases() {
+    use femlab_geometry::surface;
+    let a = surface_patch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]);
+    let mut b = surface_patch([[1.0, 0.0, 0.0], [2.0, 0.0, 1.0], [2.0, 1.0, 1.0], [1.0, 1.0, 0.0]]);
+    let joined = surface(&[a.clone(), b.clone()]).unwrap();
+    assert_eq!(joined.mesh.n_nodes(), 15);
+    assert_eq!(joined.mesh.n_elems(), 8);
+    assert_eq!(joined.mesh.face_sets["top"].len(), 8);
+    assert_eq!(joined.mesh.node_sets["a"].len(), 5);
+    assert_eq!(joined.directors[0][0], [0.0, 0.0, 1.0]);
+    assert!(joined.directors[4][0][0] < -0.7);
+    assert!(surface(&[a.clone(), a.clone()]).is_err());
+    let mut partial = b.clone();
+    partial.corners[2][1] = 0.5;
+    partial.corners[3][1] = 0.5;
+    assert!(surface(&[a.clone(), partial]).is_err());
+    b.n = [2, 3];
+    assert!(surface(&[a, b]).is_err());
+}
+
+proptest! {
+    #[test]
+    fn random_shell_surface_patches_never_panic(corners in prop::array::uniform4(prop::array::uniform3(-10.0f64..10.0)),n in prop::array::uniform2(0usize..5)) {
+        let mut p=surface_patch(corners);
+        p.n=n;
+        let _=femlab_geometry::surface(&[p]);
+    }
+}
+
+#[test]
+fn shell_surface_rejects_invalid_counts_tags_and_projections() {
+    use femlab_geometry::{surface, Projection};
+    let base = surface_patch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]);
+    assert!(surface(&[]).is_err());
+    assert!(surface(&vec![base.clone(); 1025]).is_err());
+    for n in [[0, 1], [500_001, 1], [usize::MAX, 2]] {
+        let mut p = base.clone();
+        p.n = n;
+        assert!(surface(&[p]).is_err());
+    }
+    for tag in ["", "top", "bottom"] {
+        let mut p = base.clone();
+        p.tags[0] = Some(tag.into());
+        assert!(surface(&[p]).is_err());
+    }
+    for projection in [
+        Projection::Sphere { center: [0.0, 0.0, -1.0], radius: 0.0 },
+        Projection::Sphere { center: [0.0, 0.0, -1.0], radius: f64::NAN },
+        Projection::Sphere { center: [0.5, 0.5, 0.0], radius: 1.0 },
+        Projection::Cylinder { center: [0.0; 3], axis: [0.0; 3], radius: 1.0 },
+    ] {
+        let mut p = base.clone();
+        p.projection = Some(projection);
+        assert!(surface(&[p]).is_err());
+    }
+    let mut singular = base.clone();
+    singular.corners = [[0.0; 3]; 4];
+    assert!(surface(&[singular]).is_err());
+    let mut nonfinite = base;
+    nonfinite.corners[0][0] = f64::INFINITY;
+    assert!(surface(&[nonfinite]).is_err());
+}

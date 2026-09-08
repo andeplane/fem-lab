@@ -105,7 +105,12 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
         },
         Field::Temperature => Temperature::DIM,
         Field::Strain | Field::Rotation | Field::PlasticStrain => Dimension::NONE,
-        Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
+        Field::Stress
+        | Field::StressUnaveraged
+        | Field::StressTop
+        | Field::StressBottom
+        | Field::VonMises
+        | Field::Principal => Stress::DIM,
         Field::SectionForce => Force::DIM,
         Field::SectionMoment => Torque::DIM,
     }
@@ -230,7 +235,10 @@ fn build_problem_with_temperature<'a>(
         .body_of_block
         .iter()
         .map(|body| {
-            let name = model.body(body).and_then(|b| b.section.as_deref())?;
+            let name = model
+                .body(body)
+                .and_then(|b| b.section.as_deref())
+                .or_else(|| model.mesher_section.as_deref().filter(|_| model.implicit_body() == Some(body)))?;
             model.sections.iter().position(|s| s.name == name)
         })
         .collect();
@@ -246,6 +254,7 @@ fn build_problem_with_temperature<'a>(
         })
         .collect();
     let mut p = Problem {
+        directors: &built.directors,
         mesh: &built.mesh,
         sets: &built.sets,
         body_of_block: &built.body_of_block,
@@ -1234,6 +1243,8 @@ mod tests {
             (Field::PlasticStrain, "plasticStrain", Dimension::NONE),
             (Field::Stress, "stress", Stress::DIM),
             (Field::StressUnaveraged, "stressUnaveraged", Stress::DIM),
+            (Field::StressTop, "stressTop", Stress::DIM),
+            (Field::StressBottom, "stressBottom", Stress::DIM),
             (Field::VonMises, "vonMises", Stress::DIM),
             (Field::Principal, "principal", Stress::DIM),
             (Field::SectionForce, "sectionForce", Force::DIM),

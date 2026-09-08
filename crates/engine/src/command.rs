@@ -348,6 +348,11 @@ pub enum Field {
     Displacement,
     Stress,
     StressUnaveraged,
+    /// Shell stress at +t/2 along the director, global xx, yy, zz, xy, xz, yz;
+    /// extrapolated per element node, with no averaging across creases. Zero on non-shells.
+    StressTop,
+    /// Shell stress at -t/2 along the director, with the same ordering and location as stressTop.
+    StressBottom,
     VonMises,
     Principal,
     Strain,
@@ -521,10 +526,45 @@ pub enum SweepSpec {
     },
 }
 
+/// Radial projection of a bilinear shell patch. Geometry and derivatives are projected
+/// together; the resulting unit normals become the MITC4 corner directors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SurfaceProjectionSpec {
+    Sphere { center: [Q<Length>; 3], radius: Q<Length> },
+    Cylinder { center: [Q<Length>; 3], axis: [f64; 3], radius: Q<Length> },
+}
+
+/// Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
+/// normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
+/// name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacePatchSpec {
+    pub corners: [[Q<Length>; 3]; 4],
+    pub n: [u32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<[Option<String>; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<SurfaceProjectionSpec>,
+}
+
 /// The mesher and its settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSpec {
+    /// MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a
+    /// sphere or cylinder. The patches define the implicit Body (`body`, default
+    /// "shell"). Coincident patch nodes merge; shared edges need matching divisions.
+    /// Each patch retains its own directors at a crease. `<body>.top` and
+    /// `<body>.bottom` are face Sets; tagged edges are node Sets for constraints,
+    /// forces and moments. Requires order 1, no simplex split, 3D idealisation and
+    /// a shell thickness Section assigned with section.assign.
+    Surface {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        patches: Vec<SurfacePatchSpec>,
+    },
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
     Lattice {

@@ -476,6 +476,7 @@ impl Engine {
 pub(crate) fn mesh_bytes(built: &BuiltMesh) -> u64 {
     let mesh = &built.mesh;
     let mesh_bytes = mesh.coords.len() * 8
+        + std::mem::size_of_val(built.directors.as_slice())
         + mesh.blocks.iter().map(|b| b.conn.len() * 4).sum::<usize>()
         + mesh.node_sets.values().chain(mesh.elem_sets.values()).map(|s| s.len() * 4).sum::<usize>()
         + mesh.face_sets.values().map(|s| std::mem::size_of_val(s.as_slice())).sum::<usize>()
@@ -494,8 +495,13 @@ mod tests {
 
     fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
         let nodes = mesh.n_nodes();
-        engine.mesh =
-            Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default(), points: Vec::new() });
+        engine.mesh = Some(BuiltMesh {
+            directors: Vec::new(),
+            mesh,
+            body_of_block: vec!["body".into()],
+            sets: Default::default(),
+            points: Vec::new(),
+        });
         let mut result = crate::procedure::blank(crate::solve::SolveInfo {
             solver: "test",
             iterations: 0,

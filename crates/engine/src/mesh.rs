@@ -64,6 +64,8 @@ impl ResolvedSet {
 /// The Mesh plus everything derived with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltMesh {
+    /// Analytic shell directors per element; empty for other meshers.
+    pub directors: Vec<[[f64; 3]; 4]>,
     pub mesh: Mesh,
     /// The Body each element block came from; blocks are one per Body.
     pub body_of_block: Vec<String>,
@@ -89,7 +91,25 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     })?;
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
+    let mut directors = Vec::new();
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
+        MesherSettings::Surface { body, patches } => {
+            if quadratic || settings.simplices {
+                return Err(Error::new(
+                    ErrorCode::Unsupported,
+                    "MITC4 surface meshing needs order 1 and no simplex split",
+                )
+                .at("mesher")
+                .suggest("mesh.set with order 1 and simplices false"));
+            }
+            let built = femlab_geometry::surface(patches).map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at("mesher.patches")
+                    .suggest("mesh.set with regular patches and matching edge divisions")
+            })?;
+            directors = built.directors;
+            one_body(body, built.mesh, dim, "surface")?
+        }
         MesherSettings::Lattice { size, counts, sizes } => {
             validate_body_sizes(model, sizes)?;
             bodies(model, solids, dim, settings.simplices, &|solid, body| {
@@ -178,7 +198,7 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         );
         points.push(node);
     }
-    Ok(BuiltMesh { mesh, body_of_block, sets, points })
+    Ok(BuiltMesh { mesh, body_of_block, sets, points, directors })
 }
 
 /// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces
@@ -191,12 +211,14 @@ type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
 /// swept mesh is the base's.
 fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
     match m {
-        MesherSettings::Lattice { .. } | MesherSettings::Tet { .. } => Err(Error::new(
-            ErrorCode::MeshFailed,
-            "a sweep needs a 2D base mesher, and the lattice and tet meshers mesh whole Bodies",
-        )
-        .at("mesher.base")
-        .suggest("mesh.set with a mapped base")),
+        MesherSettings::Surface { .. } | MesherSettings::Lattice { .. } | MesherSettings::Tet { .. } => {
+            Err(Error::new(
+                ErrorCode::MeshFailed,
+                "a sweep needs a 2D base mesher; lattice and tet mesh whole Bodies, and surface meshes 3D shells",
+            )
+            .at("mesher.base")
+            .suggest("mesh.set with a mapped base"))
+        }
         MesherSettings::Mapped { body, blocks } => {
             let kind = if quadratic { ElementKind::Quad8 } else { ElementKind::Quad4 };
             let part = mapped(blocks, kind).map_err(|e| {
@@ -268,6 +290,7 @@ fn one_body(body: &str, part: Mesh, dim: usize, mesher: &str) -> Result<Meshed, 
     }
     let mut mesh = part;
     mesh.face_sets = mesh.face_sets.iter().map(|(tag, f)| (format!("{body}.{tag}"), f.clone())).collect();
+    mesh.node_sets = mesh.node_sets.iter().map(|(tag, n)| (format!("{body}.{tag}"), n.clone())).collect();
     let faces = mesh.boundary_faces();
     let blocks = mesh.blocks.len();
     Ok((mesh, vec![body.to_string(); blocks], BTreeMap::from([(body.to_string(), faces)])))
@@ -417,6 +440,10 @@ fn positive_size(q: &Q<Length>, at: &str) -> Result<f64, Error> {
 /// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.
 pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
     match spec {
+        MesherSpec::Surface { body, patches } => Ok(MesherSettings::Surface {
+            body: body.clone().unwrap_or_else(|| "shell".into()),
+            patches: patches.iter().enumerate().map(|(i, p)| surface_patch(p, i)).collect::<Result<_, _>>()?,
+        }),
         MesherSpec::Lattice { size, sizes } => {
             let (size, counts) = match size {
                 LatticeSize::Size(q) => (Some(positive_size(q, "mesher.size")?), None),
@@ -498,6 +525,10 @@ const DEFAULT_MAX_ELEMENTS: u32 = 500_000;
 pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
     let k = |n: usize| ((n as f64 * h0 / h).round() as usize).max(1);
     match m {
+        MesherSettings::Surface { body, patches } => MesherSettings::Surface {
+            body: body.clone(),
+            patches: patches.iter().map(|p| femlab_geometry::SurfacePatch { n: p.n.map(k), ..p.clone() }).collect(),
+        },
         MesherSettings::Lattice { size: Some(original), sizes, .. } => MesherSettings::Lattice {
             size: Some(h),
             counts: None,
@@ -632,4 +663,55 @@ fn set_empty(model: &Model, mesh: &Mesh, name: &str, probe: Option<[f64; 3]>) ->
     Error::new(ErrorCode::SetEmpty, format!("set '{name}' matched no face, node or element on the mesh; {near}"))
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace with a plane through that point, or a larger tol")
+}
+
+fn surface_patch(p: &crate::command::SurfacePatchSpec, i: usize) -> Result<femlab_geometry::SurfacePatch, Error> {
+    use crate::command::SurfaceProjectionSpec;
+    use femlab_geometry::Projection;
+    let at = format!("mesher.patches[{i}]");
+    if p.n.contains(&0) {
+        return Err(Error::schema("surface divisions must be positive").at(format!("{at}.n")));
+    }
+    let mut corners = [[0.0; 3]; 4];
+    for (j, point) in p.corners.iter().enumerate() {
+        corners[j] = surface_point(point, &format!("{at}.corners[{j}]"))?;
+    }
+    let projection = match &p.projection {
+        None => None,
+        Some(SurfaceProjectionSpec::Sphere { center, radius }) => Some(Projection::Sphere {
+            center: surface_point(center, &format!("{at}.projection.center"))?,
+            radius: positive_size(radius, &format!("{at}.projection.radius"))?,
+        }),
+        Some(SurfaceProjectionSpec::Cylinder { center, axis, radius }) => {
+            let norm = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if !norm.is_finite() || norm <= 0.0 {
+                return Err(
+                    Error::schema("cylinder axis must be finite and nonzero").at(format!("{at}.projection.axis"))
+                );
+            }
+            Some(Projection::Cylinder {
+                center: surface_point(center, &format!("{at}.projection.center"))?,
+                axis: axis.map(|v| v / norm),
+                radius: positive_size(radius, &format!("{at}.projection.radius"))?,
+            })
+        }
+    };
+    Ok(femlab_geometry::SurfacePatch {
+        corners,
+        n: p.n.map(|n| n as usize),
+        tags: p.tags.clone().unwrap_or_default(),
+        projection,
+    })
+}
+
+fn surface_point(p: &[Q<Length>; 3], at: &str) -> Result<[f64; 3], Error> {
+    let mut out = [0.0; 3];
+    for (i, q) in p.iter().enumerate() {
+        let v = q.si().map_err(|e| e.at(format!("{at}[{i}]")))?;
+        if !v.is_finite() {
+            return Err(Error::schema("surface coordinate must be finite").at(format!("{at}[{i}]")));
+        }
+        out[i] = v;
+    }
+    Ok(out)
 }

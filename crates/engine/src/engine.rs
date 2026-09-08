@@ -326,6 +326,22 @@ impl Engine {
                 where_: Some(format!("body '{body}'")),
             });
         }
+        if let Some(body) = implicit.filter(|_| {
+            m.mesh
+                .as_ref()
+                .is_some_and(|settings| matches!(settings.mesher, crate::model::MesherSettings::Surface { .. }))
+                && m.mesher_section
+                    .as_deref()
+                    .and_then(|name| m.section(name))
+                    .and_then(|s| s.section.thickness)
+                    .is_none()
+        }) {
+            w.push(Warning {
+                code: "model.no-section".into(),
+                text: format!("Body '{body}' needs a shell thickness section; use section.add and section.assign"),
+                where_: Some(format!("body '{body}'")),
+            });
+        }
         for b in &m.bodies {
             if b.material.is_none() {
                 w.push(Warning {
@@ -781,13 +797,14 @@ impl Engine {
                 self.model
                     .section(section)
                     .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
-                // A Section belongs to explicit line geometry; a mesher's implicit Body is a
-                // surface and gets its cross-section from the idealisation, so it is not listed.
-                let known: Vec<&str> = self.model.bodies.iter().map(|b| b.name.as_str()).collect();
+                let known = self.model.names(ObjectKind::Body);
                 for b in bodies {
                     if !known.contains(&b.as_str()) {
                         return Err(Error::not_found("body", b, &known));
                     }
+                }
+                if self.model.implicit_body().is_some_and(|b| bodies.iter().any(|name| name == b)) {
+                    self.model.mesher_section = Some(section.clone());
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.section = Some(section.clone());
@@ -799,13 +816,16 @@ impl Engine {
                 self.model
                     .section(name)
                     .ok_or_else(|| Error::not_found("section", name, &self.model.names(ObjectKind::Section)))?;
-                let users: Vec<&str> = self
+                let mut users: Vec<&str> = self
                     .model
                     .bodies
                     .iter()
                     .filter(|b| b.section.as_deref() == Some(name))
                     .map(|b| b.name.as_str())
                     .collect();
+                if self.model.mesher_section.as_deref() == Some(name) {
+                    users.extend(self.model.implicit_body());
+                }
                 if !users.is_empty() {
                     return Err(in_use("section", name, &users, "bodies"));
                 }
@@ -839,6 +859,7 @@ impl Engine {
                         self.check_body_unused(body)?;
                     }
                     self.model.mesher_material = None;
+                    self.model.mesher_section = None;
                 }
                 self.model.mesh = Some(MeshSettings {
                     mesher: settings,
@@ -1465,6 +1486,7 @@ impl Engine {
             if self.model.implicit_body() == Some(name) {
                 self.model.mesh = None;
                 self.model.mesher_material = None;
+                self.model.mesher_section = None;
             }
             self.model.bodies.retain(|b| b.name != name);
             self.model.cuts.retain(|c| c.from != name);
@@ -1639,6 +1661,9 @@ impl Engine {
                 }
             }
             ObjectKind::Section => {
+                if m.mesher_section.as_deref() == Some(name) {
+                    m.mesher_section = Some(to.into());
+                }
                 for sec in &mut m.sections {
                     if sec.name == name {
                         sec.name = to.into();

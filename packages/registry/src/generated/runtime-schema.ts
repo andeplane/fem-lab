@@ -3156,6 +3156,32 @@ const commands = {
       "description": "The mesher and its settings.",
       "oneOf": [
         {
+          "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "patches": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SurfacePatchSpec"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "surface"
+            }
+          },
+          "required": [
+            "kind",
+            "patches"
+          ]
+        },
+        {
           "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
           "type": "object",
           "properties": {
@@ -3279,6 +3305,128 @@ const commands = {
           "required": [
             "kind",
             "size"
+          ]
+        }
+      ]
+    },
+    "SurfacePatchSpec": {
+      "description": "Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive\nnormal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags\nname node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.",
+      "type": "object",
+      "properties": {
+        "corners": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "n": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "projection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SurfaceProjectionSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "corners",
+        "n"
+      ]
+    },
+    "SurfaceProjectionSpec": {
+      "description": "Radial projection of a bilinear shell patch. Geometry and derivatives are projected\ntogether; the resulting unit normals become the MITC4 corner directors.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "center": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "radius": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "sphere"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "radius"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "center": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "axis": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "radius": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "cylinder"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "axis",
+            "radius"
           ]
         }
       ]
@@ -3712,20 +3860,34 @@ const commands = {
     },
     "Field": {
       "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
-      "type": "string",
-      "enum": [
-        "displacement",
-        "stress",
-        "stressUnaveraged",
-        "vonMises",
-        "principal",
-        "strain",
-        "plasticStrain",
-        "reaction",
-        "temperature",
-        "rotation",
-        "sectionForce",
-        "sectionMoment"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "displacement",
+            "stress",
+            "stressUnaveraged",
+            "vonMises",
+            "principal",
+            "strain",
+            "plasticStrain",
+            "reaction",
+            "temperature",
+            "rotation",
+            "sectionForce",
+            "sectionMoment"
+          ]
+        },
+        {
+          "description": "Shell stress at +t/2 along the director, global xx, yy, zz, xy, xz, yz;\nextrapolated per element node, with no averaging across creases. Zero on non-shells.",
+          "type": "string",
+          "const": "stressTop"
+        },
+        {
+          "description": "Shell stress at -t/2 along the director, with the same ordering and location as stressTop.",
+          "type": "string",
+          "const": "stressBottom"
+        }
       ]
     },
     "Q_time": {
@@ -4763,6 +4925,8 @@ const queries = {
     "Q_second_moment": commands.$defs["Q_second_moment"],
     "Axis": commands.$defs["Axis"],
     "MesherSpec": commands.$defs["MesherSpec"],
+    "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
+    "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
     "LatticeSize": commands.$defs["LatticeSize"],
     "QuadBlockSpec": commands.$defs["QuadBlockSpec"],
     "CurveSpec": commands.$defs["CurveSpec"],

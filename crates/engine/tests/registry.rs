@@ -11316,3 +11316,42 @@ fn shell_thickness_sections_validate_units_and_replay() {
     ok(&mut e, r#"{"cmd":"journal.undo"}"#);
     assert_eq!(e.model_hash(), hash);
 }
+
+#[test]
+fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shell strip"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[4,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"elastic","bodies":["skin"]}"#);
+    ok(&mut e, r#"{"cmd":"section.add","name":"plate","shape":{"kind":"shell","thickness":"10 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"plate","bodies":["skin"]}"#);
+    assert!(run(&mut e, r#"{"cmd":"section.remove","name":"plate"}"#).is_err());
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"section","name":"plate","to":"thin"}"#);
+    assert_eq!(e.model().mesher_section.as_deref(), Some("thin"));
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#);
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(e.model(), replayed.model());
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    // Constant curvature M/D: a unit-width strip has w(L)=-ML²/(2D).
+    let got = probe_at(&mut e, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
+    let want = -6.0 / (200e9 * 0.01f64.powi(3));
+    assert!((got - want).abs() < want.abs() * 1e-7, "{got} vs {want}");
+    for (name, sign) in [("stressTop", 1.0), ("stressBottom", -1.0)] {
+        let QueryResult::Field(f) = e.query(Query::Field { step: None, result_id: None, field: name.into() }).unwrap()
+        else {
+            panic!("field")
+        };
+        assert_eq!((f.per.as_str(), f.components, f.unit.as_str()), ("elementNode", 6, "Pa"));
+        for sig in f.values.chunks_exact(6) {
+            assert!((sig[0] - sign * 60000.0).abs() < 0.001, "{sig:?}");
+        }
+    }
+}

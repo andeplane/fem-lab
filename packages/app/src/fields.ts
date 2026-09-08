@@ -24,6 +24,8 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   reaction: 'force',
   stress: 'stress',
   stressUnaveraged: 'stress',
+  stressTop: 'stress',
+  stressBottom: 'stress',
   vonMises: 'stress',
   principal: 'stress',
   strain: 'dimensionless',

@@ -120,6 +120,14 @@ pub(crate) fn stress_fields(p: &Problem<'_>, u: &[f64], pool: &Pool, fields: &mu
     fields.insert(Field::Stress, nodal_stress);
     fields.insert(Field::StressUnaveraged, unaveraged);
     fields.insert(Field::Strain, nodal_strain);
+    if p.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
+        for (field, side) in [(Field::StressTop, 1.0), (Field::StressBottom, -1.0)] {
+            let stress = pool
+                .install(|| stress::shell_surface_stress(p, u, side))
+                .expect("the shell stiffness integral accepted this section and material");
+            fields.insert(field, stress);
+        }
+    }
     // Per-member section forces exist only where a beam does; a Result without beams keeps
     // exactly the fields it had.
     if p.has_beams() {

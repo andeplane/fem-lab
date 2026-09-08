@@ -1185,8 +1185,17 @@ reference 0.00406235 (2.30 / 0.515 / 0.126 % error, final observed rate 2.03).
 The plate has a=1 m, t=0.001 m, E=210 GPa, ν=0.3 and q=1 Pa. All edges hold
 normal displacement and the rotation normal to that edge; xmin holds ux and ymin
 holds uy to remove in-plane rigid motion. Reactions balance the 1 N load.
-Command-level surface meshing and output integration, G2–G7, and full coverage
-remain pending. The shear interpolation follows §2 of
+G2 uses the projected-cylinder surface mesher and its analytic directors. At
+4/8/16 elements in each quarter-roof direction, midside vertical displacement is
+0.2860472 / 0.2949565 / 0.2993387 m (5.41 / 2.46 / 1.01 % from 0.3024 m).
+Geometry, material and support conditions follow the
+[COMSOL Scordelis–Lo benchmark](https://doc.comsol.com/6.4/doc/com.comsol.help.models.sme.scordelis_lo_roof/scordelis_lo_roof.html):
+R=25 m, total length=50 m, opening=80°, t=0.25 m, E=4.32e8 Pa, ν=0.
+The quarter model holds two symmetry edges and the end diaphragm's transverse
+translations. A volumetric gravity load integrates to 90 N/m² on the midsurface.
+Command-level surface meshing, thickness assignment and moment loading pass a
+journal replay and constant-curvature strip solve. Output integration, G3–G7,
+and full coverage remain pending. The shear interpolation follows §2 of
 [Ko, Lee and Bathe (2017)](https://doi.org/10.1016/j.compstruc.2016.11.004),
 which reviews the original MITC4 formulation before introducing MITC4+.
 

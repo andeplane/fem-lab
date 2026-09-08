@@ -2737,6 +2737,7 @@ fn problem<'a>(
     constraints: Vec<Constraint>,
 ) -> Problem<'a> {
     Problem {
+        directors: &[],
         mesh,
         sets,
         body_of_block: bodies,
@@ -4738,6 +4739,7 @@ fn heat_problem<'a>(
     heat_loads: Vec<HeatLoad>,
 ) -> Problem<'a> {
     Problem {
+        directors: &[],
         mesh,
         sets,
         body_of_block: bodies,
@@ -6123,6 +6125,7 @@ fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
     )]);
     let bodies = vec!["massive".to_string(), "massless".to_string()];
     let mut p = Problem {
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,
@@ -6185,6 +6188,7 @@ fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
     let sets = BTreeMap::new();
     let bodies = vec!["massive".to_string(), "massless-stiffener".to_string()];
     let p = Problem {
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,
@@ -8095,6 +8099,7 @@ fn a_line_body_without_a_section_is_reported_by_the_well_posedness_checks() {
     let sets = BTreeMap::new();
     let bodies = vec!["chord".to_string()];
     let mut p = Problem {
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,
@@ -10038,6 +10043,7 @@ fn f4e_a_finite_interface_conductance_matches_the_series_resistance_closed_form(
     let sets = sets_of(&mesh);
     let bodies = two_bodies();
     let p = Problem {
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,
