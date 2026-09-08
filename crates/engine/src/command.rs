@@ -358,9 +358,9 @@ pub enum Solver {
 /// Result fields. Reaction is support force in N for structural Results and removed heat
 /// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
 /// display units. Transient thermal reactions include stored energy and refer to the last
-/// θ-method integration stage, not an endpoint steady-state residual. Three fields exist only
-/// on a static Result of a Model with beams: `rotation` (every node's rotation about the
-/// global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
+/// θ-method integration stage, not an endpoint steady-state residual. A static Result with
+/// beams or shells includes `rotation` (every node's rotation about the global axes, radians,
+/// zero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in
 /// tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
 /// member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
 /// triple at each end of every beam and zeros on every other element. `plasticStrain` is the
@@ -374,6 +374,16 @@ pub enum Field {
     Displacement,
     Stress,
     StressUnaveraged,
+    /// Shell stress at +t/2 along the director, global xx, yy, zz, xy, xz, yz;
+    /// extrapolated per element node, with no averaging across creases. Zero on non-shells.
+    StressTop,
+    /// Shell stress at -t/2 along the director, with the same ordering and location as stressTop.
+    StressBottom,
+    /// Shell stress first moment through thickness, integral z*sigma dz, in N (moment
+    /// per unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for
+    /// tension on the +director side; these are tensor components, not moment-axis
+    /// components. Extrapolated per element node, unaveraged; zero on non-shells.
+    ShellMoment,
     /// Dimensionless local ZZ energy-error contribution per element. Sum of squares
     /// equals the squared global relative estimate. Available when requested in
     /// step.add.output on supported linear simplex static/heat Steps, or after study.adapt.
@@ -436,6 +446,13 @@ pub enum IdealisationSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SectionSpec {
+    /// Homogeneous MITC4 shell section, centred on the meshed midsurface.
+    Shell { thickness: Q<Length> },
+    /// Perfectly bonded shell plies, ordered bottom to top. Total thickness is their
+    /// sum, centred on the meshed midsurface. Each ply supplies its Material and angle;
+    /// ply materials replace the Body material. Uses a common MITC4 displacement field
+    /// with per-ply integration and separate stresses on both sides of each interface.
+    Laminate { plies: Vec<ShellPlySpec> },
     /// Solid rectangle, `width` along local y and `height` along local z.
     Rectangle { width: Q<Length>, height: Q<Length> },
     /// Solid circle.
@@ -470,6 +487,19 @@ pub enum SectionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none", rename = "cZ")]
         c_z: Option<Q<Length>>,
     },
+}
+
+/// One shell ply. The angle is measured about the positive director, from the
+/// midsurface's first parametric direction or section.assign's projected reference
+/// axis. The Material's orientation is composed in this ply frame, not global axes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPlySpec {
+    pub material: String,
+    pub thickness: Q<Length>,
+    /// Rotation from the reference direction, e.g. "45 deg"; omitted means zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<Q<Dimensionless>>,
 }
 
 /// Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -550,6 +580,29 @@ pub enum SweepSpec {
     },
 }
 
+/// Radial projection of a bilinear shell patch. Geometry and derivatives are projected
+/// together; the resulting unit normals become the MITC4 corner directors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SurfaceProjectionSpec {
+    Sphere { center: [Q<Length>; 3], radius: Q<Length> },
+    Cylinder { center: [Q<Length>; 3], axis: [f64; 3], radius: Q<Length> },
+}
+
+/// Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
+/// normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
+/// name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacePatchSpec {
+    pub corners: [[Q<Length>; 3]; 4],
+    pub n: [u32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<[Option<String>; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<SurfaceProjectionSpec>,
+}
+
 /// The mesher and its settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -609,6 +662,18 @@ pub enum MesherSpec {
     /// the geometry is prismatic, because those are exact. `maxElements` caps the background
     /// lattice (500 000 by default) and is checked before anything is allocated.
     Tet(TetSpec),
+    /// MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a
+    /// sphere or cylinder. The patches define the implicit Body (`body`, default
+    /// "shell"). Coincident patch nodes merge; shared edges need matching divisions.
+    /// Each patch retains its own directors at a crease. `<body>.top` and
+    /// `<body>.bottom` are face Sets; tagged edges are node Sets for constraints,
+    /// forces and moments. Requires order 1, no simplex split, 3D idealisation and
+    /// a shell thickness Section assigned with section.assign.
+    Surface {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        patches: Vec<SurfacePatchSpec>,
+    },
 }
 
 /// Local maximum edge lengths applied after the chosen mesher. Bounds are world
@@ -1365,8 +1430,9 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialRemove { name: String },
 
-    /// Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
-    /// I, channel, or the properties given directly. A line member has no cross-section
+    /// Define a section: homogeneous shell thickness, a bottom-to-top laminate stack
+    /// of 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section
+    /// (`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section
     /// geometry of its own, so the Section is where its area, second moments, torsion constant,
     /// shear factors and extreme-fibre distances come from. Re-issuing with an existing name
     /// edits the section in place. Assign it to Bodies with section.assign.
@@ -1374,17 +1440,19 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAdd { name: String, shape: SectionSpec },
 
-    /// Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
+    /// Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;
     /// one without it is reported by query.model warnings and blocks solve.run with
-    /// model.no-section. A Section on a solid or sheet Body is carried but never used: those
-    /// Bodies get their cross-section from their geometry. `orientation` names the global
+    /// model.no-section. A shell needs a shell thickness section, a line member needs a
+    /// cross-section, and a solid gets its section from its geometry. `orientation` names the global
     /// axis the section's local z (its `height` direction, the one `iY` resists bending along)
     /// follows for the beams of these Bodies: local z is that axis made perpendicular to each
     /// member, and local y completes the right-handed triad (y = z × x). It may not lie along
     /// a member. Without it the rule is: local z follows global Z, so a horizontal beam has
     /// its height vertical; a member within 1e-6 of vertical follows global X instead, so a
     /// column's local z points along +X. `iZ` then resists bending along local y. Trusses
-    /// ignore it.
+    /// ignore it. For laminate shells, orientation instead selects the tangent projection
+    /// of that global axis as the zero-angle ply direction. A normal axis is rejected.
+    /// Without it ply angles use the midsurface's first parametric direction.
     #[serde(rename = "section.assign", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAssign {

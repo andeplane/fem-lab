@@ -59,9 +59,15 @@ pub struct Extremum {
     pub max_at: [f64; 3],
 }
 
-/// Per-component extremes of a nodal field, with the node coordinates they occur at. Ties go
+/// Per-component extremes of a nodal or element-node field, with the coordinates they occur at. Ties go
 /// to the lowest node index, so the answer does not depend on iteration order.
 pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
+    let element_nodes: Vec<u32> = if f.per == Per::ElemNode {
+        mesh.blocks.iter().flat_map(|b| b.conn.iter().copied()).collect()
+    } else {
+        Vec::new()
+    };
+    let position = |i: usize| mesh.node(element_nodes.get(i).copied().unwrap_or(i as u32));
     (0..f.comps)
         .map(|c| {
             let (mut lo, mut hi) = (0usize, 0usize);
@@ -76,9 +82,9 @@ pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
             Extremum {
                 component: c,
                 min: f.data[lo * f.comps + c],
-                min_at: mesh.node(lo as u32),
+                min_at: position(lo),
                 max: f.data[hi * f.comps + c],
-                max_at: mesh.node(hi as u32),
+                max_at: position(hi),
             }
         })
         .collect()

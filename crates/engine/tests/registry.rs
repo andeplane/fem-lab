@@ -2403,7 +2403,7 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     assert!((disp.min_at[0].value - 1000.0).abs() < 1e-9, "the largest deflection is at the free end");
     assert!(r.extremes.iter().any(|x| x.field == "vonMises" && x.min.unit == "MPa"));
     assert!(r.extremes.iter().any(|x| x.field == "reaction" && x.min.unit == "kN"));
-    assert!(r.extremes.iter().all(|x| x.field != "stressUnaveraged"), "only nodal fields have extremes");
+    assert!(r.extremes.iter().any(|x| x.field == "stressUnaveraged" && x.min.unit == "MPa"));
     // query.model now says the Step is solved
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     assert!(m.steps[0].solved);
@@ -11288,6 +11288,424 @@ fn a_linear_step_ignores_plasticity_with_a_warning_and_a_nonlinear_step_reports_
     assert_eq!(f.components, 1);
     assert!(f.values.iter().all(|v| (v - peeq.max.value).abs() < 1e-9), "homogeneous: {:?}", f.values);
     assert_eq!(r.yielded_fraction, Some(1.0));
+}
+
+#[test]
+fn shell_thickness_sections_validate_units_and_replay() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shell"}"#);
+    ok(&mut e, r#"{"cmd":"section.add","name":"skin","shape":{"kind":"shell","thickness":"2 mm"}}"#);
+    assert_eq!(e.model().section("skin").unwrap().section.thickness, Some(0.002));
+    let QueryResult::Objects(objects) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Section]) }).unwrap()
+    else {
+        panic!("objects")
+    };
+    assert_eq!(objects.objects[0].summary, "shell thickness = 0.002 m");
+    let hash = e.model_hash();
+    for thickness in ["0 m", "-2 mm", "1 N"] {
+        let command =
+            serde_json::json!({"cmd":"section.add","name":"bad","shape":{"kind":"shell","thickness":thickness}});
+        assert!(run(&mut e, &command.to_string()).is_err());
+        assert_eq!(e.model_hash(), hash);
+    }
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(replayed.model(), e.model());
+    ok(&mut e, r#"{"cmd":"section.add","name":"skin","shape":{"kind":"shell","thickness":"3 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model_hash(), hash);
+}
+
+#[test]
+fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shell strip"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[4,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"elastic","bodies":["skin"]}"#);
+    ok(&mut e, r#"{"cmd":"section.add","name":"plate","shape":{"kind":"shell","thickness":"10 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"plate","bodies":["skin"]}"#);
+    assert!(run(&mut e, r#"{"cmd":"section.remove","name":"plate"}"#).is_err());
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"section","name":"plate","to":"thin"}"#);
+    assert_eq!(e.model().mesher_section.as_deref(), Some("thin"));
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#);
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(e.model(), replayed.model());
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let QueryResult::Surface(surface) = e.query(Query::Surface { step: None, result_id: None }).unwrap() else {
+        panic!("surface")
+    };
+    assert_eq!(surface.tri_element_node.len(), surface.indices.len());
+    let mut shared: Vec<_> = surface
+        .indices
+        .iter()
+        .zip(&surface.tri_element_node)
+        .filter_map(|(&node, &local)| (node == 1).then_some(local))
+        .collect();
+    shared.sort_unstable();
+    shared.dedup();
+    assert_eq!(shared, vec![1, 4], "shared global node keeps each element's value");
+    let QueryResult::Result(summary) = e.query(Query::Result { step: None, result_id: None }).unwrap() else {
+        panic!("result")
+    };
+    assert!(summary.extremes.iter().any(|e| e.field == "stressTop"));
+    assert!(summary.extremes.iter().any(|e| e.field == "stressBottom"));
+    assert!(summary.extremes.iter().any(|e| e.field == "shellMoment"));
+    // A unit applied end moment on a unit-width strip gives M_xx=1 N everywhere.
+    let QueryResult::Field(moment) =
+        e.query(Query::Field { step: None, result_id: None, field: "shellMoment".into() }).unwrap()
+    else {
+        panic!("shell moment field")
+    };
+    assert_eq!((moment.per.as_str(), moment.components, moment.unit.as_str()), ("elementNode", 6, "N"));
+    for m in moment.values.chunks_exact(6) {
+        assert!((m[0] - 1.0).abs() < 1e-8, "{m:?}");
+        for value in &m[1..] {
+            assert!(value.abs() < 1e-8, "{m:?}");
+        }
+    }
+    // Constant curvature M/D: a unit-width strip has w(L)=-ML²/(2D).
+    let got = probe_at(&mut e, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
+    let want = -6.0 / (200e9 * 0.01f64.powi(3));
+    assert!((got - want).abs() < want.abs() * 1e-7, "{got} vs {want}");
+    let rotation = probe_at(&mut e, "s", Field::Rotation, Some(1), ["1 m", "0.5 m", "0 m"]);
+    assert!((rotation - 0.00006).abs() < 1e-11, "rotation {rotation}");
+    for (name, sign) in [("stressTop", 1.0), ("stressBottom", -1.0)] {
+        let QueryResult::Field(f) = e.query(Query::Field { step: None, result_id: None, field: name.into() }).unwrap()
+        else {
+            panic!("field")
+        };
+        assert_eq!((f.per.as_str(), f.components, f.unit.as_str()), ("elementNode", 6, "Pa"));
+        for sig in f.values.chunks_exact(6) {
+            assert!((sig[0] - sign * 60000.0).abs() < 0.001, "{sig:?}");
+        }
+    }
+}
+
+#[test]
+fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
+    let mut e = engine();
+    assert_eq!(e.field_named(None, "stressPly:1:top").unwrap_err().code, ErrorCode::NotFound);
+    ok(&mut e, r#"{"cmd":"model.new","name":"cross ply"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[4,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"ply","orthotropic":{"E1":"100 GPa","E2":"20 GPa","E3":"10 GPa","G12":"10 GPa","G13":"5 GPa","G23":"3 GPa","nu12":0,"nu13":0,"nu23":0}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"cross","shape":{"kind":"laminate","plies":[{"material":"ply","thickness":"5 mm"},{"material":"ply","thickness":"5 mm","angle":"90 deg"}]}}"#,
+    );
+    let error = err(&mut e, r#"{"cmd":"material.remove","name":"ply"}"#);
+    assert_eq!(error.code, ErrorCode::InUse);
+    assert!(error.cause.contains("sections"));
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"ply","to":"carbon"}"#);
+    assert!(e.model().section("cross").unwrap().plies.iter().all(|ply| ply.material == "carbon"));
+    let before = e.model().clone();
+    let QueryResult::Definition(definition) =
+        e.query(Query::Definition { kind: ObjectKind::Section, name: "cross".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&definition.command).unwrap());
+    assert_eq!(e.model(), &before);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"cross","bodies":["skin"],"orientation":"x"}"#);
+    assert_eq!(e.model().mesher_orientation, Some(Axis::X));
+    assert_eq!(e.model().mesher_material, None);
+    let objects = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Section]) }).unwrap();
+    assert!(serde_json::to_string(&objects).unwrap().contains("laminate: 2 plies, thickness = 0.01 m"));
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#);
+    let file = e.export_file();
+    let mut replay = engine();
+    pollster::block_on(replay.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(e.model(), replay.model());
+    let mut broken = e.model().clone();
+    broken.sections[0].plies[0].material = "missing".into();
+    let invalid =
+        femlab_engine::solve_run::build_problem(&broken, e.mesh().unwrap(), broken.step("s").unwrap()).err().unwrap();
+    assert_eq!(invalid.code, ErrorCode::NotFound);
+    assert!(invalid.cause.contains("missing"));
+    for engine in [&mut e, &mut replay] {
+        ok(engine, r#"{"cmd":"solve.run","step":"s"}"#);
+        let x = probe_at(engine, "s", Field::Displacement, Some(0), ["1 m", "0.5 m", "0 m"]);
+        let z = probe_at(engine, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
+        assert!((x / 5e-7 - 1.0).abs() < 1e-7);
+        assert!((z / -0.00015 - 1.0).abs() < 1e-7);
+        let QueryResult::Results(retained) = engine.query(Query::Results {}).unwrap() else { panic!("results") };
+        // The record's accounting must equal the public final-field payloads, including
+        // all four ply faces; omitting them would understate resident memory.
+        let summary = result_of(engine, Some("s"));
+        let fields: std::collections::BTreeSet<_> = summary.extremes.iter().map(|e| e.field.clone()).collect();
+        let mut field_bytes = 0u64;
+        for field in fields {
+            let QueryResult::Field(values) = engine.query(Query::Field { step: None, result_id: None, field }).unwrap()
+            else {
+                panic!("field")
+            };
+            field_bytes += values.values.len() as u64 * 8;
+        }
+        assert_eq!(retained.records[0].field_bytes, field_bytes);
+        let raw = engine.field_named(Some("s"), "stressPly:1:top").unwrap();
+        assert_eq!(raw.len(), 16);
+        assert!((raw.data[0] - 50000.0).abs() < 0.001);
+        for (field, expected) in [
+            ("shellMoment", 1.0),
+            ("stressTop", 40000.0),
+            ("stressBottom", -100000.0),
+            ("stressPly:1:bottom", -100000.0),
+            ("stressPly:1:top", 50000.0),
+            ("stressPly:2:bottom", 10000.0),
+            ("stressPly:2:top", 40000.0),
+        ] {
+            let QueryResult::Field(values) =
+                engine.query(Query::Field { step: None, result_id: None, field: field.into() }).unwrap()
+            else {
+                panic!("field")
+            };
+            for values in values.values.chunks_exact(6) {
+                assert!((values[0] / expected - 1.0).abs() < 1e-7);
+            }
+        }
+    }
+    let saved = result_of(&mut e, Some("s"));
+    let ply_extreme = saved.extremes.iter().find(|v| v.field == "stressPly:1:top" && v.component == 0).unwrap();
+    assert!((ply_extreme.max.value - 50000.0).abs() < 1e-3);
+    for name in ["stressPly:", "stressPly:x:top", "stressPly:0:top", "stressPly:1:middle", "stressPly:3:bottom"] {
+        let error = e.query(Query::Field { step: None, result_id: None, field: name.into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NotFound);
+        assert_eq!(error.where_.as_deref(), Some("field"));
+    }
+    ok(&mut e, r#"{"cmd":"section.assign","section":"cross","bodies":["skin"],"orientation":"z"}"#);
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert!(error.cause.contains("normal to the surface"));
+    let QueryResult::Field(retained) = e
+        .query(Query::Field { step: None, result_id: Some(saved.result_id), field: "stressPly:1:top".into() })
+        .unwrap()
+    else {
+        panic!("retained ply field")
+    };
+    assert_eq!(retained.unit, "Pa");
+    for value in retained.values.chunks_exact(6) {
+        assert!((value[0] - 50000.0).abs() < 1e-3);
+    }
+    assert_eq!(result_of(&mut e, Some("s")).extremes, saved.extremes);
+}
+
+#[test]
+fn laminate_section_schema_rejects_invalid_plies_without_journaling() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"material.add","name":"ply","E":"100 GPa","nu":0.2}"#);
+    let hash = e.model_hash();
+    let valid = serde_json::json!({"material":"ply","thickness":"1 mm","angle":"0 deg"});
+    for plies in [
+        vec![],
+        vec![serde_json::json!({"material":"ply","thickness":"1e308 m"}); 2],
+        vec![valid.clone(); 257],
+        vec![serde_json::json!({"material":"missing","thickness":"1 mm"})],
+        vec![serde_json::json!({"material":"ply","thickness":"0 mm"})],
+        vec![serde_json::json!({"material":"ply","thickness":"1 N"})],
+        vec![serde_json::json!({"material":"ply","thickness":"1 mm","angle":"1 mm"})],
+    ] {
+        let command = serde_json::json!({"cmd":"section.add","name":"bad","shape":{"kind":"laminate","plies":plies}});
+        assert!(run(&mut e, &command.to_string()).is_err());
+        assert_eq!(e.model_hash(), hash);
+    }
+}
+
+#[test]
+fn laminate_sections_track_every_ply_material_and_clear_implicit_orientation() {
+    let mut e = engine();
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[1,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"bottom","E":"100 GPa","nu":0,"rho":"1000 kg/m^3","alpha":"0 1/K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"top","E":"100 GPa","nu":0,"yield":"100 MPa","plasticity":{"H":"1 GPa"}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"stack","shape":{"kind":"laminate","plies":[{"material":"bottom","thickness":"1 mm"},{"material":"top","thickness":"1 mm"}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"],"orientation":"y"}"#);
+    assert!(e.warnings().iter().all(|w| w.code != "model.no-material"));
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"bottom","to":"base"}"#);
+    assert_eq!(e.model().section("stack").unwrap().plies[1].material, "top");
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-1 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"load.temperature","name":"hot","bodies":["skin"],"value":"310 K","reference":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["g","hot"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let summary = result_of(&mut e, Some("s"));
+    assert_eq!(summary.assumptions.len(), 2);
+    assert!(summary.assumptions.iter().all(|a| a.material == "top" && a.body == "skin"));
+    assert_eq!(summary.assumptions[0].property, AssumedMaterialProperty::Rho);
+    assert_eq!(summary.assumptions[1].property, AssumedMaterialProperty::Alpha);
+    let warning = summary.warnings.iter().find(|w| w.code == "material.plasticityIgnored").unwrap();
+    assert!(warning.text.contains("'top'"));
+    let reaction: f64 = summary.reactions.iter().map(|r| r.total[2].value).sum();
+    assert!((reaction - 1.0).abs() < 1e-8, "only the bottom ply has density: {reaction}");
+    ok(&mut e, r#"{"cmd":"step.remove","name":"s"}"#);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"hot"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"root"}"#);
+    // Reassigning without an axis clears it; replacing the implicit Body clears its section too.
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"]}"#);
+    assert_eq!(e.model().mesher_orientation, None);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"],"orientation":"x"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"other","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[1,1]}]}}"#,
+    );
+    assert_eq!(e.model().mesher_orientation, None);
+    assert_eq!(e.model().mesher_section, None);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["other"],"orientation":"x"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+    assert_eq!(e.model().mesher_orientation, None);
+    // Replacing the laminate releases the materials for deletion.
+    ok(&mut e, r#"{"cmd":"section.add","name":"stack","shape":{"kind":"shell","thickness":"2 mm"}}"#);
+    assert!(e.model().section("stack").unwrap().plies.is_empty());
+    ok(&mut e, r#"{"cmd":"material.remove","name":"top"}"#);
+}
+
+#[test]
+fn laminate_sections_reject_solid_elements_before_material_fallback() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"solid","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"ply","E":"100 GPa","nu":0}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"stack","shape":{"kind":"laminate","plies":[{"material":"ply","thickness":"1 mm"}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["solid"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"solid.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":[]}"#);
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("body 'solid'"));
+    assert!(error.cause.contains("require shell elements"));
+}
+
+#[test]
+fn shell_surface_projection_units_and_refinement_preserve_geometry() {
+    use femlab_engine::model::MesherSettings;
+    let mut e = engine();
+    for projection in [
+        serde_json::json!({"kind":"sphere","center":["0 mm","0 m","0 m"],"radius":"1000 mm"}),
+        serde_json::json!({"kind":"cylinder","center":["0 m","0 m","0 m"],"radius":"1 m","axis":[0,0,2]}),
+    ] {
+        let sphere = projection["kind"] == "sphere";
+        let corners = if sphere {
+            serde_json::json!([
+                ["1 m", "-1 m", "-1 m"],
+                ["1 m", "1 m", "-1 m"],
+                ["1 m", "1 m", "1 m"],
+                ["1 m", "-1 m", "1 m"]
+            ])
+        } else {
+            serde_json::json!([
+                ["1 m", "0 m", "0 m"],
+                ["0.8 m", "0.6 m", "0 m"],
+                ["0.8 m", "0.6 m", "1 m"],
+                ["1 m", "0 m", "1 m"]
+            ])
+        };
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[{"corners":corners,"n":[2,2],"projection":projection}]}});
+        ok(&mut e, &command.to_string());
+        assert_eq!(e.model().implicit_body(), Some("shell"));
+        let mesh = &e.mesh().unwrap().mesh;
+        assert_eq!(mesh.n_elems(), 4);
+        for point in mesh.coords.chunks_exact(3) {
+            let radius_sq = point[0] * point[0] + point[1] * point[1] + if sphere { point[2] * point[2] } else { 0.0 };
+            assert!((radius_sq - 1.0).abs() < 1e-14);
+        }
+        let original = &e.model().mesh.as_ref().unwrap().mesher;
+        let scaled = femlab_engine::mesh::scale_mesher(original, 1.0, 0.5);
+        let MesherSettings::Surface { body, patches } = &scaled else { panic!("surface") };
+        assert_eq!(body, "shell");
+        assert_eq!(patches[0].n, [4, 4]);
+        let restored = femlab_engine::mesh::scale_mesher(&scaled, 0.5, 1.0);
+        assert_eq!(&restored, original);
+        assert!(set_info(&mut e, "shell.top").measure.value > 0.0);
+        let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+        assert_eq!(model.bodies[0].measure.unit, "m^2");
+        assert!(model.bodies[0].measure.value > 0.0);
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"shell","to":"surface"}"#);
+        assert_eq!(e.model().implicit_body(), Some("surface"));
+        assert!(set_info(&mut e, "surface.top").measure.value > 0.0);
+    }
+}
+
+#[test]
+fn shell_surface_validation_reports_locations_and_rejects_incompatible_meshes() {
+    let mut e = engine();
+    let patch = serde_json::json!({"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[1,1]});
+    for (pointer, value, location) in [
+        ("/n/0", serde_json::json!(0), "mesher.patches[0].n"),
+        ("/corners/0/1", serde_json::json!("1 N"), "mesher.patches[0].corners[0][1]"),
+        ("/corners/0/0", serde_json::json!({"value":1e308,"unit":"km"}), "mesher.patches[0].corners[0][0]"),
+    ] {
+        let mut invalid = patch.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
+        let hash = e.model_hash();
+        let error = err(&mut e, &command.to_string());
+        assert_eq!(error.where_.as_deref(), Some(location));
+        assert_eq!(e.model_hash(), hash);
+    }
+    for axis in [[0.0, 0.0, 0.0], [1e308, 0.0, 0.0]] {
+        let mut invalid = patch.clone();
+        invalid["projection"] =
+            serde_json::json!({"kind":"cylinder","center":["0 m","0 m","0 m"],"radius":"1 m","axis":axis});
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
+        assert_eq!(err(&mut e, &command.to_string()).where_.as_deref(), Some("mesher.patches[0].projection.axis"));
+    }
+    for kind in ["sphere", "cylinder"] {
+        for (key, value) in
+            [("center", serde_json::json!(["1 N", "0 m", "0 m"])), ("radius", serde_json::json!("-1 m"))]
+        {
+            let mut invalid = patch.clone();
+            let mut projection = serde_json::json!({"kind":kind,"center":["0 m","0 m","0 m"],"radius":"1 m"});
+            if kind == "cylinder" {
+                projection["axis"] = serde_json::json!([0, 0, 1]);
+            }
+            projection[key] = value;
+            invalid["projection"] = projection;
+            let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[invalid]}});
+            let error = err(&mut e, &command.to_string());
+            assert!(error.where_.unwrap().starts_with(&format!("mesher.patches[0].projection.{key}")));
+        }
+    }
+    for (order, simplices) in [(2, false), (1, true)] {
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[patch]},"order":order,"simplices":simplices});
+        ok(&mut e, &command.to_string());
+        let error = e.query(Query::Mesh {}).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some("mesher"));
+    }
+    let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[]}});
+    ok(&mut e, &command.to_string());
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::MeshFailed);
+    assert_eq!(error.where_.as_deref(), Some("mesher.patches"));
+    let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","patches":[patch]}});
+    ok(&mut e, &command.to_string());
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 mm"}}"#);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::ModelIllPosed);
 }
 
 // ---------------------------------------------------------------- adaptive refinement (#83)

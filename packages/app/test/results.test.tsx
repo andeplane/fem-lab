@@ -134,6 +134,24 @@ describe('fields and the legend', () => {
     expect(choiceOf('nope').key).toBe('vonMises');
   });
 
+  it('offers each retained ply face independently with stress units and all six tensor components', () => {
+    const fields = ['stressPly:1:top', 'stressPly:2:bottom'];
+    const choices = fieldChoices(fields);
+    expect(choices).toHaveLength(12);
+    expect(fieldChoices(fields.flatMap((field) => Array<string>(6).fill(field)))).toEqual(choices);
+    for (const field of fields) {
+      expect(siUnitOf(field)).toBe('Pa');
+      expect(displayUnitOf(field, { stress: 'MPa' })).toBe('MPa');
+      for (let component = 0; component < 6; component++) {
+        const key = fieldKeyOf(field, component);
+        expect(choiceOf(key)).toEqual(choices.find((c) => c.field === field && c.component === component));
+      }
+    }
+    expect(choiceOf(fieldKeyOf(fields[0]!, null)).label).toBe('σxx ply 1 top');
+    expect(() => fieldKeyOf(fields[0]!, 6)).toThrowError(expect.objectContaining({ code: 'unsupported' }));
+    expect(fieldChoices(['stressPly:0:top', 'stressPly:1:middle'])).toEqual([]);
+  });
+
   it('collapses a vector to its magnitude, and leaves a scalar alone', () => {
     expect([...magnitude(Float32Array.from([3, 4, 0, 0, 0, 2]), true)]).toEqual([5, 2]);
     const scalar = Float32Array.from([1, 2]);

@@ -1238,6 +1238,95 @@ payload caches on every Solve Ack even when that hash is unchanged.
 
 ## G. Shells and plates (phase 8)
 
+The MITC4 kinematics foundation for #64 is checked in `tests/support/shell.rs`,
+included by the engine's `fem` test binary. Constant membrane and transverse shear
+strains are checked on a distorted quadrilateral against a prescribed Cartesian
+strain tensor; all six rigid motions give zero strain on a warped surface with
+varying directors, at three thickness positions. A constant-curvature plate gives
+`εxx = z κx`, `εyy = z κy`, `γxy = 2z κxy` and zero transverse shear at thicknesses
+1, 1e-2, 1e-5 and 1e-8 m. These are kinematic patch tests, not evidence that the
+assembled shell benchmarks below pass. The Element Extension Point now integrates
+homogeneous thickness sections, stiffness, mass, face/body/thermal loads and
+through-thickness recovery. Its additional tests verify six rigid modes, positive
+consistent and lumped mass, total mass, bending energy and opposite signed surface
+stresses. End moments on a clamped shell strip at ν=0 reproduce
+`w_tip = −M L²/(2 D b)` at 1/2/4 cells through the normal nodal-moment load and
+static solver paths. The shell kernel itself reaches 100 % lines, functions and
+regions in `cargo llvm-cov` at test optimisation level 0. G1 runs through the standard static procedure: at 4/8/16 cells per side,
+`w D / (q a⁴)` is 0.0039690074 / 0.0040414433 / 0.0040572339 against the Navier
+reference 0.00406235 (2.30 / 0.515 / 0.126 % error, final observed rate 2.03).
+The plate has a=1 m, t=0.001 m, E=210 GPa, ν=0.3 and q=1 Pa. All edges hold
+normal displacement and the rotation normal to that edge; xmin holds ux and ymin
+holds uy to remove in-plane rigid motion. Reactions balance the 1 N load.
+G2 uses the projected-cylinder surface mesher and its analytic directors. At
+4/8/16 elements in each quarter-roof direction, midside vertical displacement is
+0.2860472 / 0.2949565 / 0.2993387 m (5.41 / 2.46 / 1.01 % from 0.3024 m).
+Geometry, material and support conditions follow the
+[COMSOL Scordelis–Lo benchmark](https://doc.comsol.com/6.4/doc/com.comsol.help.models.sme.scordelis_lo_roof/scordelis_lo_roof.html):
+R=25 m, total length=50 m, opening=80°, t=0.25 m, E=4.32e8 Pa, ν=0.
+The quarter model holds two symmetry edges and the end diaphragm's transverse
+translations. A volumetric gravity load integrates to 90 N/m² on the midsurface.
+Command-level surface meshing, thickness assignment and moment loading pass a
+journal replay and constant-curvature strip solve. Top/bottom element-node stresses
+recover the independent extreme-fibre value `6M/(b t²)` through the static and query paths.
+The unaveraged `shellMoment` field integrates `z σ dz` through the thickness; the
+same strip recovers `Mxx = M/b = 1 N` and five zero tensor components at every
+element node. Components use global tensor axes and units of moment per unit width.
+The GPU-PCG regression repeats the strip at 2/4/8 elements, checking displacement,
+rotation, both surface stresses and the moment resultant against these closed
+forms within 1e-6 relative error. It runs on Metal locally and the software adapter
+in the `gpu-tests` CI suite.
+The Chromium GPU smoke repeats these checks through the production WASM host,
+explicitly selects Dawn's SwiftShader adapter and verifies its reported identity.
+G3 (LE3) covers a spherical octant with three projected cube-face patches, so no
+element collapses at the pole. R=10 m, t=0.04 m, E=68.25 GPa, ν=0.3; radial point
+loads at the equatorial symmetry corners are +2 kN in x and −2 kN in y. Two
+symmetry boundaries and the pole's vertical restraint remove rigid motion, following
+[the Abaqus LE3 benchmark](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-le3.htm).
+With 4/8/16 divisions per patch edge (48/192/768 elements), displacement at A is
+0.1749358 / 0.1831415 / 0.1840576 m against 0.185 m (5.44 / 1.00 / 0.51 % error).
+G4 (LE2) preserves the distorted four-patch layout of the
+[Abaqus LE2 bending test](https://abaqus.uclouvain.be/English/SIMACAEBMKRefMap/simabmk-c-le2.htm):
+R=1 m, opening=30°, axial length=0.5 m, t=0.01 m, internal point E at θ=20°, z=0.3 m.
+One angular edge is clamped and both axial edges have symmetry supports. At 1/2/4/8
+divisions per patch edge, outer circumferential stress under a 1000 N m/m edge
+moment is 55.396 / 58.911 / 58.946 / 59.423 MPa. The second LE2 case (0.6 MPa
+outward midsurface pressure and 60 MPa tangential end traction) gives
+62.508 / 62.295 / 60.930 / 60.318 MPa. Both target 60 MPa; final errors are 0.96% and 0.53%.
+G5 follows the [Abaqus LE5 Z-section](https://abaqus.uclouvain.be/English/SIMACAEBMKRefMap/simabmk-c-le5.htm),
+length 10 m, web width 2 m, two 1 m flanges, t=0.1 m, E=210 GPa, ν=0.3.
+The root is clamped and uniform opposing 0.6 MN flange shears apply 1.2 MN m torque.
+The midsurface axial stress at x=2.5 m on the outer lower-flange edge is
+−98.473 / −108.353 / −110.569 MPa on 24/96/384 elements. Refinement increments
+shrink; the finest error against −108 MPa is 2.38%, within the 3% tolerance.
+G7 uses the pinched-cylinder and full-hemisphere references in §§3.3 and 3.8 of
+[Ko, Lee and Bathe (2017), Performance of the MITC3+ and MITC4+ shell elements](https://web.mit.edu/kjb/www/Principal_Publications/Performance_of_the_MITC3%2B_and_MITC4%2B_shell_elements_in_widely_used_benchmark_problems.pdf).
+That paper attributes these references to Belytschko et al. (1985); the former
+MacNeal–Harder attribution in this table was not supported. The 0.0924 target is
+for a **full hemisphere**, not the 18° cut-out problem (whose reference is 0.093).
+For the cylinder, R=300, L=600, t=3, E=3e6, ν=0.3 and P=1; the octant carries P/4,
+with rigid end diaphragms and three symmetry boundaries. At 8/16/32/64 divisions,
+displacement is 1.4491683e−5 / 1.7344691e−5 / 1.8162686e−5 / 1.8409473e−5.
+Refinement increments shrink and the final error against 1.8248e−5 is 0.89%.
+As in the published MITC4 results, the sequence crosses the approximate reference.
+The full hemisphere uses the G3 geometry with E=6.825e7, unit forces on the quarter
+model, and a vertical datum at loaded point A. Displacements at 4/8/16 divisions
+per cube-face patch are 0.0874679 / 0.0915707 / 0.0920288, with final error 0.40%.
+Top/bottom fields reach browser contours with element-node identities retained,
+including at shared nodes and when bodies are hidden.
+G6 follows the [Abaqus FV12 setup and reference table](https://ceae-server.colorado.edu/v2016/books/bmk/ch04s04anf18.html):
+a 10 m square, t=0.05 m, E=200 GPa, ν=0.3, ρ=8000 kg/m³. All nodes hold ux, uy
+and rz; no transverse supports are added. Three bending rigid modes remain below
+4e−5 Hz. The seven elastic frequencies on the 32×32 mesh are
+1.621789 / 2.362091 / 2.927366 / 4.194654 / 4.194654 / 7.395800 / 7.395800 Hz.
+The largest relative error decreases from 8.31% (8×8) to 1.43% (16×16) to 0.91%
+(32×32). The source lists six elastic reference frequencies; the repeated seventh
+7.416 Hz target here also checks the degenerate pair required by square symmetry.
+All G1–G7 cases now run in the shell test module. Full coverage and remaining
+host verification are still pending. The shear interpolation follows §2 of
+[Ko, Lee and Bathe (2017)](https://doi.org/10.1016/j.compstruc.2016.11.004),
+which reviews the original MITC4 formulation before introducing MITC4+.
+
 | # | Case | Reference | Tolerance |
 |---|---|---|---|
 | G1 | Simply-supported square plate, uniform load | w_max = 0.00406 qa⁴/D | 1 % |
@@ -1246,7 +1335,47 @@ payload caches on every Solve Ack even when that hash is unchanged.
 | G4 | NAFEMS LE2 cylindrical shell patch | 60 MPa | 2 % |
 | G5 | NAFEMS LE5 Z-section cantilever | −108 MPa | 3 % |
 | G6 | NAFEMS FV12 free thin square plate, modal | 1.622, 2.360, 2.922, 4.233, 4.233, 7.416, 7.416 Hz | 1 % |
-| G7 | Pinched cylinder / hemisphere (MacNeal–Harder) | 1.8248e-5 / 0.0924 — **verify against the paper** | 2 % |
+| G7 | Pinched cylinder / full hemisphere (Belytschko et al.; Ko–Lee–Bathe verification above) | 1.8248e-5 / 0.0924 | 2 % |
+| G8 | Bonded cross-ply and symmetric laminate patches, including thermal mismatch and eccentric density | Classical A/B/D energy; bimetal curvature and interface stress; mass and gravity moment | 1e-10 relative energy; 1e-8 absolute force/stress |
+
+G8 follows the laminate force/moment integrals and symmetry argument in
+[NASA RP-1351, sections III–IV](https://ntrs.nasa.gov/citations/19950009349).
+For equal-thickness 0°/90° plies with E1=100 GPa, E2=20 GPa and zero Poisson
+ratios, the independent closed forms are A11=(E1+E2)t/2,
+B11=(E2−E1)t²/8 and D11=(E1+E2)t³/24. Reversing the plies reverses B11.
+A 0°/90°/90°/0° layup has B11=0 and D11=(7E1+E2)t³/96. Prescribed membrane
+strain and curvature on an 8 m² patch check the combined energy at thicknesses
+20/2/0.2 mm, so membrane–bending coupling and the thin limit are both exercised.
+An off-axis 45° ply checks the transformed stiffness and free anisotropic expansion
+on a spatially rotated patch, including composition with Material orientation.
+The assembled 1 m × 1 m, 10 mm-thick cross-ply strip carries a unit end moment
+and no axial force. Solving the independent 2×2 A/B/D system gives εxx=5e-7,
+κxx=3e-4/m and tip w=−0.15 mm. At 1/2/4 elements the static procedure checks
+these displacements, a 1 N moment resultant, +40 kPa top stress and −100 kPa
+bottom stress within 1e-7 relative error.
+A simply-supported 1 m square with the symmetric layup, t=1 mm and ρ=8000 kg/m³
+checks the first modal frequency against the independent Navier sine mode:
+f=π/2 sqrt((D11+D22+4D66)/(ρt))=2.027889338 Hz. At 4/8/16 elements per edge,
+frequencies are 2.186832949/2.065859727/2.037235702 Hz; errors decrease from
+7.84% to 1.87% to 0.46%, with approximately second-order convergence. A property
+test additionally checks symmetric positive-semidefinite stiffness over varying
+ply thickness ratios, stiffnesses, orientations and displacement fields.
+
+The thermal subcase uses two equal isotropic plies, E=10 MPa, ν=0, total t=10 mm,
+αbottom=1e-5/K, αtop=3e-5/K and ΔT=100 K. Free strain is 0.002 in both
+in-plane directions and free curvature is 0.3/m. Force equilibrium and four
+ply-face stresses are checked: −5/+10 kPa in the bottom ply and −10/+5 kPa
+in the top ply. The interface values stay distinct. A separate 20 mm section with
+1000/2000 kg/m³ plies has mass 240 kg over 8 m² and an eccentric gravity moment
+of 0.4 N m under 1 m/s² in-plane acceleration. Registry tests also author and
+replay the cross-ply strip through `section.add` with `kind: "laminate"`, retain
+its outer-face stresses and moment, and verify that every ply contributes to
+material assumptions and gravity. The retained fields `stressPly:1:top` and
+`stressPly:2:bottom` independently recover 50 and 10 kPa at the cross-ply
+interface and remain unchanged after section edits. Native/WASM replay checks
+cover all four ply faces as well as the outer-face fields and moment. The cross-ply
+strip also keeps these final fields and rotations when solved over a retained
+temperature history with zero thermal expansion.
 
 ## H. Plugins (phase P)
 

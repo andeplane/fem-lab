@@ -20,14 +20,18 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::command::SectionSpec;
+use crate::command::{SectionSpec, ShellPlySpec};
 use crate::error::Error;
+use crate::model::ShellPly;
 use crate::units::{Area, Length, SecondMoment, Q};
 
 /// One cross-section in SI, in the member's local axes. See the module docs for the axes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Section {
+    /// Shell thickness in metres. Present only for a shell section; line properties are zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<f64>,
     /// Cross-sectional area, m².
     pub a: f64,
     /// Second moment of area about local y, m⁴.
@@ -82,10 +86,18 @@ fn rect_j(w: f64, h: f64) -> f64 {
 /// The section properties of one `SectionSpec`, in SI. Pure: the same spec always gives the
 /// same numbers, which is what lets a Journal replay a Model byte for byte.
 pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
+    resolve(spec).map(|(section, _)| section)
+}
+
+/// Resolve section geometry and its optional material-referencing ply stack together.
+pub(crate) fn resolve(spec: &SectionSpec) -> Result<(Section, Vec<ShellPly>), Error> {
     match spec {
+        SectionSpec::Laminate { plies } => return laminate(plies),
+        SectionSpec::Shell { thickness } => Ok(shell(len(thickness, "thickness")?)),
         SectionSpec::Rectangle { width, height } => {
             let (b, h) = (len(width, "width")?, len(height, "height")?);
             Ok(Section {
+                thickness: None,
                 a: b * h,
                 i_y: b * h * h * h / 12.0,
                 i_z: h * b * b * b / 12.0,
@@ -100,6 +112,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             let r = len(radius, "radius")?;
             let i = std::f64::consts::PI * r * r * r * r / 4.0;
             Ok(Section {
+                thickness: None,
                 a: std::f64::consts::PI * r * r,
                 i_y: i,
                 i_z: i,
@@ -115,6 +128,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             let ri = positive(r - t, "radius - thickness")?;
             let i = std::f64::consts::PI * (r * r * r * r - ri * ri * ri * ri) / 4.0;
             Ok(Section {
+                thickness: None,
                 a: std::f64::consts::PI * (r * r - ri * ri),
                 i_y: i,
                 i_z: i,
@@ -133,6 +147,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             let (a_web, a_flanges) = (hw * tw, 2.0 * b * tf);
             let a = a_web + a_flanges;
             Ok(Section {
+                thickness: None,
                 // Strong axis: the full outer rectangle minus the two voids beside the web.
                 i_y: (b * h * h * h - (b - tw) * hw * hw * hw) / 12.0,
                 i_z: (2.0 * tf * b * b * b + hw * tw * tw * tw) / 12.0,
@@ -155,6 +170,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             // The web spans the full height at y ∈ [0, tw]; each flange sticks out from it.
             let y_bar = (a_web * 0.5 * tw + a_flanges * (tw + 0.5 * bf)) / a;
             Ok(Section {
+                thickness: None,
                 i_y: tw * h * h * h / 12.0 + 2.0 * rect_i(bf, tf, 0.5 * (h - tf)),
                 i_z: rect_i(h, tw, 0.5 * tw - y_bar) + 2.0 * rect_i(tf, bf, tw + 0.5 * bf - y_bar),
                 j: (h * tw * tw * tw + 2.0 * bf * tf * tf * tf) / 3.0,
@@ -166,6 +182,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             })
         }
         SectionSpec::Generic { a, i_y, i_z, j, k_y, k_z, c_y, c_z } => Ok(Section {
+            thickness: None,
             a: positive(area(a, "a")?, "a")?,
             i_y: positive(moment(i_y, "iY")?, "iY")?,
             i_z: positive(moment(i_z, "iZ")?, "iZ")?,
@@ -176,6 +193,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             c_z: fibre(c_z, "cZ")?,
         }),
     }
+    .map(|section| (section, Vec::new()))
 }
 
 fn area(q: &Q<Area>, at: &str) -> Result<f64, Error> {
@@ -208,4 +226,26 @@ fn fibre(c: &Option<Q<Length>>, at: &str) -> Result<f64, Error> {
     } else {
         Err(Error::schema(format!("{at} must be zero or positive and finite, got {v}")).at(format!("shape.{at}")))
     }
+}
+
+fn shell(thickness: f64) -> Section {
+    Section { thickness: Some(thickness), a: 0.0, i_y: 0.0, i_z: 0.0, j: 0.0, k_y: 0.0, k_z: 0.0, c_y: 0.0, c_z: 0.0 }
+}
+
+fn laminate(plies: &[ShellPlySpec]) -> Result<(Section, Vec<ShellPly>), Error> {
+    if plies.is_empty() || plies.len() > 256 {
+        return Err(Error::schema("a laminate needs 1 to 256 plies").at("shape.plies"));
+    }
+    let mut resolved = Vec::with_capacity(plies.len());
+    let mut total = 0.0;
+    for (i, ply) in plies.iter().enumerate() {
+        let thickness = len(&ply.thickness, &format!("plies[{i}].thickness"))?;
+        let angle = match &ply.angle {
+            Some(q) => q.si().map_err(|e| e.at(format!("shape.plies[{i}].angle")))?,
+            None => 0.0,
+        };
+        total += thickness;
+        resolved.push(ShellPly { material: ply.material.clone(), thickness, angle });
+    }
+    Ok((shell(positive(total, "totalThickness")?), resolved))
 }

@@ -218,7 +218,10 @@ fn missing_sections(p: &Problem<'_>) -> Vec<Error> {
         .blocks
         .iter()
         .enumerate()
-        .filter(|(b, blk)| blk.kind.dim() == 1 && p.section_of_block[*b].is_none())
+        .filter(|(b, blk)| {
+            (blk.kind.dim() == 1 || blk.kind == femlab_geometry::mesh::ElementKind::Shell4)
+                && p.section_of_block[*b].is_none()
+        })
         .map(|(b, _)| p.body_of_block[b].as_str())
         .collect();
     bodies.dedup();

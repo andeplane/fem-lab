@@ -47,7 +47,7 @@ _Avoid_: CAD, part file, solid model
 
 **Body**:
 One connected region of the geometry, carrying a material and a name. Explicit Bodies own
-Shapes; mapped and swept mapped meshers own an implicit Body with the same rename and
+Shapes; mapped, swept mapped and shell surface meshers own an implicit Body with the same rename and
 guarded-removal lifecycle (ADR 0016). A free mesher references an explicit Body.
 _Avoid_: part, instance, solid, volume
 
@@ -80,6 +80,31 @@ beam answers exactly as it does alone. The section's local z (its height) follow
 `orientation` axis of `section.assign` or the default rule (global Z, global X for a
 vertical member); local y closes the right-handed triad.
 _Avoid_: frame element, bar (that is a truss), B31
+
+**Shell**:
+A four-node MITC4 midsurface element (`shell4`) with three displacements and three
+rotations per node. A shell Section supplies its thickness; a director at each
+corner identifies the positive (top) side. Transverse shear uses mixed covariant
+interpolation so thin plates do not shear-lock. A small drilling penalty couples
+rotation about the normal to the surface's in-plane spin (ADR 0024). Top and bottom
+stress refer to offsets of plus and minus half the thickness from the midsurface.
+The `stressTop` and `stressBottom` fields retain global Cartesian stresses per
+element node. `shellMoment` is the stress first moment `∫ z σ dz`, in global
+tensor components and N (moment per unit width), positive for tension on the top
+side. It also remains per element node. The `surface` mesher owns an implicit Body and joins bilinear,
+cylindrical or spherical patches while preserving separate directors at creases.
+
+**Laminate section**:
+A perfectly bonded stack of shell plies, ordered bottom to top and centred on the
+meshed midsurface. Each ply references a Material and supplies a thickness and
+angle. Its material axes follow the shell surface, with an optional projected
+reference axis from `section.assign`. Ply materials replace the Body material.
+The common MITC4 displacement field integrates each ply separately, preserving
+extension–bending coupling, thermal mismatch and eccentric mass (ADR 0024).
+`stressPly:k:bottom` and `stressPly:k:top` retain separate global stresses on
+each ply face, with k counting from 1 at the bottom. The fields use the same
+unaveraged element-node layout as outer shell stresses and carry zeros on
+elements without that ply.
 
 **Section force**:
 The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`

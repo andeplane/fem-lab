@@ -121,6 +121,18 @@ pub(crate) fn stress_fields(p: &Problem<'_>, u: &[f64], pool: &Pool, fields: &mu
     fields.insert(Field::Stress, nodal_stress);
     fields.insert(Field::StressUnaveraged, unaveraged);
     fields.insert(Field::Strain, nodal_strain);
+    if p.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
+        for (field, side) in [(Field::StressTop, 1.0), (Field::StressBottom, -1.0)] {
+            let stress = pool
+                .install(|| stress::shell_surface_stress(p, u, side))
+                .expect("the shell stiffness integral accepted this section and material");
+            fields.insert(field, stress);
+        }
+        let moment = pool
+            .install(|| stress::shell_moments(p, u))
+            .expect("the shell stiffness integral accepted this section and material");
+        fields.insert(Field::ShellMoment, moment);
+    }
     // Per-member section forces exist only where a beam does; a Result without beams keeps
     // exactly the fields it had.
     if p.has_beams() {
@@ -369,7 +381,7 @@ pub(crate) async fn post(
 
     let mut fields = BTreeMap::new();
     fields.insert(Field::Displacement, vector_field(&u, dpn));
-    if p.has_beams() {
+    if dpn == crate::fem::problem::NODE_DOFS_MAX {
         fields.insert(Field::Rotation, rotation_field(&u));
     }
     fields.insert(Field::Reaction, vector_field(&r, dpn));
@@ -381,12 +393,15 @@ pub(crate) async fn post(
     scalars.insert("rel_residual".to_string(), solver.rel_residual);
     let ex = fields
         .iter()
-        .filter(|(_, f)| f.per == Per::Node)
+        .filter(|(_, f)| f.per != Per::ElemGp)
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
+        ply_stresses: pool
+            .install(|| stress::shell_ply_stresses(p, &u))
+            .expect("assembly and stress recovery accepted these shell sections"),
         fields,
         scalars,
         extremes: ex,
@@ -532,6 +547,12 @@ pub fn run_history(
     fields.insert(Field::StressUnaveraged, unaveraged);
     fields.insert(Field::Strain, nodal_strain);
     let mut scalars = BTreeMap::new();
+    if dpn == crate::fem::problem::NODE_DOFS_MAX {
+        fields.insert(Field::Rotation, rotation_field(&u));
+    }
+    if p.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
+        stress_fields(p, &u, pool, &mut fields);
+    }
     scalars.insert("min_det_j".to_string(), a.min_det_j);
     for (c, axis) in ["x", "y", "z"].iter().enumerate() {
         scalars.insert(format!("applied_total_{axis}"), applied.force[c]);
@@ -539,12 +560,15 @@ pub fn run_history(
     scalars.insert("rel_residual".to_string(), solver.rel_residual);
     let ex = fields
         .iter()
-        .filter(|(_, f)| f.per == Per::Node)
+        .filter(|(_, f)| f.per != Per::ElemGp)
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
+        ply_stresses: pool
+            .install(|| stress::shell_ply_stresses(p, &u))
+            .expect("assembly and stress recovery accepted these shell sections"),
         fields,
         scalars,
         extremes: ex,

@@ -58,6 +58,9 @@ it('transfers independent retained meshes and f64 fields repeatedly without expo
     const rendered = await transport.surface({ resultId: first });
     expect(rendered.resultId).toBe(first);
     expect(rendered.positions).toBeInstanceOf(Float32Array);
+    expect(rendered.triElementNode).toBeInstanceOf(Uint32Array);
+    expect([...rendered.triElementNode!]).toEqual(surface.triElementNode);
+    expect(surface.triElementNode.length).toBe(surface.indices.length);
     expect([...rendered.positions]).toEqual(surface.positions.map(Math.fround));
     const rf = await transport.field('heat', 'temperature', 0, first);
     expect(rf.resultId).toBe(first);

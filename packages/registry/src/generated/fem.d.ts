@@ -171,25 +171,28 @@ export interface Fem {
   };
   section: {
     /**
-     * Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
-     * I, channel, or the properties given directly. A line member has no cross-section
+     * Define a section: homogeneous shell thickness, a bottom-to-top laminate stack
+     * of 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section
+     * (`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section
      * geometry of its own, so the Section is where its area, second moments, torsion constant,
      * shear factors and extreme-fibre distances come from. Re-issuing with an existing name
      * edits the section in place. Assign it to Bodies with section.assign.
      */
     add(args: Omit<Extract<Command, { cmd: 'section.add' }>, 'cmd'>): Promise<Ack>;
     /**
-     * Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
+     * Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;
      * one without it is reported by query.model warnings and blocks solve.run with
-     * model.no-section. A Section on a solid or sheet Body is carried but never used: those
-     * Bodies get their cross-section from their geometry. `orientation` names the global
+     * model.no-section. A shell needs a shell thickness section, a line member needs a
+     * cross-section, and a solid gets its section from its geometry. `orientation` names the global
      * axis the section's local z (its `height` direction, the one `iY` resists bending along)
      * follows for the beams of these Bodies: local z is that axis made perpendicular to each
      * member, and local y completes the right-handed triad (y = z × x). It may not lie along
      * a member. Without it the rule is: local z follows global Z, so a horizontal beam has
      * its height vertical; a member within 1e-6 of vertical follows global X instead, so a
      * column's local z points along +X. `iZ` then resists bending along local y. Trusses
-     * ignore it.
+     * ignore it. For laminate shells, orientation instead selects the tangent projection
+     * of that global axis as the zero-angle ply direction. A normal axis is rejected.
+     * Without it ply angles use the midsurface's first parametric direction.
      */
     assign(args: Omit<Extract<Command, { cmd: 'section.assign' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -605,7 +608,10 @@ export interface Fem {
     surface(args?: Omit<Extract<Query, { query: 'query.surface' }>, 'query'>): Promise<ResultSurface>;
     /**
      * A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
-     * Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
+     * Field names include mode:k for one-based modal shapes and stressPly:k:bottom/top
+     * for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
+     * are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
+     * that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
      * omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
      */
     field(args: Omit<Extract<Query, { query: 'query.field' }>, 'query'>): Promise<ResultField>;

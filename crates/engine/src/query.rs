@@ -94,7 +94,10 @@ pub enum Query {
     },
 
     /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
-    /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
+    /// Field names include mode:k for one-based modal shapes and stressPly:k:bottom/top
+    /// for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
+    /// are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
+    /// that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
     /// omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
     #[serde(rename = "query.field", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
@@ -1206,6 +1209,9 @@ pub struct ResultSurface {
     pub positions: Vec<f64>,
     /// Triangle node indices, three per triangle, oriented outward.
     pub indices: Vec<u32>,
+    /// Index into element-node fields for each triangle corner, in the same order as indices.
+    /// Shared mesh nodes retain distinct field values on their incident elements.
+    pub tri_element_node: Vec<u32>,
     pub tri_body: Vec<u32>,
     /// Global element behind each surface triangle; indexes element-based Result fields.
     pub tri_element: Vec<u32>,

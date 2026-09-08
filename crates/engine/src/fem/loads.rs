@@ -219,10 +219,7 @@ fn body_load(p: &Problem<'_>, g: [f64; 3], f: &mut [f64], totals: &mut [f64; 3])
                 let mut t = vec![0.0; nn];
                 p.gather_temperature(elem, &mut t);
                 let mut fe = vec![0.0; nd];
-                p.ctx(elem, &coords, &t).and_then(|c| {
-                    let rho = c.material.rho;
-                    element.body_load(&c, &|_x| [rho * g[0], rho * g[1], rho * g[2]], &mut fe)
-                })?;
+                p.ctx(elem, &coords, &t).and_then(|c| element.gravity_load(&c, g, &mut fe))?;
                 Ok::<_, Error>(fe)
             });
             for (i, part) in parts.into_iter().enumerate() {

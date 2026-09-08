@@ -127,7 +127,11 @@ impl Engine {
         self.mesh().ok()?;
         let built = self.mesh.as_ref().expect("built above");
         let (lo, hi) = built.mesh.bbox();
-        let dim = built.mesh.dim as i8;
+        let dim = if built.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
+            2
+        } else {
+            built.mesh.dim as i8
+        };
         let measure: f64 = (0..built.mesh.n_elems() as u32).map(|e| elem_measure(&built.mesh, e)).sum();
         let prefix = format!("{name}.");
         let faces = built.sets.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
@@ -755,12 +759,18 @@ impl Engine {
                     ref_: format!("section:{}", sec.name),
                     kind: "section".into(),
                     name: sec.name.clone(),
-                    summary: format!(
-                        "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
-                        units::fmt_sig(sec.section.a, 4),
-                        units::fmt_sig(sec.section.i_y, 4),
-                        units::fmt_sig(sec.section.i_z, 4)
-                    ),
+                    summary: match sec.section.thickness {
+                        Some(t) if !sec.plies.is_empty() => {
+                            format!("laminate: {} plies, thickness = {} m", sec.plies.len(), units::fmt_sig(t, 4))
+                        }
+                        Some(t) => format!("shell thickness = {} m", units::fmt_sig(t, 4)),
+                        None => format!(
+                            "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
+                            units::fmt_sig(sec.section.a, 4),
+                            units::fmt_sig(sec.section.i_y, 4),
+                            units::fmt_sig(sec.section.i_z, 4)
+                        ),
+                    },
                 });
             }
         }
@@ -851,6 +861,9 @@ fn face_measure(mesh: &Mesh, f: Face) -> f64 {
 /// divergence theorem over the faces in 3D, the shoelace over the corners in 2D.
 fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
     let kind = mesh.kind_of(e);
+    if kind == femlab_geometry::ElementKind::Shell4 {
+        return face_measure(mesh, Face { elem: e, local: 1 });
+    }
     if mesh.dim == 2 {
         let p: Vec<[f64; 3]> = mesh.elem_nodes(e).iter().take(kind.n_corners()).map(|&n| mesh.node(n)).collect();
         let mut a = 0.0;

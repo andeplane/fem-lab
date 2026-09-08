@@ -331,15 +331,31 @@ impl Engine {
         // analyse yet", and it needs a material like any other Body.
         let implicit = m.implicit_body();
         let has_geometry = !m.bodies.is_empty() || implicit.is_some();
-        if let Some(body) = implicit.filter(|_| m.mesher_material.is_none()) {
+        if let Some(body) = implicit.filter(|body| m.material_of_body(body).is_none()) {
             w.push(Warning {
                 code: "model.no-material".into(),
                 text: format!("Body '{body}' has no material; assign one with material.assign"),
                 where_: Some(format!("body '{body}'")),
             });
         }
+        if let Some(body) = implicit.filter(|_| {
+            m.mesh
+                .as_ref()
+                .is_some_and(|settings| matches!(settings.mesher, crate::model::MesherSettings::Surface { .. }))
+                && m.mesher_section
+                    .as_deref()
+                    .and_then(|name| m.section(name))
+                    .and_then(|s| s.section.thickness)
+                    .is_none()
+        }) {
+            w.push(Warning {
+                code: "model.no-section".into(),
+                text: format!("Body '{body}' needs a shell thickness section; use section.add and section.assign"),
+                where_: Some(format!("body '{body}'")),
+            });
+        }
         for b in &m.bodies {
-            if b.material.is_none() {
+            if m.material_of_body(&b.name).is_none() {
                 w.push(Warning {
                     code: "model.no-material".into(),
                     text: format!("Body '{}' has no material; assign one with material.assign", b.name),
@@ -780,26 +796,43 @@ impl Engine {
                 if !users.is_empty() {
                     return Err(in_use("material", name, &users, "bodies"));
                 }
+                let sections: Vec<_> = self
+                    .model
+                    .sections
+                    .iter()
+                    .filter(|section| section.plies.iter().any(|ply| ply.material == *name))
+                    .map(|section| section.name.as_str())
+                    .collect();
+                if !sections.is_empty() {
+                    return Err(in_use("material", name, &sections, "sections"));
+                }
                 self.model.materials.retain(|m| m.name != *name);
                 Ok(Output::None)
             }
             Command::SectionAdd { name, shape } => {
                 check_name(name)?;
-                let section = crate::fem::section::properties(shape)?;
-                let named = crate::model::NamedSection { name: name.clone(), section };
+                let (section, plies) = crate::fem::section::resolve(shape)?;
+                for ply in &plies {
+                    self.model.material(&ply.material).ok_or_else(|| {
+                        Error::not_found("material", &ply.material, &self.model.names(ObjectKind::Material))
+                    })?;
+                }
+                let named = crate::model::NamedSection { name: name.clone(), section, plies };
                 Ok(upsert(&mut self.model.sections, named, |s| &s.name, ObjectKind::Section))
             }
             Command::SectionAssign { section, bodies, orientation } => {
                 self.model
                     .section(section)
                     .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
-                // A Section belongs to explicit line geometry; a mesher's implicit Body is a
-                // surface and gets its cross-section from the idealisation, so it is not listed.
-                let known: Vec<&str> = self.model.bodies.iter().map(|b| b.name.as_str()).collect();
+                let known = self.model.names(ObjectKind::Body);
                 for b in bodies {
                     if !known.contains(&b.as_str()) {
                         return Err(Error::not_found("body", b, &known));
                     }
+                }
+                if self.model.implicit_body().is_some_and(|b| bodies.iter().any(|name| name == b)) {
+                    self.model.mesher_section = Some(section.clone());
+                    self.model.mesher_orientation = *orientation;
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.section = Some(section.clone());
@@ -811,13 +844,16 @@ impl Engine {
                 self.model
                     .section(name)
                     .ok_or_else(|| Error::not_found("section", name, &self.model.names(ObjectKind::Section)))?;
-                let users: Vec<&str> = self
+                let mut users: Vec<&str> = self
                     .model
                     .bodies
                     .iter()
                     .filter(|b| b.section.as_deref() == Some(name))
                     .map(|b| b.name.as_str())
                     .collect();
+                if self.model.mesher_section.as_deref() == Some(name) {
+                    users.extend(self.model.implicit_body());
+                }
                 if !users.is_empty() {
                     return Err(in_use("section", name, &users, "bodies"));
                 }
@@ -851,6 +887,8 @@ impl Engine {
                         self.check_body_unused(body)?;
                     }
                     self.model.mesher_material = None;
+                    self.model.mesher_section = None;
+                    self.model.mesher_orientation = None;
                 }
                 self.model.mesh = Some(MeshSettings {
                     mesher: settings,
@@ -1389,7 +1427,12 @@ impl Engine {
                 let point: Vec<(&str, usize, &[f64])> = point.iter().map(|(n, c, v)| (*n, *c, v.as_slice())).collect();
                 crate::io::write_vtu(&built.mesh, &point, &[("ElementId", 1, &ids), ("Body", 1, &bodies)])
             }
-            ExportFormat::Msh => crate::io::write_msh(&self.mesh()?.mesh),
+            ExportFormat::Msh => {
+                // Registry meshers produce either shells or volume/member elements; only
+                // the raw Mesh writer can receive the unsupported mixture of both.
+                crate::io::write_msh(&self.mesh()?.mesh)
+                    .expect("registry meshers do not mix shell and volume/member blocks")
+            }
             ExportFormat::Inp => {
                 let mesh = self.mesh()?.mesh.clone();
                 crate::io::write_inp(&mesh, &name)
@@ -1506,6 +1549,8 @@ impl Engine {
             if self.model.implicit_body() == Some(name) {
                 self.model.mesh = None;
                 self.model.mesher_material = None;
+                self.model.mesher_section = None;
+                self.model.mesher_orientation = None;
             }
             self.model.bodies.retain(|b| b.name != name);
             self.model.cuts.retain(|c| c.from != name);
@@ -1678,8 +1723,18 @@ impl Engine {
                 if m.mesher_material.as_deref() == Some(name) {
                     m.mesher_material = Some(to.into());
                 }
+                for section in &mut m.sections {
+                    for ply in &mut section.plies {
+                        if ply.material == name {
+                            ply.material = to.into();
+                        }
+                    }
+                }
             }
             ObjectKind::Section => {
+                if m.mesher_section.as_deref() == Some(name) {
+                    m.mesher_section = Some(to.into());
+                }
                 for sec in &mut m.sections {
                     if sec.name == name {
                         sec.name = to.into();

@@ -125,6 +125,7 @@ impl ResultRecord {
     pub(crate) fn field_bytes(&self) -> u64 {
         let r = &self.result;
         let values = r.fields.values().map(|f| f.data.len()).sum::<usize>()
+            + r.ply_stresses.iter().flat_map(|p| &p.faces).map(|f| f.data.len()).sum::<usize>()
             + r.modes.iter().map(|f| f.data.len()).sum::<usize>()
             + r.modal_dofs.iter().map(Vec::len).sum::<usize>()
             + r.frequencies.len()
@@ -156,6 +157,22 @@ impl ResultRecord {
 
     pub(crate) fn named_field(&self, name: &str) -> Result<(&crate::post::FieldData, crate::command::Field), Error> {
         use crate::command::Field;
+        if let Some(ply_face) = name.strip_prefix("stressPly:") {
+            let field = ply_face.split_once(':').and_then(|(ply, side)| {
+                let index = ply.parse::<usize>().ok()?.checked_sub(1)?;
+                let face = match side {
+                    "bottom" => 0,
+                    "top" => 1,
+                    _ => return None,
+                };
+                self.result.ply_stresses.get(index).map(|p| &p.faces[face])
+            });
+            return field.map(|f| (f, Field::Stress)).ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, format!("Result '{}' has no ply face '{name}'", self.id))
+                    .at("field")
+                    .suggest("query.result lists stressPly:k:bottom and stressPly:k:top in its extremes")
+            });
+        }
         if let Some(mode) = name.strip_prefix("mode:") {
             let index: usize = mode.parse().unwrap_or(0);
             return self.result.modes.get(index.wrapping_sub(1)).map(|f| (f, Field::Displacement)).ok_or_else(|| {
@@ -305,6 +322,24 @@ impl Engine {
             }
             tri_set_offsets.push(tri_sets.len() as u32);
         }
+        let mut offsets = Vec::with_capacity(mesh.n_elems());
+        let mut offset = 0u32;
+        for e in 0..mesh.n_elems() as u32 {
+            offsets.push(offset);
+            offset += mesh.kind_of(e).n_nodes() as u32;
+        }
+        let tri_element_node = surface
+            .triangles
+            .iter()
+            .zip(&surface.tri_elem)
+            .flat_map(|(tri, &elem)| {
+                tri.map(|node| {
+                    offsets[elem as usize]
+                        + mesh.elem_nodes(elem).iter().position(|&n| n == node).expect("triangle belongs to element")
+                            as u32
+                })
+            })
+            .collect();
         Ok(crate::query::ResultSurface {
             result_id: record.id.clone(),
             step: record.step.clone(),
@@ -312,6 +347,7 @@ impl Engine {
             unit: "m".into(),
             positions: surface.positions.iter().flatten().copied().collect(),
             indices: surface.triangles.iter().flatten().copied().collect(),
+            tri_element_node,
             tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
             tri_element: surface.tri_elem.clone(),
             tri_face: surface
@@ -479,6 +515,7 @@ impl Engine {
 pub(crate) fn mesh_bytes(built: &BuiltMesh) -> u64 {
     let mesh = &built.mesh;
     let mesh_bytes = mesh.coords.len() * 8
+        + std::mem::size_of_val(built.directors.as_slice())
         + mesh.blocks.iter().map(|b| b.conn.len() * 4).sum::<usize>()
         + mesh.node_sets.values().chain(mesh.elem_sets.values()).map(|s| s.len() * 4).sum::<usize>()
         + mesh.face_sets.values().map(|s| std::mem::size_of_val(s.as_slice())).sum::<usize>()
@@ -497,8 +534,13 @@ mod tests {
 
     fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
         let nodes = mesh.n_nodes();
-        engine.mesh =
-            Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default(), points: Vec::new() });
+        engine.mesh = Some(BuiltMesh {
+            directors: Vec::new(),
+            mesh,
+            body_of_block: vec!["body".into()],
+            sets: Default::default(),
+            points: Vec::new(),
+        });
         let mut result = crate::procedure::blank(crate::solve::SolveInfo {
             solver: "test",
             iterations: 0,

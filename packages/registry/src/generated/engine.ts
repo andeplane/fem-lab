@@ -1599,6 +1599,22 @@ export type SectionSpec =
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
+      thickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "shell";
+    }
+  | {
+      plies: ShellPlySpec[];
+      kind: "laminate";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
       width:
         | string
         | {
@@ -1854,6 +1870,11 @@ export type MesherSpec =
           };
       maxElements?: number | null;
       kind: "tet";
+    }
+  | {
+      body?: string | null;
+      patches: SurfacePatchSpec[];
+      kind: "surface";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -1974,6 +1995,98 @@ export type SweepSpec =
       kind: "revolve";
     };
 /**
+ * Radial projection of a bilinear shell patch. Geometry and derivatives are projected
+ * together; the resulting unit normals become the MITC4 corner directors.
+ */
+export type SurfaceProjectionSpec =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "sphere";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      axis: [number, number, number];
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "cylinder";
+    };
+/**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
 export type Formulation = "incompatible-modes" | "full";
@@ -2014,9 +2127,9 @@ export type Procedure =
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
  * display units. Transient thermal reactions include stored energy and refer to the last
- * θ-method integration stage, not an endpoint steady-state residual. Three fields exist only
- * on a static Result of a Model with beams: `rotation` (every node's rotation about the
- * global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
+ * θ-method integration stage, not an endpoint steady-state residual. A static Result with
+ * beams or shells includes `rotation` (every node's rotation about the global axes, radians,
+ * zero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in
  * tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
  * member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
  * triple at each end of every beam and zeros on every other element. `plasticStrain` is the
@@ -2041,6 +2154,9 @@ export type Field =
       | "sectionMoment"
       | "contactPressure"
     )
+  | "stressTop"
+  | "stressBottom"
+  | "shellMoment"
   | "errorEstimate";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
@@ -2446,6 +2562,11 @@ export type QueryResult =
  */
 export type MesherSettings =
   | {
+      body: string;
+      patches: SurfacePatch[];
+      kind: "surface";
+    }
+  | {
       size?: number | null;
       /**
        * @minItems 3
@@ -2477,6 +2598,33 @@ export type MesherSettings =
       size: number;
       max_elements: number;
       kind: "tet";
+    };
+/**
+ * Optional radial projection of a bilinear patch, all coordinates in SI.
+ */
+export type Projection =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      center: [number, number, number];
+      radius: number;
+      kind: "sphere";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      center: [number, number, number];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      axis: [number, number, number];
+      radius: number;
+      kind: "cylinder";
     };
 /**
  * The shape of one block edge between its two corners.
@@ -5654,6 +5802,35 @@ export interface HardeningPoint {
       };
 }
 /**
+ * One shell ply. The angle is measured about the positive director, from the
+ * midsurface's first parametric direction or section.assign's projected reference
+ * axis. The Material's orientation is composed in this ply frame, not global axes.
+ */
+export interface ShellPlySpec {
+  material: string;
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  thickness:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * Rotation from the reference direction, e.g. "45 deg"; omitted means zero.
+   */
+  angle?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+}
+/**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
  * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
@@ -5815,6 +5992,122 @@ export interface RefineBoxSpec {
         value: number;
         unit: string;
       };
+}
+/**
+ * Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
+ * normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
+ * name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
+ */
+export interface SurfacePatchSpec {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ]
+  ];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags?: [string | null, string | null, string | null, string | null] | null;
+  projection?: SurfaceProjectionSpec | null;
 }
 /**
  * Local maximum edge lengths applied after the chosen mesher. Bounds are world
@@ -6338,6 +6631,28 @@ export interface MeshSettings {
   refinement?: LocalRefinement | null;
 }
 /**
+ * One oriented quadrilateral patch. Corners run counter-clockwise when seen from
+ * its positive side. Tags name node Sets on edges 0–1, 1–2, 2–3 and 3–0.
+ */
+export interface SurfacePatch {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [[number, number, number], [number, number, number], [number, number, number], [number, number, number]];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags: [string | null, string | null, string | null, string | null];
+  projection?: Projection | null;
+}
+/**
  * One mapped block: a curvilinear quadrilateral meshed as a structured grid.
  *
  * `corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`
@@ -6743,6 +7058,11 @@ export interface ResultSurface {
    * Triangle node indices, three per triangle, oriented outward.
    */
   indices: number[];
+  /**
+   * Index into element-node fields for each triangle corner, in the same order as indices.
+   * Shared mesh nodes retain distinct field values on their incident elements.
+   */
+  triElementNode: number[];
   triBody: number[];
   /**
    * Global element behind each surface triangle; indexes element-based Result fields.
@@ -7368,6 +7688,14 @@ export interface Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  /**
+   * Thickness Section assigned to the implicit surface Body, if present.
+   */
+  mesherSection?: string | null;
+  /**
+   * Projected reference axis for the implicit shell Body's ply angles.
+   */
+  mesherOrientation?: Axis | null;
   plugins?: PluginRecord[];
 }
 /**
@@ -7528,11 +7856,16 @@ export interface ModelFile_Orientation {
 export interface NamedSection {
   name: string;
   section: Section;
+  plies?: ShellPly[];
 }
 /**
  * One cross-section in SI, in the member's local axes. See the module docs for the axes.
  */
 export interface Section {
+  /**
+   * Shell thickness in metres. Present only for a shell section; line properties are zero.
+   */
+  thickness?: number | null;
   /**
    * Cross-sectional area, m².
    */
@@ -7565,6 +7898,14 @@ export interface Section {
    * Distance from the centroid to the furthest fibre along local z, m.
    */
   cZ: number;
+}
+/**
+ * A shell ply's serialisable definition: material reference, metres and radians.
+ */
+export interface ShellPly {
+  material: string;
+  thickness: number;
+  angle: number;
 }
 /**
  * A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
@@ -7899,6 +8240,14 @@ export interface DocumentSnapshot_Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  /**
+   * Thickness Section assigned to the implicit surface Body, if present.
+   */
+  mesherSection?: string | null;
+  /**
+   * Projected reference axis for the implicit shell Body's ply angles.
+   */
+  mesherOrientation?: Axis | null;
   plugins?: PluginRecord[];
 }
 /**

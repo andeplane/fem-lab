@@ -33,6 +33,8 @@ pub enum ElementKind {
     /// Two-node straight Timoshenko beam carrying axial force, shear, bending and torsion, in a
     /// 3D mesh; its nodes carry three rotations as well as the three displacements.
     Beam2,
+    /// Four-node MITC4 shell in 3D, with three translations and three rotations per node.
+    Shell4,
 }
 
 /// The shape of an element face: a quad or triangle in 3D, a line in 2D.
@@ -100,7 +102,7 @@ impl ElementKind {
             ElementKind::Hex20 => 20,
             ElementKind::Tet4 => 4,
             ElementKind::Tet10 => 10,
-            ElementKind::Quad4 => 4,
+            ElementKind::Quad4 | ElementKind::Shell4 => 4,
             ElementKind::Quad8 => 8,
             ElementKind::Tri3 => 3,
             ElementKind::Tri6 => 6,
@@ -111,7 +113,7 @@ impl ElementKind {
     pub const fn n_corners(self) -> usize {
         match self {
             ElementKind::Hex8 | ElementKind::Hex20 => 8,
-            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 => 4,
+            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Shell4 => 4,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
             ElementKind::Truss2 | ElementKind::Beam2 => 2,
         }
@@ -120,13 +122,14 @@ impl ElementKind {
     pub const fn dim(self) -> usize {
         match self {
             ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Tet4 | ElementKind::Tet10 => 3,
-            ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tri3 | ElementKind::Tri6 => 2,
+            ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tri3 | ElementKind::Tri6 | ElementKind::Shell4 => 2,
             ElementKind::Truss2 | ElementKind::Beam2 => 1,
         }
     }
     /// Faces in 3D, edges in 2D.
     pub const fn n_faces(self) -> usize {
         match self {
+            ElementKind::Shell4 => 2,
             ElementKind::Hex8 | ElementKind::Hex20 => 6,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 => 4,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
@@ -135,7 +138,7 @@ impl ElementKind {
     }
     pub const fn face_kind(self) -> FaceKind {
         match self {
-            ElementKind::Hex8 => FaceKind::Quad4,
+            ElementKind::Hex8 | ElementKind::Shell4 => FaceKind::Quad4,
             ElementKind::Hex20 => FaceKind::Quad8,
             ElementKind::Tet4 => FaceKind::Tri3,
             ElementKind::Tet10 => FaceKind::Tri6,
@@ -149,6 +152,7 @@ impl ElementKind {
     pub const fn face_nodes(self, f: usize) -> &'static [u8] {
         match self {
             ElementKind::Hex8 => &HEX8_FACES[f],
+            ElementKind::Shell4 => &[[0, 3, 2, 1], [0, 1, 2, 3]][f],
             ElementKind::Hex20 => &HEX20_FACES[f],
             ElementKind::Tet4 => &TET4_FACES[f],
             ElementKind::Tet10 => &TET10_FACES[f],
@@ -166,7 +170,7 @@ impl ElementKind {
         match self {
             ElementKind::Hex8 | ElementKind::Hex20 => &HEX_EDGES,
             ElementKind::Tet4 | ElementKind::Tet10 => &TET_EDGES,
-            ElementKind::Quad4 | ElementKind::Quad8 => &QUAD_EDGES,
+            ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Shell4 => &QUAD_EDGES,
             ElementKind::Tri3 | ElementKind::Tri6 => &TRI_EDGES,
             ElementKind::Truss2 | ElementKind::Beam2 => &LINE_EDGES,
         }
@@ -387,16 +391,22 @@ impl Mesh {
     /// Faces whose sorted node set occurs once in the mesh, sorted by `(elem, local)`.
     pub fn boundary_faces(&self) -> Vec<Face> {
         let mut keyed: Vec<(Vec<u32>, Face)> = Vec::new();
+        let mut out = Vec::new();
         for e in 0..self.n_elems() as u32 {
             for f in 0..self.kind_of(e).n_faces() as u8 {
                 let face = Face { elem: e, local: f };
+                if self.kind_of(e) == ElementKind::Shell4 {
+                    // Coincident top and bottom midsurface node lists are distinct faces.
+                    out.push(face);
+                    continue;
+                }
                 let mut key: Vec<u32> = self.face_nodes(face).collect();
                 key.sort_unstable();
                 keyed.push((key, face));
             }
         }
         keyed.sort_unstable();
-        let mut out: Vec<Face> = keyed.chunk_by(|a, b| a.0 == b.0).filter(|c| c.len() == 1).map(|c| c[0].1).collect();
+        out.extend(keyed.chunk_by(|a, b| a.0 == b.0).filter(|c| c.len() == 1).map(|c| c[0].1));
         out.sort_unstable();
         out
     }

@@ -37,7 +37,9 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         baseURL: PREVIEW,
         launchOptions: {
-          args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=vulkan', '--use-vulkan=swiftshader', '--enable-unsafe-swiftshader'],
+          // Select Dawn's WebGPU adapter explicitly; ANGLE/Vulkan flags alone select
+          // the renderer and can leave WebGPU on the hardware adapter.
+          args: ['--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--enable-features=Vulkan', '--use-angle=vulkan', '--use-vulkan=swiftshader', '--enable-unsafe-swiftshader'],
         },
       },
     },

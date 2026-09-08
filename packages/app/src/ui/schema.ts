@@ -131,10 +131,11 @@ export function humanise(name: string): string {
 
 const enumOf = (node: JsonSchema): string[] | null => {
   if (Array.isArray(node['enum'])) return node['enum'] as string[];
+  if (typeof node['const'] === 'string') return [node['const']];
   const one = node['oneOf'] as JsonSchema[] | undefined;
   if (one) {
     const options = one.map(v => typeof v['const'] === 'string' ? [v['const'] as string] : enumOf(v));
-    if (options.every(v => v !== null)) return options.flat();
+    if (options.every((v): v is string[] => v !== null)) return options.flat();
   }
   return null;
 };

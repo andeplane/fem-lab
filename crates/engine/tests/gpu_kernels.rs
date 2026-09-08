@@ -49,6 +49,8 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
     }
     let bodies = vec!["beam".to_string()];
     let p = Problem {
+        plies: Vec::new(),
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,
@@ -206,6 +208,61 @@ fn engine_reports_the_adapter_in_capabilities() {
     let mut e2 = Engine::new(None, Box::new(NoClock), 1);
     let QueryResult::Capabilities(c) = e2.query(Query::Capabilities {}).unwrap() else { panic!() };
     assert!(!c.gpu && c.adapter.is_none());
+}
+
+/// #64: the mixed-precision GPU solve must retain a shell's constant-curvature
+/// solution as the mesh is refined, including its rotational degrees of freedom.
+#[test]
+fn shell_moment_strip_matches_plate_theory_through_gpu_pcg() {
+    let mut e = Engine::new(Some(gpu()), Box::new(NoClock), 2);
+    for n in [2, 4, 8] {
+        let mesh = serde_json::json!({
+            "cmd": "mesh.set", "mesher": {"kind": "surface", "body": "skin", "patches": [{
+                "corners": [["0 m", "0 m", "0 m"], ["1 m", "0 m", "0 m"],
+                    ["1 m", "1 m", "0 m"], ["0 m", "1 m", "0 m"]],
+                "n": [n, 1], "tags": [null, "tip", null, "root"]
+            }]}
+        })
+        .to_string();
+        for command in [
+            r#"{"cmd":"model.new","name":"GPU shell strip"}"#,
+            &mesh,
+            r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0}"#,
+            r#"{"cmd":"material.assign","material":"elastic","bodies":["skin"]}"#,
+            r#"{"cmd":"section.add","name":"thin","shape":{"kind":"shell","thickness":"10 mm"}}"#,
+            r#"{"cmd":"section.assign","section":"thin","bodies":["skin"]}"#,
+            r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#,
+            r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#,
+            r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#,
+            r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
+        ] {
+            pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+        }
+        let QueryResult::Result(result) = e.query(Query::Result { step: None, result_id: None }).unwrap() else {
+            panic!("result")
+        };
+        assert_eq!(result.solver, "gpu-pcg");
+        for (field, component, expected) in [("displacement", 2, -0.00003), ("rotation", 1, 0.00006)] {
+            let query = serde_json::from_value(serde_json::json!({
+                "query": "query.probe", "step": "s", "field": field, "component": component,
+                "at": ["1 m", "0.5 m", "0 m"]
+            }))
+            .unwrap();
+            let QueryResult::Probe(probe) = e.query(query).unwrap() else { panic!("probe") };
+            assert!((probe.value.value / expected - 1.0).abs() < 1e-6, "n={n}, {field}: {:?}", probe.value);
+        }
+        for (field, expected) in [("stressTop", 60000.0), ("stressBottom", -60000.0), ("shellMoment", 1.0)] {
+            let QueryResult::Field(values) =
+                e.query(Query::Field { step: None, result_id: None, field: field.into() }).unwrap()
+            else {
+                panic!("field")
+            };
+            assert_eq!((values.per.as_str(), values.components), ("elementNode", 6));
+            for value in values.values.chunks_exact(6) {
+                assert!((value[0] / expected - 1.0).abs() < 1e-6, "n={n}, {field}: {value:?}");
+            }
+        }
+    }
 }
 
 /// A4 on the device: the CSR SpMV against an f64 sum of the same f32 values, per component,
@@ -469,6 +526,8 @@ fn tied_cantilever() -> (Csr, Vec<f64>) {
     }
     let bodies = vec!["a".to_string(), "b".to_string()];
     let p = Problem {
+        plies: Vec::new(),
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,

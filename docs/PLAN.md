@@ -198,7 +198,7 @@ Goal: geometry that is not a box, and the classic benchmarks that need it.
 
 Open items before hard-coding, all in note 04: FV52 reference set (Ansys vs Abaqus rows
 disagree), Cook's converged plane-stress value, MacNeal–Harder values beyond 0.108.
-Scordelis–Lo (0.3024), LE3 (0.185 m) and the SS plate (0.00406 qa⁴/D) wait for shells (8.1).
+Scordelis–Lo (0.3024), LE3 (0.185 m) and the SS plate (0.00406 qa⁴/D) are covered by the MITC4 shell benchmarks in 8.1 (#64).
 
 ## 6. Phase 4: the AI
 
@@ -263,7 +263,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 
 | # | Task | Job |
 |---|---|---|
-| 8.1 | Shell (MITC4) and beam (Timoshenko) elements with sections — the beam half landed with #65 (B21–B27: `beam2`, six DOFs per node, `constraint.pin`, `load.moment`, section forces); shells remain (#64) | J2.9, J3.5; Scordelis–Lo, pinched cylinder, hemispherical shell |
+| 8.1 | Shell (MITC4) and beam (Timoshenko) elements with sections — the beam half landed with #65 (B21–B27: `beam2`, six DOFs per node, `constraint.pin`, `load.moment`, section forces); the shell half is implemented in #64 (`shell4`, surface patches, thickness/laminate sections, rotational DOFs, top/bottom and ply-face stress, bending moments; ADR 0024) | J2.9, J3.5; G1–G7 shell convergence benchmarks and G8 laminate membrane/bending, thermal and modal benchmarks |
 | 8.2 | `study.sweep` (one parameter), `study.doe` (grid/LHS), response plots; runs in the Worker with a queue | J10.1, J10.2 |
 | 8.3 | Simple optimisation (scalar objective, bounds; Nelder–Mead / golden section) | J10.3 (topology optimisation: out of scope) |
 | 8.4 | Material library as data (S355, S235, 6061-T6, C30/37, ABS, PLA, wood classes) with sources; user library in IndexedDB | J3.1, J12.3 |

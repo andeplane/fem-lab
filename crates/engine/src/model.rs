@@ -73,6 +73,17 @@ pub struct Body {
 pub struct NamedSection {
     pub name: String,
     pub section: Section,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plies: Vec<ShellPly>,
+}
+
+/// A shell ply's serialisable definition: material reference, metres and radians.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPly {
+    pub material: String,
+    pub thickness: f64,
+    pub angle: f64,
 }
 
 /// A cut out of a Body.
@@ -576,6 +587,10 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSettings {
+    Surface {
+        body: String,
+        patches: Vec<femlab_geometry::SurfacePatch>,
+    },
     Lattice {
         size: Option<f64>,
         counts: Option<[u32; 3]>,
@@ -583,13 +598,26 @@ pub enum MesherSettings {
         sizes: BTreeMap<String, f64>,
     },
     /// Mapped blocks, which are their own geometry: `body` is the implicit Body they make.
-    Mapped { body: String, blocks: Vec<QuadBlock> },
+    Mapped {
+        body: String,
+        blocks: Vec<QuadBlock>,
+    },
     /// Free triangles inside the sketch of the Body `of`.
-    Free { of: String, size: f64, refine: Vec<RefineBox> },
+    Free {
+        of: String,
+        size: f64,
+        refine: Vec<RefineBox>,
+    },
     /// A 2D mesher swept into 3D.
-    Sweep { base: Box<MesherSettings>, sweep: Sweep },
+    Sweep {
+        base: Box<MesherSettings>,
+        sweep: Sweep,
+    },
     /// Free tetrahedra filling every 3D Body of the Model.
-    Tet { size: f64, max_elements: u32 },
+    Tet {
+        size: f64,
+        max_elements: u32,
+    },
 }
 
 /// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
@@ -604,7 +632,7 @@ impl MesherSettings {
     /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
     pub fn rename_body(&mut self, from: &str, to: &str) {
         match self {
-            Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
+            Self::Surface { body, .. } | Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
                 if body == from {
                     *body = to.into();
                 }
@@ -633,7 +661,7 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
+            Self::Surface { .. } | Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
         }
     }
 
@@ -641,7 +669,7 @@ impl MesherSettings {
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
             MesherSettings::Lattice { .. } => None,
-            MesherSettings::Mapped { body, .. } => Some(body),
+            MesherSettings::Surface { body, .. } | MesherSettings::Mapped { body, .. } => Some(body),
             MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
@@ -717,6 +745,12 @@ pub struct Model {
     /// like any other and the name lands here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesher_material: Option<String>,
+    /// Thickness Section assigned to the implicit surface Body, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_section: Option<String>,
+    /// Projected reference axis for the implicit shell Body's ply angles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_orientation: Option<Axis>,
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
 }
@@ -739,6 +773,8 @@ impl Model {
             steps: vec![],
             mesh: None,
             mesher_material: None,
+            mesher_section: None,
+            mesher_orientation: None,
             plugins: vec![],
         }
     }
@@ -773,10 +809,22 @@ impl Model {
     /// The material assigned to a Body, whether that is a [`Body`] record or the mesher's
     /// implicit Body, whose assignment lives in [`Model::mesher_material`].
     pub fn material_of_body(&self, body: &str) -> Option<&str> {
+        if let Some(ply) = self.section_of_body(body).and_then(|section| section.plies.first()) {
+            return Some(&ply.material);
+        }
         match self.body(body) {
             Some(b) => b.material.as_deref(),
             None => self.mesher_material.as_deref().filter(|_| self.implicit_body() == Some(body)),
         }
+    }
+
+    /// Section assigned to explicit geometry or to a mesher-owned Body.
+    pub fn section_of_body(&self, body: &str) -> Option<&NamedSection> {
+        let name = match self.body(body) {
+            Some(body) => body.section.as_deref(),
+            None => self.mesher_section.as_deref().filter(|_| self.implicit_body() == Some(body)),
+        }?;
+        self.section(name)
     }
 
     /// The effective shape of a Body: its shape minus its cuts, with names for auto face tags.

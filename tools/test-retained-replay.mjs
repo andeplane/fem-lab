@@ -76,6 +76,78 @@ try {
     }
     console.log(`retained surfaces/fields/differences: exact hashes, surface topology/coordinates/identity and Fourier oracle, native ${threads} threads vs WASM passed`);
   }
+  // #64: surface directors, thickness assignments and element-node stresses cross
+  // the same registry boundary. Compare an exact flat strip and a curved patch.
+  for (const variant of ['flat', 'curved', 'laminate']) {
+    const curved = variant === 'curved';
+    const laminate = variant === 'laminate';
+    const engine = new Engine(1);
+    const query = q => JSON.parse(engine.query(JSON.stringify(q)));
+    const dispatch = async command => engine.dispatch(JSON.stringify(command));
+    try {
+      const corners = curved
+        ? [['1 m', '0 m', '0 m'], ['0.8 m', '0.6 m', '0 m'], ['0.8 m', '0.6 m', '1 m'], ['1 m', '0 m', '1 m']]
+        : [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m'], ['1 m', '1 m', '0 m'], ['0 m', '1 m', '0 m']];
+      const patch = { corners, n: [4, 1], tags: [null, 'tip', null, 'root'],
+        ...(curved ? { projection: { kind: 'cylinder', center: ['0 m', '0 m', '0 m'], axis: [0, 0, 1], radius: '1 m' } } : {}) };
+      for (const command of [
+        { cmd: 'model.new', name: curved ? 'curved shell parity' : 'moment strip parity' },
+        { cmd: 'mesh.set', mesher: { kind: 'surface', body: 'skin', patches: [patch] } },
+        laminate
+          ? { cmd: 'material.add', name: 'elastic', orthotropic: { E1: '100 GPa', E2: '20 GPa', E3: '10 GPa', G12: '10 GPa', G13: '5 GPa', G23: '3 GPa', nu12: 0, nu13: 0, nu23: 0 } }
+          : { cmd: 'material.add', name: 'elastic', E: '200 GPa', nu: 0, rho: '8000 kg/m^3' },
+        { cmd: 'material.assign', material: 'elastic', bodies: ['skin'] },
+        { cmd: 'section.add', name: 'thin', shape: laminate
+          ? { kind: 'laminate', plies: [{ material: 'elastic', thickness: '5 mm' }, { material: 'elastic', thickness: '5 mm', angle: '90 deg' }] }
+          : { kind: 'shell', thickness: '10 mm' } },
+        { cmd: 'section.assign', section: 'thin', bodies: ['skin'] },
+        { cmd: 'constraint.fix', name: 'root', on: 'skin.root' },
+        { cmd: 'load.moment', name: 'bend', on: 'skin.tip', total: ['0 N m', '1 N m', '0 N m'] },
+        { cmd: 'step.add', name: 's', procedure: 'static', constraints: ['root'], loads: ['bend'] },
+        { cmd: 'solve.run', step: 's', solver: 'cpu-direct' },
+      ]) await dispatch(command);
+      const queries = [
+        { query: 'query.surface', step: 's' },
+        ...['displacement', 'rotation', 'stressTop', 'stressBottom', 'shellMoment', ...(laminate ? ['stressPly:1:bottom', 'stressPly:1:top', 'stressPly:2:bottom', 'stressPly:2:top'] : [])].map(field => ({ query: 'query.field', step: 's', field })),
+      ];
+      const expected = queries.map(query);
+      const entries = JSON.parse(engine.export_file()).journal.entries;
+      const file = path.join(scratch, 'shell.json');
+      writeFileSync(file, JSON.stringify(entries));
+      for (const threads of [1, 4]) {
+        const args = ['run', file, '--cpu', '--threads', String(threads), '--verify'];
+        assert.deepEqual(execFileSync(native, [...args, '--hashes'], { encoding: 'utf8' }).trim().split(/\r?\n/), entries.map(e => e.hashAfter));
+        const actual = JSON.parse(execFileSync(native, [...args, ...queries.flatMap(q => ['--query', JSON.stringify(q)])], { encoding: 'utf8' }));
+        assert.deepEqual(actual[0], expected[0]);
+        for (let i = 1; i < actual.length; i++) {
+          const { values, ...metadata } = actual[i];
+          const { values: wasmValues, ...wasmMetadata } = expected[i];
+          assert.deepEqual(metadata, wasmMetadata);
+          assert.equal(values.length, wasmValues.length);
+          const scale = Math.max(1e-12, ...values.map(Math.abs), ...wasmValues.map(Math.abs));
+          values.forEach((v, j) => assert.ok(Math.abs(v - wasmValues[j]) < 1e-7 * scale, `${curved ? 'curved' : 'flat'} ${queries[i].field}[${j}]`));
+          if (!curved && queries[i].field.startsWith('stress')) {
+            const reference = laminate
+              ? { stressTop: 40000, stressBottom: -100000, 'stressPly:1:bottom': -100000, 'stressPly:1:top': 50000, 'stressPly:2:bottom': 10000, 'stressPly:2:top': 40000 }[queries[i].field]
+              : (queries[i].field === 'stressTop' ? 60000 : -60000);
+            for (let j = 0; j < values.length; j += 6) {
+              assert.ok(Math.abs(values[j] - reference) < 0.001);
+              assert.ok(Math.abs(wasmValues[j] - reference) < 0.001);
+            }
+          }
+          if (!curved && queries[i].field === 'shellMoment') {
+            for (let j = 0; j < values.length; j += 6) {
+              assert.ok(Math.abs(values[j] - 1) < 1e-8);
+              assert.ok(Math.abs(wasmValues[j] - 1) < 1e-8);
+            }
+          }
+        }
+        console.log(`${variant} shell: journal, geometry and surface stress parity at native ${threads} threads passed`);
+      }
+    } finally {
+      engine.free();
+    }
+  }
 } finally {
   engine.free();
   rmSync(scratch, { recursive: true, force: true });

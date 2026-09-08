@@ -655,7 +655,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,\nI, channel, or the properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
+      "description": "Define a section: homogeneous shell thickness, a bottom-to-top laminate stack\nof 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section\n(`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
       "type": "object",
       "properties": {
         "name": {
@@ -677,7 +677,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
+      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
       "type": "object",
       "properties": {
         "section": {
@@ -3016,6 +3016,43 @@ const commands = {
       "description": "A cross-section for line members (trusses and frames). The library turns the shape into the\narea, the two second moments, the St Venant torsion constant, the shear correction factors\nand the extreme-fibre distances a line element integrates with.\n\nLocal axes: `y` is the section's width direction and `z` its height, both through the\ncentroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and\n`iZ` about local z. The shear centre and warping torsion are not modelled, so an open\nsection (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the\ntorsional stiffness of a channel and ignores the twist a load through the centroid causes.\n`kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for\na circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's\nnu-dependent values, which at nu = 0.3 are 0.850 and 0.886.",
       "oneOf": [
         {
+          "description": "Homogeneous MITC4 shell section, centred on the meshed midsurface.",
+          "type": "object",
+          "properties": {
+            "thickness": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "shell"
+            }
+          },
+          "required": [
+            "kind",
+            "thickness"
+          ]
+        },
+        {
+          "description": "Perfectly bonded shell plies, ordered bottom to top. Total thickness is their\nsum, centred on the meshed midsurface. Each ply supplies its Material and angle;\nply materials replace the Body material. Uses a common MITC4 displacement field\nwith per-ply integration and separate stresses on both sides of each interface.",
+          "type": "object",
+          "properties": {
+            "plies": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ShellPlySpec"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "laminate"
+            }
+          },
+          "required": [
+            "kind",
+            "plies"
+          ]
+        },
+        {
           "description": "Solid rectangle, `width` along local y and `height` along local z.",
           "type": "object",
           "properties": {
@@ -3197,6 +3234,33 @@ const commands = {
         }
       ]
     },
+    "ShellPlySpec": {
+      "description": "One shell ply. The angle is measured about the positive director, from the\nmidsurface's first parametric direction or section.assign's projected reference\naxis. The Material's orientation is composed in this ply frame, not global axes.",
+      "type": "object",
+      "properties": {
+        "material": {
+          "type": "string"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "angle": {
+          "description": "Rotation from the reference direction, e.g. \"45 deg\"; omitted means zero.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_dimensionless"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "material",
+        "thickness"
+      ]
+    },
     "Q_area": {
       "description": "A area with unit, e.g. \"2000 mm^2\". Any unit of the right dimension is accepted.",
       "$ref": "#/$defs/Quantity",
@@ -3343,6 +3407,32 @@ const commands = {
           "required": [
             "kind",
             "size"
+          ]
+        },
+        {
+          "description": "MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a\nsphere or cylinder. The patches define the implicit Body (`body`, default\n\"shell\"). Coincident patch nodes merge; shared edges need matching divisions.\nEach patch retains its own directors at a crease. `<body>.top` and\n`<body>.bottom` are face Sets; tagged edges are node Sets for constraints,\nforces and moments. Requires order 1, no simplex split, 3D idealisation and\na shell thickness Section assigned with section.assign.",
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "patches": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SurfacePatchSpec"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "surface"
+            }
+          },
+          "required": [
+            "kind",
+            "patches"
           ]
         }
       ]
@@ -3607,6 +3697,128 @@ const commands = {
         }
       ]
     },
+    "SurfacePatchSpec": {
+      "description": "Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive\nnormal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags\nname node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.",
+      "type": "object",
+      "properties": {
+        "corners": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "n": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "tags": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "projection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SurfaceProjectionSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "corners",
+        "n"
+      ]
+    },
+    "SurfaceProjectionSpec": {
+      "description": "Radial projection of a bilinear shell patch. Geometry and derivatives are projected\ntogether; the resulting unit normals become the MITC4 corner directors.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "center": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "radius": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "sphere"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "radius"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "center": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "axis": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "radius": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "cylinder"
+            }
+          },
+          "required": [
+            "kind",
+            "center",
+            "axis",
+            "radius"
+          ]
+        }
+      ]
+    },
     "Formulation": {
       "description": "Element formulation for linear hexahedra and quadrilaterals.",
       "oneOf": [
@@ -3836,7 +4048,7 @@ const commands = {
       ]
     },
     "Field": {
-      "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces. `contactPressure` is the normal pressure a\nfrictionless contact carries, one component, positive in compression, on the slave nodes of\nevery frictionless pair and zero on every other node; only a Step with such a pair has it.",
+      "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. A static Result with\nbeams or shells includes `rotation` (every node's rotation about the global axes, radians,\nzero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces. `contactPressure` is the normal pressure a\nfrictionless contact carries, one component, positive in compression, on the slave nodes of\nevery frictionless pair and zero on every other node; only a Step with such a pair has it.",
       "oneOf": [
         {
           "type": "string",
@@ -3855,6 +4067,21 @@ const commands = {
             "sectionMoment",
             "contactPressure"
           ]
+        },
+        {
+          "description": "Shell stress at +t/2 along the director, global xx, yy, zz, xy, xz, yz;\nextrapolated per element node, with no averaging across creases. Zero on non-shells.",
+          "type": "string",
+          "const": "stressTop"
+        },
+        {
+          "description": "Shell stress at -t/2 along the director, with the same ordering and location as stressTop.",
+          "type": "string",
+          "const": "stressBottom"
+        },
+        {
+          "description": "Shell stress first moment through thickness, integral z*sigma dz, in N (moment\nper unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for\ntension on the +director side; these are tensor components, not moment-axis\ncomponents. Extrapolated per element node, unaveraged; zero on non-shells.",
+          "type": "string",
+          "const": "shellMoment"
         },
         {
           "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
@@ -4290,7 +4517,7 @@ const queries = {
       "x-returns": "ResultSurface"
     },
     {
-      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
       "type": "object",
       "properties": {
         "step": {
@@ -4910,6 +5137,7 @@ const queries = {
     "Plasticity": commands.$defs["Plasticity"],
     "HardeningPoint": commands.$defs["HardeningPoint"],
     "SectionSpec": commands.$defs["SectionSpec"],
+    "ShellPlySpec": commands.$defs["ShellPlySpec"],
     "Q_area": commands.$defs["Q_area"],
     "Q_second_moment": commands.$defs["Q_second_moment"],
     "Axis": commands.$defs["Axis"],
@@ -4919,6 +5147,8 @@ const queries = {
     "CurveSpec": commands.$defs["CurveSpec"],
     "RefineBoxSpec": commands.$defs["RefineBoxSpec"],
     "SweepSpec": commands.$defs["SweepSpec"],
+    "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
+    "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
     "Formulation": commands.$defs["Formulation"],
     "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
     "SizeBoxSpec": commands.$defs["SizeBoxSpec"],

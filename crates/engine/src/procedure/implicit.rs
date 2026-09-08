@@ -346,6 +346,9 @@ pub fn run(
     stress_fields(p, &st.u, pool, &mut fields);
 
     let mut res = blank(solver);
+    res.ply_stresses = pool
+        .install(|| crate::post::stress::shell_ply_stresses(p, &st.u))
+        .expect("assembly and stress recovery accepted these shell sections");
     res.scalars.insert("min_det_j".to_string(), a.min_det_j);
     res.scalars.insert("dt".to_string(), dt);
     res.scalars.insert("steps".to_string(), n_steps as f64);
@@ -361,7 +364,7 @@ pub fn run(
     res.scalars.insert("rel_residual".to_string(), res.solver.rel_residual);
     res.extremes = fields
         .iter()
-        .filter(|(_, fd)| fd.per == Per::Node)
+        .filter(|(_, fd)| fd.per != Per::ElemGp)
         .flat_map(|(name, fd)| extremes(fd, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     res.reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);

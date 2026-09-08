@@ -69,6 +69,100 @@ pub fn stress_gp(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), E
     Ok((FieldData::new(Per::ElemGp, VOIGT, stress), FieldData::new(Per::ElemGp, VOIGT, strain)))
 }
 
+/// Stress at one physical shell surface (`side` = +1 top, -1 bottom). Element
+/// nodes retain each patch's stress independently, including at shared creases.
+pub fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Result<FieldData, Error> {
+    shell_face_stress(p, u, side, None)
+}
+
+/// Both faces of one ply, and their immutable extremes. Faces are bottom then top.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlyStress {
+    pub faces: [FieldData; 2],
+    pub extremes: [Vec<crate::post::Extremum>; 2],
+}
+
+/// Retain every assigned laminate ply, indexed bottom to top within each section.
+/// Elements without that ply carry zeros, preserving the common element-node layout.
+pub fn shell_ply_stresses(p: &Problem<'_>, u: &[f64]) -> Result<Vec<PlyStress>, Error> {
+    let count = p.section_of_block.iter().flatten().map(|&s| p.plies.get(s).map_or(0, Vec::len)).max().unwrap_or(0);
+    (0..count)
+        .map(|ply| {
+            let faces = [shell_face_stress(p, u, -1.0, Some(ply))?, shell_face_stress(p, u, 1.0, Some(ply))?];
+            let extremes = faces.each_ref().map(|f| crate::post::extremes(f, p.mesh));
+            Ok(PlyStress { faces, extremes })
+        })
+        .collect()
+}
+
+fn shell_face_stress(p: &Problem<'_>, u: &[f64], side: f64, ply: Option<usize>) -> Result<FieldData, Error> {
+    let dpn = p.dofs_per_node();
+    let mut stress = Vec::new();
+    for blk in &p.mesh.blocks {
+        if blk.kind != ElementKind::Shell4 {
+            stress.resize(stress.len() + blk.n_elems() * element_for(blk.kind).n_gp() * VOIGT, 0.0);
+            continue;
+        }
+        for i in 0..blk.n_elems() {
+            let elem = blk.first_elem + i as u32;
+            let mut coords = [0.0; 12];
+            let mut temp = [0.0; 4];
+            let mut ue = [0.0; 24];
+            p.mesh.elem_coords(elem, &mut coords);
+            p.gather_temperature(elem, &mut temp);
+            crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), 6, dpn, &mut ue);
+            let c = p.ctx(elem, &coords, &temp)?;
+            let (mut sig, mut eps) = ([0.0; 24], [0.0; 24]);
+            if let Some(ply) = ply {
+                if ply < c.plies.len() {
+                    crate::fem::shell::recover_ply_face(&c, &ue, ply, side > 0.0, &mut sig, &mut eps)?;
+                }
+            } else {
+                let z = side * crate::fem::shell::thickness(&c)? * 0.5;
+                crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
+            }
+            stress.extend(sig);
+        }
+    }
+    Ok(gp_to_nodes(p.mesh, &FieldData::new(Per::ElemGp, VOIGT, stress)))
+}
+
+/// Shell stress first moment, integral z*sigma dz in global tensor axes. Two thickness
+/// Gauss points integrate a homogeneous flat section exactly. Keep each element's
+/// values separate, just as for surface stress; other element kinds carry zeros.
+pub fn shell_moments(p: &Problem<'_>, u: &[f64]) -> Result<FieldData, Error> {
+    let dpn = p.dofs_per_node();
+    let mut moments = Vec::new();
+    for blk in &p.mesh.blocks {
+        if blk.kind != ElementKind::Shell4 {
+            moments.resize(moments.len() + blk.n_elems() * element_for(blk.kind).n_gp() * VOIGT, 0.0);
+            continue;
+        }
+        for i in 0..blk.n_elems() {
+            let elem = blk.first_elem + i as u32;
+            let mut coords = [0.0; 12];
+            let mut temp = [0.0; 4];
+            let mut ue = [0.0; 24];
+            p.mesh.elem_coords(elem, &mut coords);
+            p.gather_temperature(elem, &mut temp);
+            crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), 6, dpn, &mut ue);
+            let c = p.ctx(elem, &coords, &temp)?;
+            let mut moment = [0.0; 24];
+            for layer in crate::fem::shell::layers(&c)? {
+                for (z, weight) in layer.points() {
+                    let (mut sig, mut eps) = ([0.0; 24], [0.0; 24]);
+                    crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
+                    for (m, s) in moment.iter_mut().zip(sig) {
+                        *m += weight * z * s;
+                    }
+                }
+            }
+            moments.extend(moment);
+        }
+    }
+    Ok(gp_to_nodes(p.mesh, &FieldData::new(Per::ElemGp, VOIGT, moments)))
+}
+
 /// The section forces (`N, V_y, V_z`) and moments (`T, M_y, M_z`) of every beam element at
 /// each of its two nodes, as two [`Per::ElemNode`] fields of three components, elements in
 /// order; every node of every other element carries zeros, so the two fields line up with

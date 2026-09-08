@@ -42,6 +42,7 @@ use crate::model::Idealisation;
 /// `alpha` and `k` are the three material-axis components; an isotropic material repeats one
 /// value three times. `axes` is the rotation whose **rows are the material axes in global
 /// coordinates**, or `None` when the material axes are the global ones.
+#[derive(Clone)]
 pub struct Material {
     pub law: &'static dyn MaterialLaw,
     pub props: Vec<f64>,
@@ -64,7 +65,12 @@ impl Material {
 }
 
 /// Everything one element integral needs besides the load itself.
+#[derive(Clone)]
 pub struct ElementCtx<'a> {
+    /// Bottom-to-top shell plies; empty means the homogeneous section and Body material.
+    pub plies: &'a [crate::fem::shell::Ply],
+    /// Per-corner shell directors in global coordinates; absent for non-shell elements.
+    pub directors: Option<[[f64; 3]; 4]>,
     /// `n_nodes * 3`, stride 3 (`z = 0` in 2D).
     pub coords: &'a [f64],
     pub material: &'a Material,
@@ -73,7 +79,8 @@ pub struct ElementCtx<'a> {
     /// The cross-section of a line member; `None` for a solid, which has its own geometry.
     pub section: Option<&'a Section>,
     /// The reference vector a beam's local z-axis is taken from; `None` is the default rule
-    /// (`section.assign`). Ignored by every other element.
+    /// (`section.assign`); for a laminate it defines the zero-angle ply direction by
+    /// projection onto the midsurface. Ignored by every other element.
     pub orientation: Option<[f64; 3]>,
     /// The acceleration every gravity Load of the Step adds up to, so a beam can subtract its
     /// own fixed-end forces when it recovers section forces. Zero without gravity.
@@ -117,6 +124,11 @@ pub trait Element: Send + Sync {
     fn mass(&self, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -> Result<(), Error>;
     /// `∫ Nᵀ f dV` for a body force per unit volume evaluated at the Gauss points (gravity is `ρ g`).
     fn body_load(&self, c: &ElementCtx<'_>, f: &dyn Fn([f64; 3]) -> [f64; 3], out: &mut [f64]) -> Result<(), Error>;
+    /// Gravity, including section-dependent density and its moment about the mesh surface.
+    fn gravity_load(&self, c: &ElementCtx<'_>, g: [f64; 3], out: &mut [f64]) -> Result<(), Error> {
+        let rho = density(c)?;
+        self.body_load(c, &|_x| g.map(|value| rho * value), out)
+    }
     /// `∫ Bᵀ D ε_th dV`; all zeros when `c.temperature` is `None`.
     fn thermal_load(&self, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<(), Error>;
     /// Consistent nodal load on one face (Abaqus S1.. identity, 0-based).
@@ -1052,6 +1064,8 @@ fn tangent_and_force_of(
     // infinitesimal strain and hourglasses in compression, so this integrates fully whatever
     // the Model's Formulation says. `procedure::nonlinear` warns when that changes an answer.
     let full = ElementCtx {
+        plies: c.plies,
+        directors: c.directors,
         coords: c.coords,
         material: c.material,
         idealisation: c.idealisation.clone(),
@@ -1129,6 +1143,9 @@ fn tangent_and_force_of(
 /// is folded at one of them. The well-posedness check screens a whole Mesh with this before
 /// any material is looked at, and it is the same Jacobian the integrals use.
 pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
+    if kind == ElementKind::Shell4 {
+        return crate::fem::shell::min_surface_jacobian(coords);
+    }
     // A line member is embedded in the mesh's space, so its Jacobian is the length of
     // `dx/dξ` rather than a determinant of the coordinate directions.
     if kind.dim() == 1 {
@@ -1330,5 +1347,6 @@ pub fn element_for(kind: ElementKind) -> &'static dyn Element {
         ElementKind::Tri6 => &ISO_TRI6,
         ElementKind::Truss2 => &TRUSS2,
         ElementKind::Beam2 => &BEAM2,
+        ElementKind::Shell4 => &crate::fem::shell::Shell4,
     }
 }

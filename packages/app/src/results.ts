@@ -6,7 +6,7 @@
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
 import { FemError, type FrameResult, type FramesResult, type ResultSummary, type Ack, type Warning } from '@femlab/registry';
-import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
+import { choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store, ViewMode } from './store';
 import type { EngineTransport } from '@femlab/registry';
@@ -271,7 +271,7 @@ export class ResultsView {
     v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
     v.setMode(this.store.state.viewMode);
     v.setDim(result.stale);
-    v.setField(values, range, scalar.per === 'element' ? 'element' : 'node');
+    v.setField(values, range, scalar.per);
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
     if (choice.mode !== undefined) this.requested = 'auto';
@@ -427,7 +427,7 @@ export function fieldKeyOf(field: string, component: number | null): string {
     if (!/^mode:[1-9]\d*$/.test(field) || component !== null) throw unsupportedField(field, component);
     return field;
   }
-  const choices = FIELD_CHOICES.filter((c) => c.field === field);
+  const choices = fieldChoices([field]);
   if (choices.length === 0) throw unsupportedField(field, component);
   if (component === null) return choices.find((c) => c.component === null)?.key ?? choices[0]!.key;
   const exact = choices.find((c) => c.component === component);

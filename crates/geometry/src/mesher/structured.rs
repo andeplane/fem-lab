@@ -40,6 +40,18 @@ impl Structured {
     }
 
     fn build_dyn(&self, map: &dyn Fn([f64; 3]) -> [f64; 3]) -> Mesh {
+        if self.kind == ElementKind::Shell4 {
+            let mut mesh = Structured { kind: ElementKind::Quad4, n: self.n }.build_dyn(map);
+            mesh.dim = 3;
+            mesh.blocks[0].kind = ElementKind::Shell4;
+            mesh.face_sets.clear();
+            for (name, local) in [("bottom", 0), ("top", 1)] {
+                mesh.face_sets
+                    .insert(name.into(), (0..mesh.n_elems() as u32).map(|elem| Face { elem, local }).collect());
+                mesh.node_sets.insert(name.into(), (0..mesh.n_nodes() as u32).collect());
+            }
+            return mesh;
+        }
         let (grid_kind, simplex) = match self.kind {
             ElementKind::Tet4 => (ElementKind::Hex8, true),
             ElementKind::Tet10 => (ElementKind::Hex20, true),

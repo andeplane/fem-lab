@@ -24,6 +24,9 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   reaction: 'force',
   stress: 'stress',
   stressUnaveraged: 'stress',
+  stressTop: 'stress',
+  stressBottom: 'stress',
+  shellMoment: 'force',
   vonMises: 'stress',
   principal: 'stress',
   strain: 'dimensionless',
@@ -40,6 +43,7 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
 export function dimensionOf(field: string, reactionQuantity: 'force' | 'power' = 'force'): keyof typeof SI_UNIT {
   if (field === 'reaction') return reactionQuantity;
   if (field.startsWith('mode:')) return 'length';
+  if (/^stressPly:[1-9]\d*:(bottom|top)$/.test(field)) return 'stress';
   if (field === 'safety' || field === 'utilisation') return 'dimensionless';
   return FIELD_DIMENSION[field as Field] ?? 'dimensionless';
 }
@@ -77,6 +81,14 @@ export interface FieldChoice {
 const VEC = ['x', 'y', 'z'];
 const VOIGT = ['xx', 'yy', 'zz', 'xy', 'xz', 'yz'];
 
+/** A retained laminate ply face has the same six global components as outer shell stress. */
+function plyChoices(field: string): FieldChoice[] {
+  const match = /^stressPly:([1-9]\d*):(bottom|top)$/.exec(field);
+  return match ? VOIGT.map((axis, component) => ({
+    key: `${field}:${axis}`, label: `σ${axis} ply ${match[1]} ${match[2]}`, field, component,
+  })) : [];
+}
+
 /**
  * Every scalar the viewer can contour, in the order the design's picker lists them: the one
  * number an engineer looks at first, then the displacement, then the stress components.
@@ -85,7 +97,10 @@ export const FIELD_CHOICES: FieldChoice[] = [
   { key: 'vonMises', label: 'σ_vM', field: 'vonMises', component: 0 },
   { key: 'umag', label: '|u|', field: 'displacement', component: null, magnitude: true },
   ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
+  ...VEC.map((a, i) => ({ key: `r${a}`, label: `θ${a}`, field: 'rotation', component: i })),
   ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
+  ...['Top', 'Bottom'].flatMap((side) => VOIGT.map((a, i) => ({ key: `s${side}${a}`, label: `σ${a} ${side.toLowerCase()}`, field: `stress${side}`, component: i }))),
+  ...VOIGT.map((a, i) => ({ key: `shellM${a}`, label: `M${a} / width`, field: 'shellMoment', component: i })),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
   { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
   { key: 'contactPressure', label: 'p_c', field: 'contactPressure', component: 0 },
@@ -120,6 +135,7 @@ export function modeChoice(k: number, result?: ModeSpectrum | null): FieldChoice
 export function fieldChoices(fields: string[], modes: number | ModeSpectrum | null = 0, hasYield = false): FieldChoice[] {
   return [
     ...FIELD_CHOICES.filter((c) => fields.includes(c.field)),
+    ...[...new Set(fields)].flatMap(plyChoices),
     ...Array.from({ length: typeof modes === 'number' ? modes : modeCount(modes) }, (_, i) => modeChoice(i + 1, typeof modes === 'number' ? undefined : modes)),
     ...(hasYield && fields.includes('vonMises') ? DERIVED_CHOICES : []),
   ];
@@ -137,6 +153,8 @@ export function showFieldArgs(c: FieldChoice): { field: string; component?: numb
 export function choiceOf(key: string, result?: ModeSpectrum | null): FieldChoice {
   const known = [...FIELD_CHOICES, ...DERIVED_CHOICES].find((c) => c.key === key);
   if (known) return known;
+  const ply = plyChoices(key.slice(0, key.lastIndexOf(':'))).find((c) => c.key === key);
+  if (ply) return ply;
   const k = /^mode:(\d+)$/.exec(key);
   return k ? modeChoice(Number(k[1]), result) : FIELD_CHOICES[0]!;
 }

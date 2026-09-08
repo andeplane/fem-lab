@@ -1,4 +1,5 @@
 [
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "shell","thickness": "2 mm"}}},
   {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "rectangle","width": "60 mm","height": "100 mm"}}},
   {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "circle","radius": "25 mm"}}},
   {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "tube","radius": "25 mm","thickness": "5 mm"}}},

@@ -114,7 +114,7 @@ export class Viewer {
   private mode: ViewMode = 'geometry';
   private colormap: ColormapName = 'viridis';
   private field: Float32Array | null = null;
-  private fieldPer: 'node' | 'element' = 'node';
+  private fieldPer = 'node';
   private range: [number, number] = [0, 1];
   /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
   private dim = false;
@@ -357,7 +357,7 @@ export class Viewer {
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
-          const entity = this.fieldPer === 'element' ? s.triElement?.[t] : this.vert[vertex];
+          const entity = this.fieldPer === 'elementNode' ? s.triElementNode?.[t * 3 + k] : this.fieldPer === 'element' ? s.triElement?.[t] : this.vert[vertex];
           const value = entity === undefined ? lo : this.field[entity] ?? lo;
           const [r, g, b] = sample(this.colormap, (value - lo) / span);
           c.setRGB(r, g, b);
@@ -451,7 +451,11 @@ export class Viewer {
     this.render();
   }
 
-  setField(values: Float32Array | null, range: [number, number], per: 'node' | 'element' = 'node'): void {
+  setField(values: Float32Array | null, range: [number, number], per = 'node'): void {
+    if (values && per !== 'node' && per !== 'elementNode' && per !== 'element') throw new FemError('unsupported', `cannot contour ${per} fields`);
+    if (values && per === 'elementNode' && this.surface?.triElementNode?.length !== this.surface?.indices.length) {
+      throw new FemError('internal', 'the Result surface has no element-node field mapping');
+    }
     this.field = values;
     this.fieldPer = per;
     this.range = range;
@@ -789,13 +793,14 @@ export class Viewer {
     if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
     const t = this.tri[hit.faceIndex]!;
     const node = this.nearestNode(hit.faceIndex, hit.point);
-    const entity = this.fieldPer === 'element' ? s.triElement?.[t] : node;
+    const corner = [0, 1, 2].find(k => s.indices[t * 3 + k] === node);
+    const fieldIndex = this.fieldPer === 'elementNode' && corner !== undefined ? s.triElementNode?.[t * 3 + corner] : this.fieldPer === 'element' ? s.triElement?.[t] : node;
     return {
       face: s.faceNames[s.triFace[t]!] ?? null,
       body: s.bodyNames[s.triBody[t]!] ?? null,
       point: [hit.point.x, hit.point.y, hit.point.z],
       node,
-      value: entity !== null && entity !== undefined && this.field ? (this.field[entity] ?? null) : null,
+      value: fieldIndex != null && this.field ? (this.field[fieldIndex] ?? null) : null,
     };
   }
 

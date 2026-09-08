@@ -86,6 +86,32 @@ it('colours line members from endpoint results and keeps body emphasis on outlin
   expect(colours()[0]).toBeLessThan(resultColours[0]!);
 });
 
+it('keeps separate element-node colours at a shared mesh node', () => {
+  const { viewer, objects } = setup();
+  viewer.setSurface({ ...surface,
+    indices: Uint32Array.from([0, 1, 2, 0, 2, 1]),
+    triElementNode: Uint32Array.from([0, 1, 2, 4, 6, 5]),
+    bodyNames: ['first', 'second'], triBody: Uint32Array.from([0, 1]), triFace: Uint32Array.from([0, 0]),
+  });
+  viewer.setMode('results');
+  viewer.setField(Float32Array.from([0, 0, 0, 0, 1, 1, 1, 1]), [0, 1], 'elementNode');
+  const colour = objects.mesh.geometry.getAttribute('color');
+  expect([colour.getX(0), colour.getY(0), colour.getZ(0)])
+    .not.toEqual([colour.getX(3), colour.getY(3), colour.getZ(3)]);
+  viewer.setField(Float32Array.from([0, 0, 0]), [0, 1]);
+  expect([colour.getX(0), colour.getY(0), colour.getZ(0)])
+    .toEqual([colour.getX(3), colour.getY(3), colour.getZ(3)]);
+  viewer.setField(Float32Array.from([0, 0, 0, 0, 1, 1, 1, 1]), [0, 1], 'elementNode');
+  const second = [colour.getX(3), colour.getY(3), colour.getZ(3)];
+  viewer.setVisible(['first'], false);
+  const visible = objects.mesh.geometry.getAttribute('color');
+  expect([visible.getX(0), visible.getY(0), visible.getZ(0)]).toEqual(second);
+  expect(() => viewer.setField(Float32Array.of(1), [0, 1], 'elementGaussPoint')).toThrow('cannot contour');
+  viewer.setField(null, [0, 1]);
+  viewer.setSurface(surface);
+  expect(() => viewer.setField(Float32Array.of(1), [0, 1], 'elementNode')).toThrow('no element-node field mapping');
+});
+
 it('colours each triangle by its element id and restores nodal colouring afterwards', () => {
   const { viewer, objects } = setup();
   viewer.setSurface({ ...surface,

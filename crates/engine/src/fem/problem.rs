@@ -123,6 +123,8 @@ pub struct PointMass {
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
 /// block, and the resolved Constraints and Loads.
 pub struct Problem<'a> {
+    /// Analytic directors per shell element; empty uses the element's own corner normals.
+    pub directors: &'a [[[f64; 3]; 4]],
     pub mesh: &'a Mesh,
     /// Every Set of the built Mesh, by name.
     pub sets: &'a BTreeMap<String, ResolvedSet>,
@@ -135,9 +137,11 @@ pub struct Problem<'a> {
     /// `checks::missing_sections`; a solid block never needs one.
     pub section_of_block: Vec<Option<usize>>,
     pub sections: Vec<Section>,
+    /// Bottom-to-top plies per section. An absent or empty entry is homogeneous.
+    pub plies: Vec<Vec<crate::fem::shell::Ply>>,
     /// Per block: the unit vector of the global axis its beams take their local z-axis from,
-    /// or `None` for the default rule (`section.assign`'s `orientation`). Ignored by every
-    /// other element.
+    /// or `None` for the default rule (`section.assign`'s `orientation`). Laminates use
+    /// its tangent projection as the zero-angle ply direction. Other elements ignore it.
     pub orientation_of_block: Vec<Option<[f64; 3]>>,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
@@ -185,13 +189,13 @@ impl Problem<'_> {
         self.mesh.blocks.iter().any(|b| b.kind == ElementKind::Beam2)
     }
 
-    /// Per node: does a beam element reach it, so its three rotations are real unknowns. On
+    /// Per node: does a beam or shell element reach it, so its three rotations are real unknowns. On
     /// every other node of a six-DOF Problem the rotations are inert: no element gives them
     /// stiffness or mass, so [`crate::fem::assembly::resolve`] lists them as `inert` and the
     /// reduction drops them exactly like a DOF fixed at zero.
     pub fn rotational_nodes(&self) -> Vec<bool> {
         let mut out = vec![false; self.mesh.n_nodes()];
-        for blk in self.mesh.blocks.iter().filter(|b| b.kind == ElementKind::Beam2) {
+        for blk in self.mesh.blocks.iter().filter(|b| b.kind == ElementKind::Beam2 || b.kind == ElementKind::Shell4) {
             for &n in &blk.conn {
                 out[n as usize] = true;
             }
@@ -199,7 +203,7 @@ impl Problem<'_> {
         out
     }
 
-    /// The inert rotational DOFs of a six-DOF Problem, ascending: rotations of nodes no beam
+    /// The inert rotational DOFs of a six-DOF Problem, ascending: rotations of nodes no beam or shell
     /// reaches. Empty unless the stride is six.
     pub fn inert_dofs(&self) -> Vec<u32> {
         if self.dofs_per_node() != NODE_DOFS_MAX {
@@ -242,6 +246,8 @@ impl Problem<'_> {
     pub fn ctx<'b>(&'b self, elem: u32, coords: &'b [f64], temperature: &'b [f64]) -> Result<ElementCtx<'b>, Error> {
         let block = self.mesh.block_of(elem).0;
         Ok(ElementCtx {
+            plies: self.section_of_block[block].and_then(|i| self.plies.get(i)).map_or(&[][..], Vec::as_slice),
+            directors: self.directors.get(elem as usize).copied(),
             coords,
             material: self.material_of(elem)?,
             section: self.section_of_block[block].map(|i| &self.sections[i]),
@@ -293,9 +299,9 @@ pub fn no_material(body: &str) -> Error {
         .suggest("material.assign")
 }
 
-/// The `model.no-section` error for one Body of line members.
+/// The `model.no-section` error for a Body whose elements require a Section.
 pub fn no_section(body: &str) -> Error {
-    Error::new(ErrorCode::ModelNoSection, format!("body '{body}' is made of line members and has no section"))
+    Error::new(ErrorCode::ModelNoSection, format!("body '{body}' needs a section but has none"))
         .at(format!("body '{body}'"))
         .suggest("section.add, then section.assign")
 }
@@ -318,10 +324,10 @@ pub fn dof_labels(id: &Idealisation) -> [&'static str; NODE_DOFS_MAX] {
 }
 
 /// The structural unknowns per node of a Mesh under an idealisation: six once it holds a beam
-/// block, else the idealisation's own count. [`Problem::dofs_per_node`] for a structural Step,
+/// or shell block, else the idealisation's own count. [`Problem::dofs_per_node`] for a structural Step,
 /// and what `query.mesh` and `query.cost` count with before any Problem exists.
 pub fn mesh_dofs_per_node(mesh: &Mesh, id: &Idealisation) -> usize {
-    if mesh.blocks.iter().any(|b| b.kind == ElementKind::Beam2) {
+    if mesh.blocks.iter().any(|b| b.kind == ElementKind::Beam2 || b.kind == ElementKind::Shell4) {
         NODE_DOFS_MAX
     } else {
         id.dofs_per_node()
@@ -333,7 +339,7 @@ pub fn mesh_dofs_per_node(mesh: &Mesh, id: &Idealisation) -> usize {
 /// to a beam still integrates three displacements per node, and the assembler's gather and
 /// scatter leave the rotational slots of its nodes untouched.
 pub fn local_dofs(kind: ElementKind, dofs_per_node: usize) -> usize {
-    if dofs_per_node == NODE_DOFS_MAX && kind != ElementKind::Beam2 {
+    if dofs_per_node == NODE_DOFS_MAX && kind != ElementKind::Beam2 && kind != ElementKind::Shell4 {
         3
     } else {
         dofs_per_node

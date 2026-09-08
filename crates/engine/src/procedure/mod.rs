@@ -338,6 +338,8 @@ pub struct StepResult {
     /// Kept with the solved Result, so later model edits cannot change its reaction units.
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub fields: BTreeMap<Field, FieldData>,
+    /// Laminate stresses on both faces of every ply, bottom to top, including interface jumps.
+    pub ply_stresses: Vec<crate::post::stress::PlyStress>,
     pub scalars: BTreeMap<String, f64>,
     /// Per-component extremes of every nodal field, in `Field` order.
     pub extremes: Vec<(Field, Extremum)>,
@@ -504,6 +506,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
     StepResult {
         reaction_quantity: crate::units::ReactionQuantity::Force,
         fields: BTreeMap::new(),
+        ply_stresses: Vec::new(),
         scalars: BTreeMap::new(),
         extremes: Vec::new(),
         reactions: Vec::new(),
@@ -540,7 +543,7 @@ pub(crate) fn vector_field(v: &[f64], dofs_per_node: usize) -> FieldData {
 }
 
 /// The rotations of a six-DOF vector as a three-component nodal field: components 3, 4 and 5
-/// of every node, which only a Problem with beams has.
+/// of every node reached by a beam or shell.
 pub(crate) fn rotation_field(v: &[f64]) -> FieldData {
     let dpn = crate::fem::problem::NODE_DOFS_MAX;
     let n = v.len() / dpn;

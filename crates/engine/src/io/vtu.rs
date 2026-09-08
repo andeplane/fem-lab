@@ -16,7 +16,7 @@ fn cell_type(kind: ElementKind) -> u8 {
         ElementKind::Hex20 => 25,
         ElementKind::Tet4 => 10,
         ElementKind::Tet10 => 24,
-        ElementKind::Quad4 => 9,
+        ElementKind::Quad4 | ElementKind::Shell4 => 9,
         ElementKind::Quad8 => 23,
         ElementKind::Tri3 => 5,
         ElementKind::Tri6 => 22,
