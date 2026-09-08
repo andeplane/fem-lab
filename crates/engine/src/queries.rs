@@ -687,13 +687,19 @@ impl Engine {
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
         let dofs_per_node = crate::fem::problem::mesh_dofs_per_node(&built.mesh, &self.model.idealisation);
+        let modal_modes = step
+            .after
+            .as_deref()
+            .and_then(|name| self.model.step(name))
+            .map_or(0, |source| source.n_modes.unwrap_or(6) as usize)
+            .min(built.mesh.n_nodes().saturating_mul(dofs_per_node));
         if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
-            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure, modal_modes)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         } else {
-            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, None, &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, None, &procedure, modal_modes)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         }

@@ -20,10 +20,10 @@ describe('fieldsOf', () => {
       expect(fields.every((f) => f.path.length === 1), name).toBe(true);
       // `plugin.load`'s `manifest` is deliberately free-form JSON, and `geometry.addLine`'s
       // joint list and member wiring are tables of numbers rather than form fields, as are
-      // `step.add`'s per-Set initial-velocity list and its per-mode `dampingRatios` list.
+      // `step.add`'s per-Set initial velocities, per-mode damping ratios and input PSD table.
       // `study.adapt.refinements` is the recorded per-iteration table of size boxes.
       // Nothing else may be.
-      const json: Record<string, string[]> = { 'study.adapt': ['study.adapt.refinements'], 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'], 'step.add': ['step.add.initialVelocity', 'step.add.dampingRatios'] };
+      const json: Record<string, string[]> = { 'study.adapt': ['study.adapt.refinements'], 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'], 'step.add': ['step.add.initialVelocity', 'step.add.dampingRatios', 'step.add.psd'] };
       expect(fields.filter((f) => f.kind === 'json').map((f) => `${name}.${f.path.join('.')}`)).toEqual(json[name] ?? []);
     }
   });
@@ -51,7 +51,7 @@ describe('fieldsOf', () => {
 
   it('reads an enum as options and a list of names as a multi picker', () => {
     const fields = fieldsOf(byName('step.add'), DEFS);
-    expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'static-nonlinear', 'modal', 'buckling', 'heat-steady', 'heat-transient', 'explicit', 'implicit', 'harmonic'], multi: false });
+    expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'static-nonlinear', 'modal', 'buckling', 'heat-steady', 'heat-transient', 'explicit', 'implicit', 'harmonic', 'randomVibration'], multi: false });
     expect(fields.find((f) => f.path[0] === 'constraints')).toMatchObject({ kind: 'ref', refKind: 'constraint', multi: true });
     expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true });
   });

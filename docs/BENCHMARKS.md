@@ -410,6 +410,9 @@ Hermitian-cubic one without rotary inertia, so the reference is Euler–Bernoull
 slender enough (`r_g/L = 1e-4`) for the element's shear flexibility to be a 1e-8 effect: mode 1
 errors 4.75e-3, 4.83e-4, 3.27e-5 and 2.03e-6 at 1, 2, 4 and 8 elements, an observed rate of 3.95
 on the last three, mode 2 within 1e-3 at eight, and every discrete frequency above the exact one.
+The retained full modal vectors are also checked on every mesh for unit generalized mass,
+the free-DOF eigenproblem residual, nonzero beam rotations, and agreement with the displayed
+translations (#73). Post-modal stress recovery needs those rotations.
 The same test then solves a beam with `r_g/L = 0.1` and checks that its first frequency comes
 out *below* Euler–Bernoulli — at 0.948 of it — which is the shear flexibility showing. B27
 (`a_beam_element_has_exactly_six_zero_energy_modes`) is the rank test: `K v = 0` on the six
@@ -923,9 +926,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F14 | Damped harmonic magnification of one degree of freedom, r = f/f_n from 0.1 to 3.0, ζ = 0.02, 0.05 and 0.2 | `\|u\|/u_static = 1/√((1−r²)² + (2ζr)²)` and `phase = atan2(2ζr, 1−r²)` — exact for one degree of freedom, so mode superposition is exact too | 1e-8 on magnitude and phase | harmonic response by mode superposition (ADR 0020) | green + engine test |
 | F15 | Harmonic sweep on B1's cantilever, ζ = 0.02, 30–55 Hz at 0.5 Hz | the peak row sits on B4's Euler–Bernoulli f₁ = 41.91 Hz; its phase is the quadrature π/2 a resonance produces; its amplitude is the static tip deflection amplified by 1/(2ζ) | 1 % in frequency, 5 % in phase, 4 % in amplitude | the sweep finds the real resonance of a real structure | green |
 | F16 | NAFEMS R0016 case 5H, forced harmonic response of the simply-supported thin plate | the published peak displacement and stress table | — | | **resolve** — needs the published table |
-| F17 | NAFEMS R0016 case 5R, random response of the same plate | the published RMS table | — | | **resolve** — needs the published table |
+| F17 | #73, NAFEMS R0016 Test 5R / Ansys VM19: simply-supported deep beam, 10/20/40 elements | f₁ = 42.65 Hz; peak displacement PSD = 180.90 mm²/Hz; peak bending stress PSD = 58515.60 (N/mm²)²/Hz | 2 % frequency and displacement PSD, 1 % stress PSD | correlated modal response; signed extreme-fibre stress; mesh refinement | engine test |
 | F18 | #346, logarithmic decrement: F3's SDOF hex8 released with an initial velocity (no load) at ζ = 0.05, Rayleigh pair `α = ζω, β = ζ/ω` | `δ = 2πζ/√(1−ζ²)`, measured from two parabolically-interpolated peaks four damped periods apart, `ln(peak₀/peak₄)/4` | 1 % | free-decay damping reaches the ratio the pair was chosen for, independent of F3's step-load closed form | engine test |
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
+| F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
 
 The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
 10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
@@ -1106,11 +1110,28 @@ occupies is identified three ways, not one: its frequency is Euler–Bernoulli's
 phase is 1.526 rad against π/2, and its amplitude is 73.52 mm against the 75.77 mm the
 amplification identity predicts.
 
-**F16 and F17 are not claimed.** NAFEMS R0016, *Selected Benchmarks for Forced Vibration*, is the
-right published set for both harmonic and random response and covers them on one plate. Nobody on
-this change has read the publication, and BENCHMARKS' own rule forbids hard-coding a remembered
-number, so the rows say **resolve** and the harmonic PR is gated on F14 and F15, which are closed
-forms.
+**F17 (#73)** uses the published [Ansys VM19 description](https://ansyshelp.ansys.com/public/Views/Secured/corp/v251/en/ans_vm/Hlp_V_VM19.html)
+and [input listing](https://ansyshelp.ansys.com/public/Views/Secured/corp/v251/en/ans_vm/Hlp_V_VM19TXT.html),
+which identify the case as NAFEMS R0016 Test 5R. This is a deep beam, not a plate.
+The test uses L = 10 m, a 2 m square section, E = 200 GPa, ν = 0.3, ρ = 8000 kg/m³,
+2 % damping and spatially correlated transverse line-load PSD (10⁶ N/m)²/Hz.
+The input band is 0.1–70 Hz. On 10/20/40 elements, displacement PSD is
+179.855/181.891/182.401 mm²/Hz and stress PSD is 58561.90/58524.86/58512.53 (N/mm²)²/Hz.
+The beam's existing Hermitian mass omits rotary inertia; frequencies approach 43.183 Hz,
+1.25 % above the published 42.65 Hz. The frequency gate includes that documented approximation;
+it does not claim convergence to the rotary-inertia reference. The procedure's integrated
+RMS fields are separately compared within 3 % to the narrow-band Lorentzian area estimate
+`variance ≈ peak PSD · π ζ f_n`. Those RMS estimates are analytical approximations, not
+published VM19 targets. F16's harmonic case still needs its published reference table.
+
+**F20 (#73)** additionally runs a finite-element SDOF bar (`random-vibration-sdof`) through the randomVibration
+procedure. With its transverse motion constrained, `C₁₁ = E(1−ν)/((1+ν)(1−2ν))`,
+`ω_n² = 3 C₁₁/(ρL²)` and `u_static = traction L/C₁₁`. The independent stationary
+energy balance gives `σ_u² = u_static² S ω_n/(8ζ)` and `σ_stress = C₁₁ σ_u/L`.
+The canonical CLI case checks both fields at 1e-7 relative.
+`tools/test-random-vibration-replay.mjs` verifies its Journal hashes and complete RMS fields
+in WASM and native hosts at one and four threads. Covariance integration alone is gated at 1e-8
+for damping down to 1e-5. Equal modes with opposite participation cancel exactly.
 
 F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).
 Every retained nodal displacement equals `v₀ t + g t²/2` within `1e-10 tEnd` m for all eight

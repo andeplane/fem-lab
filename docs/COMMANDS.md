@@ -1038,6 +1038,7 @@ amplitude at the frequency of peak response. Its Constraints may only hold DOFs 
 | sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}]}</code> | Frequency spacing of a harmonic sweep; default linear. |
 | dampingRatio | no | <code>{"type":["number","null"],"format":"double"}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused together with &#96;dampingRatios&#96; on the same Step. |
 | dampingRatios | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"}}</code> | Per-mode modal damping ratios &#96;[ζ₁, ζ₂, …]&#96; of a harmonic Step, e.g. &#96;[0.01, 0.02]&#96; for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past the end of the list holds the last entry, so a two-entry list on a five-mode basis gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly like &#96;dampingRatio&#96;. Refused together with &#96;dampingRatio&#96; on the same Step. |
+| psd | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/PsdPoint"}}</code> | One-sided PSD table for randomVibration. All Loads form one spatial pattern multiplied by the same zero-mean stationary random process. Use density "1 s" (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots, &#96;after&#96; naming a solved modal Step, identical constraints, and positive damping. Outputs are componentwise standard deviations, never a signed equilibrium state. |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
@@ -2366,7 +2367,36 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
       "type": "string",
       "const": "harmonic"
+    },
+    {
+      "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
+      "type": "string",
+      "const": "randomVibration"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>PsdPoint</summary>
+
+```json
+{
+  "description": "One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.\nDensities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation\nis linear in Hz and density, with zero input outside the table's finite band.",
+  "type": "object",
+  "properties": {
+    "frequency": {
+      "$ref": "#/$defs/Q_frequency"
+    },
+    "density": {
+      "$ref": "#/$defs/Q_time"
+    }
+  },
+  "required": [
+    "frequency",
+    "density"
   ]
 }
 ```
@@ -5922,6 +5952,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "format": "double"
           }
         },
+        "psd": {
+          "description": "One-sided PSD table for randomVibration. All Loads form one spatial pattern\nmultiplied by the same zero-mean stationary random process. Use density \"1 s\"\n(1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,\n`after` naming a solved modal Step, identical constraints, and positive damping.\nOutputs are componentwise standard deviations, never a signed equilibrium state.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PsdPoint"
+          }
+        },
         "cmd": {
           "type": "string",
           "const": "step.add"
@@ -7521,7 +7561,36 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
       "type": "string",
       "const": "harmonic"
+    },
+    {
+      "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
+      "type": "string",
+      "const": "randomVibration"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>PsdPoint</summary>
+
+```json
+{
+  "description": "One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.\nDensities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation\nis linear in Hz and density, with zero input outside the table's finite band.",
+  "type": "object",
+  "properties": {
+    "frequency": {
+      "$ref": "#/$defs/Q_frequency"
+    },
+    "density": {
+      "$ref": "#/$defs/Q_time"
+    }
+  },
+  "required": [
+    "frequency",
+    "density"
   ]
 }
 ```

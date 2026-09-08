@@ -159,6 +159,7 @@ jobs:
       - run: node tools/test-transient-replay.mjs
       - run: node tools/test-retained-replay.mjs
       - run: node tools/test-adaptive-replay.mjs
+      - run: node tools/test-random-vibration-replay.mjs
       - name: replay every fixture natively and in wasm
         run: |
           mkdir -p hashes/native hashes/wasm

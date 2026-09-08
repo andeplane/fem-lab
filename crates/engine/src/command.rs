@@ -275,6 +275,20 @@ pub enum Procedure {
     /// superposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,
     /// `fStop` and `points`.
     Harmonic,
+    /// One-sided PSD response of the solved modal Step named by `after`. Produces
+    /// componentwise 1σ displacement and stress, including cross-modal correlations.
+    #[serde(rename = "randomVibration")]
+    RandomVibration,
+}
+
+/// One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.
+/// Densities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation
+/// is linear in Hz and density, with zero input outside the table's finite band.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PsdPoint {
+    pub frequency: Q<Frequency>,
+    pub density: Q<Time>,
 }
 
 /// A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
@@ -1795,6 +1809,13 @@ pub enum Command {
         /// like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         damping_ratios: Option<Vec<f64>>,
+        /// One-sided PSD table for randomVibration. All Loads form one spatial pattern
+        /// multiplied by the same zero-mean stationary random process. Use density "1 s"
+        /// (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+        /// `after` naming a solved modal Step, identical constraints, and positive damping.
+        /// Outputs are componentwise standard deviations, never a signed equilibrium state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        psd: Option<Vec<PsdPoint>>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
