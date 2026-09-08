@@ -70,6 +70,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [step.add](#commands-step-add)
 - [step.remove](#commands-step-remove)
 - [step.reorder](#commands-step-reorder)
+- [study.adapt](#commands-study-adapt)
 - [study.converge](#commands-study-converge)
 
 <a id="commands-constraint-couple"></a>
@@ -766,6 +767,7 @@ incompatible modes.
 | order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
 | formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> |  |
 | simplices | no | <code>{"type":["boolean","null"]}</code> |  |
+| refinement | no | <code>{"anyOf":[{"$ref":"#/$defs/LocalRefinementSpec"},{"type":"null"}]}</code> | Optional local size field on the resulting linear simplex mesh. A new mesh.set replaces this field; omit it to return to the base mesh. |
 | cmd | yes | <code>{"type":"string","const":"mesh.set"}</code> |  |
 
 <a id="commands-model-duplicate"></a>
@@ -1064,6 +1066,31 @@ later Step may inherit state (a temperature field) from an earlier one.
 | --- | --- | --- | --- |
 | order | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"step.reorder"}</code> |  |
+
+<a id="commands-study-adapt"></a>
+
+### study.adapt
+
+Solve, estimate local spatial error with ZZ recovery, refine the largest
+contributions, and repeat until targetError or maxIterations is reached.
+Leaves the last solved mesh and Result installed. Supports planar tri3/solid
+tet4 with static, heat-steady or heat-transient Steps without after. Transient
+runs restart at the configured initial state and estimate the final field;
+this does not estimate time error or adapt/coarsen within a time integration.
+errorEstimate is a dimensionless element field; its squared sum is the squared
+global relative estimate. Recovery is an indicator, not a certified error bound.
+Refines the existing boundary approximation without CAD projection. Exceeding
+maxElements or cancellation rolls back the entire Command.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| step | yes | <code>{"type":"string"}</code> |  |
+| targetError | yes | <code>{"type":"number","format":"double"}</code> |  |
+| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| maxElements | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| markingFraction | no | <code>{"type":["number","null"],"format":"double"}</code> | Fraction of squared error selected by bulk marking; default 0.5. |
+| refinements | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"$ref":"#/$defs/SizeBoxSpec"}}}</code> | Recorded refinement regions per iteration. Omit for a new study. The engine fills this in its Journal so replay follows the original choices; opening with skipped solves applies the same regions without solving. |
+| cmd | yes | <code>{"type":"string","const":"study.adapt"}</code> |  |
 
 <a id="commands-study-converge"></a>
 
@@ -1561,20 +1588,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
 ```json
 {
   "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
-  "type": "string",
-  "enum": [
-    "displacement",
-    "stress",
-    "stressUnaveraged",
-    "vonMises",
-    "principal",
-    "strain",
-    "plasticStrain",
-    "reaction",
-    "temperature",
-    "rotation",
-    "sectionForce",
-    "sectionMoment"
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "displacement",
+        "stress",
+        "stressUnaveraged",
+        "vonMises",
+        "principal",
+        "strain",
+        "plasticStrain",
+        "reaction",
+        "temperature",
+        "rotation",
+        "sectionForce",
+        "sectionMoment"
+      ]
+    },
+    {
+      "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
+      "type": "string",
+      "const": "errorEstimate"
+    }
   ]
 }
 ```
@@ -1790,6 +1826,36 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "string",
       "const": "beam"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>LocalRefinementSpec</summary>
+
+```json
+{
+  "description": "Local maximum edge lengths applied after the chosen mesher. Bounds are world\ncoordinates; touching element boxes obey the finest overlapping size. Only\nlinear triangles/tetrahedra are supported. Boundary edges are bisected without\nprojection onto CAD, so this controls discretisation error on the base geometry.",
+  "type": "object",
+  "properties": {
+    "boxes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SizeBoxSpec"
+      }
+    },
+    "maxElements": {
+      "description": "Maximum final element count, checked before refinement allocations grow past it.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "boxes",
+    "maxElements"
   ]
 }
 ```
@@ -3459,6 +3525,43 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>SizeBoxSpec</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "min": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "max": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "size": {
+      "$ref": "#/$defs/Q_length"
+    }
+  },
+  "required": [
+    "min",
+    "max",
+    "size"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>SketchSpec</summary>
 
 ```json
@@ -3937,7 +4040,9 @@ Returns: `PathResult`.
 
 ### query.probe
 
-A field value interpolated at a point (default: the last solved Step). Component
+A field value at a point (default: the last solved Step). Nodal fields are
+interpolated; errorEstimate returns the containing element's constant value
+with interpolated=false. Shared-face ties use the lowest element id. Component
 indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
 Optional sample selects a retained primary-field frame; omitted means the final field.
 Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
@@ -4897,6 +5002,17 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "refinement": {
+          "description": "Optional local size field on the resulting linear simplex mesh. A new\nmesh.set replaces this field; omit it to return to the base mesh.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalRefinementSpec"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "cmd": {
@@ -5978,6 +6094,66 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
+      "description": "Solve, estimate local spatial error with ZZ recovery, refine the largest\ncontributions, and repeat until targetError or maxIterations is reached.\nLeaves the last solved mesh and Result installed. Supports planar tri3/solid\ntet4 with static, heat-steady or heat-transient Steps without after. Transient\nruns restart at the configured initial state and estimate the final field;\nthis does not estimate time error or adapt/coarsen within a time integration.\nerrorEstimate is a dimensionless element field; its squared sum is the squared\nglobal relative estimate. Recovery is an indicator, not a certified error bound.\nRefines the existing boundary approximation without CAD projection. Exceeding\nmaxElements or cancellation rolls back the entire Command.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "targetError": {
+          "type": "number",
+          "format": "double"
+        },
+        "maxIterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxElements": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "markingFraction": {
+          "description": "Fraction of squared error selected by bulk marking; default 0.5.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "refinements": {
+          "description": "Recorded refinement regions per iteration. Omit for a new study. The\nengine fills this in its Journal so replay follows the original choices;\nopening with skipped solves applies the same regions without solving.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SizeBoxSpec"
+            }
+          }
+        },
+        "cmd": {
+          "type": "string",
+          "const": "study.adapt"
+        }
+      },
+      "required": [
+        "cmd",
+        "step",
+        "targetError"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
       "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
       "type": "object",
       "properties": {
@@ -6502,20 +6678,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
 ```json
 {
   "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
-  "type": "string",
-  "enum": [
-    "displacement",
-    "stress",
-    "stressUnaveraged",
-    "vonMises",
-    "principal",
-    "strain",
-    "plasticStrain",
-    "reaction",
-    "temperature",
-    "rotation",
-    "sectionForce",
-    "sectionMoment"
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "displacement",
+        "stress",
+        "stressUnaveraged",
+        "vonMises",
+        "principal",
+        "strain",
+        "plasticStrain",
+        "reaction",
+        "temperature",
+        "rotation",
+        "sectionForce",
+        "sectionMoment"
+      ]
+    },
+    {
+      "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
+      "type": "string",
+      "const": "errorEstimate"
+    }
   ]
 }
 ```
@@ -6835,6 +7020,36 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "string",
       "const": "beam"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>LocalRefinementSpec</summary>
+
+```json
+{
+  "description": "Local maximum edge lengths applied after the chosen mesher. Bounds are world\ncoordinates; touching element boxes obey the finest overlapping size. Only\nlinear triangles/tetrahedra are supported. Boundary edges are bisected without\nprojection onto CAD, so this controls discretisation error on the base geometry.",
+  "type": "object",
+  "properties": {
+    "boxes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SizeBoxSpec"
+      }
+    },
+    "maxElements": {
+      "description": "Maximum final element count, checked before refinement allocations grow past it.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "boxes",
+    "maxElements"
   ]
 }
 ```
@@ -8555,6 +8770,43 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "at"
       ]
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>SizeBoxSpec</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "min": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "max": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "size": {
+      "$ref": "#/$defs/Q_length"
+    }
+  },
+  "required": [
+    "min",
+    "max",
+    "size"
   ]
 }
 ```

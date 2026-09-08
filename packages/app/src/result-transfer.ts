@@ -3,7 +3,7 @@ import type { BufferSpec, DifferenceField, FrameResult, Query, QueryResult, Resu
 import { FemError } from '@femlab/registry';
 
 export type BulkQuery = Extract<Query, { query: 'query.frame' | 'query.field' | 'query.difference' | 'query.surface' }>;
-const TOPOLOGY = ['indices', 'triBody', 'triFace', 'triSetOffsets', 'triSets', 'edges', 'edgeFace', 'edgeBody'] as const;
+const TOPOLOGY = ['indices', 'triBody', 'triElement', 'triFace', 'triSetOffsets', 'triSets', 'edges', 'edgeFace', 'edgeBody'] as const;
 type Topology = typeof TOPOLOGY[number];
 export type SurfaceTransfer = Omit<ResultSurface, Topology | 'positions'> & Record<Topology, Uint32Array> & { positions: Float64Array };
 export type FieldTransfer = Omit<ResultField, 'values'> & { values: Float64Array };

@@ -1811,3 +1811,71 @@ verify detachment and repeated exact f64 reads, and isolate f32 casts to rendere
 `surface()` retains the current geometry-preview route; `surface({})` and
 `query.surface` require a compatible solved Result, while explicit IDs permit stale
 retained solves. Replies identify the immutable solve even when selected by Step.
+
+### ZZ recovery estimator (#83)
+
+Energy is evaluated as ||L⁻¹q||² with C=LLᵀ, avoiding cancellation in an
+explicit inverse quadratic form. Nonfinite energy and constitutive-plugin
+failures are structured errors, never small error estimates.
+
+The same two-triangle square has the exact displacement interpolant u=(xy,0).
+The two constant engineering strains are (0,0,1) and (1,0,0), giving local
+squared recovery error t(C_xxxx+G_xy)/16 and total field energy
+t(C_xxxx+G_xy)/2. Both plane stress (including thickness) and plane strain
+are checked against these closed forms, including η_rel=sqrt(1/5).
+
+
+`zz_two_triangles_have_the_exact_integrated_flux_error` uses the unit square split
+along its diagonal, with nodal temperatures sampled from T=xy and k=45 W/(m K).
+The two constant element gradients are (0,1) and (1,0); volume-weighted recovery
+at the shared corners is (1/2,1/2). Exact integration gives each squared error
+k/8, total field norm squared k, and relative estimate sqrt(1/5). This checks the
+energy integral, including the variation of the recovered field within an element.
+
+Affine temperature and displacement patches on distorted tri3/tet4 meshes have
+relative estimates below 1e-13, including plane stress with thickness, plane strain,
+and 3D. Two material patches keep independent recovered fluxes at their common
+nodes, so physical interface jumps do not become recovery error. One and four
+threads give identical estimates.
+
+For T=x² on unit-square tri3 meshes with 8, 16 and 32 divisions per side, the
+independent exact energy error of the nodal interpolant is sqrt(k/3)/n. The ZZ
+estimate has effectivity within 15% and first-order energy convergence within
+0.1 of the theoretical rate. This is an estimator benchmark on a manufactured
+field; adaptive solved-problem benchmarks are separate gates.
+
+The method uses volume-weighted, material-separated recovered stress/heat flux
+and the inverse elastic/conductivity tensor in the energy integral; see the
+[MFEM ZZ estimator contract](https://docs.mfem.org/html/classmfem_1_1ZienkiewiczZhuEstimator.html).
+An estimate is not a guaranteed bound on the true discretisation error.
+
+Local simplex refinement is checked on tri3 and tet4 boxes at target edge lengths
+0.4 m and 0.2 m. Area/volume stays exact to 1e-12, every child has positive
+orientation, every unpaired face remains on the original box boundary, and named
+face Sets retain their geometric planes. All edges in the requested region obey
+the bound; a remote region retains coarser elements. Refining an already compliant
+mesh is idempotent. An irregular three-triangle patch also forces all three edges
+of its central triangle to split in one pass: it must retain area 2.2 m² and
+satisfy Euler’s disk identity with exactly six boundary edges and no hanging faces.
+Invalid size fields and element budgets return errors without
+changing the input mesh. New boundary nodes bisect the existing mesh edges; these
+tests assert conservation of that boundary approximation, not improved CAD fidelity.
+
+`adaptive_heat_reduces_error_against_the_exact_parabolic_solution` solves the
+unit-square conduction problem with k=1 W/(m K), source 2 W/m³, T=300 K at
+x=0 and x=1, and insulated horizontal edges. Its independent exact solution is
+T=300+x(1−x) K. One, two and three adaptive solves must each reduce the sampled
+RMS temperature error by at least 30%. The element field's squared sum must equal
+the report's squared relative error. A separate registry test replays the recorded
+refinement choices with and without solves and compares exact meshes and Models,
+then checks undo and redo.
+
+The 3D adaptive cantilever also checks that the refined support reaction balances
+the 1000 N applied load to 1e-5 N. Transient adaptive conduction uses the same
+square, unit density/capacity, T(0)=300 K, θ=1/2, dt=0.01 s and tEnd=0.2 s.
+Its final probe is checked to 0.012 K against the independent odd-sine-series
+solution, ensuring spatial iterations restart rather than accumulate physical time.
+`tools/test-adaptive-replay.mjs` runs the recorded adaptive heat Journal through
+native execution at one/four threads and WASM, with exact per-entry hashes and
+surface topology and 1e-9 agreement of temperature/error fields. Both hosts also
+verify the same Model hashes when replay skips the solves.

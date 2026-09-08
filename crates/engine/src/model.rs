@@ -649,6 +649,16 @@ pub struct MeshSettings {
     /// Split the chosen mesher's quads/hexes into triangles/tetrahedra.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub simplices: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refinement: Option<LocalRefinement>,
+}
+
+/// Local mesher size field in SI, retained so replay reconstructs the exact mesh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRefinement {
+    pub boxes: Vec<femlab_geometry::SizeBox>,
+    pub max_elements: u32,
 }
 
 /// A Plugin used by the Model (phase P).

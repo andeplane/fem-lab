@@ -2455,3 +2455,134 @@ fn any_shape(depth: u32) -> BoxedStrategy<Shape> {
     ]
     .boxed()
 }
+
+#[test]
+fn local_refinement_preserves_measure_conformity_and_named_sets() {
+    use femlab_geometry::{refine, SizeBox};
+    for kind in [ElementKind::Tri3, ElementKind::Tet4] {
+        let dim = kind.dim();
+        let original =
+            Structured { kind, n: [4, 2, if dim == 3 { 2 } else { 1 }] }.box_([2., 1., if dim == 3 { 1. } else { 0. }]);
+        for size in [0.4, 0.2] {
+            let boxes = vec![SizeBox { min: [0.; 3], max: [0.3, 1., 1.], size }];
+            let refined = refine(&original, &boxes, 10000).unwrap();
+            assert_eq!(refined, refine(&original, &boxes, 10000).unwrap());
+            assert!(refined.n_elems() > original.n_elems());
+            assert!((measure(&refined) - measure(&original)).abs() < 1e-12);
+            assert!(min_element_measure(&refined) > 0.);
+            assert_eq!(refined.blocks.len(), original.blocks.len());
+            assert_eq!(refined.face_sets.keys().collect::<Vec<_>>(), original.face_sets.keys().collect::<Vec<_>>());
+            // Every unpaired face lies on the original box boundary. An internal hanging
+            // face would appear here, with a centroid strictly inside the box.
+            for face in refined.boundary_faces() {
+                let points: Vec<_> = refined.face_nodes(face).map(|n| refined.node(n)).collect();
+                assert!((0..dim).any(|a| {
+                    points.iter().all(|x| x[a] == 0.) || points.iter().all(|x| x[a] == if a == 0 { 2. } else { 1. })
+                }));
+            }
+            for (name, faces) in &refined.face_sets {
+                assert!(!faces.is_empty(), "lost {name}");
+                let prior_points: Vec<_> = original.face_sets[name]
+                    .iter()
+                    .flat_map(|&f| original.face_nodes(f))
+                    .map(|n| original.node(n))
+                    .collect();
+                let axis = (0..dim).find(|&a| prior_points.iter().all(|p| p[a] == prior_points[0][a])).unwrap();
+                for &face in faces {
+                    assert!(refined.face_nodes(face).all(|n| refined.node(n)[axis] == prior_points[0][axis]));
+                }
+            }
+            for e in 0..refined.n_elems() as u32 {
+                let nodes = refined.elem_nodes(e);
+                if nodes.iter().any(|&n| refined.node(n)[0] <= 0.3) {
+                    for &[a, b] in kind.edges() {
+                        let delta = sub(refined.node(nodes[a as usize]), refined.node(nodes[b as usize]));
+                        assert!(dot(delta, delta).sqrt() <= size * (1.0 + 2e-12));
+                    }
+                }
+            }
+            assert_eq!(refine(&refined, &boxes, 10000).unwrap(), refined);
+            // The remote end keeps some coarse edges: this is local, not uniform refinement.
+            let remote = (0..refined.n_elems() as u32)
+                .filter(|&e| refined.elem_nodes(e).iter().all(|&n| refined.node(n)[0] >= 1.5))
+                .count();
+            assert!(remote > 0);
+            let max_remote = (0..refined.n_elems() as u32)
+                .filter(|&e| refined.elem_nodes(e).iter().all(|&n| refined.node(n)[0] >= 1.5))
+                .map(|e| {
+                    let ps: Vec<_> = refined.elem_nodes(e).iter().map(|&n| refined.node(n)).collect();
+                    corner_measure(kind, &ps)
+                })
+                .fold(0.0_f64, f64::max);
+            assert!(max_remote > if dim == 2 { size * size / 2. } else { size.powi(3) / 6. });
+        }
+    }
+}
+
+#[test]
+fn local_refinement_rejects_bad_boxes_and_limits_without_changing_the_input() {
+    use femlab_geometry::{refine, SizeBox};
+    let mesh = Structured { kind: ElementKind::Tri3, n: [1, 1, 1] }.box_([1., 1., 0.]);
+    let before = mesh.clone();
+    let valid = SizeBox { min: [0.; 3], max: [1.; 3], size: 0.1 };
+    for bad in [
+        SizeBox { size: 0., ..valid.clone() },
+        SizeBox { size: f64::NAN, ..valid.clone() },
+        SizeBox { min: [2.; 3], ..valid.clone() },
+        SizeBox { max: [f64::INFINITY; 3], ..valid.clone() },
+    ] {
+        assert!(refine(&mesh, &[bad], 100).is_err());
+    }
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 1).is_err());
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 2).is_err());
+    // One shared edge splits both incident triangles: a three-element budget is
+    // insufficient even though it admits the initial edge-count lower bound.
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 3).is_err());
+    let mut tiny = mesh.clone();
+    for x in &mut tiny.coords {
+        *x = 1. + *x * f64::EPSILON;
+    }
+    let microscopic = SizeBox { min: [1.; 3], max: [2.; 3], size: f64::MIN_POSITIVE };
+    let failure = refine(&tiny, &[microscopic], 100).unwrap_err();
+    assert!(failure.0.contains("floating-point coordinate resolution"));
+
+    let quad = Structured { kind: ElementKind::Quad4, n: [1, 1, 1] }.box_([1., 1., 0.]);
+    assert!(refine(&quad, &[valid], 100).is_err());
+    assert_eq!(refine(&quad, &[], 100).unwrap(), quad);
+    assert_eq!(mesh, before);
+}
+
+#[test]
+fn local_refinement_closes_multiple_marked_edges_of_one_triangle() {
+    use femlab_geometry::{refine, SizeBox};
+    // Each neighbour's longest edge is shared with the central triangle, whose
+    // own longest edge is different. All three central edges split in one pass.
+    let original = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 2., 0., 0., 0., 2., 0., 1., -0.1, 0., -0.1, 1., 0.],
+        blocks: vec![femlab_geometry::mesh::ElementBlock {
+            kind: ElementKind::Tri3,
+            conn: vec![0, 1, 2, 1, 0, 3, 0, 2, 4],
+            first_elem: 0,
+        }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let boxes = [SizeBox { min: [-1., -1., 0.], max: [2., 2., 0.], size: 1.5 }];
+    let refined = refine(&original, &boxes, 100).unwrap();
+    // A further interior split closes the long median left by ordered bisection.
+    // Euler's identity for a triangulated disk checks the resulting connectivity.
+    assert_eq!(refined.boundary_faces().len(), 6);
+    assert_eq!(refined.n_elems(), 2 * refined.n_nodes() - 2 - refined.boundary_faces().len());
+    for e in 0..refined.n_elems() as u32 {
+        let nodes = refined.elem_nodes(e);
+        for &[a, b] in ElementKind::Tri3.edges() {
+            let delta = sub(refined.node(nodes[a as usize]), refined.node(nodes[b as usize]));
+            assert!(dot(delta, delta).sqrt() <= 1.5 * (1. + 1e-12));
+        }
+    }
+    assert!((measure(&refined) - 2.2).abs() < 1e-13);
+    assert!(min_element_measure(&refined) > 0.);
+    assert_eq!(refine(&refined, &boxes, 100).unwrap(), refined);
+}

@@ -508,6 +508,19 @@ export interface Fem {
      * dependencies and target at each mesh explicitly.
      */
     converge(args: Omit<Extract<Command, { cmd: 'study.converge' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Solve, estimate local spatial error with ZZ recovery, refine the largest
+     * contributions, and repeat until targetError or maxIterations is reached.
+     * Leaves the last solved mesh and Result installed. Supports planar tri3/solid
+     * tet4 with static, heat-steady or heat-transient Steps without after. Transient
+     * runs restart at the configured initial state and estimate the final field;
+     * this does not estimate time error or adapt/coarsen within a time integration.
+     * errorEstimate is a dimensionless element field; its squared sum is the squared
+     * global relative estimate. Recovery is an indicator, not a certified error bound.
+     * Refines the existing boundary approximation without CAD projection. Exceeding
+     * maxElements or cancellation rolls back the entire Command.
+     */
+    adapt(args: Omit<Extract<Command, { cmd: 'study.adapt' }>, 'cmd'>): Promise<Ack>;
   };
   journal: {
     /**
@@ -608,7 +621,9 @@ export interface Fem {
      */
     frame(args?: Omit<Extract<Query, { query: 'query.frame' }>, 'query'>): Promise<FrameResult>;
     /**
-     * A field value interpolated at a point (default: the last solved Step). Component
+     * A field value at a point (default: the last solved Step). Nodal fields are
+     * interpolated; errorEstimate returns the containing element's constant value
+     * with interpolated=false. Shared-face ties use the lowest element id. Component
      * indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
      * Optional sample selects a retained primary-field frame; omitted means the final field.
      * Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.

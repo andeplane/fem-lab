@@ -362,6 +362,10 @@ pub enum Field {
     Displacement,
     Stress,
     StressUnaveraged,
+    /// Dimensionless local ZZ energy-error contribution per element. Sum of squares
+    /// equals the squared global relative estimate. Available when requested in
+    /// step.add.output on supported linear simplex static/heat Steps, or after study.adapt.
+    ErrorEstimate,
     VonMises,
     Principal,
     Strain,
@@ -592,6 +596,25 @@ pub enum MesherSpec {
     /// the geometry is prismatic, because those are exact. `maxElements` caps the background
     /// lattice (500 000 by default) and is checked before anything is allocated.
     Tet(TetSpec),
+}
+
+/// Local maximum edge lengths applied after the chosen mesher. Bounds are world
+/// coordinates; touching element boxes obey the finest overlapping size. Only
+/// linear triangles/tetrahedra are supported. Boundary edges are bisected without
+/// projection onto CAD, so this controls discretisation error on the base geometry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRefinementSpec {
+    pub boxes: Vec<SizeBoxSpec>,
+    /// Maximum final element count, checked before refinement allocations grow past it.
+    pub max_elements: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SizeBoxSpec {
+    pub min: [Q<Length>; 3],
+    pub max: [Q<Length>; 3],
+    pub size: Q<Length>,
 }
 
 /// `MesherSpec::Tet`'s settings, deserialized by hand rather than derived.
@@ -1387,6 +1410,10 @@ pub enum Command {
         formulation: Option<Formulation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         simplices: Option<bool>,
+        /// Optional local size field on the resulting linear simplex mesh. A new
+        /// mesh.set replaces this field; omit it to return to the base mesh.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refinement: Option<LocalRefinementSpec>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
@@ -1848,6 +1875,35 @@ pub enum Command {
         quantity: QuantityOfInterest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         restore: Option<bool>,
+    },
+
+    /// Solve, estimate local spatial error with ZZ recovery, refine the largest
+    /// contributions, and repeat until targetError or maxIterations is reached.
+    /// Leaves the last solved mesh and Result installed. Supports planar tri3/solid
+    /// tet4 with static, heat-steady or heat-transient Steps without after. Transient
+    /// runs restart at the configured initial state and estimate the final field;
+    /// this does not estimate time error or adapt/coarsen within a time integration.
+    /// errorEstimate is a dimensionless element field; its squared sum is the squared
+    /// global relative estimate. Recovery is an indicator, not a certified error bound.
+    /// Refines the existing boundary approximation without CAD projection. Exceeding
+    /// maxElements or cancellation rolls back the entire Command.
+    #[serde(rename = "study.adapt", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    StudyAdapt {
+        step: String,
+        target_error: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_iterations: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_elements: Option<u32>,
+        /// Fraction of squared error selected by bulk marking; default 0.5.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        marking_fraction: Option<f64>,
+        /// Recorded refinement regions per iteration. Omit for a new study. The
+        /// engine fills this in its Journal so replay follows the original choices;
+        /// opening with skipped solves applies the same regions without solving.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refinements: Option<Vec<Vec<SizeBoxSpec>>>,
     },
 
     /// Undo the last `steps` Commands (default 1), restoring the Model and orphaning any

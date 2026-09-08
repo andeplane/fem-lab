@@ -761,6 +761,17 @@ const commands = {
             "null"
           ]
         },
+        "refinement": {
+          "description": "Optional local size field on the resulting linear simplex mesh. A new\nmesh.set replaces this field; omit it to return to the base mesh.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalRefinementSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cmd": {
           "type": "string",
           "const": "mesh.set"
@@ -1836,6 +1847,66 @@ const commands = {
         "step",
         "sizes",
         "quantity"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
+      "description": "Solve, estimate local spatial error with ZZ recovery, refine the largest\ncontributions, and repeat until targetError or maxIterations is reached.\nLeaves the last solved mesh and Result installed. Supports planar tri3/solid\ntet4 with static, heat-steady or heat-transient Steps without after. Transient\nruns restart at the configured initial state and estimate the final field;\nthis does not estimate time error or adapt/coarsen within a time integration.\nerrorEstimate is a dimensionless element field; its squared sum is the squared\nglobal relative estimate. Recovery is an indicator, not a certified error bound.\nRefines the existing boundary approximation without CAD projection. Exceeding\nmaxElements or cancellation rolls back the entire Command.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "targetError": {
+          "type": "number",
+          "format": "double"
+        },
+        "maxIterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxElements": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "markingFraction": {
+          "description": "Fraction of squared error selected by bulk marking; default 0.5.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "refinements": {
+          "description": "Recorded refinement regions per iteration. Omit for a new study. The\nengine fills this in its Journal so replay follows the original choices;\nopening with skipped solves applies the same regions without solving.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SizeBoxSpec"
+            }
+          }
+        },
+        "cmd": {
+          "type": "string",
+          "const": "study.adapt"
+        }
+      },
+      "required": [
+        "cmd",
+        "step",
+        "targetError"
       ],
       "x-execution": "modelWrite"
     },
@@ -3551,6 +3622,57 @@ const commands = {
         }
       ]
     },
+    "LocalRefinementSpec": {
+      "description": "Local maximum edge lengths applied after the chosen mesher. Bounds are world\ncoordinates; touching element boxes obey the finest overlapping size. Only\nlinear triangles/tetrahedra are supported. Boundary edges are bisected without\nprojection onto CAD, so this controls discretisation error on the base geometry.",
+      "type": "object",
+      "properties": {
+        "boxes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SizeBoxSpec"
+          }
+        },
+        "maxElements": {
+          "description": "Maximum final element count, checked before refinement allocations grow past it.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "boxes",
+        "maxElements"
+      ]
+    },
+    "SizeBoxSpec": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "max": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "size": {
+          "$ref": "#/$defs/Q_length"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "size"
+      ]
+    },
     "ExportFormat": {
       "description": "A file format `mesh.export` writes.",
       "oneOf": [
@@ -3710,20 +3832,29 @@ const commands = {
     },
     "Field": {
       "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
-      "type": "string",
-      "enum": [
-        "displacement",
-        "stress",
-        "stressUnaveraged",
-        "vonMises",
-        "principal",
-        "strain",
-        "plasticStrain",
-        "reaction",
-        "temperature",
-        "rotation",
-        "sectionForce",
-        "sectionMoment"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "displacement",
+            "stress",
+            "stressUnaveraged",
+            "vonMises",
+            "principal",
+            "strain",
+            "plasticStrain",
+            "reaction",
+            "temperature",
+            "rotation",
+            "sectionForce",
+            "sectionMoment"
+          ]
+        },
+        {
+          "description": "Dimensionless local ZZ energy-error contribution per element. Sum of squares\nequals the squared global relative estimate. Available when requested in\nstep.add.output on supported linear simplex static/heat Steps, or after study.adapt.",
+          "type": "string",
+          "const": "errorEstimate"
+        }
       ]
     },
     "Q_time": {
@@ -4295,7 +4426,7 @@ const queries = {
       "x-returns": "FrameResult"
     },
     {
-      "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+      "description": "A field value at a point (default: the last solved Step). Nodal fields are\ninterpolated; errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
       "type": "object",
       "properties": {
         "resultId": {
@@ -4783,6 +4914,8 @@ const queries = {
     "RefineBoxSpec": commands.$defs["RefineBoxSpec"],
     "SweepSpec": commands.$defs["SweepSpec"],
     "Formulation": commands.$defs["Formulation"],
+    "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
+    "SizeBoxSpec": commands.$defs["SizeBoxSpec"],
     "ExportFormat": commands.$defs["ExportFormat"],
     "Dof": commands.$defs["Dof"],
     "Q_temperature": commands.$defs["Q_temperature"],

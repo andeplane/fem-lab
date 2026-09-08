@@ -48,6 +48,7 @@ fn next_sequence(sequence: &str) -> String {
 fn field_location(per: crate::post::Per) -> &'static str {
     match per {
         crate::post::Per::Node => "node",
+        crate::post::Per::Element => "element",
         crate::post::Per::ElemGp => "elementGaussPoint",
         crate::post::Per::ElemNode => "elementNode",
     }
@@ -312,6 +313,7 @@ impl Engine {
             positions: surface.positions.iter().flatten().copied().collect(),
             indices: surface.triangles.iter().flatten().copied().collect(),
             tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
+            tri_element: surface.tri_elem.clone(),
             tri_face: surface
                 .tri_face
                 .iter()
@@ -521,6 +523,7 @@ mod tests {
     #[test]
     fn field_entity_layout_is_explicit_for_each_storage_location() {
         assert_eq!(field_location(crate::post::Per::Node), "node");
+        assert_eq!(field_location(crate::post::Per::Element), "element");
         assert_eq!(field_location(crate::post::Per::ElemGp), "elementGaussPoint");
         assert_eq!(field_location(crate::post::Per::ElemNode), "elementNode");
     }

@@ -19,6 +19,8 @@ export interface Surface {
   positions: Float32Array;
   indices: Uint32Array;
   triBody: Uint32Array;
+  /** Element id behind each retained surface triangle. Geometry previews may omit it. */
+  triElement?: Uint32Array;
   triFace: Uint32Array;
   /** Optional tagged Sheet boundary edges. Mesh edges index original nodes in `positions`. */
   edges?: Uint32Array;
@@ -32,6 +34,8 @@ export interface Surface {
   bodyNames: string[];
 }
 export interface FieldData {
+  /** Defaults to node for older hosts and test fakes. */
+  per?: string;
   /** Immutable solve identity, carried by retained Result rendering routes. */
   resultId?: string;
   step?: string;

@@ -2,6 +2,7 @@
 //! grouped by the Constraint that carried them (plan A §8).
 
 pub mod convergence;
+pub mod estimator;
 pub mod probe;
 pub mod stress;
 
@@ -13,6 +14,8 @@ use crate::fem::problem::Problem;
 /// Where a field's values sit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Per {
+    /// One value per element, in global element order.
+    Element,
     /// One value per mesh node.
     Node,
     /// One value per element Gauss point, elements in order.

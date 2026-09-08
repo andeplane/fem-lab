@@ -154,7 +154,9 @@ pub enum Query {
         field: Option<Field>,
     },
 
-    /// A field value interpolated at a point (default: the last solved Step). Component
+    /// A field value at a point (default: the last solved Step). Nodal fields are
+    /// interpolated; errorEstimate returns the containing element's constant value
+    /// with interpolated=false. Shared-face ties use the lowest element id. Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
@@ -1021,6 +1023,9 @@ pub enum Output {
     Study {
         report: StudyReport,
     },
+    Adapt {
+        report: AdaptReport,
+    },
     /// A file `mesh.export` produced, for the host to save.
     Export {
         format: crate::command::ExportFormat,
@@ -1034,6 +1039,26 @@ pub enum Output {
     Redo {
         steps: u32,
     },
+}
+
+/// Adaptive spatial-error study. The retained Result owns the final element field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdaptReport {
+    pub rows: Vec<AdaptRow>,
+    pub converged: bool,
+    pub target_error: f64,
+    pub result_id: String,
+    pub refinements: Vec<Vec<crate::command::SizeBoxSpec>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdaptRow {
+    pub elements: u64,
+    pub dofs: u64,
+    pub estimated_error: f64,
+    pub time_ms: f64,
 }
 
 /// `study.converge` output.
@@ -1159,6 +1184,8 @@ pub struct ResultSurface {
     /// Triangle node indices, three per triangle, oriented outward.
     pub indices: Vec<u32>,
     pub tri_body: Vec<u32>,
+    /// Global element behind each surface triangle; indexes element-based Result fields.
+    pub tri_element: Vec<u32>,
     /// First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
     pub tri_face: Vec<u32>,
     pub face_names: Vec<String>,

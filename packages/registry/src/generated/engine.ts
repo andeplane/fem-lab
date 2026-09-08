@@ -393,6 +393,11 @@ export type Command =
       order?: number | null;
       formulation?: Formulation | null;
       simplices?: boolean | null;
+      /**
+       * Optional local size field on the resulting linear simplex mesh. A new
+       * mesh.set replaces this field; omit it to return to the base mesh.
+       */
+      refinement?: LocalRefinementSpec | null;
       cmd: "mesh.set";
     }
   | {
@@ -991,6 +996,23 @@ export type Command =
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
+    }
+  | {
+      step: string;
+      targetError: number;
+      maxIterations?: number | null;
+      maxElements?: number | null;
+      /**
+       * Fraction of squared error selected by bulk marking; default 0.5.
+       */
+      markingFraction?: number | null;
+      /**
+       * Recorded refinement regions per iteration. Omit for a new study. The
+       * engine fills this in its Journal so replay follows the original choices;
+       * opening with skipped solves applies the same regions without solving.
+       */
+      refinements?: SizeBoxSpec[][] | null;
+      cmd: "study.adapt";
     }
   | {
       steps?: number | null;
@@ -2002,18 +2024,21 @@ export type Procedure =
  * an elastic–plastic Material produces.
  */
 export type Field =
-  | "displacement"
-  | "stress"
-  | "stressUnaveraged"
-  | "vonMises"
-  | "principal"
-  | "strain"
-  | "plasticStrain"
-  | "reaction"
-  | "temperature"
-  | "rotation"
-  | "sectionForce"
-  | "sectionMoment";
+  | (
+      | "displacement"
+      | "stress"
+      | "stressUnaveraged"
+      | "vonMises"
+      | "principal"
+      | "strain"
+      | "plasticStrain"
+      | "reaction"
+      | "temperature"
+      | "rotation"
+      | "sectionForce"
+      | "sectionMoment"
+    )
+  | "errorEstimate";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a
@@ -2518,6 +2543,10 @@ export type Output =
   | {
       report: StudyReport;
       type: "study";
+    }
+  | {
+      report: AdaptReport;
+      type: "adapt";
     }
   | {
       format: ExportFormat;
@@ -3329,6 +3358,11 @@ export type ModelFile_Command =
       order?: number | null;
       formulation?: Formulation | null;
       simplices?: boolean | null;
+      /**
+       * Optional local size field on the resulting linear simplex mesh. A new
+       * mesh.set replaces this field; omit it to return to the base mesh.
+       */
+      refinement?: LocalRefinementSpec | null;
       cmd: "mesh.set";
     }
   | {
@@ -3927,6 +3961,23 @@ export type ModelFile_Command =
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
+    }
+  | {
+      step: string;
+      targetError: number;
+      maxIterations?: number | null;
+      maxElements?: number | null;
+      /**
+       * Fraction of squared error selected by bulk marking; default 0.5.
+       */
+      markingFraction?: number | null;
+      /**
+       * Recorded refinement regions per iteration. Omit for a new study. The
+       * engine fills this in its Journal so replay follows the original choices;
+       * opening with skipped solves applies the same regions without solving.
+       */
+      refinements?: SizeBoxSpec[][] | null;
+      cmd: "study.adapt";
     }
   | {
       steps?: number | null;
@@ -4665,6 +4716,11 @@ export type DocumentSnapshot_Command =
       order?: number | null;
       formulation?: Formulation | null;
       simplices?: boolean | null;
+      /**
+       * Optional local size field on the resulting linear simplex mesh. A new
+       * mesh.set replaces this field; omit it to return to the base mesh.
+       */
+      refinement?: LocalRefinementSpec | null;
       cmd: "mesh.set";
     }
   | {
@@ -5265,6 +5321,23 @@ export type DocumentSnapshot_Command =
       cmd: "study.converge";
     }
   | {
+      step: string;
+      targetError: number;
+      maxIterations?: number | null;
+      maxElements?: number | null;
+      /**
+       * Fraction of squared error selected by bulk marking; default 0.5.
+       */
+      markingFraction?: number | null;
+      /**
+       * Recorded refinement regions per iteration. Omit for a new study. The
+       * engine fills this in its Journal so replay follows the original choices;
+       * opening with skipped solves applies the same regions without solving.
+       */
+      refinements?: SizeBoxSpec[][] | null;
+      cmd: "study.adapt";
+    }
+  | {
       steps?: number | null;
       expectedJournal?: string | null;
       cmd: "journal.undo";
@@ -5736,6 +5809,88 @@ export interface RefineBoxSpec {
       };
 }
 /**
+ * Local maximum edge lengths applied after the chosen mesher. Bounds are world
+ * coordinates; touching element boxes obey the finest overlapping size. Only
+ * linear triangles/tetrahedra are supported. Boundary edges are bisected without
+ * projection onto CAD, so this controls discretisation error on the base geometry.
+ */
+export interface LocalRefinementSpec {
+  boxes: SizeBoxSpec[];
+  /**
+   * Maximum final element count, checked before refinement allocations grow past it.
+   */
+  maxElements: number;
+}
+export interface SizeBoxSpec {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  min: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  max: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  size:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
  * A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
  * from rest. Constrained components are held at zero whatever this says; two entries that
  * give one node different velocities are `model.ill-posed`.
@@ -6172,6 +6327,7 @@ export interface MeshSettings {
    * Split the chosen mesher's quads/hexes into triangles/tetrahedra.
    */
   simplices?: boolean;
+  refinement?: LocalRefinement | null;
 }
 /**
  * One mapped block: a curvilinear quadrilateral meshed as a structured grid.
@@ -6223,6 +6379,31 @@ export interface RefineBox {
    * @maxItems 2
    */
   max: [number, number];
+  size: number;
+}
+/**
+ * Local mesher size field in SI, retained so replay reconstructs the exact mesh.
+ */
+export interface LocalRefinement {
+  boxes: SizeBox[];
+  maxElements: number;
+}
+/**
+ * A local maximum edge length in an axis-aligned world-coordinate box, SI.
+ * Elements whose bounding boxes intersect this box obey its size. Overlapping
+ * boxes use the smallest size; closure may also split adjacent elements.
+ */
+export interface SizeBox {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  min: [number, number, number];
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  max: [number, number, number];
   size: number;
 }
 /**
@@ -6521,6 +6702,10 @@ export interface ResultSurface {
    */
   indices: number[];
   triBody: number[];
+  /**
+   * Global element behind each surface triangle; indexes element-based Result fields.
+   */
+  triElement: number[];
   /**
    * First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
    */
@@ -7019,6 +7204,22 @@ export interface StudyRow {
   size: Valued;
   dofs: number;
   value: number;
+  timeMs: number;
+}
+/**
+ * Adaptive spatial-error study. The retained Result owns the final element field.
+ */
+export interface AdaptReport {
+  rows: AdaptRow[];
+  converged: boolean;
+  targetError: number;
+  resultId: string;
+  refinements: SizeBoxSpec[][];
+}
+export interface AdaptRow {
+  elements: number;
+  dofs: number;
+  estimatedError: number;
   timeMs: number;
 }
 /**

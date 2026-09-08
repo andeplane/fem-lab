@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
@@ -157,6 +157,8 @@ export interface UiState {
   clamp: [number, number] | null;
   /** The last `study.converge` report, for the Results tab's convergence bars. */
   study: StudyReport | null;
+  /** The last adaptive study, shown only with its retained Result. */
+  adaptation: AdaptReport | null;
   /** Every default the solve fell back on: the `warnings` of the solve's own Ack. */
   assumptions: Warning[];
   /** display = SI x this, for the one dimension the camera needs: length. */
@@ -284,6 +286,7 @@ export const initialState: UiState = {
   legend: null,
   clamp: null,
   study: null,
+  adaptation: null,
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
