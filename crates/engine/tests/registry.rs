@@ -11289,3 +11289,30 @@ fn a_linear_step_ignores_plasticity_with_a_warning_and_a_nonlinear_step_reports_
     assert!(f.values.iter().all(|v| (v - peeq.max.value).abs() < 1e-9), "homogeneous: {:?}", f.values);
     assert_eq!(r.yielded_fraction, Some(1.0));
 }
+
+#[test]
+fn shell_thickness_sections_validate_units_and_replay() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"shell"}"#);
+    ok(&mut e, r#"{"cmd":"section.add","name":"skin","shape":{"kind":"shell","thickness":"2 mm"}}"#);
+    assert_eq!(e.model().section("skin").unwrap().section.thickness, Some(0.002));
+    let QueryResult::Objects(objects) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Section]) }).unwrap()
+    else {
+        panic!("objects")
+    };
+    assert_eq!(objects.objects[0].summary, "shell thickness = 0.002 m");
+    let hash = e.model_hash();
+    for thickness in ["0 m", "-2 mm", "1 N"] {
+        let command =
+            serde_json::json!({"cmd":"section.add","name":"bad","shape":{"kind":"shell","thickness":thickness}});
+        assert!(run(&mut e, &command.to_string()).is_err());
+        assert_eq!(e.model_hash(), hash);
+    }
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(replayed.model(), e.model());
+    ok(&mut e, r#"{"cmd":"section.add","name":"skin","shape":{"kind":"shell","thickness":"3 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model_hash(), hash);
+}

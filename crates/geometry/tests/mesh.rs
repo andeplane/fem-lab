@@ -2455,3 +2455,29 @@ fn any_shape(depth: u32) -> BoxedStrategy<Shape> {
     ]
     .boxed()
 }
+
+#[test]
+fn structured_shells_keep_both_sides_and_embed_the_quad_in_space() {
+    assert!(mapped(&[], ElementKind::Shell4).is_err());
+    let mesh = Structured { kind: ElementKind::Shell4, n: [3, 2, 1] }.build(|p| [p[0], p[1], 0.3 * p[0] * p[1]]);
+    assert_eq!(mesh.dim, 3);
+    assert_eq!(mesh.n_nodes(), 12);
+    assert_eq!(mesh.n_elems(), 6);
+    assert_eq!(mesh.blocks[0].kind, ElementKind::Shell4);
+    assert_eq!(mesh.boundary_faces().len(), 12);
+    assert_eq!(mesh.face_sets["top"].len(), 6);
+    assert_eq!(mesh.face_sets["bottom"].len(), 6);
+    assert_eq!(mesh.node_sets["xmin"].len(), 3);
+    assert_eq!(mesh.node_sets["ymax"].len(), 4);
+    assert_eq!(mesh.node_sets["top"].len(), 12);
+    let surface = mesh.surface();
+    assert_eq!(surface.triangles.len(), 24);
+    assert_eq!(surface.faces.len(), 12);
+    for face in mesh.face_sets["top"].iter().chain(&mesh.face_sets["bottom"]) {
+        let nodes: Vec<_> = mesh.face_nodes(*face).collect();
+        assert_eq!(nodes.len(), 4);
+    }
+    assert_eq!(ElementKind::Shell4.n_nodes(), 4);
+    assert_eq!(ElementKind::Shell4.n_corners(), 4);
+    assert_eq!(ElementKind::Shell4.edges().len(), 4);
+}

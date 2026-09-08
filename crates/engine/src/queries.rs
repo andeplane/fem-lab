@@ -740,12 +740,15 @@ impl Engine {
                     ref_: format!("section:{}", sec.name),
                     kind: "section".into(),
                     name: sec.name.clone(),
-                    summary: format!(
-                        "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
-                        units::fmt_sig(sec.section.a, 4),
-                        units::fmt_sig(sec.section.i_y, 4),
-                        units::fmt_sig(sec.section.i_z, 4)
-                    ),
+                    summary: match sec.section.thickness {
+                        Some(t) => format!("shell thickness = {} m", units::fmt_sig(t, 4)),
+                        None => format!(
+                            "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
+                            units::fmt_sig(sec.section.a, 4),
+                            units::fmt_sig(sec.section.i_y, 4),
+                            units::fmt_sig(sec.section.i_z, 4)
+                        ),
+                    },
                 });
             }
         }

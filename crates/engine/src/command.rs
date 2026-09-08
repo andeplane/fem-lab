@@ -405,6 +405,8 @@ pub enum IdealisationSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SectionSpec {
+    /// Homogeneous MITC4 shell section, centred on the meshed midsurface.
+    Shell { thickness: Q<Length> },
     /// Solid rectangle, `width` along local y and `height` along local z.
     Rectangle { width: Q<Length>, height: Q<Length> },
     /// Solid circle.
@@ -1315,8 +1317,8 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialRemove { name: String },
 
-    /// Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
-    /// I, channel, or the properties given directly. A line member has no cross-section
+    /// Define a section: shell midsurface thickness, or a line Body cross-section
+    /// (`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section
     /// geometry of its own, so the Section is where its area, second moments, torsion constant,
     /// shear factors and extreme-fibre distances come from. Re-issuing with an existing name
     /// edits the section in place. Assign it to Bodies with section.assign.
@@ -1324,10 +1326,10 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAdd { name: String, shape: SectionSpec },
 
-    /// Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
+    /// Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;
     /// one without it is reported by query.model warnings and blocks solve.run with
-    /// model.no-section. A Section on a solid or sheet Body is carried but never used: those
-    /// Bodies get their cross-section from their geometry. `orientation` names the global
+    /// model.no-section. A shell needs a shell thickness section, a line member needs a
+    /// cross-section, and a solid gets its section from its geometry. `orientation` names the global
     /// axis the section's local z (its `height` direction, the one `iY` resists bending along)
     /// follows for the beams of these Bodies: local z is that axis made perpendicular to each
     /// member, and local y completes the right-handed triad (y = z × x). It may not lie along

@@ -193,7 +193,7 @@ pub fn rule_of(kind: ElementKind) -> Rule {
         ElementKind::Hex20 => &HEX_3X3X3,
         ElementKind::Tet4 => &TET_1,
         ElementKind::Tet10 => &TET_4,
-        ElementKind::Quad4 => &QUAD_2X2,
+        ElementKind::Quad4 | ElementKind::Shell4 => &QUAD_2X2,
         ElementKind::Quad8 => &QUAD_3X3,
         ElementKind::Tri3 => &TRI_1,
         ElementKind::Tri6 => &TRI_3,
@@ -221,7 +221,7 @@ pub fn product_rule_of(kind: ElementKind) -> Rule {
 pub fn shape_of(kind: ElementKind, xi: [f64; 3], n: &mut [f64]) {
     match kind {
         ElementKind::Hex8 => tensor_shape(3, &HEX_CORNERS, xi, n),
-        ElementKind::Quad4 => tensor_shape(2, &QUAD_CORNERS, xi, n),
+        ElementKind::Quad4 | ElementKind::Shell4 => tensor_shape(2, &QUAD_CORNERS, xi, n),
         ElementKind::Hex20 => serendipity_shape(3, &HEX_CORNERS, kind.edges(), xi, n),
         ElementKind::Quad8 => serendipity_shape(2, &QUAD_CORNERS, kind.edges(), xi, n),
         ElementKind::Tet4 => simplex_shape(3, 4, &[], xi, n),
@@ -237,7 +237,7 @@ pub fn shape_of(kind: ElementKind, xi: [f64; 3], n: &mut [f64]) {
 pub fn dshape_of(kind: ElementKind, xi: [f64; 3], dn: &mut [[f64; 3]]) {
     match kind {
         ElementKind::Hex8 => tensor_dshape(3, &HEX_CORNERS, xi, dn),
-        ElementKind::Quad4 => tensor_dshape(2, &QUAD_CORNERS, xi, dn),
+        ElementKind::Quad4 | ElementKind::Shell4 => tensor_dshape(2, &QUAD_CORNERS, xi, dn),
         ElementKind::Hex20 => serendipity_dshape(3, &HEX_CORNERS, kind.edges(), xi, dn),
         ElementKind::Quad8 => serendipity_dshape(2, &QUAD_CORNERS, kind.edges(), xi, dn),
         ElementKind::Tet4 => simplex_dshape(3, 4, &[], xi, dn),
@@ -253,7 +253,7 @@ fn corners_of(kind: ElementKind) -> &'static [[f64; 3]] {
     match kind {
         ElementKind::Hex8 | ElementKind::Hex20 => &HEX_CORNERS,
         ElementKind::Tet4 | ElementKind::Tet10 => &TET_CORNERS,
-        ElementKind::Quad4 | ElementKind::Quad8 => &QUAD_CORNERS,
+        ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Shell4 => &QUAD_CORNERS,
         ElementKind::Tri3 | ElementKind::Tri6 => &TRI_CORNERS,
         ElementKind::Truss2 | ElementKind::Beam2 => &LINE_CORNERS,
     }
@@ -292,6 +292,7 @@ pub fn in_reference(kind: ElementKind, xi: [f64; 3], tol: f64) -> bool {
         ElementKind::Hex8
         | ElementKind::Hex20
         | ElementKind::Quad4
+        | ElementKind::Shell4
         | ElementKind::Quad8
         | ElementKind::Truss2
         | ElementKind::Beam2 => (0..dim).all(|k| xi[k].abs() <= 1.0 + tol),

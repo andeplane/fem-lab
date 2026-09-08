@@ -1569,6 +1569,18 @@ export type SectionSpec =
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
+      thickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "shell";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
       width:
         | string
         | {
@@ -7238,6 +7250,10 @@ export interface NamedSection {
  * One cross-section in SI, in the member's local axes. See the module docs for the axes.
  */
 export interface Section {
+  /**
+   * Shell thickness in metres. Present only for a shell section; line properties are zero.
+   */
+  thickness?: number | null;
   /**
    * Cross-sectional area, m².
    */

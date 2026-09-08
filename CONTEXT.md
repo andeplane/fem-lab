@@ -81,6 +81,14 @@ beam answers exactly as it does alone. The section's local z (its height) follow
 vertical member); local y closes the right-handed triad.
 _Avoid_: frame element, bar (that is a truss), B31
 
+**Shell**:
+A four-node MITC4 midsurface element (`shell4`) with three displacements and three
+rotations per node. A shell Section supplies its thickness; a director at each
+corner identifies the positive (top) side. Transverse shear uses mixed covariant
+interpolation so thin plates do not shear-lock. A small drilling penalty couples
+rotation about the normal to the surface's in-plane spin (ADR 0023). Top and bottom
+stress refer to offsets of plus and minus half the thickness from the midsurface.
+
 **Section force**:
 The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`
 field) and `T, M_y, M_z` (`sectionMoment`), in the member's local axes, positive as the far side

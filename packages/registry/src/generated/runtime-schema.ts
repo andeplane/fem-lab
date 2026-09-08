@@ -655,7 +655,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,\nI, channel, or the properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
+      "description": "Define a section: shell midsurface thickness, or a line Body cross-section\n(`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
       "type": "object",
       "properties": {
         "name": {
@@ -677,7 +677,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
+      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
       "type": "object",
       "properties": {
         "section": {
@@ -2934,6 +2934,23 @@ const commands = {
     "SectionSpec": {
       "description": "A cross-section for line members (trusses and frames). The library turns the shape into the\narea, the two second moments, the St Venant torsion constant, the shear correction factors\nand the extreme-fibre distances a line element integrates with.\n\nLocal axes: `y` is the section's width direction and `z` its height, both through the\ncentroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and\n`iZ` about local z. The shear centre and warping torsion are not modelled, so an open\nsection (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the\ntorsional stiffness of a channel and ignores the twist a load through the centroid causes.\n`kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for\na circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's\nnu-dependent values, which at nu = 0.3 are 0.850 and 0.886.",
       "oneOf": [
+        {
+          "description": "Homogeneous MITC4 shell section, centred on the meshed midsurface.",
+          "type": "object",
+          "properties": {
+            "thickness": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "kind": {
+              "type": "string",
+              "const": "shell"
+            }
+          },
+          "required": [
+            "kind",
+            "thickness"
+          ]
+        },
         {
           "description": "Solid rectangle, `width` along local y and `height` along local z.",
           "type": "object",

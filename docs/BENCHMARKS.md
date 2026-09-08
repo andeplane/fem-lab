@@ -1172,8 +1172,21 @@ strain tensor; all six rigid motions give zero strain on a warped surface with
 varying directors, at three thickness positions. A constant-curvature plate gives
 `εxx = z κx`, `εyy = z κy`, `γxy = 2z κxy` and zero transverse shear at thicknesses
 1, 1e-2, 1e-5 and 1e-8 m. These are kinematic patch tests, not evidence that the
-assembled shell benchmarks below pass. The solver, section and mesher integration
-and G1–G7 remain pending. The shear interpolation follows §2 of
+assembled shell benchmarks below pass. The Element Extension Point now integrates
+homogeneous thickness sections, stiffness, mass, face/body/thermal loads and
+through-thickness recovery. Its additional tests verify six rigid modes, positive
+consistent and lumped mass, total mass, bending energy and opposite signed surface
+stresses. End moments on a clamped shell strip at ν=0 reproduce
+`w_tip = −M L²/(2 D b)` at 1/2/4 cells through the normal nodal-moment load and
+static solver paths. The shell kernel itself reaches 100 % lines, functions and
+regions in `cargo llvm-cov` at test optimisation level 0. G1 runs through the standard static procedure: at 4/8/16 cells per side,
+`w D / (q a⁴)` is 0.0039690074 / 0.0040414433 / 0.0040572339 against the Navier
+reference 0.00406235 (2.30 / 0.515 / 0.126 % error, final observed rate 2.03).
+The plate has a=1 m, t=0.001 m, E=210 GPa, ν=0.3 and q=1 Pa. All edges hold
+normal displacement and the rotation normal to that edge; xmin holds ux and ymin
+holds uy to remove in-plane rigid motion. Reactions balance the 1 N load.
+Command-level surface meshing and output integration, G2–G7, and full coverage
+remain pending. The shear interpolation follows §2 of
 [Ko, Lee and Bathe (2017)](https://doi.org/10.1016/j.compstruc.2016.11.004),
 which reviews the original MITC4 formulation before introducing MITC4+.
 

@@ -73,7 +73,7 @@ pub(crate) fn midpoint(coords: &[f64]) -> [f64; 3] {
 /// reports the same thing per Body before a solve starts; this is what an element integrated
 /// on its own reports.
 pub(crate) fn section_of<'a>(c: &ElementCtx<'a>) -> Result<&'a Section, Error> {
-    c.section.ok_or_else(|| {
+    c.section.filter(|s| s.thickness.is_none()).ok_or_else(|| {
         Error::new(ErrorCode::ModelNoSection, "a line member has no cross-section to carry force over")
             .at("element")
             .suggest("section.add and section.assign on the Body")

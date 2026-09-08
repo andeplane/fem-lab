@@ -133,7 +133,8 @@ fn in_bbox(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> bool {
         | ElementKind::Quad4
         | ElementKind::Tri3
         | ElementKind::Truss2
-        | ElementKind::Beam2 => nodal_bounds(coords),
+        | ElementKind::Beam2
+        | ElementKind::Shell4 => nodal_bounds(coords),
         ElementKind::Tet10 | ElementKind::Tri6 => simplex_control_bounds(kind, coords),
         ElementKind::Hex20 | ElementKind::Quad8 => tensor_control_bounds(kind, coords),
     };

@@ -65,6 +65,8 @@ impl Material {
 
 /// Everything one element integral needs besides the load itself.
 pub struct ElementCtx<'a> {
+    /// Per-corner shell directors in global coordinates; absent for non-shell elements.
+    pub directors: Option<[[f64; 3]; 4]>,
     /// `n_nodes * 3`, stride 3 (`z = 0` in 2D).
     pub coords: &'a [f64],
     pub material: &'a Material,
@@ -1052,6 +1054,7 @@ fn tangent_and_force_of(
     // infinitesimal strain and hourglasses in compression, so this integrates fully whatever
     // the Model's Formulation says. `procedure::nonlinear` warns when that changes an answer.
     let full = ElementCtx {
+        directors: c.directors,
         coords: c.coords,
         material: c.material,
         idealisation: c.idealisation.clone(),
@@ -1129,6 +1132,9 @@ fn tangent_and_force_of(
 /// is folded at one of them. The well-posedness check screens a whole Mesh with this before
 /// any material is looked at, and it is the same Jacobian the integrals use.
 pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
+    if kind == ElementKind::Shell4 {
+        return crate::fem::shell::min_surface_jacobian(coords);
+    }
     // A line member is embedded in the mesh's space, so its Jacobian is the length of
     // `dx/dξ` rather than a determinant of the coordinate directions.
     if kind.dim() == 1 {
@@ -1330,5 +1336,6 @@ pub fn element_for(kind: ElementKind) -> &'static dyn Element {
         ElementKind::Tri6 => &ISO_TRI6,
         ElementKind::Truss2 => &TRUSS2,
         ElementKind::Beam2 => &BEAM2,
+        ElementKind::Shell4 => &crate::fem::shell::Shell4,
     }
 }

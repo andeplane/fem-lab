@@ -772,6 +772,7 @@ fn steel() -> Material {
 
 fn ctx<'a>(coords: &'a [f64], mat: &'a Material, id: Idealisation, form: Formulation) -> ElementCtx<'a> {
     ElementCtx {
+        directors: None,
         coords,
         material: mat,
         section: None,
@@ -1567,7 +1568,8 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
             | ElementKind::Quad4
             | ElementKind::Quad8
             | ElementKind::Truss2
-            | ElementKind::Beam2 => [1.1, 0.0, 0.0],
+            | ElementKind::Beam2
+            | ElementKind::Shell4 => [1.1, 0.0, 0.0],
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => [-0.1, 0.0, 0.0],
         };
         el.shape_at(outside_xi, &mut n);
@@ -1933,7 +1935,7 @@ fn gmsh_hex20_permutation_matches_gmshs_published_edge_order() {
     // Pin the direction with real coordinates: the node the writer puts at gmsh position 8+g is
     // the midpoint of that Gmsh edge's two corners.
     let m = Structured { kind: ElementKind::Hex20, n: [1, 1, 1] }.box_([1.3, 0.9, 1.7]);
-    let text = write_msh(&m);
+    let text = write_msh(&m).unwrap();
     let elements = text.split("$Elements\n").nth(1).unwrap().split("$EndElements").next().unwrap();
     let lines: Vec<&str> = elements.lines().collect();
     let hdr_idx = lines.iter().position(|&l| l == "3 1 17 1").expect("the hex20 block header");
@@ -1971,7 +1973,7 @@ fn assert_mid_nodes_are_edge_midpoints(m: &Mesh) {
 // ---------------------------------------------------------------- msh: round trip
 
 fn assert_msh_round_trips(m: &Mesh, label: &str) -> Mesh {
-    let text = write_msh(m);
+    let text = write_msh(m).unwrap();
     let back = read_msh(&text).unwrap_or_else(|e| panic!("{label}: {e}"));
     assert_eq!(&back, m, "{label}");
     back
@@ -2051,7 +2053,7 @@ fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
         ]),
         face_sets: BTreeMap::new(),
     };
-    let text = write_msh(&m);
+    let text = write_msh(&m).unwrap();
     let back = read_msh(&text).unwrap();
     assert_eq!(back.coords, m.coords);
     for elem in 0..m.n_elems() as u32 {
@@ -2074,7 +2076,7 @@ fn good_msh_text() -> (String, Mesh) {
         elem_sets: BTreeMap::from([("all".to_string(), vec![0])]),
         face_sets: BTreeMap::from([("bottom".to_string(), vec![Face { elem: 0, local: 0 }])]),
     };
-    (write_msh(&m), m)
+    (write_msh(&m).unwrap(), m)
 }
 
 fn set_line_after(text: &str, marker: &str, offset: usize, new_line: &str) -> String {
@@ -2175,7 +2177,7 @@ fn read_msh_rejects_a_malformed_entities_header() {
 fn read_msh_reports_malformed_point_entities_and_unknown_physical_tags() {
     let (_, mut m) = good_msh_text();
     m.node_sets.insert("pin".into(), vec![0]);
-    let good = write_msh(&m);
+    let good = write_msh(&m).unwrap();
     assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0"), "malformed entity line");
     assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 x 1"), "expected a number");
     assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 1 99"), "physical tag 99");
@@ -7797,6 +7799,7 @@ fn truss_ctx<'a>(
     temperature: Option<&'a [f64]>,
 ) -> ElementCtx<'a> {
     ElementCtx {
+        directors: None,
         coords,
         material: mat,
         section,
@@ -10149,6 +10152,7 @@ const FILM_COORDS: [f64; 24] = [
 fn a_constant_film_reproduces_the_convection_face_integral_bit_for_bit() {
     let material = conductor(45.0, 7800.0, 460.0);
     let c = ElementCtx {
+        directors: None,
         coords: &FILM_COORDS,
         material: &material,
         section: None,
@@ -13776,7 +13780,7 @@ fn error_rule(kind: ElementKind) -> (Vec<[f64; 3]>, Vec<f64>) {
                 }
             }
         }
-        ElementKind::Quad4 | ElementKind::Quad8 => {
+        ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Shell4 => {
             for &(a, wa) in gl {
                 for &(b, wb) in gl {
                     points.push([a, b, 0.0]);
@@ -14018,6 +14022,7 @@ fn beam_ctx<'a>(
     temperature: Option<&'a [f64]>,
 ) -> ElementCtx<'a> {
     ElementCtx {
+        directors: None,
         coords,
         material: mat,
         section,

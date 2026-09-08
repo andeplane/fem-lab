@@ -118,10 +118,14 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     // are Sets a Constraint or a Load can target like any other. Inert for the others, which
     // produce no node sets at all.
     for (name, nodes) in &mesh.node_sets {
-        sets.insert(
-            name.clone(),
-            ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: nodes.clone(), elems: Vec::new() },
-        );
+        // A surface mesher can name both a face Set and its nodes. Keep the face
+        // membership so pressure and traction still have an integration surface.
+        sets.entry(name.clone()).or_insert_with(|| ResolvedSet {
+            kind: SetKind::Node,
+            faces: Vec::new(),
+            nodes: nodes.clone(),
+            elems: Vec::new(),
+        });
     }
     for named in &model.sets {
         let (resolved, probe) = match &named.source {

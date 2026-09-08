@@ -17,6 +17,7 @@ fn abaqus_type(kind: ElementKind) -> &'static str {
         ElementKind::Tri6 => "CPS6",
         ElementKind::Truss2 => "T3D2",
         ElementKind::Beam2 => "B31",
+        ElementKind::Shell4 => "S4",
     }
 }
 
@@ -65,7 +66,16 @@ pub fn write_inp(mesh: &Mesh, part_name: &str) -> String {
     for (name, set) in &mesh.face_sets {
         s.push_str(&format!("*SURFACE, TYPE=ELEMENT, NAME={name}\n"));
         for f in set {
-            s.push_str(&format!("{}, S{}\n", f.elem + 1, f.local + 1));
+            let side = if mesh.kind_of(f.elem) == ElementKind::Shell4 {
+                if f.local == 0 {
+                    "SNEG".into()
+                } else {
+                    "SPOS".into()
+                }
+            } else {
+                format!("S{}", f.local + 1)
+            };
+            s.push_str(&format!("{}, {side}\n", f.elem + 1));
         }
     }
 
