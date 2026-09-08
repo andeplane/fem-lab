@@ -709,6 +709,27 @@
   {
     "kind": "constraint",
     "command": {
+      "cmd": "contact.add",
+      "name": "editable",
+      "master": "base.xmax",
+      "slave": "base.xmin",
+      "kind": "frictionless"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "contact.add",
+      "name": "editable",
+      "master": "base.xmax",
+      "slave": "base.xmin",
+      "kind": "frictionless",
+      "tol": "2 mm"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
       "cmd": "constraint.cyclic",
       "name": "editable",
       "from": "base.xmax",

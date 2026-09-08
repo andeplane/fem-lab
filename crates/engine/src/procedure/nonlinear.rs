@@ -47,6 +47,7 @@ use crate::engine::OnProgress;
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::assembly::{self, Assembled, NlInput, Pattern, ResolvedConstraints};
 use crate::fem::checks;
+use crate::fem::contact::{self, ActiveSet};
 use crate::fem::element::element_for;
 use crate::fem::loads::{self, LoadTotals};
 use crate::fem::material::PEEQ;
@@ -297,8 +298,9 @@ struct Newton<'a> {
     free: Vec<bool>,
     /// The multipoint constraints, eliminated the same way the linear Step eliminates them:
     /// `TᵀK_T T` and `Tᵀr` per iteration, the slaves dropped from the free set, and the
-    /// correction recovered onto them afterwards.
-    mpc: &'a Mpc,
+    /// correction recovered onto them afterwards. With every frictionless candidate's row in
+    /// it; an increment works on [`Mpc::with_active`] of it.
+    base: &'a Mpc,
     f_ref: &'a [f64],
     /// `|f_ref|_inf`, which does not change between increments.
     f_ref_norm: f64,
@@ -308,6 +310,14 @@ struct Newton<'a> {
 
 impl Newton<'_> {
     /// One increment, from the last converged displacement and state to `lambda`.
+    ///
+    /// `set` is the active set of the frictionless candidates. It is consulted only at a
+    /// converged state: the contact force at a slave DOF is a constraint force only in
+    /// equilibrium, so a set read off a half-corrected residual would release nodes that a
+    /// converged one holds. When the converged state moves the set, the constraints change,
+    /// `u` is snapped onto the new master surface and the iteration goes on; the increment is
+    /// accepted only once both the residual and the set have stopped moving.
+    #[allow(clippy::too_many_arguments)]
     async fn increment(
         &self,
         u_conv: &[f64],
@@ -315,16 +325,22 @@ impl Newton<'_> {
         lambda: f64,
         number: usize,
         scale: &mut f64,
+        set: &mut ActiveSet,
         progress: &mut OnProgress<'_>,
     ) -> Result<Attempt, Error> {
         let o = self.o;
+        let dpn = self.p.dofs_per_node();
         // The prescribed displacements are applied once, at the top of the increment; the
         // corrections that follow leave them alone because `rc_zero` holds them at zero.
         let mut u = u_conv.to_vec();
         for &(dof, value) in &self.rc.fixed {
             u[dof as usize] = lambda * value;
         }
-        mpc::recover(self.mpc, &mut u);
+        // `held` carries `g` and puts `u` itself on the master surface; `corr` is the same set
+        // with `g = 0`, for the corrections, which must keep a satisfied constraint satisfied.
+        let mut held = self.base.with_active(&set.active, true, dpn);
+        let mut corr = self.base.with_active(&set.active, false, dpn);
+        mpc::recover(&held, &mut u);
         // No correction has been taken yet, so the displacement criterion cannot be met on the
         // first pass: a nonlinear increment always costs at least one solve.
         let mut correction = f64::INFINITY;
@@ -357,14 +373,45 @@ impl Newton<'_> {
             // at a fixed DOF is not one. `transform` copies the whole operator, and a Newton
             // Step would pay for that once per iteration rather than once per Step, so a Model
             // with no ties goes straight to `reduce`.
-            let tied = (!self.mpc.is_empty()).then(|| mpc::transform(&a.k, &r, self.mpc));
+            let tied = (!corr.is_empty()).then(|| mpc::transform(&a.k, &r, &corr));
             let (kt, rt) = tied.as_ref().map_or((&a.k, r.as_slice()), |(k, f)| (k, f.as_slice()));
-            let red = assembly::reduce(kt, rt, self.rc_zero, &self.mpc.slaves);
+            let red = assembly::reduce(kt, rt, self.rc_zero, &corr.slaves);
             residual = norm_inf(&red.f_f);
             *scale = scale.max(external).max(internal);
             let increment: Vec<f64> = u.iter().zip(u_conv).map(|(a, b)| a - b).collect();
             if converged(&o.converge, residual, *scale, correction, norm_inf(&increment)) {
-                return Ok(Attempt::Converged(u, Box::new(a), iteration, info));
+                // Equilibrium on this set: now the slave residuals are contact forces.
+                let out_of_balance: Vec<f64> = a.f_int.iter().zip(self.f_ref).map(|(i, e)| i - lambda * e).collect();
+                let stiffness = a.k.diag().into_iter().fold(0.0f64, f64::max);
+                // Chatter and a host saying stop both end the increment here, as one error.
+                let moved = set.update(self.p, &held, &u, &out_of_balance, stiffness).and_then(|moved| {
+                    if moved {
+                        let text = format!(
+                            "increment {number}: active set changed, {} of {} paired nodes in contact",
+                            set.count(),
+                            set.active.len()
+                        );
+                        report(
+                            progress,
+                            "contact",
+                            0.05 + 0.85 * ((number - 1) as f64 / o.increments as f64).min(1.0),
+                            &text,
+                        )?;
+                    }
+                    Ok(moved)
+                })?;
+                if !moved {
+                    return Ok(Attempt::Converged(u, Box::new(a), iteration, info));
+                }
+                held = self.base.with_active(&set.active, true, dpn);
+                corr = self.base.with_active(&set.active, false, dpn);
+                mpc::recover(&held, &mut u);
+                correction = f64::INFINITY;
+                iteration += 1;
+                if iteration > o.converge.max_newton {
+                    return Ok(Attempt::CutBack(iteration, residual / scale.max(FLOOR)));
+                }
+                continue;
             }
             let relative = residual / scale.max(FLOOR);
             if iteration == o.converge.max_newton || !residual.is_finite() {
@@ -392,7 +439,7 @@ impl Newton<'_> {
                 Err(e) => return Err(e),
             };
             let mut du = assembly::expand(&red, &du_f);
-            mpc::recover(self.mpc, &mut du);
+            mpc::recover(&corr, &mut du);
             for (ui, d) in u.iter_mut().zip(&du) {
                 *ui += d;
             }
@@ -436,12 +483,13 @@ pub async fn run(
     }
     let f_ref_norm = norm_inf(&f_ref);
     // `checks::all` has already paired every contact.
-    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    let base = mpc::build(p).expect("the checks built the multipoint constraints");
     let newton =
-        Newton { p, pat: &pat, o, rc: &rc, rc_zero: &rc_zero, free, mpc: &mpc, f_ref: &f_ref, f_ref_norm, pool, gpu };
+        Newton { p, pat: &pat, o, rc: &rc, rc_zero: &rc_zero, free, base: &base, f_ref: &f_ref, f_ref_norm, pool, gpu };
 
     let mut u = vec![0.0; p.n_dofs()];
     let mut committed = GpState::new(p).expect("the checks found a material for every element");
+    let mut set = ActiveSet::initial(&base);
     let mut dt = o.t_end / o.increments as f64;
     let mut t = 0.0;
     let mut lambda = 0.0;
@@ -457,7 +505,10 @@ pub async fn run(
         // no displacement change at all — which no relative displacement criterion can meet.
         let t_next = if t + dt >= o.t_end * (1.0 - 1e-9) { o.t_end } else { t + dt };
         let lambda_next = load_factor(o, t_next);
-        let attempt = newton.increment(&u, &committed, lambda_next, taken + 1, &mut scale, &mut progress).await?;
+        // A cut-back increment retries from the last converged state, active set included.
+        let mut trial = set.clone();
+        let attempt =
+            newton.increment(&u, &committed, lambda_next, taken + 1, &mut scale, &mut trial, &mut progress).await?;
         let ok = match attempt {
             Attempt::Converged(u_next, a, its, info) => {
                 iterations += its;
@@ -465,6 +516,7 @@ pub async fn run(
                 t = t_next;
                 lambda = lambda_next;
                 u = u_next;
+                set = trial;
                 committed = a.state.clone();
                 history.times.push(lambda);
                 history.values.push(u.clone());
@@ -489,6 +541,7 @@ pub async fn run(
     // Reactions are the internal force the supports carry against the external one, which is
     // the finite-strain reading of `K u − f`, plus the tie force a bonded contact hands to its
     // masters — a tie's own internal force is never a support reaction.
+    let mpc = base.with_active(&set.active, true, dpn);
     let out_of_balance: Vec<f64> =
         a.f_int.iter().zip(&f_ref).map(|(internal, external)| internal - lambda * external).collect();
     let mut tie = vec![0.0; u.len()];
@@ -513,6 +566,14 @@ pub async fn run(
         scalars.insert("yielded_fraction".to_string(), yielded_fraction(&peeq));
         fields.insert(Field::PlasticStrain, stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &peeq)));
     }
+    let mut warnings = mpc.warnings.clone();
+    let mut contacts = Vec::new();
+    if !set.is_empty() {
+        let (pressure, summaries) = contact::finish(p, &mpc, &set, &out_of_balance, &mut warnings);
+        fields.insert(Field::ContactPressure, pressure);
+        contacts = summaries;
+        scalars.insert("contact_changes".to_string(), set.changes as f64);
+    }
     scalars.insert("min_det_j".to_string(), a.min_det_j);
     for (c, axis) in ["x", "y", "z"].iter().enumerate() {
         scalars.insert(format!("applied_total_{axis}"), lambda * applied.force[c]);
@@ -528,7 +589,6 @@ pub async fn run(
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let per_constraint = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
-    let mut warnings = mpc.warnings.clone();
     let locking = locking_kinds(p);
     if !locking.is_empty() {
         warnings.push(Warning {
@@ -559,6 +619,7 @@ pub async fn run(
         solver: SolveInfo { iterations, ..solved },
         warnings,
         assumptions: Vec::new(),
+        contacts,
     })
 }
 

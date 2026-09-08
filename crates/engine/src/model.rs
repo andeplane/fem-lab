@@ -288,6 +288,15 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<f64>,
     },
+    /// A frictionless contact: the Constraint's own Set is the slave, `master` names the face
+    /// Set it can press on, and `tol` is the search distance in metres (`None` scales with the
+    /// Mesh). Its own variant rather than a flag on `Bonded`, so every saved bonded contact
+    /// serialises byte-for-byte as it did before this kind existed.
+    Frictionless {
+        master: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
     /// A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector
     /// face, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`
     /// (metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales
@@ -328,7 +337,7 @@ impl Constraint {
     pub fn sets(&self) -> Vec<&str> {
         let mut out = vec![self.on.as_str()];
         match &self.kind {
-            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Bonded { master, .. } | ConstraintKind::Frictionless { master, .. } => out.push(master),
             ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
@@ -344,7 +353,7 @@ impl Constraint {
     pub fn sets_mut(&mut self) -> Vec<&mut String> {
         let mut out = vec![&mut self.on];
         match &mut self.kind {
-            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Bonded { master, .. } | ConstraintKind::Frictionless { master, .. } => out.push(master),
             ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }

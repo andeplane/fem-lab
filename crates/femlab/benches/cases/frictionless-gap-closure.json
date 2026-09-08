@@ -1,0 +1,119 @@
+{
+  "name": "frictionless-gap-closure",
+  "reference": "Benchmark F5b, gap closure. Two collinear 1 m bars of 100 mm square section, steel (210 GPa) and aluminium (70 GPa), start 1 mm apart. The steel bar's far end is pushed 2 mm towards the aluminium one by a prescribed displacement ramped linearly over four increments, so the retained frames are at 0.5, 1.0, 1.5 and 2.0 mm: nothing is transmitted while the gap is open (the steel bar translates rigidly and the aluminium bar does not move), the 1.0 mm increment lands exactly on closure with zero force, and afterwards the force is (delta - g0) over the series compliance L1/E1A + L2/E2A = 1.905e-9 m/N: 262.5 kN at 1.5 mm and 525 kN at 2 mm, with the aluminium bar's interface displaced by F L2/E2A. The compliance is a hand calculation, not a number from any solver.",
+  "journal": [
+    { "cmd": "model.new", "name": "gap-closure" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "a", "size": ["1 m", "100 mm", "100 mm"] },
+    { "cmd": "geometry.addBox", "name": "b", "size": ["1 m", "100 mm", "100 mm"], "at": ["1001 mm", "0 mm", "0 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "source": "EN 10025" },
+    { "cmd": "material.add", "name": "aluminium", "E": "70 GPa", "nu": 0.33 },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["a"] },
+    { "cmd": "material.assign", "material": "aluminium", "bodies": ["b"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": "100 mm" },
+      "order": 1,
+      "formulation": "full"
+    },
+    { "cmd": "constraint.prescribe", "name": "push", "on": "a.xmin", "dof": "ux", "value": "2 mm" },
+    { "cmd": "constraint.fix", "name": "ay", "on": "a.ymin", "dofs": ["uy"] },
+    { "cmd": "constraint.fix", "name": "az", "on": "a.zmin", "dofs": ["uz"] },
+    { "cmd": "constraint.fix", "name": "by", "on": "b.ymin", "dofs": ["uy"] },
+    { "cmd": "constraint.fix", "name": "bz", "on": "b.zmin", "dofs": ["uz"] },
+    { "cmd": "constraint.fix", "name": "end", "on": "b.xmax", "dofs": ["ux"] },
+    { "cmd": "contact.add", "name": "gap", "master": "b.xmin", "slave": "a.xmax", "kind": "frictionless", "tol": "5 mm" },
+    {
+      "cmd": "step.add",
+      "name": "ramp",
+      "procedure": "static",
+      "constraints": ["push", "ay", "az", "by", "bz", "end", "gap"],
+      "loads": [],
+      "dt": "0.25 s",
+      "tEnd": "1 s",
+      "outputEvery": 1,
+      "amplitude": { "kind": "table", "t": ["0 s", "1 s"], "value": [0.0, 1.0] }
+    },
+    { "cmd": "solve.run", "step": "ramp" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/5/total/0/value",
+      "expect": -525.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the aluminium bar's held end carries (2 mm - 1 mm) / 1.905e-9 m/N = 525 kN at the end of the ramp"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/0/value",
+      "expect": 525.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "and the pushed end carries the same, the other way"
+    },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "at": ["1001 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 0.75,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the aluminium interface moves F L2 / E2 A = 525 kN * 1.4286e-9 m/N = 0.75 mm"
+    },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "sample": { "kind": "frame", "index": 3 }, "at": ["1001 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 0.375,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "at 1.5 mm the force is 262.5 kN and the aluminium interface has moved 0.375 mm"
+    },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "sample": { "kind": "frame", "index": 2 }, "at": ["1001 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "the 1.0 mm increment lands exactly on closure: zero force, the aluminium bar untouched"
+    },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "sample": { "kind": "frame", "index": 1 }, "at": ["1001 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "and before closure nothing is transmitted"
+    },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "sample": { "kind": "frame", "index": 1 }, "at": ["1000 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 0.5,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "while the steel bar translates rigidly by the whole 0.5 mm of the first increment"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/contacts/0/activeFraction",
+      "expect": 1.0,
+      "tol": 0.0,
+      "note": "the whole interface is closed at the end"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/contacts/0/force/0/value",
+      "expect": -525.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the aluminium master pushes the steel slave back with the full force, towards -x"
+    },
+    {
+      "query": { "query": "query.probe", "field": "contactPressure", "at": ["1000 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 52.5,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "525 kN over the 100 mm square face is 52.5 MPa of contact pressure"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false }
+  ]
+}

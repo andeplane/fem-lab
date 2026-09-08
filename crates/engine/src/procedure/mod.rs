@@ -372,6 +372,22 @@ pub struct StepResult {
     /// Solver-used optional material defaults, captured by the Model-to-Problem boundary only
     /// after this procedure succeeds.
     pub assumptions: Vec<ResultAssumption>,
+    /// One entry per frictionless contact the Step listed, in Step order; empty otherwise.
+    pub contacts: Vec<ContactSummary>,
+}
+
+/// What one frictionless contact ended the Step with (`query.result` reports it).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContactSummary {
+    pub name: String,
+    /// Slave nodes held on the master surface.
+    pub active: usize,
+    /// Slave nodes the search paired, active or not.
+    pub paired: usize,
+    /// The resultant of the normal forces on the slave side, N.
+    pub force: [f64; 3],
+    /// The slave nodes held on the master surface, ascending: the contact patch.
+    pub nodes: Vec<u32>,
 }
 
 /// Run one Step.
@@ -501,6 +517,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         solver,
         warnings: Vec::new(),
         assumptions: Vec::new(),
+        contacts: Vec::new(),
     }
 }
 

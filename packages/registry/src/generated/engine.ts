@@ -1990,7 +1990,7 @@ export type Dof = "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
 /**
  * How two faces interact where they meet.
  */
-export type ContactKind = "bonded";
+export type ContactKind = "bonded" | "frictionless";
 /**
  * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
  * transmits a moment.
@@ -2021,7 +2021,9 @@ export type Procedure =
  * member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
  * triple at each end of every beam and zeros on every other element. `plasticStrain` is the
  * equivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with
- * an elastic–plastic Material produces.
+ * an elastic–plastic Material produces. `contactPressure` is the normal pressure a
+ * frictionless contact carries, one component, positive in compression, on the slave nodes of
+ * every frictionless pair and zero on every other node; only a Step with such a pair has it.
  */
 export type Field =
   | (
@@ -2037,6 +2039,7 @@ export type Field =
       | "rotation"
       | "sectionForce"
       | "sectionMoment"
+      | "contactPressure"
     )
   | "errorEstimate";
 /**
@@ -2848,6 +2851,11 @@ export type Constraint1 =
       master: string;
       tol?: number | null;
       kind: "bonded";
+    }
+  | {
+      master: string;
+      tol?: number | null;
+      kind: "frictionless";
     }
   | {
       from: string;
@@ -6585,8 +6593,16 @@ export interface ResultSummary {
    */
   balance: number;
   /**
+   * One row per frictionless contact the Step listed: how much of the paired slave face
+   * ended in contact and the resultant it carries. Empty for a Step without one. These forces
+   * are internal to the assembly — they are what one part pushes on the other with — so they
+   * are not in `reactions` and do not enter `balance`.
+   */
+  contacts?: ContactRow[];
+  /**
    * What the solve wanted the user to know but would not stop for: a bonded contact tied
-   * across a gap, a slave face coarser than its master. Retained with the Result.
+   * across a gap, a slave face coarser than its master, a frictionless pair that ended fully
+   * open. Retained with the Result.
    */
   warnings?: Warning[];
 }
@@ -6651,6 +6667,32 @@ export interface SweepRow {
   frequency: Valued;
   amplitude: Valued;
   phase: Valued;
+}
+/**
+ * One frictionless contact of a solved Step.
+ */
+export interface ContactRow {
+  contact: string;
+  /**
+   * Slave nodes held on the master surface at the end of the Step.
+   */
+  active: number;
+  /**
+   * Slave nodes the search found within `tol` of the master: the ones that could touch.
+   */
+  paired: number;
+  /**
+   * `active / paired`: 1 is a face fully in contact, 0 a pair that has opened completely.
+   */
+  activeFraction: number;
+  /**
+   * The resultant of the normal forces the master exerts on the slave, in the Model's force
+   * unit: the load the contact transmits.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  force: [Valued, Valued, Valued];
 }
 export interface RetainedResults {
   limit: number;
@@ -7259,6 +7301,8 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "constraint.dependent"
     | "contact.unpaired"
+    | "contact.chatter"
+    | "contact.open"
     | "solve.not-positive-definite"
     | "solve.stalled"
     | "solve.diverged"

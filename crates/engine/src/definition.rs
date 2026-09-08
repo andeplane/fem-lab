@@ -227,6 +227,13 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                     kind: ContactKind::Bonded,
                     tol: tol.map(length),
                 },
+                ConstraintKind::Frictionless { master, tol } => Command::ContactAdd {
+                    name,
+                    master: master.clone(),
+                    slave: on,
+                    kind: ContactKind::Frictionless,
+                    tol: tol.map(length),
+                },
                 ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => Command::ConstraintCyclic {
                     name,
                     from: from.clone(),

@@ -221,16 +221,28 @@ multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driv
 
 ### contact.add
 
-Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
-point it projects onto in `master`, in every displacement component. It is a linear
-constraint inside the same operator — no iteration, no gap opening, no sliding — so a
-bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
-slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
-gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
-master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
-so the two parts are in perfect thermal contact. A tie is listed in a Step's
-`constraints` like any other, and is removed with constraint.remove. Ties add stiffness
-between Bodies that share no element, which query.cost does not count.
+Connect two face Sets. `bonded` ties them so the parts behave as one: every node of
+`slave` is constrained to the point it projects onto in `master`, in every displacement
+component. It is a linear constraint inside the same operator — no iteration, no gap
+opening, no sliding — so a bonded assembly costs a static solve, not a contact search.
+`tol` is then the largest gap that still pairs, defaulting to 1e-4 of the Mesh diagonal;
+a node further from the master than that is `contact.unpaired`. In a heat Step a bonded
+tie carries temperature, so the two parts are in perfect thermal contact.
+`frictionless` lets the faces press, open and slide: `tol` is then the *search distance*
+(same default), every slave node within it is paired and its initial gap along the master
+normal recorded (positive when open, so faces may start apart and close under load), and
+the solve keeps a node on the master surface only while the normal force there is
+compressive. A node beyond `tol` is simply not a candidate. Hold each Body against the
+motions the contact cannot stop: a frictionless face transmits no tangential force, so a
+part held only by it can still slide. The Result carries a `contactPressure` field on the
+slave nodes and query.result lists every frictionless pair with its active fraction and
+the resultant it carries; a pair that ends fully open is a `contact.open` warning, a part
+that lifts off entirely with nothing else holding it a `contact.open` error, and a set
+that never settles a `contact.chatter` error naming the nodes. Put the *finer* mesh on
+the slave side either way: a node-to-face constraint passes the patch test that way
+round. A contact is listed in a Step's `constraints` like any other, and is removed with
+constraint.remove. Contacts add stiffness between Bodies that share no element, which
+query.cost does not count.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -1208,9 +1220,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "How two faces interact where they meet.",
   "oneOf": [
     {
-      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear: one solve, no contact search.",
       "type": "string",
       "const": "bonded"
+    },
+    {
+      "description": "The faces can press on each other, open, and slide without friction. A slave node\nwithin `tol` of the master is paired with the point it projects onto and its initial gap\nalong the master normal is recorded; in the solve it is held on the master surface while\nthe normal force there is compressive, released the moment that force turns tensile, and\nheld again the moment its gap would go negative. Tangential motion is free, so nothing\nis transmitted along the surface. Small sliding: the pairing and the normal are those of\nthe undeformed Mesh. `static` solves this by repeated linear solves (an active set),\n`static-nonlinear` updates the set inside every Newton iteration; heat, modal, buckling,\nharmonic, explicit and implicit Steps refuse it.",
+      "type": "string",
+      "const": "frictionless"
     }
   ]
 }
@@ -1587,7 +1604,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces. `contactPressure` is the normal pressure a\nfrictionless contact carries, one component, positive in compression, on the slave nodes of\nevery frictionless pair and zero on every other node; only a Step with such a pair has it.",
   "oneOf": [
     {
       "type": "string",
@@ -1603,7 +1620,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "temperature",
         "rotation",
         "sectionForce",
-        "sectionMoment"
+        "sectionMoment",
+        "contactPressure"
       ]
     },
     {
@@ -5186,7 +5204,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+      "description": "Connect two face Sets. `bonded` ties them so the parts behave as one: every node of\n`slave` is constrained to the point it projects onto in `master`, in every displacement\ncomponent. It is a linear constraint inside the same operator — no iteration, no gap\nopening, no sliding — so a bonded assembly costs a static solve, not a contact search.\n`tol` is then the largest gap that still pairs, defaulting to 1e-4 of the Mesh diagonal;\na node further from the master than that is `contact.unpaired`. In a heat Step a bonded\ntie carries temperature, so the two parts are in perfect thermal contact.\n`frictionless` lets the faces press, open and slide: `tol` is then the *search distance*\n(same default), every slave node within it is paired and its initial gap along the master\nnormal recorded (positive when open, so faces may start apart and close under load), and\nthe solve keeps a node on the master surface only while the normal force there is\ncompressive. A node beyond `tol` is simply not a candidate. Hold each Body against the\nmotions the contact cannot stop: a frictionless face transmits no tangential force, so a\npart held only by it can still slide. The Result carries a `contactPressure` field on the\nslave nodes and query.result lists every frictionless pair with its active fraction and\nthe resultant it carries; a pair that ends fully open is a `contact.open` warning, a part\nthat lifts off entirely with nothing else holding it a `contact.open` error, and a set\nthat never settles a `contact.chatter` error naming the nodes. Put the *finer* mesh on\nthe slave side either way: a node-to-face constraint passes the patch test that way\nround. A contact is listed in a Step's `constraints` like any other, and is removed with\nconstraint.remove. Contacts add stiffness between Bodies that share no element, which\nquery.cost does not count.",
       "type": "object",
       "properties": {
         "name": {
@@ -6249,9 +6267,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "How two faces interact where they meet.",
   "oneOf": [
     {
-      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear: one solve, no contact search.",
       "type": "string",
       "const": "bonded"
+    },
+    {
+      "description": "The faces can press on each other, open, and slide without friction. A slave node\nwithin `tol` of the master is paired with the point it projects onto and its initial gap\nalong the master normal is recorded; in the solve it is held on the master surface while\nthe normal force there is compressive, released the moment that force turns tensile, and\nheld again the moment its gap would go negative. Tangential motion is free, so nothing\nis transmitted along the surface. Small sliding: the pairing and the normal are those of\nthe undeformed Mesh. `static` solves this by repeated linear solves (an active set),\n`static-nonlinear` updates the set inside every Newton iteration; heat, modal, buckling,\nharmonic, explicit and implicit Steps refuse it.",
+      "type": "string",
+      "const": "frictionless"
     }
   ]
 }
@@ -6677,7 +6700,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces. `contactPressure` is the normal pressure a\nfrictionless contact carries, one component, positive in compression, on the slave nodes of\nevery frictionless pair and zero on every other node; only a Step with such a pair has it.",
   "oneOf": [
     {
       "type": "string",
@@ -6693,7 +6716,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "temperature",
         "rotation",
         "sectionForce",
-        "sectionMoment"
+        "sectionMoment",
+        "contactPressure"
       ]
     },
     {

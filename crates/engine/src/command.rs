@@ -25,8 +25,18 @@ pub type SetRef = String;
 #[serde(rename_all = "lowercase")]
 pub enum ContactKind {
     /// Glued: the two faces never separate and never slide, so the assembly behaves as one
-    /// part. Linear, and the only kind there is today.
+    /// part. Linear: one solve, no contact search.
     Bonded,
+    /// The faces can press on each other, open, and slide without friction. A slave node
+    /// within `tol` of the master is paired with the point it projects onto and its initial gap
+    /// along the master normal is recorded; in the solve it is held on the master surface while
+    /// the normal force there is compressive, released the moment that force turns tensile, and
+    /// held again the moment its gap would go negative. Tangential motion is free, so nothing
+    /// is transmitted along the surface. Small sliding: the pairing and the normal are those of
+    /// the undeformed Mesh. `static` solves this by repeated linear solves (an active set),
+    /// `static-nonlinear` updates the set inside every Newton iteration; heat, modal, buckling,
+    /// harmonic, explicit and implicit Steps refuse it.
+    Frictionless,
 }
 
 /// How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
@@ -355,7 +365,9 @@ pub enum Solver {
 /// member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
 /// triple at each end of every beam and zeros on every other element. `plasticStrain` is the
 /// equivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with
-/// an elastic–plastic Material produces.
+/// an elastic–plastic Material produces. `contactPressure` is the normal pressure a
+/// frictionless contact carries, one component, positive in compression, on the slave nodes of
+/// every frictionless pair and zero on every other node; only a Step with such a pair has it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -375,6 +387,7 @@ pub enum Field {
     Rotation,
     SectionForce,
     SectionMoment,
+    ContactPressure,
 }
 
 /// Element formulation for linear hexahedra and quadrilaterals.
@@ -1477,16 +1490,28 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintTemperature { name: String, on: SetRef, value: Q<Temperature> },
 
-    /// Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
-    /// point it projects onto in `master`, in every displacement component. It is a linear
-    /// constraint inside the same operator — no iteration, no gap opening, no sliding — so a
-    /// bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
-    /// slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
-    /// gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
-    /// master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
-    /// so the two parts are in perfect thermal contact. A tie is listed in a Step's
-    /// `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
-    /// between Bodies that share no element, which query.cost does not count.
+    /// Connect two face Sets. `bonded` ties them so the parts behave as one: every node of
+    /// `slave` is constrained to the point it projects onto in `master`, in every displacement
+    /// component. It is a linear constraint inside the same operator — no iteration, no gap
+    /// opening, no sliding — so a bonded assembly costs a static solve, not a contact search.
+    /// `tol` is then the largest gap that still pairs, defaulting to 1e-4 of the Mesh diagonal;
+    /// a node further from the master than that is `contact.unpaired`. In a heat Step a bonded
+    /// tie carries temperature, so the two parts are in perfect thermal contact.
+    /// `frictionless` lets the faces press, open and slide: `tol` is then the *search distance*
+    /// (same default), every slave node within it is paired and its initial gap along the master
+    /// normal recorded (positive when open, so faces may start apart and close under load), and
+    /// the solve keeps a node on the master surface only while the normal force there is
+    /// compressive. A node beyond `tol` is simply not a candidate. Hold each Body against the
+    /// motions the contact cannot stop: a frictionless face transmits no tangential force, so a
+    /// part held only by it can still slide. The Result carries a `contactPressure` field on the
+    /// slave nodes and query.result lists every frictionless pair with its active fraction and
+    /// the resultant it carries; a pair that ends fully open is a `contact.open` warning, a part
+    /// that lifts off entirely with nothing else holding it a `contact.open` error, and a set
+    /// that never settles a `contact.chatter` error naming the nodes. Put the *finer* mesh on
+    /// the slave side either way: a node-to-face constraint passes the patch test that way
+    /// round. A contact is listed in a Step's `constraints` like any other, and is removed with
+    /// constraint.remove. Contacts add stiffness between Bodies that share no element, which
+    /// query.cost does not count.
     #[serde(rename = "contact.add", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     ContactAdd {

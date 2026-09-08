@@ -99,6 +99,16 @@ beam joint a *clamp* (`constraint.fix` with no rotation named) holds all six DOF
 and the two rotations in the plane.
 _Avoid_: BC, boundary condition, support, fixture, restraint, encastre
 
+**Contact**:
+A connection between two face Sets of different Bodies, made by `contact.add`: *bonded* ties every
+slave node to the master point it projects onto and behaves as one part; *frictionless* lets the
+faces press, open and slide — a slave node within the search distance is held on the master surface
+only while the normal force there is compressive, and transmits nothing along it. Both are applied
+by elimination, never by a penalty spring, and a contact is listed in a Step's constraints like a
+Constraint. The *active set* is the set of slave nodes currently held; the Result reports it as an
+active fraction and a `contactPressure` field.
+_Avoid_: interaction, glue, tie (that is the bonded kind), gap element
+
 **Load**:
 A prescribed force-like condition on a Set: pressure, traction, point force, moment (on beam
 joints), body force, gravity, thermal load.
