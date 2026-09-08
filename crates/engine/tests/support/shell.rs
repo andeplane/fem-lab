@@ -1021,3 +1021,337 @@ fn free_shell_modal_spectrum_keeps_six_rigid_modes_and_physical_bending_modes() 
     assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
     assert!(errors[2] < 0.01, "{errors:?}");
 }
+
+/// Classical laminate A/B/D integrals, independent of the element quadrature:
+/// two cross plies couple extension to bending; mirroring the layup removes B.
+#[test]
+fn shell_laminate_extension_bending_coupling_matches_classical_plate_theory() {
+    use femlab_engine::fem::shell::Ply;
+    let mat = super::orthotropic_material(&[100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
+    let coords: Vec<f64> = flat().nodes.into_iter().flatten().collect();
+    let (eps, curvature, area) = (0.001, 0.002, 8.0);
+    for t in [0.02, 0.002, 0.0002] {
+        let sec = properties(&SectionSpec::Shell { thickness: Q::new(t, "m") }).unwrap();
+        for angles in [vec![0.0, 90.0], vec![90.0, 0.0], vec![0.0, 90.0, 90.0, 0.0]] {
+            let plies: Vec<_> = angles
+                .iter()
+                .map(|angle| Ply {
+                    thickness: t / angles.len() as f64,
+                    angle: angle * std::f64::consts::PI / 180.0,
+                    material: mat.clone(),
+                })
+                .collect();
+            let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+            c.plies = &plies;
+            let mut u = [0.0; 24];
+            for (i, [x, _, _]) in flat().nodes.into_iter().enumerate() {
+                u[6 * i] = eps * x;
+                u[6 * i + 2] = -0.5 * curvature * x * x;
+                u[6 * i + 4] = curvature * x;
+            }
+            let a = 60e9 * t;
+            let (b, d) = if angles.len() == 4 {
+                (0.0, 720e9 * t.powi(3) / 96.0)
+            } else {
+                let b = 80e9 * t * t / 8.0;
+                (if angles[0] == 0.0 { -b } else { b }, 120e9 * t.powi(3) / 24.0)
+            };
+            let expected = 0.5 * area * (a * eps * eps + 2.0 * b * eps * curvature + d * curvature * curvature);
+            let mut k = [0.0; 576];
+            element_for(ElementKind::Shell4).stiffness(&c, &mut k).unwrap();
+            let f = super::matvec(&k, &u, 24);
+            let energy: f64 = u.iter().zip(f).map(|(u, f)| 0.5 * u * f).sum();
+            assert!((energy / expected - 1.0).abs() < 1e-10, "t={t}, angles={angles:?}, {energy} vs {expected}");
+        }
+    }
+}
+
+#[test]
+fn shell_ply_densities_preserve_mass_and_the_eccentric_gravity_moment() {
+    use femlab_engine::fem::shell::Ply;
+    let mat = super::steel();
+    let coords: Vec<f64> = flat().nodes.into_iter().flatten().collect();
+    let sec = properties(&SectionSpec::Shell { thickness: Q::new(0.02, "m") }).unwrap();
+    let mut plies: Vec<_> = [1000.0, 2000.0]
+        .into_iter()
+        .map(|rho| {
+            let mut material = mat.clone();
+            material.rho = rho;
+            Ply { thickness: 0.01, angle: 0.0, material }
+        })
+        .collect();
+    let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    c.plies = &plies;
+    let el = element_for(ElementKind::Shell4);
+    let mut mass = [0.0; 576];
+    el.mass(&c, &mut mass, false).unwrap();
+    let total: f64 = (0..4).flat_map(|i| (0..4).map(move |j| (i, j))).map(|(i, j)| mass[6 * i * 24 + 6 * j]).sum();
+    assert!((total - 240.0).abs() < 1e-10);
+    let mut f = [0.0; 24];
+    el.gravity_load(&c, [1.0, 0.0, 0.0], &mut f).unwrap();
+    assert!(((0..4).map(|i| f[6 * i]).sum::<f64>() - 240.0).abs() < 1e-10);
+    assert!(((0..4).map(|i| f[6 * i + 4]).sum::<f64>() - 0.4).abs() < 1e-10);
+    plies[1].material.rho = -1.0;
+    let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    c.plies = &plies;
+    assert_eq!(el.mass(&c, &mut mass, false).unwrap_err().code, ErrorCode::ModelIllPosed);
+}
+
+#[test]
+fn shell_bimetal_free_expansion_and_curvature_preserve_interface_stress_jumps() {
+    use femlab_engine::fem::shell::{recover_ply_face, Ply};
+    let mut mat = super::steel();
+    mat.props = vec![1e7, 0.0];
+    let coords: Vec<f64> = flat().nodes.into_iter().flatten().collect();
+    let sec = properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap();
+    let plies: Vec<_> = [1e-5, 3e-5]
+        .into_iter()
+        .map(|alpha| {
+            let mut material = mat.clone();
+            material.alpha = [alpha; 3];
+            Ply { thickness: 0.005, angle: 0.0, material }
+        })
+        .collect();
+    let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], Some(&[100.0; 4]));
+    c.plies = &plies;
+    let mut u = [0.0; 24];
+    for (i, [x, y, _]) in flat().nodes.into_iter().enumerate() {
+        u[6 * i] = 0.002 * x;
+        u[6 * i + 1] = 0.002 * y;
+        u[6 * i + 2] = -0.15 * (x * x + y * y);
+        u[6 * i + 3] = -0.3 * y;
+        u[6 * i + 4] = 0.3 * x;
+    }
+    let el = element_for(ElementKind::Shell4);
+    let (mut k, mut f) = ([0.0; 576], [0.0; 24]);
+    el.stiffness(&c, &mut k).unwrap();
+    el.thermal_load(&c, &mut f).unwrap();
+    close(&super::matvec(&k, &u, 24), &f, 1e-8);
+    for (ply, top, expected) in [(0, false, -5000.0), (0, true, 10000.0), (1, false, -10000.0), (1, true, 5000.0)] {
+        let (mut stress, mut strain) = ([0.0; 24], [0.0; 24]);
+        recover_ply_face(&c, &u, ply, top, &mut stress, &mut strain).unwrap();
+        for sig in stress.chunks_exact(6) {
+            close(sig, &[expected, expected, 0.0, 0.0, 0.0, 0.0], 1e-8);
+        }
+    }
+}
+
+#[test]
+fn shell_ply_angles_follow_the_surface_frame_and_compose_material_orientation() {
+    use femlab_engine::fem::shell::{recover_ply_face, Ply};
+    let mut mat = super::orthotropic_material(&[100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
+    mat.alpha = [2e-5, 1e-5, 3e-5];
+    let coords: Vec<f64> = flat().nodes.into_iter().flat_map(|[x, y, z]| [y, z, x]).collect();
+    let sec = properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap();
+    for case in 0..3 {
+        let mut material = mat.clone();
+        let angle = if case == 1 {
+            material.axes = Some([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+            -std::f64::consts::FRAC_PI_4
+        } else if case == 2 {
+            -std::f64::consts::FRAC_PI_4
+        } else {
+            std::f64::consts::FRAC_PI_4
+        };
+        let plies = [Ply { thickness: 0.01, angle, material }];
+        let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+        c.plies = &plies;
+        if case == 2 {
+            c.orientation = Some([1.0, 0.0, 0.0]);
+        }
+        let mut u = [0.0; 24];
+        for (i, [x, _, _]) in flat().nodes.into_iter().enumerate() {
+            u[6 * i + 2] = 0.001 * x;
+        }
+        let (mut stress, mut strain) = ([0.0; 24], [0.0; 24]);
+        recover_ply_face(&c, &u, 0, true, &mut stress, &mut strain).unwrap();
+        // At 45 degrees: Q11=(E1+E2+4G12)/4, Q12=(E1+E2-4G12)/4,
+        // Q16=(E1-E2)/4. The rotated patch's local x/y become global z/x.
+        for sig in stress.chunks_exact(6) {
+            close(sig, &[20e6, 0.0, 40e6, 0.0, 20e6, 0.0], 1e-6);
+        }
+        c.temperature = Some(&[100.0; 4]);
+        for (i, [x, y, _]) in flat().nodes.into_iter().enumerate() {
+            u[6 * i] = 0.0015 * y + 0.0005 * x;
+            u[6 * i + 2] = 0.0015 * x + 0.0005 * y;
+        }
+        recover_ply_face(&c, &u, 0, false, &mut stress, &mut strain).unwrap();
+        close(&stress, &[0.0; 24], 1e-6);
+    }
+}
+
+#[test]
+fn shell_layups_reject_invalid_thickness_angles_and_missing_plies() {
+    use femlab_engine::fem::shell::{recover_ply_face, Ply};
+    let mat = super::steel();
+    let coords: Vec<f64> = flat().nodes.into_iter().flatten().collect();
+    let sec = properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap();
+    let el = element_for(ElementKind::Shell4);
+    let (mut k, mut f, mut stress, mut strain) = ([0.0; 576], [0.0; 24], [0.0; 24], [0.0; 24]);
+    for (thickness, angle) in [(f64::NAN, 0.0), (-0.01, 0.0), (0.01, f64::INFINITY), (0.02, 0.0)] {
+        let plies = [Ply { thickness, angle, material: mat.clone() }];
+        let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], Some(&[100.0; 4]));
+        c.plies = &plies;
+        assert!(el.stiffness(&c, &mut k).is_err());
+        assert!(el.mass(&c, &mut k, false).is_err());
+        assert!(el.body_load(&c, &|_| [1.0; 3], &mut f).is_err());
+        assert!(el.gravity_load(&c, [1.0; 3], &mut f).is_err());
+        assert!(el.thermal_load(&c, &mut f).is_err());
+        assert!(recover_ply_face(&c, &[0.0; 24], 0, false, &mut stress, &mut strain).is_err());
+    }
+    let c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+    let error = recover_ply_face(&c, &[0.0; 24], 1, false, &mut stress, &mut strain).unwrap_err();
+    assert_eq!(error.where_.as_deref(), Some("ply"));
+    let plies = [Ply { thickness: 0.01, angle: 0.0, material: mat.clone() }];
+    let mut c = super::beam_ctx(&coords, &mat, Some(&sec), Some([0.0, 0.0, 1.0]), [0.0; 3], None);
+    c.plies = &plies;
+    let error = el.stiffness(&c, &mut k).unwrap_err();
+    assert_eq!(error.where_.as_deref(), Some("section.orientation"));
+}
+
+#[test]
+fn shell_cross_ply_strip_solves_coupled_extension_and_bending_at_three_meshes() {
+    use femlab_engine::command::{Field, Formulation};
+    use femlab_engine::fem::problem::Constraint;
+    use femlab_engine::fem::shell::Ply;
+    use femlab_engine::mesh::ResolvedSet;
+    use femlab_engine::model::Idealisation;
+    use femlab_engine::SetKind;
+    let lamina = super::orthotropic_material(&[100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
+    for n in [1, 2, 4] {
+        let mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [n, 1, 1] }.build(|p| p);
+        let mut sets = super::sets_of(&mesh);
+        for name in ["xmin", "xmax"] {
+            sets.insert(
+                name.into(),
+                ResolvedSet { kind: SetKind::Node, nodes: mesh.node_sets[name].clone(), faces: vec![], elems: vec![] },
+            );
+        }
+        let bodies = ["laminate".into()];
+        let constraints = vec![Constraint { name: "root".into(), nodes: "xmin".into(), dofs: [true; 6], value: 0.0 }];
+        let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.01, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.plies = vec![vec![
+            Ply { thickness: 0.005, angle: 0.0, material: lamina.clone() },
+            Ply { thickness: 0.005, angle: std::f64::consts::FRAC_PI_2, material: lamina.clone() },
+        ]];
+        p.loads.push(femlab_engine::fem::loads::Load::NodalMoment { nodes: "xmax".into(), m: [0.0, 0.5, 0.0] });
+        let result = super::run_static(&p, &mut |_| true).unwrap();
+        // N=A*eps+B*kappa=0, M=B*eps+D*kappa=1; A=6e8, B=-1e6, D=5000.
+        // Thus eps=5e-7, kappa=3e-4, and w(L)=-kappa*L²/2.
+        for &node in &mesh.node_sets["xmax"] {
+            let displacement = &result.fields[&Field::Displacement].data;
+            assert!((displacement[3 * node as usize] / 5e-7 - 1.0).abs() < 1e-7);
+            assert!((displacement[3 * node as usize + 2] / -0.00015 - 1.0).abs() < 1e-7);
+        }
+        for (field, expected) in
+            [(Field::ShellMoment, 1.0), (Field::StressTop, 40000.0), (Field::StressBottom, -100000.0)]
+        {
+            for sig in result.fields[&field].data.chunks_exact(6) {
+                assert!((sig[0] / expected - 1.0).abs() < 1e-7, "n={n}, {field:?}: {sig:?}");
+            }
+        }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(48))]
+    #[test]
+    fn laminate_stiffness_is_symmetric_positive_semidefinite(
+        thickness in 0.001f64..0.1,
+        fraction in 0.1f64..0.9,
+        young in 1e8f64..2e11,
+        angle in -std::f64::consts::PI..std::f64::consts::PI,
+        u in proptest::collection::vec(-0.01f64..0.01, 24),
+    ) {
+        use femlab_engine::fem::shell::Ply;
+        let mat = super::steel();
+        let other = super::orthotropic_material(&[young, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
+        let plies = [
+            Ply { thickness: thickness * fraction, angle, material: mat.clone() },
+            Ply { thickness: thickness * (1.0 - fraction), angle: -angle, material: other },
+        ];
+        let coords: Vec<f64> = flat().nodes.into_iter().flatten().collect();
+        let sec = properties(&SectionSpec::Shell { thickness: Q::new(thickness, "m") }).unwrap();
+        let mut c = super::beam_ctx(&coords, &mat, Some(&sec), None, [0.0; 3], None);
+        c.plies = &plies;
+        let mut k = [0.0; 576];
+        element_for(ElementKind::Shell4).stiffness(&c, &mut k).unwrap();
+        let scale = k.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+        for i in 0..24 { for j in 0..24 {
+            proptest::prop_assert!((k[i * 24 + j] - k[j * 24 + i]).abs() < 1e-12 * scale);
+        } }
+        let f = super::matvec(&k, &u, 24);
+        let energy: f64 = u.iter().zip(f).map(|(u, f)| u * f).sum();
+        proptest::prop_assert!(energy >= -1e-12 * scale * u.iter().map(|v| v * v).sum::<f64>());
+    }
+}
+
+#[test]
+fn symmetric_laminate_plate_frequency_converges_to_the_navier_solution() {
+    use femlab_engine::command::Formulation;
+    use femlab_engine::fem::problem::Constraint;
+    use femlab_engine::fem::shell::Ply;
+    use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
+    use femlab_engine::{procedure::Step, solve::SolveOptions};
+    let mut mat = super::orthotropic_material(&[100e9, 20e9, 10e9, 10e9, 5e9, 3e9, 0.0, 0.0, 0.0], None);
+    mat.rho = 8000.0;
+    let t = 0.001f64;
+    // w=sin(pi*x)sin(pi*y): omega²=pi⁴(D11+D22+4D66)/(rho*t), D12=0.
+    let reference = 0.5 * std::f64::consts::PI * libm::sqrt(160e9 * t * t / (12.0 * 8000.0));
+    let mut errors = Vec::new();
+    for n in [4, 8, 16] {
+        let mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [n, n, 1] }.build(|p| p);
+        let mut sets = super::sets_of(&mesh);
+        sets.insert(
+            "plane".into(),
+            ResolvedSet {
+                kind: SetKind::Node,
+                nodes: (0..mesh.n_nodes() as u32).collect(),
+                faces: vec![],
+                elems: vec![],
+            },
+        );
+        let mut edge: Vec<u32> =
+            ["xmin", "xmax", "ymin", "ymax"].into_iter().flat_map(|name| mesh.node_sets[name].clone()).collect();
+        edge.sort_unstable();
+        edge.dedup();
+        sets.insert("edge".into(), ResolvedSet { kind: SetKind::Node, nodes: edge, faces: vec![], elems: vec![] });
+        let constraints = vec![
+            Constraint {
+                name: "plane".into(),
+                nodes: "plane".into(),
+                dofs: [true, true, false, false, false, true],
+                value: 0.0,
+            },
+            Constraint {
+                name: "edge".into(),
+                nodes: "edge".into(),
+                dofs: [false, false, true, false, false, false],
+                value: 0.0,
+            },
+        ];
+        let bodies = ["laminate".into()];
+        let mut p = super::problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(t, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.plies = vec![vec![0.0, 90.0, 90.0, 0.0]
+            .into_iter()
+            .map(|angle| Ply { thickness: t / 4.0, angle: angle * std::f64::consts::PI / 180.0, material: mat.clone() })
+            .collect()];
+        let result = super::run_step(
+            &p,
+            &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None },
+        )
+        .unwrap();
+        let frequency = result.frequencies[0];
+        let error = (frequency / reference - 1.0).abs();
+        eprintln!("G8 modal n={n}, frequency={frequency}, reference={reference}, error={error}");
+        errors.push(error);
+    }
+    assert!(errors.windows(2).all(|pair| pair[1] < pair[0]), "{errors:?}");
+    assert!(errors[2] < 0.01, "{errors:?}");
+    let rate = libm::log(errors[1] / errors[2]) / libm::log(2.0);
+    assert!(rate > 1.7, "rate={rate}, errors={errors:?}");
+}

@@ -49,6 +49,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
     }
     let bodies = vec!["beam".to_string()];
     let p = Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh: &mesh,
         sets: &sets,
@@ -525,6 +526,7 @@ fn tied_cantilever() -> (Csr, Vec<f64>) {
     }
     let bodies = vec!["a".to_string(), "b".to_string()];
     let p = Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh: &mesh,
         sets: &sets,

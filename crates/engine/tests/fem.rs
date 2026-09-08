@@ -772,6 +772,7 @@ fn steel() -> Material {
 
 fn ctx<'a>(coords: &'a [f64], mat: &'a Material, id: Idealisation, form: Formulation) -> ElementCtx<'a> {
     ElementCtx {
+        plies: &[],
         directors: None,
         coords,
         material: mat,
@@ -2737,6 +2738,7 @@ fn problem<'a>(
     constraints: Vec<Constraint>,
 ) -> Problem<'a> {
     Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh,
         sets,
@@ -4746,6 +4748,7 @@ fn heat_problem<'a>(
     heat_loads: Vec<HeatLoad>,
 ) -> Problem<'a> {
     Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh,
         sets,
@@ -6132,6 +6135,7 @@ fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
     )]);
     let bodies = vec!["massive".to_string(), "massless".to_string()];
     let mut p = Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh: &mesh,
         sets: &sets,
@@ -6195,6 +6199,7 @@ fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
     let sets = BTreeMap::new();
     let bodies = vec!["massive".to_string(), "massless-stiffener".to_string()];
     let p = Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh: &mesh,
         sets: &sets,
@@ -7810,6 +7815,7 @@ fn truss_ctx<'a>(
     temperature: Option<&'a [f64]>,
 ) -> ElementCtx<'a> {
     ElementCtx {
+        plies: &[],
         directors: None,
         coords,
         material: mat,
@@ -8106,6 +8112,7 @@ fn a_line_body_without_a_section_is_reported_by_the_well_posedness_checks() {
     let sets = BTreeMap::new();
     let bodies = vec!["chord".to_string()];
     let mut p = Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh: &mesh,
         sets: &sets,
@@ -10050,6 +10057,7 @@ fn f4e_a_finite_interface_conductance_matches_the_series_resistance_closed_form(
     let sets = sets_of(&mesh);
     let bodies = two_bodies();
     let p = Problem {
+        plies: Vec::new(),
         directors: &[],
         mesh: &mesh,
         sets: &sets,
@@ -10165,6 +10173,7 @@ const FILM_COORDS: [f64; 24] = [
 fn a_constant_film_reproduces_the_convection_face_integral_bit_for_bit() {
     let material = conductor(45.0, 7800.0, 460.0);
     let c = ElementCtx {
+        plies: &[],
         directors: None,
         coords: &FILM_COORDS,
         material: &material,
@@ -14035,6 +14044,7 @@ fn beam_ctx<'a>(
     temperature: Option<&'a [f64]>,
 ) -> ElementCtx<'a> {
     ElementCtx {
+        plies: &[],
         directors: None,
         coords,
         material: mat,

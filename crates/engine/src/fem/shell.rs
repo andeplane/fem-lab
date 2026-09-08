@@ -146,7 +146,7 @@ impl Surface {
 }
 
 use crate::fem::element::{
-    density, no_density, omega_max_power, tangent_at_zero, Element, ElementCtx, FaceLoad, TangentOut,
+    density, no_density, omega_max_power, tangent_at_zero, Element, ElementCtx, FaceLoad, Material, TangentOut,
 };
 use crate::fem::material::{transpose3, voigt_rotation};
 use crate::fem::quadrature::QUAD_2X2;
@@ -156,6 +156,84 @@ use femlab_geometry::mesh::ElementKind;
 /// It vanishes for rigid motion and constant membrane/bending patch fields (ADR 0023).
 const DRILL: f64 = 1e-3;
 const SHEAR: f64 = 5.0 / 6.0;
+
+/// One perfectly bonded ply, ordered from the negative to the positive director side.
+/// Its material axes are relative to the shell's midsurface frame, rotated by `angle`
+/// radians about the director. Thickness is in metres; materials retain their own density
+/// and thermal expansion. The common MITC4 displacement field spans the entire laminate.
+pub struct Ply {
+    pub thickness: f64,
+    pub angle: f64,
+    pub material: Material,
+}
+
+pub(crate) struct Layer<'a> {
+    pub bottom: f64,
+    pub top: f64,
+    material: &'a Material,
+    angle: Option<f64>,
+}
+
+impl Layer<'_> {
+    pub(crate) fn points(&self) -> [(f64, f64); 2] {
+        let half = 0.5 * (self.top - self.bottom);
+        let middle = 0.5 * (self.top + self.bottom);
+        let offset = half / libm::sqrt(3.0);
+        [(middle - offset, half), (middle + offset, half)]
+    }
+
+    fn material_in(&self, axes: &Basis, reference: Option<Vector>) -> Result<std::borrow::Cow<'_, Material>, Error> {
+        let Some(angle) = self.angle else { return Ok(std::borrow::Cow::Borrowed(self.material)) };
+        let mut axes = *axes;
+        if let Some(reference) = reference {
+            let normal = dot(reference, axes[2]);
+            let projected = std::array::from_fn(|i| reference[i] - normal * axes[2][i]);
+            let length = dot(projected, projected);
+            if !length.is_finite() || length <= 1e-24 * dot(reference, reference) {
+                return Err(Error::schema("shell ply reference axis is normal to the surface")
+                    .at("section.orientation")
+                    .suggest("section.assign with an axis having a nonzero tangent projection"));
+            }
+            axes[0] = unit(projected);
+            axes[1] = cross(axes[2], axes[0]);
+        }
+        let (s, c) = (libm::sin(angle), libm::cos(angle));
+        let frame: Basis = [
+            std::array::from_fn(|i| c * axes[0][i] + s * axes[1][i]),
+            std::array::from_fn(|i| -s * axes[0][i] + c * axes[1][i]),
+            axes[2],
+        ];
+        let intrinsic = self.material.axes.unwrap_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        let mut material = self.material.clone();
+        material.axes =
+            Some(std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| intrinsic[i][k] * frame[k][j]).sum())));
+        Ok(std::borrow::Cow::Owned(material))
+    }
+}
+
+/// Resolved physical ply intervals. Homogeneous sections use the Body material in global axes.
+pub(crate) fn layers<'a>(c: &'a ElementCtx<'_>) -> Result<Vec<Layer<'a>>, Error> {
+    let t = thickness(c)?;
+    if c.plies.is_empty() {
+        return Ok(vec![Layer { bottom: -0.5 * t, top: 0.5 * t, material: c.material, angle: None }]);
+    }
+    let mut result = Vec::with_capacity(c.plies.len());
+    let mut z = -0.5 * t;
+    for ply in c.plies {
+        if !ply.thickness.is_finite() || ply.thickness <= 0.0 || !ply.angle.is_finite() {
+            return Err(
+                Error::schema("shell plies need positive finite thicknesses and finite angles").at("section.plies")
+            );
+        }
+        let top = z + ply.thickness;
+        result.push(Layer { bottom: z, top, material: &ply.material, angle: Some(ply.angle) });
+        z = top;
+    }
+    if (z - 0.5 * t).abs() > 1e-12 * t {
+        return Err(Error::schema("shell ply thicknesses must sum to the section thickness").at("section.plies"));
+    }
+    Ok(result)
+}
 
 pub(crate) fn thickness(c: &ElementCtx<'_>) -> Result<f64, Error> {
     let t = c.section.and_then(|s| s.thickness).ok_or_else(|| {
@@ -293,39 +371,45 @@ impl Element for Shell4 {
 
     fn stiffness(&self, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<f64, Error> {
         let surface = surface(c)?;
-        let t = thickness(c)?;
-        let global = tangent_at_zero(c, 1)?;
+        let layers = layers(c)?;
         out.fill(0.0);
         let mut min_det = f64::INFINITY;
         for [r, s, _] in QUAD_2X2.points {
             let middle = surface.kinematics(*r, *s, 0.0)?;
-            // The physical faces must remain regular too; recovery uses z=±t/2.
-            surface.kinematics(*r, *s, -0.5 * t)?;
-            surface.kinematics(*r, *s, 0.5 * t)?;
-            for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
-                let kin = surface.kinematics(*r, *s, z)?;
-                min_det = min_det.min(kin.det);
-                let d = local_tangent(&global, &kin.axes);
-                let mut db = [[0.0; N_DOF]; 6];
-                for (a, db_row) in db.iter_mut().enumerate() {
-                    for (b, value) in d[a].iter().enumerate() {
-                        for (entry, strain) in db_row.iter_mut().zip(kin.b[b]) {
-                            *entry += value * strain;
+            let mut drilling = 0.0;
+            for layer in &layers {
+                // Recovery visits ply interfaces as well as the external faces.
+                surface.kinematics(*r, *s, layer.bottom)?;
+                surface.kinematics(*r, *s, layer.top)?;
+                let material = layer.material_in(&middle.axes, c.orientation)?;
+                let ply = ElementCtx { material: &material, ..c.clone() };
+                let global = tangent_at_zero(&ply, 1)?;
+                drilling += (layer.top - layer.bottom) * local_tangent(&global, &middle.axes)[3][3];
+                for (z, weight) in layer.points() {
+                    let kin = surface.kinematics(*r, *s, z)?;
+                    min_det = min_det.min(kin.det);
+                    let d = local_tangent(&global, &kin.axes);
+                    let mut db = [[0.0; N_DOF]; 6];
+                    for (a, db_row) in db.iter_mut().enumerate() {
+                        for (b, value) in d[a].iter().enumerate() {
+                            for (entry, strain) in db_row.iter_mut().zip(kin.b[b]) {
+                                *entry += value * strain;
+                            }
                         }
                     }
-                }
-                for i in 0..N_DOF {
-                    for j in 0..N_DOF {
-                        out[i * N_DOF + j] += 0.5 * t * kin.det * (0..6).map(|a| kin.b[a][i] * db[a][j]).sum::<f64>();
+                    for i in 0..N_DOF {
+                        for j in 0..N_DOF {
+                            out[i * N_DOF + j] +=
+                                weight * kin.det * (0..6).map(|a| kin.b[a][i] * db[a][j]).sum::<f64>();
+                        }
                     }
                 }
             }
             let kin = middle;
             let b = surface.drilling(*r, *s, &kin);
-            let d = local_tangent(&global, &kin.axes);
             for i in 0..N_DOF {
                 for j in 0..N_DOF {
-                    out[i * N_DOF + j] += DRILL * d[3][3] * t * kin.det * b[i] * b[j];
+                    out[i * N_DOF + j] += DRILL * drilling * kin.det * b[i] * b[j];
                 }
             }
         }
@@ -334,26 +418,30 @@ impl Element for Shell4 {
 
     fn mass(&self, c: &ElementCtx<'_>, out: &mut [f64], lumped: bool) -> Result<(), Error> {
         let surface = surface(c)?;
-        let (t, rho) = (thickness(c)?, density(c)?);
+        let layers = layers(c)?;
         out.fill(0.0);
         for [r, s, _] in QUAD_2X2.points {
             let (n, _) = shape(*r, *s);
-            for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
-                let kin = surface.kinematics(*r, *s, z)?;
-                let h = surface.displacement_shape(*r, *s, z);
-                let weight = 0.5 * t * rho * kin.det;
-                for i in 0..N_DOF {
-                    for j in 0..N_DOF {
-                        out[i * N_DOF + j] += weight * (0..3).map(|a| h[a][i] * h[a][j]).sum::<f64>();
-                        if i % 6 >= 3 && j % 6 >= 3 {
-                            out[i * N_DOF + j] += weight
-                                * DRILL
-                                * z
-                                * z
-                                * n[i / 6]
-                                * n[j / 6]
-                                * surface.directors[i / 6][i % 6 - 3]
-                                * surface.directors[j / 6][j % 6 - 3];
+            for layer in &layers {
+                let ply = ElementCtx { material: layer.material, ..c.clone() };
+                let rho = density(&ply)?;
+                for (z, weight) in layer.points() {
+                    let kin = surface.kinematics(*r, *s, z)?;
+                    let h = surface.displacement_shape(*r, *s, z);
+                    let weight = weight * rho * kin.det;
+                    for i in 0..N_DOF {
+                        for j in 0..N_DOF {
+                            out[i * N_DOF + j] += weight * (0..3).map(|a| h[a][i] * h[a][j]).sum::<f64>();
+                            if i % 6 >= 3 && j % 6 >= 3 {
+                                out[i * N_DOF + j] += weight
+                                    * DRILL
+                                    * z
+                                    * z
+                                    * n[i / 6]
+                                    * n[j / 6]
+                                    * surface.directors[i / 6][i % 6 - 3]
+                                    * surface.directors[j / 6][j % 6 - 3];
+                            }
                         }
                     }
                 }
@@ -386,17 +474,31 @@ impl Element for Shell4 {
 
     fn body_load(&self, c: &ElementCtx<'_>, f: &dyn Fn(Vector) -> Vector, out: &mut [f64]) -> Result<(), Error> {
         let surface = surface(c)?;
-        let t = thickness(c)?;
+        let layers = layers(c)?;
         out.fill(0.0);
         for [r, s, _] in QUAD_2X2.points {
-            for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
-                let kin = surface.kinematics(*r, *s, z)?;
-                let h = surface.displacement_shape(*r, *s, z);
-                let force = f(surface.position(*r, *s, z));
-                for (i, value) in out.iter_mut().enumerate() {
-                    *value += 0.5 * t * kin.det * (0..3).map(|a| h[a][i] * force[a]).sum::<f64>();
+            for layer in &layers {
+                for (z, weight) in layer.points() {
+                    let kin = surface.kinematics(*r, *s, z)?;
+                    let h = surface.displacement_shape(*r, *s, z);
+                    let force = f(surface.position(*r, *s, z));
+                    for (i, value) in out.iter_mut().enumerate() {
+                        *value += weight * kin.det * (0..3).map(|a| h[a][i] * force[a]).sum::<f64>();
+                    }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn gravity_load(&self, c: &ElementCtx<'_>, g: Vector, out: &mut [f64]) -> Result<(), Error> {
+        let mut mass = [0.0; N_DOF * N_DOF];
+        self.mass(c, &mut mass, false)?;
+        for (i, value) in out.iter_mut().enumerate() {
+            *value = (0..4)
+                .flat_map(|node| (0..3).map(move |axis| (node, axis)))
+                .map(|(node, axis)| mass[i * N_DOF + 6 * node + axis] * g[axis])
+                .sum();
         }
         Ok(())
     }
@@ -435,19 +537,24 @@ impl Element for Shell4 {
             return Ok(());
         };
         let surface = surface(c)?;
-        let t = thickness(c)?;
-        let global = tangent_at_zero(c, 1)?;
+        let layers = layers(c)?;
         for [r, s, _] in QUAD_2X2.points {
             let (n, _) = shape(*r, *s);
             let delta = (0..4).map(|i| n[i] * temperature[i]).sum::<f64>() - c.t_ref;
-            for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
-                let kin = surface.kinematics(*r, *s, z)?;
-                let d = local_tangent(&global, &kin.axes);
-                let alpha = local_alpha(c, &kin.axes);
-                for (i, value) in out.iter_mut().enumerate() {
-                    for (a, row) in d.iter().enumerate() {
-                        for (entry, expansion) in row.iter().zip(alpha) {
-                            *value += 0.5 * t * kin.det * kin.b[a][i] * entry * expansion * delta;
+            let middle = surface.kinematics(*r, *s, 0.0)?;
+            for layer in &layers {
+                let material = layer.material_in(&middle.axes, c.orientation)?;
+                let ply = ElementCtx { material: &material, ..c.clone() };
+                let global = tangent_at_zero(&ply, 1)?;
+                for (z, weight) in layer.points() {
+                    let kin = surface.kinematics(*r, *s, z)?;
+                    let d = local_tangent(&global, &kin.axes);
+                    let alpha = local_alpha(&ply, &kin.axes);
+                    for (i, value) in out.iter_mut().enumerate() {
+                        for (a, row) in d.iter().enumerate() {
+                            for (entry, expansion) in row.iter().zip(alpha) {
+                                *value += weight * kin.det * kin.b[a][i] * entry * expansion * delta;
+                            }
                         }
                     }
                 }
@@ -487,7 +594,7 @@ impl Element for Shell4 {
         let mut m = [0.0; N_DOF * N_DOF];
         self.stiffness(c, &mut k)?;
         self.mass(c, &mut m, true)?;
-        if c.material.rho == 0.0 {
+        if m.iter().all(|value| *value == 0.0) {
             return Err(no_density());
         }
         Ok(omega_max_power(&k, &m, N_DOF))
@@ -522,14 +629,48 @@ fn local_alpha(c: &ElementCtx<'_>, axes: &Basis) -> [f64; 6] {
 /// The thickness-normal stress is zero; the total normal strain follows plane stress.
 pub fn recover_at(c: &ElementCtx<'_>, u: &[f64], z: f64, stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
     let surface = surface(c)?;
-    let global = tangent_at_zero(c, 1)?;
+    let layers = layers(c)?;
+    let layer = layers.iter().find(|layer| z <= layer.top).unwrap_or(layers.last().expect("a section has a layer"));
+    recover_layer_at(&surface, c, layer, u, z, stress, strain)
+}
+
+/// Stress and total strain on either face of one ply, preserving the jump at an
+/// interface. `ply` is zero-based from the bottom; `top` selects its positive side.
+pub fn recover_ply_face(
+    c: &ElementCtx<'_>,
+    u: &[f64],
+    ply: usize,
+    top: bool,
+    stress: &mut [f64],
+    strain: &mut [f64],
+) -> Result<(), Error> {
+    let surface = surface(c)?;
+    let layers = layers(c)?;
+    let layer = layers.get(ply).ok_or_else(|| Error::schema("shell ply index is outside this section").at("ply"))?;
+    let z = if top { layer.top } else { layer.bottom };
+    recover_layer_at(&surface, c, layer, u, z, stress, strain)
+}
+
+fn recover_layer_at(
+    surface: &Surface,
+    c: &ElementCtx<'_>,
+    layer: &Layer<'_>,
+    u: &[f64],
+    z: f64,
+    stress: &mut [f64],
+    strain: &mut [f64],
+) -> Result<(), Error> {
     for (gp, [r, s, _]) in QUAD_2X2.points.iter().enumerate() {
         let kin = surface.kinematics(*r, *s, z)?;
+        let middle = surface.kinematics(*r, *s, 0.0)?;
+        let material = layer.material_in(&middle.axes, c.orientation)?;
+        let ply = ElementCtx { material: &material, ..c.clone() };
+        let global = tangent_at_zero(&ply, 1)?;
         let d = local_tangent(&global, &kin.axes);
         let mut eps = kin.b.map(|row| row.iter().zip(u).map(|(b, v)| b * v).sum::<f64>());
         let (n, _) = shape(*r, *s);
         let delta = c.temperature.map_or(0.0, |temp| (0..4).map(|i| n[i] * temp[i]).sum::<f64>() - c.t_ref);
-        let alpha = local_alpha(c, &kin.axes);
+        let alpha = local_alpha(&ply, &kin.axes);
         let elastic: [f64; 6] = std::array::from_fn(|a| eps[a] - alpha[a] * delta);
         let sig: [f64; 6] = d.map(|row| row.iter().zip(elastic).map(|(a, e)| a * e).sum());
         // Recover the eliminated normal strain from the full rotated elastic tangent.

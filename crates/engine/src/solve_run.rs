@@ -262,6 +262,7 @@ fn build_problem_with_temperature<'a>(
         materials,
         section_of_block,
         sections: model.sections.iter().map(|s| s.section).collect(),
+        plies: Vec::new(),
         orientation_of_block,
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),

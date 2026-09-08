@@ -1263,6 +1263,40 @@ which reviews the original MITC4 formulation before introducing MITC4+.
 | G5 | NAFEMS LE5 Z-section cantilever | −108 MPa | 3 % |
 | G6 | NAFEMS FV12 free thin square plate, modal | 1.622, 2.360, 2.922, 4.233, 4.233, 7.416, 7.416 Hz | 1 % |
 | G7 | Pinched cylinder / full hemisphere (Belytschko et al.; Ko–Lee–Bathe verification above) | 1.8248e-5 / 0.0924 | 2 % |
+| G8 | Bonded cross-ply and symmetric laminate patches, including thermal mismatch and eccentric density | Classical A/B/D energy; bimetal curvature and interface stress; mass and gravity moment | 1e-10 relative energy; 1e-8 absolute force/stress |
+
+G8 follows the laminate force/moment integrals and symmetry argument in
+[NASA RP-1351, sections III–IV](https://ntrs.nasa.gov/citations/19950009349).
+For equal-thickness 0°/90° plies with E1=100 GPa, E2=20 GPa and zero Poisson
+ratios, the independent closed forms are A11=(E1+E2)t/2,
+B11=(E2−E1)t²/8 and D11=(E1+E2)t³/24. Reversing the plies reverses B11.
+A 0°/90°/90°/0° layup has B11=0 and D11=(7E1+E2)t³/96. Prescribed membrane
+strain and curvature on an 8 m² patch check the combined energy at thicknesses
+20/2/0.2 mm, so membrane–bending coupling and the thin limit are both exercised.
+An off-axis 45° ply checks the transformed stiffness and free anisotropic expansion
+on a spatially rotated patch, including composition with Material orientation.
+The assembled 1 m × 1 m, 10 mm-thick cross-ply strip carries a unit end moment
+and no axial force. Solving the independent 2×2 A/B/D system gives εxx=5e-7,
+κxx=3e-4/m and tip w=−0.15 mm. At 1/2/4 elements the static procedure checks
+these displacements, a 1 N moment resultant, +40 kPa top stress and −100 kPa
+bottom stress within 1e-7 relative error.
+A simply-supported 1 m square with the symmetric layup, t=1 mm and ρ=8000 kg/m³
+checks the first modal frequency against the independent Navier sine mode:
+f=π/2 sqrt((D11+D22+4D66)/(ρt))=2.027889338 Hz. At 4/8/16 elements per edge,
+frequencies are 2.186832949/2.065859727/2.037235702 Hz; errors decrease from
+7.84% to 1.87% to 0.46%, with approximately second-order convergence. A property
+test additionally checks symmetric positive-semidefinite stiffness over varying
+ply thickness ratios, stiffnesses, orientations and displacement fields.
+
+The thermal subcase uses two equal isotropic plies, E=10 MPa, ν=0, total t=10 mm,
+αbottom=1e-5/K, αtop=3e-5/K and ΔT=100 K. Free strain is 0.002 in both
+in-plane directions and free curvature is 0.3/m. Force equilibrium and four
+ply-face stresses are checked: −5/+10 kPa in the bottom ply and −10/+5 kPa
+in the top ply. The interface values stay distinct. A separate 20 mm section with
+1000/2000 kg/m³ plies has mass 240 kg over 8 m² and an eccentric gravity moment
+of 0.4 N m under 1 m/s² in-plane acceleration. These currently exercise the
+headless element interface; registry authoring and retained ply output are added
+with the layered section commands.
 
 ## H. Plugins (phase P)
 

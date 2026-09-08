@@ -30,7 +30,12 @@ the physical plate modes from the numerical drilling modes.
 The 3D material tangent is rotated into the local shell frame and condensed to
 zero normal stress, retaining both transverse shear components with the classical
 5/6 shear correction. Two thickness Gauss points integrate homogeneous elastic
-sections. Top and bottom stresses use those physical offsets and are transformed
+sections. Laminate sections use two points in each ply, preserving extension–bending
+coupling, ply densities and thermal expansion. Ply angles compose with the material
+orientation in the midsurface frame; ply-face recovery retains stress jumps at
+interfaces. The displacement interpolation is the same common MITC4 field through
+the stack. Gravity uses the consistent mass action so asymmetric density produces
+its correct moment about the midsurface. Top and bottom stresses use those physical offsets and are transformed
 back to global axes. Finite-strain and stress-stiffening kernels remain separate
 capabilities and return structured unsupported errors until implemented.
 

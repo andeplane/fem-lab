@@ -117,13 +117,14 @@ pub(crate) fn shell_moments(p: &Problem<'_>, u: &[f64]) -> Result<FieldData, Err
             p.gather_temperature(elem, &mut temp);
             crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), 6, dpn, &mut ue);
             let c = p.ctx(elem, &coords, &temp)?;
-            let t = crate::fem::shell::thickness(&c)?;
             let mut moment = [0.0; 24];
-            for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
-                let (mut sig, mut eps) = ([0.0; 24], [0.0; 24]);
-                crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
-                for (m, s) in moment.iter_mut().zip(sig) {
-                    *m += 0.5 * t * z * s;
+            for layer in crate::fem::shell::layers(&c)? {
+                for (z, weight) in layer.points() {
+                    let (mut sig, mut eps) = ([0.0; 24], [0.0; 24]);
+                    crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
+                    for (m, s) in moment.iter_mut().zip(sig) {
+                        *m += weight * z * s;
+                    }
                 }
             }
             moments.extend(moment);

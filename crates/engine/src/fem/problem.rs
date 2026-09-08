@@ -124,9 +124,11 @@ pub struct Problem<'a> {
     /// `checks::missing_sections`; a solid block never needs one.
     pub section_of_block: Vec<Option<usize>>,
     pub sections: Vec<Section>,
+    /// Bottom-to-top plies per section. An absent or empty entry is homogeneous.
+    pub plies: Vec<Vec<crate::fem::shell::Ply>>,
     /// Per block: the unit vector of the global axis its beams take their local z-axis from,
-    /// or `None` for the default rule (`section.assign`'s `orientation`). Ignored by every
-    /// other element.
+    /// or `None` for the default rule (`section.assign`'s `orientation`). Laminates use
+    /// its tangent projection as the zero-angle ply direction. Other elements ignore it.
     pub orientation_of_block: Vec<Option<[f64; 3]>>,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
@@ -231,6 +233,7 @@ impl Problem<'_> {
     pub fn ctx<'b>(&'b self, elem: u32, coords: &'b [f64], temperature: &'b [f64]) -> Result<ElementCtx<'b>, Error> {
         let block = self.mesh.block_of(elem).0;
         Ok(ElementCtx {
+            plies: self.section_of_block[block].and_then(|i| self.plies.get(i)).map_or(&[][..], Vec::as_slice),
             directors: self.directors.get(elem as usize).copied(),
             coords,
             material: self.material_of(elem)?,
