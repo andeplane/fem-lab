@@ -11794,6 +11794,12 @@ fn a_frictionless_contact_is_reported_by_query_result_and_carries_a_pressure_fie
     assert!(not_bonded.cause.contains("'seat' is not a bonded contact"), "{}", not_bonded.cause);
     let text = serde_json::to_string(e.model()).unwrap();
     assert!(text.contains(r#""kind":"frictionless""#), "{text}");
+    // Both Sets follow a rename and hold their Bodies in use, as a bonded contact's do.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"left"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!((m.connections[0].master.as_str(), m.connections[0].slave.as_str()), ("left.xmax", "b.xmin"));
+    assert_eq!(err(&mut e, r#"{"cmd":"geometry.remove","name":"left"}"#).code, ErrorCode::InUse);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"left","to":"a"}"#);
 
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"a.xmin","dofs":["ux"]}"#);
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"symy","on":"a.ymin","dofs":["uy"]}"#);

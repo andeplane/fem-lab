@@ -436,10 +436,11 @@ fn frictionless_candidates(
 
 /// The unit normal of `face` at face coordinates `s`, pointing out of its element.
 ///
-/// The cross product of the two tangents (or the in-plane normal of an edge's one tangent) has
-/// a sign that depends on the face's node order; rather than trust a convention, it is turned to
-/// point from the element's centroid towards the face.
-fn outward_normal(mesh: &Mesh, face: Face, s: [f64; 2]) -> [f64; 3] {
+/// A face's nodes run counter-clockwise seen from outside the element (the Abaqus order the
+/// Mesh keeps for every kind), so the cross product of its two tangents points out, and so
+/// does the in-plane normal `(t_y, −t_x)` of a 2D element's edge; `every_face_of_every_kind_
+/// faces_out` in the engine tests holds the convention for each kind.
+pub fn outward_normal(mesh: &Mesh, face: Face, s: [f64; 2]) -> [f64; 3] {
     let fk = mesh.kind_of(face.elem).face_kind();
     let coords: Vec<[f64; 3]> = mesh.face_nodes(face).map(|n| mesh.node(n)).collect();
     let mut ds = vec![[0.0; 2]; fk.n_nodes()];
@@ -463,23 +464,6 @@ fn outward_normal(mesh: &Mesh, face: Face, s: [f64; 2]) -> [f64; 3] {
     let len = dot3(n, n).sqrt();
     for v in &mut n {
         *v /= len;
-    }
-    let inside = {
-        let nodes = mesh.elem_nodes(face.elem);
-        let mut c = [0.0; 3];
-        for &node in nodes {
-            let x = mesh.node(node);
-            for k in 0..3 {
-                c[k] += x[k] / nodes.len() as f64;
-            }
-        }
-        c
-    };
-    let on_face = face_centroid(mesh, face);
-    if dot3(n, [on_face[0] - inside[0], on_face[1] - inside[1], on_face[2] - inside[2]]) < 0.0 {
-        for v in &mut n {
-            *v = -*v;
-        }
     }
     n
 }

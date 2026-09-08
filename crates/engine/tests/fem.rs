@@ -16421,6 +16421,10 @@ fn a_frictionless_pair_needs_a_candidate_and_a_slave_face() {
     assert_eq!(far.where_.as_deref(), Some("contact 'press'"));
     assert!(far.suggestion.as_deref().is_some_and(|s| s.contains("larger tol")));
     assert_eq!(checks::all(&p).first().map(|e| e.code), Some(ErrorCode::ContactUnpaired));
+    assert_eq!(
+        run_step(&p, &static_step(SolveOptions::default())).expect_err("the solve refuses on it").code,
+        ErrorCode::ContactUnpaired
+    );
 
     p.couplings = vec![slide("press", "a.xmax", "loose", 0.1)];
     let bare = mpc::build(&p).expect_err("a node Set has no faces to carry a pressure");
@@ -16761,4 +16765,92 @@ fn a_contact_solve_cancels_at_every_phase() {
         cancelled += 1;
     }
     assert!(cancelled >= 6, "{cancelled}");
+}
+
+/// The master normal a candidate is held along points out of the master element for every
+/// face of every element kind, straight from the node order and without a sign check: the
+/// convention [`mpc::outward_normal`] relies on.
+#[test]
+fn every_face_of_every_kind_faces_out() {
+    for kind in [
+        ElementKind::Hex8,
+        ElementKind::Hex20,
+        ElementKind::Tet4,
+        ElementKind::Tet10,
+        ElementKind::Quad4,
+        ElementKind::Quad8,
+        ElementKind::Tri3,
+        ElementKind::Tri6,
+    ] {
+        let n = if kind.dim() == 3 { [2, 2, 2] } else { [2, 2, 1] };
+        let mesh = Structured { kind, n }.build(|p| [p[0] + 0.3 * p[1], p[1] + 0.2 * p[0] * p[2], p[2] - 0.1 * p[0]]);
+        let mut faces = 0;
+        for elem in 0..mesh.n_elems() as u32 {
+            let nodes = mesh.elem_nodes(elem);
+            let mut inside = [0.0; 3];
+            for &node in nodes {
+                let x = mesh.node(node);
+                for k in 0..3 {
+                    inside[k] += x[k] / nodes.len() as f64;
+                }
+            }
+            for local in 0..kind.n_faces() as u8 {
+                let face = Face { elem, local };
+                let fk = kind.face_kind();
+                let s = match fk {
+                    FaceKind::Tri3 | FaceKind::Tri6 => [1.0 / 3.0, 1.0 / 3.0],
+                    _ => [0.0, 0.0],
+                };
+                let n = mpc::outward_normal(&mesh, face, s);
+                let mut c = [0.0; 3];
+                let mut count = 0.0;
+                for node in mesh.face_nodes(face) {
+                    let x = mesh.node(node);
+                    for k in 0..3 {
+                        c[k] += x[k];
+                    }
+                    count += 1.0;
+                }
+                let dot: f64 = (0..3).map(|k| n[k] * (c[k] / count - inside[k])).sum();
+                assert!(dot > 0.0, "{kind:?} element {elem} face {local}: normal {n:?} points in");
+                assert!(((0..3).map(|k| n[k] * n[k]).sum::<f64>() - 1.0).abs() < 1e-12);
+                faces += 1;
+            }
+        }
+        assert!(faces > 0);
+    }
+}
+
+/// A Newton increment whose active set keeps moving runs out of iterations like one whose
+/// residual does, and is cut back; when no increment can carry the closure the Step ends with
+/// `newton.diverged` as any other stuck increment would.
+#[test]
+fn a_set_that_moves_past_the_newton_budget_is_cut_back() {
+    let (g0, delta, l, side) = (1e-3, 4e-3, 1.0, 0.1);
+    let bar = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([l, side, side]);
+    let mesh = join(&bar, &bar, [l + g0, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let held = vec![
+        fix("push", "a.xmin", [true, false, false], delta),
+        fix("ay", "a.ymin", [false, true, false], 0.0),
+        fix("az", "a.zmin", [false, false, true], 0.0),
+        fix("by", "b.ymin", [false, true, false], 0.0),
+        fix("bz", "b.zmin", [false, false, true], 0.0),
+        fix("end", "b.xmax", [true, false, false], 0.0),
+    ];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.couplings = vec![slide("gap", "b.xmin", "a.xmax", 5.0 * g0)];
+    // Two iterations are exactly what a linear increment needs to converge; the closure that
+    // follows is one more than the budget.
+    let mut o = nl_options(2);
+    o.converge = NlConverge { tolerance: 1e-8, max_newton: 2 };
+    o.max_cutbacks = 1;
+    let e = run_nonlinear(&p, o, &mut nop).expect_err("every attempt at the closing increment is cut back");
+    assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
+    assert!(e.cause.contains("after 1 cutbacks"), "{}", e.cause);
+    // With room to iterate the same Step closes the gap and carries the series force.
+    let res = run_nonlinear(&p, nl_options(2), &mut nop).expect("the gap closes");
+    assert_eq!(res.contacts[0].active, 4);
+    assert!(res.scalars["contact_changes"] >= 1.0);
 }
