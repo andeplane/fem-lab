@@ -621,7 +621,9 @@ export interface Fem {
      */
     frame(args?: Omit<Extract<Query, { query: 'query.frame' }>, 'query'>): Promise<FrameResult>;
     /**
-     * A field value interpolated at a point (default: the last solved Step). Component
+     * A field value at a point (default: the last solved Step). Nodal fields are
+     * interpolated; errorEstimate returns the containing element's constant value
+     * with interpolated=false. Shared-face ties use the lowest element id. Component
      * indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
      * Optional sample selects a retained primary-field frame; omitted means the final field.
      * Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.

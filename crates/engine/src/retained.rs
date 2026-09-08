@@ -312,6 +312,7 @@ impl Engine {
             positions: surface.positions.iter().flatten().copied().collect(),
             indices: surface.triangles.iter().flatten().copied().collect(),
             tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
+            tri_element: surface.tri_elem.clone(),
             tri_face: surface
                 .tri_face
                 .iter()

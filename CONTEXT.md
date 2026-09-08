@@ -236,5 +236,7 @@ and refines the largest contributions until a target or iteration limit. Its
 Journal entry records geometric refinement regions so replay reconstructs the
 same mesh without making new numerical decisions. `errorEstimate` contains one
 dimensionless contribution per element; the sum of their squares equals the
-squared global relative estimate. This is an error indicator, not a certified
-bound. See [ADR 0023](docs/adr/0023-adaptive-refinement-records-local-size-fields.md).
+squared global relative estimate. The viewer colours each element without nodal
+interpolation; `query.probe` returns the containing element’s constant value. The
+Results tab lists each adaptive solve and whether the requested target was reached.
+This is an error indicator, not a certified bound. See [ADR 0023](docs/adr/0023-adaptive-refinement-records-local-size-fields.md).

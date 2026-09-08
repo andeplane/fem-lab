@@ -4395,7 +4395,7 @@ const queries = {
       "x-returns": "FrameResult"
     },
     {
-      "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+      "description": "A field value at a point (default: the last solved Step). Nodal fields are\ninterpolated; errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
       "type": "object",
       "properties": {
         "resultId": {

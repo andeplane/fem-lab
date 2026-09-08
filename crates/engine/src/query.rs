@@ -154,7 +154,9 @@ pub enum Query {
         field: Option<Field>,
     },
 
-    /// A field value interpolated at a point (default: the last solved Step). Component
+    /// A field value at a point (default: the last solved Step). Nodal fields are
+    /// interpolated; errorEstimate returns the containing element's constant value
+    /// with interpolated=false. Shared-face ties use the lowest element id. Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
@@ -1182,6 +1184,8 @@ pub struct ResultSurface {
     /// Triangle node indices, three per triangle, oriented outward.
     pub indices: Vec<u32>,
     pub tri_body: Vec<u32>,
+    /// Global element behind each surface triangle; indexes element-based Result fields.
+    pub tri_element: Vec<u32>,
     /// First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
     pub tri_face: Vec<u32>,
     pub face_names: Vec<String>,

@@ -88,6 +88,7 @@ export const FIELD_CHOICES: FieldChoice[] = [
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
   { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
+  { key: 'errorEstimate', label: 'Estimated spatial error', field: 'errorEstimate', component: 0 },
 ];
 
 /** `yield / σ_vM` and its reciprocal: the two numbers a check is actually written against. */

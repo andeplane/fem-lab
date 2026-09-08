@@ -5,7 +5,7 @@
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import { FemError, type FrameResult, type FramesResult, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
+import { FemError, type FrameResult, type FramesResult, type ResultSummary, type Ack, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store, ViewMode } from './store';
@@ -254,6 +254,9 @@ export class ResultsView {
     const surface = await this.transport.surface({ resultId: result.resultId });
     const choice = choiceOf(this.store.state.fieldKey);
     const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined, result.resultId);
+    if (scalar.per === 'element' && surface.triElement?.length !== surface.indices.length / 3) {
+      throw new FemError('unsupported', 'the retained surface lacks element identities for this contour', 'view.showField', 'query.surface with this Result id');
+    }
     const { values, range, unit } = await this.contour(choice, scalar.values);
 
     // A mode shape is its own deformation; every other field rides on the Step's displacement,
@@ -268,7 +271,7 @@ export class ResultsView {
     v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
     v.setMode(this.store.state.viewMode);
     v.setDim(result.stale);
-    v.setField(values, range);
+    v.setField(values, range, scalar.per === 'element' ? 'element' : 'node');
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
     if (choice.mode !== undefined) this.requested = 'auto';
@@ -371,12 +374,18 @@ export class ResultsView {
    * contours (design "Solve completion"), a study keeps its report for the convergence bars.
    */
   async onAck(ack: unknown): Promise<void> {
-    const out = (ack as { output?: { type?: string; report?: StudyReport } } | undefined)?.output;
+    const out = (ack as Ack | undefined)?.output;
     if (out?.type === 'study' && out.report) this.store.set({ study: out.report });
-    if (out?.type !== 'solve') return;
+    if (out?.type !== 'solve' && out?.type !== 'adapt') return;
     this.invalidateTransient();
     const epoch = this.displayEpoch;
     this.selectedStep = undefined;
+    if (out.type === 'adapt') {
+      const solved = await this.transport.query({ query: 'query.result', resultId: out.report.resultId }) as ResultSummary;
+      if (epoch !== this.displayEpoch) return;
+      this.selectedStep = solved.step;
+      this.store.set({ fieldKey: 'errorEstimate', adaptation: out.report });
+    }
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
@@ -385,7 +394,7 @@ export class ResultsView {
     await this.refresh(true);
     if (epoch !== this.displayEpoch) return;
     const result = this.store.state.result;
-    if (result?.history?.length) await this.playTransient({ step: result.step, playing: false, sample: { kind: 'frame', index: result.history.length - 1 } });
+    if (out.type === 'solve' && result?.history?.length) await this.playTransient({ step: result.step, playing: false, sample: { kind: 'frame', index: result.history.length - 1 } });
   }
 }
 

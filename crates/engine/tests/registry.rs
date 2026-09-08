@@ -11521,3 +11521,25 @@ fn convergence_studies_preserve_requested_error_fields_and_scale_local_sizes() {
     pollster::block_on(copy.replay(&file.journal.entries, true, true)).unwrap();
     assert_eq!(copy.mesh().unwrap(), &mesh);
 }
+
+#[test]
+fn adaptive_error_probes_use_the_containing_element_and_surface_identity() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.01,"maxIterations":2}"#);
+    let field = e.field(Some("heat"), Field::ErrorEstimate).unwrap().clone();
+    let query = serde_json::from_str(
+        r#"{"query":"query.probe","step":"heat","field":"errorEstimate","at":["0.37 m","0.43 m","0 m"]}"#,
+    )
+    .unwrap();
+    let QueryResult::Probe(probe) = e.query(query).unwrap() else { panic!("probe") };
+    assert!(!probe.interpolated);
+    assert_eq!(probe.value.value, field.data[probe.element as usize]);
+    let query = serde_json::from_str(r#"{"query":"query.surface","step":"heat"}"#).unwrap();
+    let QueryResult::Surface(surface) = e.query(query).unwrap() else { panic!("surface") };
+    let mesh = &e.mesh().unwrap().mesh;
+    for (triangle, &element) in surface.indices.chunks_exact(3).zip(&surface.tri_element) {
+        assert_eq!(triangle, mesh.elem_nodes(element));
+    }
+    assert_eq!(surface.tri_element.len(), mesh.n_elems());
+}

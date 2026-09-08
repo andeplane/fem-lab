@@ -6653,6 +6653,10 @@ export interface ResultSurface {
   indices: number[];
   triBody: number[];
   /**
+   * Global element behind each surface triangle; indexes element-based Result fields.
+   */
+  triElement: number[];
+  /**
    * First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
    */
   triFace: number[];

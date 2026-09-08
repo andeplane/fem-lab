@@ -4394,7 +4394,7 @@
         "x-returns": "FrameResult"
       },
       {
-        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+        "description": "A field value at a point (default: the last solved Step). Nodal fields are\ninterpolated; errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
         "type": "object",
         "properties": {
           "resultId": {
@@ -14826,6 +14826,15 @@
               "minimum": 0
             }
           },
+          "triElement": {
+            "description": "Global element behind each surface triangle; indexes element-based Result fields.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "triFace": {
             "description": "First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).",
             "type": "array",
@@ -14905,6 +14914,7 @@
           "positions",
           "indices",
           "triBody",
+          "triElement",
           "triFace",
           "faceNames",
           "setNames",
@@ -28176,7 +28186,7 @@
             "x-returns": "FrameResult"
           },
           {
-            "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
+            "description": "A field value at a point (default: the last solved Step). Nodal fields are\ninterpolated; errorEstimate returns the containing element's constant value\nwith interpolated=false. Shared-face ties use the lowest element id. Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
             "type": "object",
             "properties": {
               "resultId": {
@@ -39616,6 +39626,15 @@
               "minimum": 0
             }
           },
+          "triElement": {
+            "description": "Global element behind each surface triangle; indexes element-based Result fields.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "triFace": {
             "description": "First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).",
             "type": "array",
@@ -39695,6 +39714,7 @@
           "positions",
           "indices",
           "triBody",
+          "triElement",
           "triFace",
           "faceNames",
           "setNames",

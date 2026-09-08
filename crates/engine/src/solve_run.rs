@@ -1109,10 +1109,13 @@ impl Engine {
                 .at("quantity.field")
                 .suggest("query.result lists the fields that were computed")
         })?;
-        if f.per != crate::post::Per::Node {
-            return Err(Error::new(ErrorCode::Unsupported, format!("{} is not a nodal field", field_name(field)))
-                .at("quantity.field")
-                .suggest("a quantity of interest over displacement, stress, vonMises, principal, strain or reaction"));
+        if f.per != crate::post::Per::Node && f.per != crate::post::Per::Element {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!("{} is not a nodal or element field", field_name(field)),
+            )
+            .at("quantity.field")
+            .suggest("a quantity of interest over displacement, stress, vonMises, principal, strain or reaction"));
         }
         let at = |i: usize| Engine::pick(&f.data[i * f.comps..(i + 1) * f.comps], component);
         let raw = match q {
