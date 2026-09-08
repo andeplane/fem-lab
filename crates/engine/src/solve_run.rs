@@ -111,7 +111,7 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
         | Field::StressBottom
         | Field::VonMises
         | Field::Principal => Stress::DIM,
-        Field::SectionForce => Force::DIM,
+        Field::SectionForce | Field::ShellMoment => Force::DIM,
         Field::SectionMoment => Torque::DIM,
     }
 }
@@ -1245,6 +1245,7 @@ mod tests {
             (Field::StressUnaveraged, "stressUnaveraged", Stress::DIM),
             (Field::StressTop, "stressTop", Stress::DIM),
             (Field::StressBottom, "stressBottom", Stress::DIM),
+            (Field::ShellMoment, "shellMoment", Force::DIM),
             (Field::VonMises, "vonMises", Stress::DIM),
             (Field::Principal, "principal", Stress::DIM),
             (Field::SectionForce, "sectionForce", Force::DIM),

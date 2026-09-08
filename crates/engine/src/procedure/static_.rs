@@ -127,6 +127,10 @@ pub(crate) fn stress_fields(p: &Problem<'_>, u: &[f64], pool: &Pool, fields: &mu
                 .expect("the shell stiffness integral accepted this section and material");
             fields.insert(field, stress);
         }
+        let moment = pool
+            .install(|| stress::shell_moments(p, u))
+            .expect("the shell stiffness integral accepted this section and material");
+        fields.insert(Field::ShellMoment, moment);
     }
     // Per-member section forces exist only where a beam does; a Result without beams keeps
     // exactly the fields it had.

@@ -495,6 +495,11 @@ fn shell_tip_moments_reproduce_constant_curvature_through_the_static_solver() {
             }
         }
         let exact = -0.001 / (2.0 * (1e7 * 0.01f64.powi(3) / 12.0));
+        let moment = &result.fields[&Field::ShellMoment];
+        assert_eq!(moment.per, femlab_engine::post::Per::ElemNode);
+        for m in moment.data.chunks_exact(6) {
+            close(m, &[0.001, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-10);
+        }
         for &node in &mesh.node_sets["xmax"] {
             let actual = result.fields[&Field::Displacement].data[3 * node as usize + 2];
             assert!((actual / exact - 1.0).abs() < 1e-9, "n={n}, displacement {actual}, expected {exact}");

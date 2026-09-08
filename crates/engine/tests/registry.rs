@@ -2403,7 +2403,7 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     assert!((disp.min_at[0].value - 1000.0).abs() < 1e-9, "the largest deflection is at the free end");
     assert!(r.extremes.iter().any(|x| x.field == "vonMises" && x.min.unit == "MPa"));
     assert!(r.extremes.iter().any(|x| x.field == "reaction" && x.min.unit == "kN"));
-    assert!(r.extremes.iter().all(|x| x.field != "stressUnaveraged"), "only nodal fields have extremes");
+    assert!(r.extremes.iter().any(|x| x.field == "stressUnaveraged" && x.min.unit == "MPa"));
     // query.model now says the Step is solved
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     assert!(m.steps[0].solved);
@@ -11358,6 +11358,20 @@ fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
     };
     assert!(summary.extremes.iter().any(|e| e.field == "stressTop"));
     assert!(summary.extremes.iter().any(|e| e.field == "stressBottom"));
+    assert!(summary.extremes.iter().any(|e| e.field == "shellMoment"));
+    // A unit applied end moment on a unit-width strip gives M_xx=1 N everywhere.
+    let QueryResult::Field(moment) =
+        e.query(Query::Field { step: None, result_id: None, field: "shellMoment".into() }).unwrap()
+    else {
+        panic!("shell moment field")
+    };
+    assert_eq!((moment.per.as_str(), moment.components, moment.unit.as_str()), ("elementNode", 6, "N"));
+    for m in moment.values.chunks_exact(6) {
+        assert!((m[0] - 1.0).abs() < 1e-8, "{m:?}");
+        for value in &m[1..] {
+            assert!(value.abs() < 1e-8, "{m:?}");
+        }
+    }
     // Constant curvature M/D: a unit-width strip has w(L)=-ML²/(2D).
     let got = probe_at(&mut e, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
     let want = -6.0 / (200e9 * 0.01f64.powi(3));

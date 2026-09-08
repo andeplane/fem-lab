@@ -2117,7 +2117,8 @@ export type Field =
       | "sectionMoment"
     )
   | "stressTop"
-  | "stressBottom";
+  | "stressBottom"
+  | "shellMoment";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a

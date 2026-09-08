@@ -97,6 +97,41 @@ pub(crate) fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Res
     Ok(gp_to_nodes(p.mesh, &FieldData::new(Per::ElemGp, VOIGT, stress)))
 }
 
+/// Shell stress first moment, integral z*sigma dz in global tensor axes. Two thickness
+/// Gauss points integrate a homogeneous flat section exactly. Keep each element's
+/// values separate, just as for surface stress; other element kinds carry zeros.
+pub(crate) fn shell_moments(p: &Problem<'_>, u: &[f64]) -> Result<FieldData, Error> {
+    let dpn = p.dofs_per_node();
+    let mut moments = Vec::new();
+    for blk in &p.mesh.blocks {
+        if blk.kind != ElementKind::Shell4 {
+            moments.resize(moments.len() + blk.n_elems() * element_for(blk.kind).n_gp() * VOIGT, 0.0);
+            continue;
+        }
+        for i in 0..blk.n_elems() {
+            let elem = blk.first_elem + i as u32;
+            let mut coords = [0.0; 12];
+            let mut temp = [0.0; 4];
+            let mut ue = [0.0; 24];
+            p.mesh.elem_coords(elem, &mut coords);
+            p.gather_temperature(elem, &mut temp);
+            crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), 6, dpn, &mut ue);
+            let c = p.ctx(elem, &coords, &temp)?;
+            let t = crate::fem::shell::thickness(&c)?;
+            let mut moment = [0.0; 24];
+            for z in [-t / libm::sqrt(12.0), t / libm::sqrt(12.0)] {
+                let (mut sig, mut eps) = ([0.0; 24], [0.0; 24]);
+                crate::fem::shell::recover_at(&c, &ue, z, &mut sig, &mut eps)?;
+                for (m, s) in moment.iter_mut().zip(sig) {
+                    *m += 0.5 * t * z * s;
+                }
+            }
+            moments.extend(moment);
+        }
+    }
+    Ok(gp_to_nodes(p.mesh, &FieldData::new(Per::ElemGp, VOIGT, moments)))
+}
+
 /// The section forces (`N, V_y, V_z`) and moments (`T, M_y, M_z`) of every beam element at
 /// each of its two nodes, as two [`Per::ElemNode`] fields of three components, elements in
 /// order; every node of every other element carries zeros, so the two fields line up with

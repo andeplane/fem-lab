@@ -1587,6 +1587,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Shell stress at -t/2 along the director, with the same ordering and location as stressTop.",
       "type": "string",
       "const": "stressBottom"
+    },
+    {
+      "description": "Shell stress first moment through thickness, integral z*sigma dz, in N (moment\nper unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for\ntension on the +director side; these are tensor components, not moment-axis\ncomponents. Extrapolated per element node, unaveraged; zero on non-shells.",
+      "type": "string",
+      "const": "shellMoment"
     }
   ]
 }
@@ -6684,6 +6689,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Shell stress at -t/2 along the director, with the same ordering and location as stressTop.",
       "type": "string",
       "const": "stressBottom"
+    },
+    {
+      "description": "Shell stress first moment through thickness, integral z*sigma dz, in N (moment\nper unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for\ntension on the +director side; these are tensor components, not moment-axis\ncomponents. Extrapolated per element node, unaveraged; zero on non-shells.",
+      "type": "string",
+      "const": "shellMoment"
     }
   ]
 }

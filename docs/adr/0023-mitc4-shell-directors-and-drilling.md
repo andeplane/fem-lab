@@ -35,6 +35,8 @@ sections. Top and bottom stresses use those physical offsets and are transformed
 back to global axes. Finite-strain and stress-stiffening kernels remain separate
 capabilities and return structured unsupported errors until implemented.
 
-This is a proposed decision while the assembled shell benchmark gates are being
-implemented. The current tests prove the element patch energies, mass totals and
-six rigid modes; they do not yet prove all G1–G7 or drilling sensitivity.
+The assembled G1–G7 benchmarks now pass at the mesh refinements recorded in
+`docs/BENCHMARKS.md`. An unconstrained plate additionally retains all six rigid
+modes while its first three elastic bending frequencies converge within 1% of
+the FV12 references, without low-frequency drilling modes. This decision remains
+proposed until drilling-penalty sensitivity is checked.

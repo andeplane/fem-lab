@@ -353,6 +353,11 @@ pub enum Field {
     StressTop,
     /// Shell stress at -t/2 along the director, with the same ordering and location as stressTop.
     StressBottom,
+    /// Shell stress first moment through thickness, integral z*sigma dz, in N (moment
+    /// per unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for
+    /// tension on the +director side; these are tensor components, not moment-axis
+    /// components. Extrapolated per element node, unaveraged; zero on non-shells.
+    ShellMoment,
     VonMises,
     Principal,
     Strain,

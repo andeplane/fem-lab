@@ -102,7 +102,7 @@ try {
       ]) await dispatch(command);
       const queries = [
         { query: 'query.surface', step: 's' },
-        ...['displacement', 'rotation', 'stressTop', 'stressBottom'].map(field => ({ query: 'query.field', step: 's', field })),
+        ...['displacement', 'rotation', 'stressTop', 'stressBottom', 'shellMoment'].map(field => ({ query: 'query.field', step: 's', field })),
       ];
       const expected = queries.map(query);
       const entries = JSON.parse(engine.export_file()).journal.entries;
@@ -125,6 +125,12 @@ try {
             for (let j = 0; j < values.length; j += 6) {
               assert.ok(Math.abs(values[j] - sign * 60000) < 0.001);
               assert.ok(Math.abs(wasmValues[j] - sign * 60000) < 0.001);
+            }
+          }
+          if (!curved && queries[i].field === 'shellMoment') {
+            for (let j = 0; j < values.length; j += 6) {
+              assert.ok(Math.abs(values[j] - 1) < 1e-8);
+              assert.ok(Math.abs(wasmValues[j] - 1) < 1e-8);
             }
           }
         }
