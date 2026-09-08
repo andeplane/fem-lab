@@ -1194,8 +1194,16 @@ R=25 m, total length=50 m, opening=80°, t=0.25 m, E=4.32e8 Pa, ν=0.
 The quarter model holds two symmetry edges and the end diaphragm's transverse
 translations. A volumetric gravity load integrates to 90 N/m² on the midsurface.
 Command-level surface meshing, thickness assignment and moment loading pass a
-journal replay and constant-curvature strip solve. Output integration, G3–G7,
-and full coverage remain pending. The shear interpolation follows §2 of
+journal replay and constant-curvature strip solve. Top/bottom element-node stresses
+recover the independent extreme-fibre value `6M/(b t²)` through the static and query paths.
+G3 (LE3) covers a spherical octant with three projected cube-face patches, so no
+element collapses at the pole. R=10 m, t=0.04 m, E=68.25 GPa, ν=0.3; radial point
+loads at the equatorial symmetry corners are +2 kN in x and −2 kN in y. Two
+symmetry boundaries and the pole's vertical restraint remove rigid motion, following
+[the Abaqus LE3 benchmark](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-le3.htm).
+With 4/8/16 divisions per patch edge (48/192/768 elements), displacement at A is
+0.1749358 / 0.1831415 / 0.1840576 m against 0.185 m (5.44 / 1.00 / 0.51 % error).
+Browser output integration, G4–G7, and full coverage remain pending. The shear interpolation follows §2 of
 [Ko, Lee and Bathe (2017)](https://doi.org/10.1016/j.compstruc.2016.11.004),
 which reviews the original MITC4 formulation before introducing MITC4+.
 

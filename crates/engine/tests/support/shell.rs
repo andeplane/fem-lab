@@ -612,3 +612,69 @@ fn g2_scordelis_lo_roof_converges_with_analytic_directors() {
     assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
     assert!(errors[2] < 0.02, "{errors:?}");
 }
+
+/// NAFEMS LE3, following the Abaqus benchmark geometry and loading. Three
+/// projected cube faces cover the octant without a collapsed element at the pole.
+#[test]
+fn g3_nafems_le3_hemisphere_converges_under_point_loads() {
+    use femlab_engine::command::{Field, Formulation};
+    use femlab_engine::fem::{loads::Load, problem::Constraint};
+    use femlab_engine::{mesh::ResolvedSet, model::Idealisation, SetKind};
+    use femlab_geometry::{surface, Projection, SurfacePatch};
+    let corners = [
+        [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 1.0], [1.0, 0.0, 1.0]],
+        [[0.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 0.0]],
+        [[0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]],
+    ];
+    let mut errors = Vec::new();
+    for n in [4, 8, 16] {
+        let patches = corners.map(|corners| SurfacePatch {
+            corners,
+            n: [n, n],
+            tags: [None, None, None, None],
+            projection: Some(Projection::Sphere { center: [0.0; 3], radius: 10.0 }),
+        });
+        let built = surface(&patches).unwrap();
+        let mesh = &built.mesh;
+        let mut sets = super::sets_of(mesh);
+        for name in ["x", "y", "pole", "a", "c"] {
+            let nodes = (0..mesh.n_nodes() as u32)
+                .filter(|&node| {
+                    let [x, y, z] = mesh.node(node);
+                    match name {
+                        "x" => x.abs() < 1e-9,
+                        "y" => y.abs() < 1e-9,
+                        "pole" => z > 10.0 - 1e-9,
+                        "a" => x > 10.0 - 1e-9,
+                        _ => y > 10.0 - 1e-9,
+                    }
+                })
+                .collect();
+            sets.insert(name.into(), ResolvedSet { kind: SetKind::Node, nodes, faces: vec![], elems: vec![] });
+        }
+        let constraints = [
+            ("x", [true, false, false, false, true, true]),
+            ("y", [false, true, false, true, false, true]),
+            ("pole", [false, false, true, false, false, false]),
+        ]
+        .map(|(name, dofs)| Constraint { name: name.into(), nodes: name.into(), dofs, value: 0.0 })
+        .to_vec();
+        let bodies = ["hemisphere".into()];
+        let mut p = super::problem(mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+        p.directors = &built.directors;
+        p.materials[0].props = vec![68.25e9, 0.3];
+        p.sections = vec![properties(&SectionSpec::Shell { thickness: Q::new(0.04, "m") }).unwrap()];
+        p.section_of_block = vec![Some(0)];
+        p.loads = vec![
+            Load::NodalForce { nodes: "a".into(), f: [2000.0, 0.0, 0.0] },
+            Load::NodalForce { nodes: "c".into(), f: [0.0, -2000.0, 0.0] },
+        ];
+        let result = super::run_static(&p, &mut |_| true).unwrap();
+        let displacement = result.fields[&Field::Displacement].data[3 * sets["a"].nodes[0] as usize];
+        let error = (displacement / 0.185 - 1.0).abs();
+        eprintln!("G3 n={n}, displacement={displacement}, relative error={error}");
+        errors.push(error);
+    }
+    assert!(errors.windows(2).all(|e| e[1] < e[0]), "{errors:?}");
+    assert!(errors[2] < 0.02, "{errors:?}");
+}
