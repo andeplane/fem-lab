@@ -395,8 +395,9 @@ fn frictionless_candidates(
     for &node in &slave_set.nodes {
         let x = p.mesh.node(node);
         let (distance, face, s) = nearest(p.mesh, faces, x);
-        // `NaN <= tol` is false, so a degenerate master face pairs nothing rather than
-        // something wrong.
+        // Written as a negated `<=` on purpose: `NaN <= tol` is false, so a degenerate master
+        // face pairs nothing rather than something wrong, with no second arm to cover.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(distance <= tol) {
             continue;
         }
@@ -460,8 +461,8 @@ fn outward_normal(mesh: &Mesh, face: Face, s: [f64; 2]) -> [f64; 3] {
         ]
     };
     let len = dot3(n, n).sqrt();
-    for k in 0..3 {
-        n[k] /= len;
+    for v in &mut n {
+        *v /= len;
     }
     let inside = {
         let nodes = mesh.elem_nodes(face.elem);
@@ -476,8 +477,8 @@ fn outward_normal(mesh: &Mesh, face: Face, s: [f64; 2]) -> [f64; 3] {
     };
     let on_face = face_centroid(mesh, face);
     if dot3(n, [on_face[0] - inside[0], on_face[1] - inside[1], on_face[2] - inside[2]]) < 0.0 {
-        for k in 0..3 {
-            n[k] = -n[k];
+        for v in &mut n {
+            *v = -*v;
         }
     }
     n

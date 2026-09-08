@@ -11765,3 +11765,91 @@ fn random_vibration_checks_predecessor_constraints_and_requires_a_psd() {
         assert!(error.cause.contains("identical constraints"));
     }
 }
+
+/// `contact.add` with `kind: frictionless` (#62) is a Connection of its own kind, keeps its
+/// search distance, is not a bonded contact for `contact.thermal`, and a solved Step reports the
+/// pair in `query.result` and its pressure as a field — the Command path of Benchmark F5.
+#[test]
+fn a_frictionless_contact_is_reported_by_query_result_and_carries_a_pressure_field() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    ok(&mut e, r#"{"cmd":"contact.add","name":"seat","master":"a.xmax","slave":"b.xmin","kind":"frictionless"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.constraints.is_empty());
+    assert_eq!(
+        (m.connections[0].kind.as_str(), m.connections[0].summary.as_str()),
+        ("frictionless", "frictionless, pairing tolerance from the mesh size")
+    );
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"contact.add","name":"seat","master":"a.xmax","slave":"b.xmin","kind":"frictionless","tol":"2 mm"}"#,
+    );
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].summary, "frictionless, pairing within 2 mm");
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+    let not_bonded =
+        err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"seat","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(not_bonded.code, ErrorCode::ModelIllPosed);
+    assert!(not_bonded.cause.contains("'seat' is not a bonded contact"), "{}", not_bonded.cause);
+    let text = serde_json::to_string(e.model()).unwrap();
+    assert!(text.contains(r#""kind":"frictionless""#), "{text}");
+
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"a.xmin","dofs":["ux"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symy","on":"a.ymin","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symz","on":"a.zmin","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symy_b","on":"b.ymin","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symz_b","on":"b.zmin","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"push","on":"b.xmax","total":["-1 MN","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root","symy","symz","symy_b","symz_b","seat"],"loads":["push"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let r = result(&mut e);
+    assert_eq!(r.contacts.len(), 1);
+    let c = &r.contacts[0];
+    assert_eq!((c.contact.as_str(), c.active, c.paired, c.active_fraction), ("seat", 9, 9, 1.0));
+    assert!((c.force[0].value - 1e6).abs() <= 1e-6, "the master pushes 1 MN back: {:?}", c.force);
+    assert_eq!(c.force[0].unit, "N");
+    assert!(c.force[1].value.abs() <= 1e-6 && c.force[2].value.abs() <= 1e-6);
+    assert!(r.balance <= 1e-9, "the contact force is internal: {}", r.balance);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert!(
+        r.extremes.iter().any(|x| x.field == "contactPressure" && (x.max.value - 1e6).abs() <= 1.0),
+        "{:?}",
+        r.extremes
+    );
+    let json = serde_json::to_value(&r).unwrap();
+    assert_eq!(json["contacts"][0]["activeFraction"], 1.0);
+    let QueryResult::Field(pressure) =
+        e.query(Query::Field { step: None, result_id: None, field: "contactPressure".into() }).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!((pressure.components, pressure.unit.as_str()), (1, "Pa"));
+    let on_face = pressure.values.iter().filter(|v| (**v - 1e6).abs() <= 1.0).count();
+    let off_face = pressure.values.iter().filter(|v| v.abs() <= 1.0).count();
+    assert_eq!((on_face, off_face), (9, pressure.values.len() - 9), "1 MPa on the nine slave nodes, zero elsewhere");
+
+    // A bonded Result has no contact rows and no pressure field: the shape is unchanged.
+    ok(&mut e, r#"{"cmd":"contact.add","name":"seat","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"welded","procedure":"static","constraints":["root","symy","symz","seat"],"loads":["push"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"welded"}"#);
+    let QueryResult::Result(w) = e.query(Query::Result { result_id: None, step: Some("welded".into()) }).unwrap()
+    else {
+        panic!()
+    };
+    assert!(w.contacts.is_empty());
+    let json = serde_json::to_value(&w).unwrap();
+    assert!(json.get("contacts").is_none(), "an empty list is left out of the wire form");
+    assert_eq!(
+        e.query(Query::Field { step: Some("welded".into()), result_id: None, field: "contactPressure".into() })
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+}

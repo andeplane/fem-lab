@@ -68,6 +68,9 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
 | explicit-wave-bar | green | 4/4 | 1.001437 | 1 | 0.14 % |
+| frictionless-block-liftoff | green | 8/8 | 3335.09957 | 3333.333333 | 0.05 % |
+| frictionless-gap-closure | green | 11/11 | -525 | -525 | 0.00 % |
+| frictionless-two-block-patch | green | 15/15 | -0.009524 | -0.009524 | 0.00 % |
 | harmonic-cantilever-sweep | green | 7/7 | 42 | 41.9107 | 0.21 % |
 | harmonic-sdof-magnification | green | 29/29 | 3.5731e-6 | 3.5731e-6 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
@@ -912,6 +915,11 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4e | `contact.thermal` on a bonded pair: two conductors in series with a finite interface resistance | `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, interface jump `q/hc` | 1e-9 rel | thermal contact resistance (#85) | green |
 | F4f | A 60° sector of Benchmark C2's pressurised thick annulus, revolved and tied to itself with `constraint.cyclic` instead of a symmetry plane, free ends | C2's own free-ends (SimScale) number: σθθ(a) = 100 MPa, σrr(a) = −60 MPa, u_r(a) = 5.90e-5 m | 1 % | cyclic symmetry (#81) is exact for a harmonic-0 load | green |
 | F4g | The same sector against a full 360° revolution of the same cross-section at the same angular density, three probes | equivalence, not a published number | 1e-8 rel | the cyclic elimination reproduces the full model exactly | engine test |
+| F4h | Frictionless contact patch test (#62): F4's two blocks pressed together by 1 MN through a `frictionless` `contact.add`, then the top block dragged 1 mm sideways | compression: the bonded F4 field exactly, a contact pressure of 1 MPa on every slave node and a 1 MN contact resultant; shear: zero stress, zero reaction and zero pressure everywhere, where a bonded tie carries `Gγ` | 1e-8 (compression), 1e-10 (shear) | a closed frictionless pair is the bonded tie; an open direction transmits nothing; inclined interfaces at 30° and 60° pick the right eliminated component | green + engine test |
+| F4i | Gap closure: two collinear bars (steel, aluminium) 1 mm apart, the far end pushed 2 mm over four increments | force exactly zero until closure (one increment lands exactly on it), `(δ − g₀)/(L₁/E₁A + L₂/E₂A)` = 262.5 kN and 525 kN after, on every retained frame | 1e-8 rel | the active set opens and closes inside a static amplitude schedule, next to a bonded tie in the same Model | green + engine test |
+| F4j | Lift-off: a block a million times stiffer than the 10 mm bed under it (plane strain, ν = 0), a point load at `e = 0.3 B` outside the kern | rigid-block statics on a Winkler bed: contact over `c = 3(B/2 − e) = 0.6 B`, a triangular pressure peaking at `2P/c`, the open 0.4 B carrying nothing, the resultant equal to the load and through it | 1 % on the lift-off point, the pressure gradient and the resultant; 1 % of the peak pointwise outside `2h` of the kink | nodes release under tension and stay released; the pressure projection is exact for a linear profile | green + engine test |
+| F4k | Hertz: sphere on a rigid flat, axisymmetric — a half-space ten radii square with a spherical cap of radius R at its pole, pressed by a prescribed approach δ, graded quad8 with the first element at a/20 and a/10 | `a = √(Rδ)`, `P = (4/3) E* √R δ^{3/2}`, `p₀ = 3P/(2πa²)`, `E* = E/(1 − ν²)` | 2 % on δ (from the measured P), 5 % on `p₀` and `a`; every error smaller on the finer mesh | measured: P −0.12 %, p₀ +0.16 %, a +2.7 % (coarse: −0.46 %, +1.6 %, +10 %) — the set settles in 3–4 passes | engine test |
+| F4l | The same half-space as a cylinder in plane strain, approach 4e-7 R (strains of 3e-4), through `static` and `static-nonlinear` | equivalence: the two procedures agree on the displacement field, the load, the pole pressure and the held set | 1e-3 | the active set moves inside the Newton loop and settles in a bounded number of changes (one here) | engine test |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
 | F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
 | F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
@@ -997,6 +1005,49 @@ Bodies of different conductivity, joined by `contact.add` and overridden by `con
 reproduce `q = ΔT / (L1/k1 + 1/hc + L2/k2)` to roundoff at every node on both sides, with the
 temperature dropping by exactly `q/hc` at the interface — an oracle from series thermal
 resistance, not a comparison against the engine's own perfect-tie or convection paths.
+
+**Frictionless contact (#62) is the same elimination with an active set.** A slave node of a
+`frictionless` `contact.add` within `tol` of the master is paired once, at the reference
+configuration, with its projection, the master normal `n` there and its initial gap `g₀` along it
+(small sliding). While it is *active* it carries the one scalar relation `(u_s − Σ a·u_m)·n = −g₀`,
+eliminated on the slave component with the largest `|n_k|` so the other slave components and the
+master DOFs are its masters — the inhomogeneous branch `u = T v + g`, `TᵀKT v = Tᵀ(f − K g)`, that
+`mpc` reserves for exactly this; a bonded row keeps `g = 0` and takes the old path bit for bit,
+which every F4 fixture still checks. The set moves by the Signorini condition read off the solved
+state: the contact force at an active node is the residual `K u − f` of the *original* system at
+its eliminated DOF (along `n` by construction, since the row makes the slave's other components
+masters), and a node whose force turns tensile is released while a free node whose gap
+`g₀ + (u_s − Σ a·u_m)·n` goes negative is held. The linear `static` procedure repeats whole linear
+solves until nothing moves — once per increment of an amplitude, each starting from the set the
+previous one settled on, which is what lets F4i's gap close partway through a Step;
+`static-nonlinear` reads the set at every converged Newton state and accepts an increment only
+when the residual and the set have both stopped moving. A node that moves more than eight times is
+`contact.chatter`, a part left with nothing holding it when its pair opens is `contact.open`, and
+a pair that ends fully open is a warning. Tangential motion is never constrained, which is what F4h's
+shear half checks: a dragged block slides off with zero shear, zero reaction and zero pressure.
+
+The `contactPressure` field is an L2 projection of the nodal contact forces onto the slave faces,
+`M p = λ` with `M = ∫ NᵀN dS`, rather than a division by lumped areas: a quad8 corner on the axis of
+an axisymmetric Model has a lumped area of exactly zero (`∫ N₀ 2πr ds = 0`), and F4k's `p₀` is read
+at precisely that node. `query.result` lists every frictionless pair with its active fraction and
+the resultant it carries; that resultant is what one part pushes on the other with, so it is not
+among the `reactions` and does not enter `balance`.
+
+F4k's oracle is Hertz with the approach prescribed rather than the load: the half-space's far
+boundary is ten radii away, so the elastic displacement there is 0.15 % of δ and the prescribed
+top-face motion *is* the Hertz approach to that accuracy, while a load-controlled sphere has no
+unambiguous δ to compare against (its whole-body compression is of the same order as the
+half-space correction). `a` is halfway between the outermost held node and the first free one, so
+its error is the mesh's resolution — 2.7 % at a/20, 10 % at a/10 — which is why the refinement pair
+is part of the gate. F4l is the finite-strain kernel's own check: it has no axisymmetric form, so
+the same half-space runs as a cylinder in plane strain, at an approach small enough that the
+Green–Lagrange and small-strain answers coincide to 1e-3, and agrees with the linear procedure on
+everything including which nodes are held.
+
+The Journal cases are `frictionless-two-block-patch` (F4h, both halves as two Steps of one Model),
+`frictionless-gap-closure` (F4i, its frames read back by `query.probe` with a frame sample) and
+`frictionless-block-liftoff` (F4j); F4k and F4l need meshes graded towards a point, which only the
+engine's own mapped builder makes, so they are engine tests.
 
 F12 and F13 are the point mass and the coupling of #67. A `distributed` coupling weights its face
 by the lumped areas `a_i = ∫ N_i dS` the heat kernel's face integral already produces, and

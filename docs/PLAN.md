@@ -246,7 +246,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 6.2 | J2 plasticity with isotropic hardening; return mapping; consistent tangent | plate with hole plastic zone vs reference; bar with yield |
 | 6.3 | Linear buckling (eigen on K + K_σ) | Euler column load factors |
 | 6.4 | Implicit dynamics (Newmark / HHT-α) and harmonic response | SDOF and cantilever transient analytical |
-| 6.5 | **Done** (#61): tie / bonded contact between bodies, node-to-face, applied by **elimination** (`TᵀKT`) rather than by penalty — a penalty parameter would multiply κ(K) and break the f32 GPU CG. Frictionless contact (#62) reuses the same machinery inside a Newton loop | two-block tie patch test (F4, F4b, F4c, F4d) |
+| 6.5 | **Done** (#61, #62): tie / bonded contact between bodies, node-to-face, applied by **elimination** (`TᵀKT`) rather than by penalty — a penalty parameter would multiply κ(K) and break the f32 GPU CG. Frictionless contact (#62) reuses the same machinery with an active set of inhomogeneous rows, repeated linear solves in `static` and inside the Newton loop of `static-nonlinear`; friction and large sliding stay out | two-block tie patch test (F4, F4b, F4c, F4d); frictionless patch, gap closure, lift-off and Hertz (F4h–F4l) |
 | 6.6 | Restart / rerun only changed steps (J7.4) | Journal-driven cache keyed by Model revision |
 
 ## 9. Phase 7: B-rep geometry (v2) and CAD interop

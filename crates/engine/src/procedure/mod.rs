@@ -386,6 +386,8 @@ pub struct ContactSummary {
     pub paired: usize,
     /// The resultant of the normal forces on the slave side, N.
     pub force: [f64; 3],
+    /// The slave nodes held on the master surface, ascending: the contact patch.
+    pub nodes: Vec<u32>,
 }
 
 /// Run one Step.

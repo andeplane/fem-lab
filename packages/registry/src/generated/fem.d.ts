@@ -299,16 +299,28 @@ export interface Fem {
   };
   contact: {
     /**
-     * Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
-     * point it projects onto in `master`, in every displacement component. It is a linear
-     * constraint inside the same operator — no iteration, no gap opening, no sliding — so a
-     * bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
-     * slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
-     * gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
-     * master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
-     * so the two parts are in perfect thermal contact. A tie is listed in a Step's
-     * `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
-     * between Bodies that share no element, which query.cost does not count.
+     * Connect two face Sets. `bonded` ties them so the parts behave as one: every node of
+     * `slave` is constrained to the point it projects onto in `master`, in every displacement
+     * component. It is a linear constraint inside the same operator — no iteration, no gap
+     * opening, no sliding — so a bonded assembly costs a static solve, not a contact search.
+     * `tol` is then the largest gap that still pairs, defaulting to 1e-4 of the Mesh diagonal;
+     * a node further from the master than that is `contact.unpaired`. In a heat Step a bonded
+     * tie carries temperature, so the two parts are in perfect thermal contact.
+     * `frictionless` lets the faces press, open and slide: `tol` is then the *search distance*
+     * (same default), every slave node within it is paired and its initial gap along the master
+     * normal recorded (positive when open, so faces may start apart and close under load), and
+     * the solve keeps a node on the master surface only while the normal force there is
+     * compressive. A node beyond `tol` is simply not a candidate. Hold each Body against the
+     * motions the contact cannot stop: a frictionless face transmits no tangential force, so a
+     * part held only by it can still slide. The Result carries a `contactPressure` field on the
+     * slave nodes and query.result lists every frictionless pair with its active fraction and
+     * the resultant it carries; a pair that ends fully open is a `contact.open` warning, a part
+     * that lifts off entirely with nothing else holding it a `contact.open` error, and a set
+     * that never settles a `contact.chatter` error naming the nodes. Put the *finer* mesh on
+     * the slave side either way: a node-to-face constraint passes the patch test that way
+     * round. A contact is listed in a Step's `constraints` like any other, and is removed with
+     * constraint.remove. Contacts add stiffness between Bodies that share no element, which
+     * query.cost does not count.
      */
     add(args: Omit<Extract<Command, { cmd: 'contact.add' }>, 'cmd'>): Promise<Ack>;
     /**

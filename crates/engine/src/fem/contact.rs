@@ -248,14 +248,19 @@ pub fn finish(
     for (owner, c) in p.couplings.iter().enumerate() {
         let Coupling::Frictionless { name, master, slave, .. } = c else { continue };
         let mut force = [0.0; 3];
-        let (mut active, mut paired) = (0, 0);
+        let mut paired = 0;
+        let mut nodes = Vec::new();
         for (i, cand) in mpc.candidates.iter().enumerate().filter(|(_, k)| k.owner == owner) {
             paired += 1;
-            active += usize::from(set.active[i]);
-            for k in 0..3 {
-                force[k] += forces[i] * cand.normal[k];
+            if set.active[i] {
+                nodes.push(cand.node);
+            }
+            for (f, n) in force.iter_mut().zip(&cand.normal) {
+                *f += forces[i] * n;
             }
         }
+        nodes.sort_unstable();
+        let active = nodes.len();
         if active == 0 {
             warnings.push(Warning {
                 code: "contact.open".into(),
@@ -266,7 +271,7 @@ pub fn finish(
                 where_: Some(format!("contact '{name}'")),
             });
         }
-        summaries.push(ContactSummary { name: name.clone(), active, paired, force });
+        summaries.push(ContactSummary { name: name.clone(), active, paired, force, nodes });
     }
     (pressure(p, mpc, &forces), summaries)
 }
