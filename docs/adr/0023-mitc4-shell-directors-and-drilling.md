@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-08
 ---
 
@@ -24,9 +24,8 @@ Mass integrates the same translational and director-motion interpolation through
 the thickness. A drilling inertia of `1e-3 rho t³/12` per unit area regularises the
 otherwise massless drilling rotation. This is numerical inertia, not physical
 rotation of a material fibre. HRZ lumping preserves each global component's
-consistent rigid-velocity inertia. Modal benchmarks and penalty sensitivity must
-be checked before this decision is accepted; drilling modes must not be mistaken
-for physical plate or shell modes.
+consistent rigid-velocity inertia. The modal and sensitivity checks below distinguish
+the physical plate modes from the numerical drilling modes.
 
 The 3D material tangent is rotated into the local shell frame and condensed to
 zero normal stress, retaining both transverse shear components with the classical
@@ -38,5 +37,19 @@ capabilities and return structured unsupported errors until implemented.
 The assembled G1–G7 benchmarks now pass at the mesh refinements recorded in
 `docs/BENCHMARKS.md`. An unconstrained plate additionally retains all six rigid
 modes while its first three elastic bending frequencies converge within 1% of
-the FV12 references, without low-frequency drilling modes. This decision remains
-proposed until drilling-penalty sensitivity is checked.
+the FV12 references, without low-frequency drilling modes.
+
+On 2026-09-08, the complete 22-test shell suite was also run with `DRILL=1e-4`
+and `DRILL=1e-2`, changing both the penalty and its matching numerical inertia.
+Both runs passed every G1–G7 refinement gate and the unconstrained modal test.
+Across this hundredfold coefficient range, the largest finest-mesh change in a
+reported static benchmark output was 0.00652% (hemisphere displacement). The
+coarsest hemisphere changed by 1.44%, so the refinement requirement remains
+essential. FV12's bending frequencies were unchanged, and the unconstrained
+plate's first three elastic frequencies changed by less than 1e-9 relative.
+The production coefficient remains `1e-3`.
+
+To repeat this sensitivity check, substitute each coefficient in `fem/shell.rs`,
+run `cargo test -p femlab-engine --test fem shell:: -- --nocapture`, compare the
+printed benchmark values, and restore `1e-3`. This is a formulation experiment;
+the coefficient is deliberately not a model setting or a runtime environment input.
