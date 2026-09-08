@@ -171,7 +171,8 @@ export interface Fem {
   };
   section: {
     /**
-     * Define a section: shell midsurface thickness, or a line Body cross-section
+     * Define a section: homogeneous shell thickness, a bottom-to-top laminate stack
+     * of 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section
      * (`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section
      * geometry of its own, so the Section is where its area, second moments, torsion constant,
      * shear factors and extreme-fibre distances come from. Re-issuing with an existing name
@@ -189,7 +190,9 @@ export interface Fem {
      * a member. Without it the rule is: local z follows global Z, so a horizontal beam has
      * its height vertical; a member within 1e-6 of vertical follows global X instead, so a
      * column's local z points along +X. `iZ` then resists bending along local y. Trusses
-     * ignore it.
+     * ignore it. For laminate shells, orientation instead selects the tangent projection
+     * of that global axis as the zero-angle ply direction. A normal axis is rejected.
+     * Without it ply angles use the midsurface's first parametric direction.
      */
     assign(args: Omit<Extract<Command, { cmd: 'section.assign' }>, 'cmd'>): Promise<Ack>;
     /**

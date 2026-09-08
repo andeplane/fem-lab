@@ -94,6 +94,14 @@ tensor components and N (moment per unit width), positive for tension on the top
 side. It also remains per element node. The `surface` mesher owns an implicit Body and joins bilinear,
 cylindrical or spherical patches while preserving separate directors at creases.
 
+**Laminate section**:
+A perfectly bonded stack of shell plies, ordered bottom to top and centred on the
+meshed midsurface. Each ply references a Material and supplies a thickness and
+angle. Its material axes follow the shell surface, with an optional projected
+reference axis from `section.assign`. Ply materials replace the Body material.
+The common MITC4 displacement field integrates each ply separately, preserving
+extension–bending coupling, thermal mismatch and eccentric mass (ADR 0023).
+
 **Section force**:
 The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`
 field) and `T, M_y, M_z` (`sectionMoment`), in the member's local axes, positive as the far side

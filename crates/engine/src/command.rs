@@ -417,6 +417,11 @@ pub enum IdealisationSpec {
 pub enum SectionSpec {
     /// Homogeneous MITC4 shell section, centred on the meshed midsurface.
     Shell { thickness: Q<Length> },
+    /// Perfectly bonded shell plies, ordered bottom to top. Total thickness is their
+    /// sum, centred on the meshed midsurface. Each ply supplies its Material and angle;
+    /// ply materials replace the Body material. Uses a common MITC4 displacement field
+    /// with per-ply integration and separate stresses on both sides of each interface.
+    Laminate { plies: Vec<ShellPlySpec> },
     /// Solid rectangle, `width` along local y and `height` along local z.
     Rectangle { width: Q<Length>, height: Q<Length> },
     /// Solid circle.
@@ -451,6 +456,19 @@ pub enum SectionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none", rename = "cZ")]
         c_z: Option<Q<Length>>,
     },
+}
+
+/// One shell ply. The angle is measured about the positive director, from the
+/// midsurface's first parametric direction or section.assign's projected reference
+/// axis. The Material's orientation is composed in this ply frame, not global axes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPlySpec {
+    pub material: String,
+    pub thickness: Q<Length>,
+    /// Rotation from the reference direction, e.g. "45 deg"; omitted means zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<Q<Dimensionless>>,
 }
 
 /// Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -1362,7 +1380,8 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialRemove { name: String },
 
-    /// Define a section: shell midsurface thickness, or a line Body cross-section
+    /// Define a section: homogeneous shell thickness, a bottom-to-top laminate stack
+    /// of 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section
     /// (`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section
     /// geometry of its own, so the Section is where its area, second moments, torsion constant,
     /// shear factors and extreme-fibre distances come from. Re-issuing with an existing name
@@ -1381,7 +1400,9 @@ pub enum Command {
     /// a member. Without it the rule is: local z follows global Z, so a horizontal beam has
     /// its height vertical; a member within 1e-6 of vertical follows global X instead, so a
     /// column's local z points along +X. `iZ` then resists bending along local y. Trusses
-    /// ignore it.
+    /// ignore it. For laminate shells, orientation instead selects the tangent projection
+    /// of that global axis as the zero-angle ply direction. A normal axis is rejected.
+    /// Without it ply angles use the midsurface's first parametric direction.
     #[serde(rename = "section.assign", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAssign {

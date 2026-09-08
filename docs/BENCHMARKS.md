@@ -1294,9 +1294,10 @@ in-plane directions and free curvature is 0.3/m. Force equilibrium and four
 ply-face stresses are checked: −5/+10 kPa in the bottom ply and −10/+5 kPa
 in the top ply. The interface values stay distinct. A separate 20 mm section with
 1000/2000 kg/m³ plies has mass 240 kg over 8 m² and an eccentric gravity moment
-of 0.4 N m under 1 m/s² in-plane acceleration. These currently exercise the
-headless element interface; registry authoring and retained ply output are added
-with the layered section commands.
+of 0.4 N m under 1 m/s² in-plane acceleration. Registry tests also author and
+replay the cross-ply strip through `section.add` with `kind: "laminate"`, retain
+its outer-face stresses and moment, and verify that every ply contributes to
+material assumptions and gravity. Retained internal ply-face output is pending.
 
 ## H. Plugins (phase P)
 

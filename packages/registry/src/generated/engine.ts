@@ -1578,6 +1578,10 @@ export type SectionSpec =
       kind: "shell";
     }
   | {
+      plies: ShellPlySpec[];
+      kind: "laminate";
+    }
+  | {
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
@@ -5694,6 +5698,35 @@ export interface HardeningPoint {
       };
 }
 /**
+ * One shell ply. The angle is measured about the positive director, from the
+ * midsurface's first parametric direction or section.assign's projected reference
+ * axis. The Material's orientation is composed in this ply frame, not global axes.
+ */
+export interface ShellPlySpec {
+  material: string;
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  thickness:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * Rotation from the reference direction, e.g. "45 deg"; omitted means zero.
+   */
+  angle?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+}
+/**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
  * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
@@ -7366,6 +7399,10 @@ export interface Model {
    * Thickness Section assigned to the implicit surface Body, if present.
    */
   mesherSection?: string | null;
+  /**
+   * Projected reference axis for the implicit shell Body's ply angles.
+   */
+  mesherOrientation?: Axis | null;
   plugins?: PluginRecord[];
 }
 /**
@@ -7526,6 +7563,7 @@ export interface ModelFile_Orientation {
 export interface NamedSection {
   name: string;
   section: Section;
+  plies?: ShellPly[];
 }
 /**
  * One cross-section in SI, in the member's local axes. See the module docs for the axes.
@@ -7567,6 +7605,14 @@ export interface Section {
    * Distance from the centroid to the furthest fibre along local z, m.
    */
   cZ: number;
+}
+/**
+ * A shell ply's serialisable definition: material reference, metres and radians.
+ */
+export interface ShellPly {
+  material: string;
+  thickness: number;
+  angle: number;
 }
 /**
  * A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
@@ -7904,6 +7950,10 @@ export interface DocumentSnapshot_Model {
    * Thickness Section assigned to the implicit surface Body, if present.
    */
   mesherSection?: string | null;
+  /**
+   * Projected reference axis for the implicit shell Body's ply angles.
+   */
+  mesherOrientation?: Axis | null;
   plugins?: PluginRecord[];
 }
 /**

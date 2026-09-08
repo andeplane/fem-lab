@@ -120,7 +120,19 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
             let x = m.section(name).ok_or_else(missing)?;
             Command::SectionAdd {
                 name: x.name.clone(),
-                shape: if let Some(thickness) = x.section.thickness {
+                shape: if !x.plies.is_empty() {
+                    SectionSpec::Laminate {
+                        plies: x
+                            .plies
+                            .iter()
+                            .map(|ply| crate::command::ShellPlySpec {
+                                material: ply.material.clone(),
+                                thickness: si_text(ply.thickness, "m"),
+                                angle: Some(si_text(ply.angle, "rad")),
+                            })
+                            .collect(),
+                    }
+                } else if let Some(thickness) = x.section.thickness {
                     SectionSpec::Shell { thickness: si_text(thickness, "m") }
                 } else {
                     SectionSpec::Generic {

@@ -745,6 +745,9 @@ impl Engine {
                     kind: "section".into(),
                     name: sec.name.clone(),
                     summary: match sec.section.thickness {
+                        Some(t) if !sec.plies.is_empty() => {
+                            format!("laminate: {} plies, thickness = {} m", sec.plies.len(), units::fmt_sig(t, 4))
+                        }
                         Some(t) => format!("shell thickness = {} m", units::fmt_sig(t, 4)),
                         None => format!(
                             "A = {} m^2, Iy = {} m^4, Iz = {} m^4",

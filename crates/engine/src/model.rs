@@ -73,6 +73,17 @@ pub struct Body {
 pub struct NamedSection {
     pub name: String,
     pub section: Section,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plies: Vec<ShellPly>,
+}
+
+/// A shell ply's serialisable definition: material reference, metres and radians.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPly {
+    pub material: String,
+    pub thickness: f64,
+    pub angle: f64,
 }
 
 /// A cut out of a Body.
@@ -716,6 +727,9 @@ pub struct Model {
     /// Thickness Section assigned to the implicit surface Body, if present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesher_section: Option<String>,
+    /// Projected reference axis for the implicit shell Body's ply angles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_orientation: Option<Axis>,
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
 }
@@ -739,6 +753,7 @@ impl Model {
             mesh: None,
             mesher_material: None,
             mesher_section: None,
+            mesher_orientation: None,
             plugins: vec![],
         }
     }
@@ -773,10 +788,22 @@ impl Model {
     /// The material assigned to a Body, whether that is a [`Body`] record or the mesher's
     /// implicit Body, whose assignment lives in [`Model::mesher_material`].
     pub fn material_of_body(&self, body: &str) -> Option<&str> {
+        if let Some(ply) = self.section_of_body(body).and_then(|section| section.plies.first()) {
+            return Some(&ply.material);
+        }
         match self.body(body) {
             Some(b) => b.material.as_deref(),
             None => self.mesher_material.as_deref().filter(|_| self.implicit_body() == Some(body)),
         }
+    }
+
+    /// Section assigned to explicit geometry or to a mesher-owned Body.
+    pub fn section_of_body(&self, body: &str) -> Option<&NamedSection> {
+        let name = match self.body(body) {
+            Some(body) => body.section.as_deref(),
+            None => self.mesher_section.as_deref().filter(|_| self.implicit_body() == Some(body)),
+        }?;
+        self.section(name)
     }
 
     /// The effective shape of a Body: its shape minus its cuts, with names for auto face tags.

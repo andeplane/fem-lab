@@ -319,7 +319,7 @@ impl Engine {
         // analyse yet", and it needs a material like any other Body.
         let implicit = m.implicit_body();
         let has_geometry = !m.bodies.is_empty() || implicit.is_some();
-        if let Some(body) = implicit.filter(|_| m.mesher_material.is_none()) {
+        if let Some(body) = implicit.filter(|body| m.material_of_body(body).is_none()) {
             w.push(Warning {
                 code: "model.no-material".into(),
                 text: format!("Body '{body}' has no material; assign one with material.assign"),
@@ -343,7 +343,7 @@ impl Engine {
             });
         }
         for b in &m.bodies {
-            if b.material.is_none() {
+            if m.material_of_body(&b.name).is_none() {
                 w.push(Warning {
                     code: "model.no-material".into(),
                     text: format!("Body '{}' has no material; assign one with material.assign", b.name),
@@ -784,13 +784,28 @@ impl Engine {
                 if !users.is_empty() {
                     return Err(in_use("material", name, &users, "bodies"));
                 }
+                let sections: Vec<_> = self
+                    .model
+                    .sections
+                    .iter()
+                    .filter(|section| section.plies.iter().any(|ply| ply.material == *name))
+                    .map(|section| section.name.as_str())
+                    .collect();
+                if !sections.is_empty() {
+                    return Err(in_use("material", name, &sections, "sections"));
+                }
                 self.model.materials.retain(|m| m.name != *name);
                 Ok(Output::None)
             }
             Command::SectionAdd { name, shape } => {
                 check_name(name)?;
-                let section = crate::fem::section::properties(shape)?;
-                let named = crate::model::NamedSection { name: name.clone(), section };
+                let (section, plies) = crate::fem::section::resolve(shape)?;
+                for ply in &plies {
+                    self.model.material(&ply.material).ok_or_else(|| {
+                        Error::not_found("material", &ply.material, &self.model.names(ObjectKind::Material))
+                    })?;
+                }
+                let named = crate::model::NamedSection { name: name.clone(), section, plies };
                 Ok(upsert(&mut self.model.sections, named, |s| &s.name, ObjectKind::Section))
             }
             Command::SectionAssign { section, bodies, orientation } => {
@@ -805,6 +820,7 @@ impl Engine {
                 }
                 if self.model.implicit_body().is_some_and(|b| bodies.iter().any(|name| name == b)) {
                     self.model.mesher_section = Some(section.clone());
+                    self.model.mesher_orientation = *orientation;
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.section = Some(section.clone());
@@ -860,6 +876,7 @@ impl Engine {
                     }
                     self.model.mesher_material = None;
                     self.model.mesher_section = None;
+                    self.model.mesher_orientation = None;
                 }
                 self.model.mesh = Some(MeshSettings {
                     mesher: settings,
@@ -1487,6 +1504,7 @@ impl Engine {
                 self.model.mesh = None;
                 self.model.mesher_material = None;
                 self.model.mesher_section = None;
+                self.model.mesher_orientation = None;
             }
             self.model.bodies.retain(|b| b.name != name);
             self.model.cuts.retain(|c| c.from != name);
@@ -1658,6 +1676,13 @@ impl Engine {
                 }
                 if m.mesher_material.as_deref() == Some(name) {
                     m.mesher_material = Some(to.into());
+                }
+                for section in &mut m.sections {
+                    for ply in &mut section.plies {
+                        if ply.material == name {
+                            ply.material = to.into();
+                        }
+                    }
                 }
             }
             ObjectKind::Section => {

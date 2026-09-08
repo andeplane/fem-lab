@@ -655,7 +655,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define a section: shell midsurface thickness, or a line Body cross-section\n(`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
+      "description": "Define a section: homogeneous shell thickness, a bottom-to-top laminate stack\nof 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section\n(`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
       "type": "object",
       "properties": {
         "name": {
@@ -677,7 +677,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
+      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
       "type": "object",
       "properties": {
         "section": {
@@ -2952,6 +2952,26 @@ const commands = {
           ]
         },
         {
+          "description": "Perfectly bonded shell plies, ordered bottom to top. Total thickness is their\nsum, centred on the meshed midsurface. Each ply supplies its Material and angle;\nply materials replace the Body material. Uses a common MITC4 displacement field\nwith per-ply integration and separate stresses on both sides of each interface.",
+          "type": "object",
+          "properties": {
+            "plies": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ShellPlySpec"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "laminate"
+            }
+          },
+          "required": [
+            "kind",
+            "plies"
+          ]
+        },
+        {
           "description": "Solid rectangle, `width` along local y and `height` along local z.",
           "type": "object",
           "properties": {
@@ -3131,6 +3151,33 @@ const commands = {
             "j"
           ]
         }
+      ]
+    },
+    "ShellPlySpec": {
+      "description": "One shell ply. The angle is measured about the positive director, from the\nmidsurface's first parametric direction or section.assign's projected reference\naxis. The Material's orientation is composed in this ply frame, not global axes.",
+      "type": "object",
+      "properties": {
+        "material": {
+          "type": "string"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "angle": {
+          "description": "Rotation from the reference direction, e.g. \"45 deg\"; omitted means zero.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_dimensionless"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "material",
+        "thickness"
       ]
     },
     "Q_area": {
@@ -4926,6 +4973,7 @@ const queries = {
     "Plasticity": commands.$defs["Plasticity"],
     "HardeningPoint": commands.$defs["HardeningPoint"],
     "SectionSpec": commands.$defs["SectionSpec"],
+    "ShellPlySpec": commands.$defs["ShellPlySpec"],
     "Q_area": commands.$defs["Q_area"],
     "Q_second_moment": commands.$defs["Q_second_moment"],
     "Axis": commands.$defs["Axis"],

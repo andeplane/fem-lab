@@ -11389,3 +11389,157 @@ fn shell_surface_commands_solve_a_moment_strip_and_replay_sections() {
         }
     }
 }
+
+#[test]
+fn laminate_sections_author_assign_solve_and_replay_without_a_body_material() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cross ply"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[4,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"ply","orthotropic":{"E1":"100 GPa","E2":"20 GPa","E3":"10 GPa","G12":"10 GPa","G13":"5 GPa","G23":"3 GPa","nu12":0,"nu13":0,"nu23":0}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"cross","shape":{"kind":"laminate","plies":[{"material":"ply","thickness":"5 mm"},{"material":"ply","thickness":"5 mm","angle":"90 deg"}]}}"#,
+    );
+    let error = err(&mut e, r#"{"cmd":"material.remove","name":"ply"}"#);
+    assert_eq!(error.code, ErrorCode::InUse);
+    assert!(error.cause.contains("sections"));
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"ply","to":"carbon"}"#);
+    assert!(e.model().section("cross").unwrap().plies.iter().all(|ply| ply.material == "carbon"));
+    let before = e.model().clone();
+    let QueryResult::Definition(definition) =
+        e.query(Query::Definition { kind: ObjectKind::Section, name: "cross".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&definition.command).unwrap());
+    assert_eq!(e.model(), &before);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"cross","bodies":["skin"],"orientation":"x"}"#);
+    assert_eq!(e.model().mesher_orientation, Some(Axis::X));
+    assert_eq!(e.model().mesher_material, None);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#);
+    let file = e.export_file();
+    let mut replay = engine();
+    pollster::block_on(replay.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(e.model(), replay.model());
+    for engine in [&mut e, &mut replay] {
+        ok(engine, r#"{"cmd":"solve.run","step":"s"}"#);
+        let x = probe_at(engine, "s", Field::Displacement, Some(0), ["1 m", "0.5 m", "0 m"]);
+        let z = probe_at(engine, "s", Field::Displacement, Some(2), ["1 m", "0.5 m", "0 m"]);
+        assert!((x / 5e-7 - 1.0).abs() < 1e-7);
+        assert!((z / -0.00015 - 1.0).abs() < 1e-7);
+        for (field, expected) in [("shellMoment", 1.0), ("stressTop", 40000.0), ("stressBottom", -100000.0)] {
+            let QueryResult::Field(values) =
+                engine.query(Query::Field { step: None, result_id: None, field: field.into() }).unwrap()
+            else {
+                panic!("field")
+            };
+            for values in values.values.chunks_exact(6) {
+                assert!((values[0] / expected - 1.0).abs() < 1e-7);
+            }
+        }
+    }
+    ok(&mut e, r#"{"cmd":"section.assign","section":"cross","bodies":["skin"],"orientation":"z"}"#);
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert!(error.cause.contains("normal to the surface"));
+}
+
+#[test]
+fn laminate_section_schema_rejects_invalid_plies_without_journaling() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"material.add","name":"ply","E":"100 GPa","nu":0.2}"#);
+    let hash = e.model_hash();
+    let valid = serde_json::json!({"material":"ply","thickness":"1 mm","angle":"0 deg"});
+    for plies in [
+        vec![],
+        vec![valid.clone(); 257],
+        vec![serde_json::json!({"material":"missing","thickness":"1 mm"})],
+        vec![serde_json::json!({"material":"ply","thickness":"0 mm"})],
+        vec![serde_json::json!({"material":"ply","thickness":"1 N"})],
+        vec![serde_json::json!({"material":"ply","thickness":"1 mm","angle":"1 mm"})],
+    ] {
+        let command = serde_json::json!({"cmd":"section.add","name":"bad","shape":{"kind":"laminate","plies":plies}});
+        assert!(run(&mut e, &command.to_string()).is_err());
+        assert_eq!(e.model_hash(), hash);
+    }
+}
+
+#[test]
+fn laminate_sections_track_every_ply_material_and_clear_implicit_orientation() {
+    let mut e = engine();
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[1,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"bottom","E":"100 GPa","nu":0,"rho":"1000 kg/m^3","alpha":"0 1/K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"top","E":"100 GPa","nu":0,"yield":"100 MPa","plasticity":{"H":"1 GPa"}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"stack","shape":{"kind":"laminate","plies":[{"material":"bottom","thickness":"1 mm"},{"material":"top","thickness":"1 mm"}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"],"orientation":"y"}"#);
+    assert!(e.warnings().iter().all(|w| w.code != "model.no-material"));
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-1 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"load.temperature","name":"hot","bodies":["skin"],"value":"310 K","reference":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["g","hot"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let summary = result_of(&mut e, Some("s"));
+    assert_eq!(summary.assumptions.len(), 2);
+    assert!(summary.assumptions.iter().all(|a| a.material == "top" && a.body == "skin"));
+    assert_eq!(summary.assumptions[0].property, AssumedMaterialProperty::Rho);
+    assert_eq!(summary.assumptions[1].property, AssumedMaterialProperty::Alpha);
+    let warning = summary.warnings.iter().find(|w| w.code == "material.plasticityIgnored").unwrap();
+    assert!(warning.text.contains("'top'"));
+    let reaction: f64 = summary.reactions.iter().map(|r| r.total[2].value).sum();
+    assert!((reaction - 1.0).abs() < 1e-8, "only the bottom ply has density: {reaction}");
+    ok(&mut e, r#"{"cmd":"step.remove","name":"s"}"#);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"hot"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"root"}"#);
+    // Reassigning without an axis clears it; replacing the implicit Body clears its section too.
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"]}"#);
+    assert_eq!(e.model().mesher_orientation, None);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"],"orientation":"x"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"other","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[1,1]}]}}"#,
+    );
+    assert_eq!(e.model().mesher_orientation, None);
+    assert_eq!(e.model().mesher_section, None);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["other"],"orientation":"x"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+    assert_eq!(e.model().mesher_orientation, None);
+    // Replacing the laminate releases the materials for deletion.
+    ok(&mut e, r#"{"cmd":"section.add","name":"stack","shape":{"kind":"shell","thickness":"2 mm"}}"#);
+    assert!(e.model().section("stack").unwrap().plies.is_empty());
+    ok(&mut e, r#"{"cmd":"material.remove","name":"top"}"#);
+}
+
+#[test]
+fn laminate_sections_reject_solid_elements_before_material_fallback() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"solid","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"ply","E":"100 GPa","nu":0}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"stack","shape":{"kind":"laminate","plies":[{"material":"ply","thickness":"1 mm"}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["solid"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"solid.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":[]}"#);
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("body 'solid'"));
+    assert!(error.cause.contains("require shell elements"));
+}

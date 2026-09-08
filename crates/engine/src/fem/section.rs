@@ -20,8 +20,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::command::SectionSpec;
+use crate::command::{SectionSpec, ShellPlySpec};
 use crate::error::Error;
+use crate::model::ShellPly;
 use crate::units::{Area, Length, SecondMoment, Q};
 
 /// One cross-section in SI, in the member's local axes. See the module docs for the axes.
@@ -85,18 +86,14 @@ fn rect_j(w: f64, h: f64) -> f64 {
 /// The section properties of one `SectionSpec`, in SI. Pure: the same spec always gives the
 /// same numbers, which is what lets a Journal replay a Model byte for byte.
 pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
+    resolve(spec).map(|(section, _)| section)
+}
+
+/// Resolve section geometry and its optional material-referencing ply stack together.
+pub(crate) fn resolve(spec: &SectionSpec) -> Result<(Section, Vec<ShellPly>), Error> {
     match spec {
-        SectionSpec::Shell { thickness } => Ok(Section {
-            thickness: Some(len(thickness, "thickness")?),
-            a: 0.0,
-            i_y: 0.0,
-            i_z: 0.0,
-            j: 0.0,
-            k_y: 0.0,
-            k_z: 0.0,
-            c_y: 0.0,
-            c_z: 0.0,
-        }),
+        SectionSpec::Laminate { plies } => return laminate(plies),
+        SectionSpec::Shell { thickness } => Ok(shell(len(thickness, "thickness")?)),
         SectionSpec::Rectangle { width, height } => {
             let (b, h) = (len(width, "width")?, len(height, "height")?);
             Ok(Section {
@@ -196,6 +193,7 @@ pub fn properties(spec: &SectionSpec) -> Result<Section, Error> {
             c_z: fibre(c_z, "cZ")?,
         }),
     }
+    .map(|section| (section, Vec::new()))
 }
 
 fn area(q: &Q<Area>, at: &str) -> Result<f64, Error> {
@@ -228,4 +226,26 @@ fn fibre(c: &Option<Q<Length>>, at: &str) -> Result<f64, Error> {
     } else {
         Err(Error::schema(format!("{at} must be zero or positive and finite, got {v}")).at(format!("shape.{at}")))
     }
+}
+
+fn shell(thickness: f64) -> Section {
+    Section { thickness: Some(thickness), a: 0.0, i_y: 0.0, i_z: 0.0, j: 0.0, k_y: 0.0, k_z: 0.0, c_y: 0.0, c_z: 0.0 }
+}
+
+fn laminate(plies: &[ShellPlySpec]) -> Result<(Section, Vec<ShellPly>), Error> {
+    if plies.is_empty() || plies.len() > 256 {
+        return Err(Error::schema("a laminate needs 1 to 256 plies").at("shape.plies"));
+    }
+    let mut resolved = Vec::with_capacity(plies.len());
+    let mut total = 0.0;
+    for (i, ply) in plies.iter().enumerate() {
+        let thickness = len(&ply.thickness, &format!("plies[{i}].thickness"))?;
+        let angle = match &ply.angle {
+            Some(q) => q.si().map_err(|e| e.at(format!("shape.plies[{i}].angle")))?,
+            None => 0.0,
+        };
+        total += thickness;
+        resolved.push(ShellPly { material: ply.material.clone(), thickness, angle });
+    }
+    Ok((shell(positive(total, "totalThickness")?), resolved))
 }

@@ -70,10 +70,9 @@ fn plasticity_ignored(model: &Model, p: &Problem<'_>, procedure: Procedure) -> O
     if procedure == Procedure::StaticNonlinear {
         return None;
     }
-    let mut names: Vec<&str> = p
-        .material_of_block
-        .iter()
-        .filter_map(|&i| i.map(|i| &model.materials[i]))
+    let mut names: Vec<&str> = assigned_materials(model, p.body_of_block, &p.material_of_block)
+        .into_keys()
+        .map(|(_, i)| &model.materials[i])
         .filter(|m| m.plasticity.is_some())
         .map(|m| m.name.as_str())
         .collect();
@@ -137,6 +136,15 @@ fn build_problem_with_temperature<'a>(
     previous: Option<&FieldData>,
 ) -> Result<Problem<'a>, Error> {
     let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
+    for (block, body) in built.mesh.blocks.iter().zip(&built.body_of_block) {
+        if model.section_of_body(body).is_some_and(|section| !section.plies.is_empty())
+            && block.kind != femlab_geometry::ElementKind::Shell4
+        {
+            return Err(Error::new(ErrorCode::Unsupported, "laminate sections require shell elements")
+                .at(format!("body '{body}'"))
+                .suggest("mesh.set with the surface mesher, or section.assign a compatible section"));
+        }
+    }
     let materials: Vec<Material> = model.materials.iter().map(|m| resolve_material(m, step.procedure)).collect();
     let material_of_block = built
         .body_of_block
@@ -235,22 +243,23 @@ fn build_problem_with_temperature<'a>(
         .body_of_block
         .iter()
         .map(|body| {
-            let name = model
-                .body(body)
-                .and_then(|b| b.section.as_deref())
-                .or_else(|| model.mesher_section.as_deref().filter(|_| model.implicit_body() == Some(body)))?;
-            model.sections.iter().position(|s| s.name == name)
+            let section = model.section_of_body(body)?;
+            model.sections.iter().position(|s| s.name == section.name)
         })
         .collect();
     let orientation_of_block = built
         .body_of_block
         .iter()
         .map(|body| {
-            model.body(body).and_then(|b| b.orientation).map(|axis| {
-                let mut v = [0.0; 3];
-                v[axis.index()] = 1.0;
-                v
-            })
+            model
+                .body(body)
+                .and_then(|b| b.orientation)
+                .or_else(|| model.mesher_orientation.filter(|_| model.implicit_body() == Some(body)))
+                .map(|axis| {
+                    let mut v = [0.0; 3];
+                    v[axis.index()] = 1.0;
+                    v
+                })
         })
         .collect();
     let mut p = Problem {
@@ -262,7 +271,26 @@ fn build_problem_with_temperature<'a>(
         materials,
         section_of_block,
         sections: model.sections.iter().map(|s| s.section).collect(),
-        plies: Vec::new(),
+        plies: model
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .plies
+                    .iter()
+                    .map(|ply| {
+                        let material = model.material(&ply.material).ok_or_else(|| {
+                            Error::not_found("material", &ply.material, &model.names(ObjectKind::Material))
+                        })?;
+                        Ok(crate::fem::shell::Ply {
+                            thickness: ply.thickness,
+                            angle: ply.angle,
+                            material: resolve_material(material, step.procedure),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?,
         orientation_of_block,
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
@@ -376,6 +404,36 @@ fn rho_assumption_cause(procedure: Procedure, has_gravity: bool) -> Option<&'sta
     }
 }
 
+/// Materials actually integrated in each Body, including every laminate ply.
+fn assigned_materials<'a>(
+    model: &Model,
+    bodies: &'a [String],
+    materials: &[Option<usize>],
+) -> std::collections::BTreeMap<(&'a str, usize), ()> {
+    bodies
+        .iter()
+        .zip(materials)
+        .flat_map(|(body, material)| {
+            let plies = model.section_of_body(body).map_or(&[][..], |section| section.plies.as_slice());
+            let indices: Vec<_> = if plies.is_empty() {
+                material.iter().copied().collect()
+            } else {
+                plies
+                    .iter()
+                    .map(|ply| {
+                        model
+                            .materials
+                            .iter()
+                            .position(|m| m.name == ply.material)
+                            .expect("build_problem resolved every ply material")
+                    })
+                    .collect()
+            };
+            indices.into_iter().map(move |i| ((body.as_str(), i), ()))
+        })
+        .collect()
+}
+
 /// Optional material values this exact procedure read after the Model-to-Problem boundary
 /// resolved an omission to zero. Callers attach these only after the procedure succeeds.
 fn result_assumptions(
@@ -392,12 +450,7 @@ fn result_assumptions(
         matches!(procedure, Procedure::Static | Procedure::Explicit | Procedure::Implicit) && p.temperature.is_some();
     // A BuiltMesh block always has elements. Collecting by Body and material also collapses a
     // mapped Body made from several blocks into one assumption row per property.
-    let assigned: std::collections::BTreeMap<(&str, usize), ()> = built
-        .body_of_block
-        .iter()
-        .zip(&p.material_of_block)
-        .filter_map(|(body, material)| material.map(|index| ((body.as_str(), index), ())))
-        .collect();
+    let assigned = assigned_materials(model, &built.body_of_block, &p.material_of_block);
     let mut out = Vec::new();
     for ((body, material_index), ()) in assigned {
         let material = &model.materials[material_index];
