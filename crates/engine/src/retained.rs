@@ -522,6 +522,7 @@ mod tests {
     #[test]
     fn field_entity_layout_is_explicit_for_each_storage_location() {
         assert_eq!(field_location(crate::post::Per::Node), "node");
+        assert_eq!(field_location(crate::post::Per::Element), "element");
         assert_eq!(field_location(crate::post::Per::ElemGp), "elementGaussPoint");
         assert_eq!(field_location(crate::post::Per::ElemNode), "elementNode");
     }

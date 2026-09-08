@@ -889,6 +889,9 @@ impl Engine {
             .at("step.after")
             .suggest("mesh.set, then solve.run on each dependency and the target Step for every refinement"));
         }
+        if step.output.contains(&Field::ErrorEstimate) {
+            check_estimator_step(&step)?;
+        }
         let proc_step = procedure_step(&step, SolveOptions::default())?;
         let (settings, h) = self.study_mesh(sizes)?;
         let mut progress = on_progress;
@@ -919,7 +922,6 @@ impl Engine {
                 result.assumptions = assumptions;
                 result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
                 if step.output.contains(&Field::ErrorEstimate) {
-                    check_estimator_step(&step)?;
                     self.pool.install(|| estimate_result(&p, &mut result))?;
                 }
                 (result, dofs)
@@ -1362,10 +1364,11 @@ fn estimate_result(p: &Problem<'_>, result: &mut StepResult) -> Result<crate::po
         .iter()
         .map(|e| if denominator == 0.0 { 0.0 } else { (e / denominator).sqrt() })
         .collect();
-    if !values.is_empty() {
-        let mut lo = 0;
-        let mut hi = 0;
-        for i in 1..values.len() {
+    let mut elements = 0..values.len();
+    result.extremes.extend(elements.next().map(|first| {
+        let mut lo = first;
+        let mut hi = first;
+        for i in elements {
             if values[i] < values[lo] {
                 lo = i;
             }
@@ -1373,7 +1376,7 @@ fn estimate_result(p: &Problem<'_>, result: &mut StepResult) -> Result<crate::po
                 hi = i;
             }
         }
-        result.extremes.push((
+        (
             Field::ErrorEstimate,
             Extremum {
                 component: 0,
@@ -1382,8 +1385,8 @@ fn estimate_result(p: &Problem<'_>, result: &mut StepResult) -> Result<crate::po
                 min_at: femlab_geometry::elem_centroid(p.mesh, lo as u32),
                 max_at: femlab_geometry::elem_centroid(p.mesh, hi as u32),
             },
-        ));
-    }
+        )
+    }));
     result.fields.insert(Field::ErrorEstimate, FieldData::new(Per::Element, 1, values));
     Ok(estimate)
 }

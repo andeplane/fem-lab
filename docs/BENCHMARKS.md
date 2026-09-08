@@ -1833,7 +1833,10 @@ Local simplex refinement is checked on tri3 and tet4 boxes at target edge length
 orientation, every unpaired face remains on the original box boundary, and named
 face Sets retain their geometric planes. All edges in the requested region obey
 the bound; a remote region retains coarser elements. Refining an already compliant
-mesh is idempotent. Invalid size fields and element budgets return errors without
+mesh is idempotent. An irregular three-triangle patch also forces all three edges
+of its central triangle to split in one pass: it must retain area 2.2 m² and
+satisfy Euler’s disk identity with exactly six boundary edges and no hanging faces.
+Invalid size fields and element budgets return errors without
 changing the input mesh. New boundary nodes bisect the existing mesh edges; these
 tests assert conservation of that boundary approximation, not improved CAD fidelity.
 

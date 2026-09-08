@@ -2551,3 +2551,38 @@ fn local_refinement_rejects_bad_boxes_and_limits_without_changing_the_input() {
     assert_eq!(refine(&quad, &[], 100).unwrap(), quad);
     assert_eq!(mesh, before);
 }
+
+#[test]
+fn local_refinement_closes_multiple_marked_edges_of_one_triangle() {
+    use femlab_geometry::{refine, SizeBox};
+    // Each neighbour's longest edge is shared with the central triangle, whose
+    // own longest edge is different. All three central edges split in one pass.
+    let original = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 2., 0., 0., 0., 2., 0., 1., -0.1, 0., -0.1, 1., 0.],
+        blocks: vec![femlab_geometry::mesh::ElementBlock {
+            kind: ElementKind::Tri3,
+            conn: vec![0, 1, 2, 1, 0, 3, 0, 2, 4],
+            first_elem: 0,
+        }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let boxes = [SizeBox { min: [-1., -1., 0.], max: [2., 2., 0.], size: 1.5 }];
+    let refined = refine(&original, &boxes, 100).unwrap();
+    // A further interior split closes the long median left by ordered bisection.
+    // Euler's identity for a triangulated disk checks the resulting connectivity.
+    assert_eq!(refined.boundary_faces().len(), 6);
+    assert_eq!(refined.n_elems(), 2 * refined.n_nodes() - 2 - refined.boundary_faces().len());
+    for e in 0..refined.n_elems() as u32 {
+        let nodes = refined.elem_nodes(e);
+        for &[a, b] in ElementKind::Tri3.edges() {
+            let delta = sub(refined.node(nodes[a as usize]), refined.node(nodes[b as usize]));
+            assert!(dot(delta, delta).sqrt() <= 1.5 * (1. + 1e-12));
+        }
+    }
+    assert!((measure(&refined) - 2.2).abs() < 1e-13);
+    assert!(min_element_measure(&refined) > 0.);
+    assert_eq!(refine(&refined, &boxes, 100).unwrap(), refined);
+}

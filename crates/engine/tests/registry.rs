@@ -11563,3 +11563,141 @@ fn adaptive_studies_refuse_unsupported_steps_without_changing_the_journal() {
     assert_eq!(err(&mut e, r#"{"cmd":"study.adapt","step":"missing","targetError":0.1}"#).code, ErrorCode::NotFound);
     assert_eq!(e.export_file(), before);
 }
+
+#[test]
+fn adaptive_size_fields_validate_units_bounds_and_skipped_replay() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    let before = e.export_file();
+    let valid = serde_json::json!({"maxElements":1000,"boxes":[{"min":["0 m","0 m","0 m"],"max":["1 m","1 m","0 m"],"size":"0.1 m"}]});
+    let mut cases = Vec::new();
+    let mut bad = valid.clone();
+    bad["maxElements"] = 0.into();
+    cases.push(bad);
+    for (key, value) in [
+        ("min", serde_json::json!(["0 s", "0 m", "0 m"])),
+        ("max", serde_json::json!(["1 s", "1 m", "0 m"])),
+        ("size", serde_json::json!("1 s")),
+        ("size", serde_json::json!("0 m")),
+        ("min", serde_json::json!(["2 m", "0 m", "0 m"])),
+    ] {
+        let mut bad = valid.clone();
+        bad["boxes"][0][key] = value;
+        cases.push(bad);
+    }
+    for refinement in cases {
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"},"simplices":true,"refinement":refinement});
+        let failure = err(&mut e, &command.to_string());
+        assert!(!failure.cause.is_empty());
+        assert_eq!(e.export_file(), before);
+    }
+    for command in [
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1}"#,
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1,"refinements":[[]]}"#,
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1,"maxElements":0,"refinements":[[]]}"#,
+    ] {
+        let entry = femlab_engine::journal::JournalEntry {
+            seq: 0,
+            cmd: serde_json::from_str(command).unwrap(),
+            hash_after: String::new(),
+        };
+        let mut copy = engine();
+        assert!(pollster::block_on(copy.replay(&[entry], true, false)).is_err());
+        assert!(copy.export_file().journal.entries.is_empty());
+    }
+    let invalid = r#"{"cmd":"study.adapt","step":"heat","targetError":0.1,"maxIterations":2,"refinements":[[{"min":["0 m","0 m","0 m"],"max":["1 m","1 m","0 m"],"size":"0 m"}]]}"#;
+    assert_eq!(err(&mut e, invalid).code, ErrorCode::Schema);
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
+fn adaptive_error_outputs_reject_unsupported_meshes_and_procedures() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"}}"#);
+    let before = e.export_file();
+    for cmd in [
+        r#"{"cmd":"solve.run","step":"heat"}"#,
+        r#"{"cmd":"study.converge","step":"heat","sizes":["0.5 m","0.25 m"],"quantity":{"kind":"max","field":"temperature"}}"#,
+        r#"{"cmd":"study.adapt","step":"heat","targetError":0.1}"#,
+    ] {
+        assert_eq!(err(&mut e, cmd).code, ErrorCode::Unsupported);
+        assert_eq!(e.export_file(), before);
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":[],"loads":[],"output":["errorEstimate"]}"#,
+    );
+    let before = e.export_file();
+    for cmd in [
+        r#"{"cmd":"solve.run","step":"dynamic"}"#,
+        r#"{"cmd":"study.converge","step":"dynamic","sizes":["0.5 m","0.25 m"],"quantity":{"kind":"max","field":"displacement"}}"#,
+    ] {
+        assert_eq!(err(&mut e, cmd).code, ErrorCode::Unsupported);
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+#[test]
+fn adaptive_zero_energy_and_iteration_limited_reports_are_distinct() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.001,"maxIterations":1}"#);
+    let QueryResult::Report(report) = e
+        .query(serde_json::from_str(r#"{"query":"query.report","step":"heat","sections":["results"]}"#).unwrap())
+        .unwrap()
+    else {
+        panic!("report")
+    };
+    assert!(report.markdown.contains("Iteration limit reached; target not reached"));
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"plate.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"plate.xmax","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["plate"],"q":"0 W/m^3"}"#);
+    let Output::Adapt { report } = ok(&mut e, r#"{"cmd":"study.adapt","step":"heat","targetError":0.001}"#).output
+    else {
+        panic!("adapt")
+    };
+    assert!(report.converged);
+    assert_eq!(report.rows.len(), 1);
+    assert_eq!(report.rows[0].estimated_error, 0.);
+    assert!(e.field(Some("heat"), Field::ErrorEstimate).unwrap().data.iter().all(|v| *v == 0.));
+}
+
+#[test]
+fn adaptive_transient_preflight_and_solver_cancellation_leave_no_partial_study() {
+    let mut e = engine();
+    adaptive_heat(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"conductor","E":"1 Pa","nu":0.3,"k":"1 W/(m K)","rho":"1 kg/m^3","cp":"1 J/(kg K)"}"#,
+    );
+    for timing in ["", r#", "dt":"0 s","tEnd":"1 s""#, r#", "dt":"1e-9 s","tEnd":"1 s""#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"transient","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"initial":"300 K"{timing}}}"#
+            ),
+        );
+        let before = e.export_file();
+        let failure = err(&mut e, r#"{"cmd":"study.adapt","step":"transient","targetError":0.01}"#);
+        assert!(!failure.cause.is_empty());
+        assert_eq!(e.export_file(), before);
+        assert!(e.field(Some("transient"), Field::Temperature).is_err());
+    }
+    ok(&mut e, r#"{"cmd":"load.traction","name":"nowhere","on":"plate.side","total":["1 N","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"missing-boundary","procedure":"static","constraints":[],"loads":["nowhere"]}"#,
+    );
+    let before = e.export_file();
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"study.adapt","step":"missing-boundary","targetError":0.01}"#).code,
+        ErrorCode::SetEmpty
+    );
+    assert_eq!(e.export_file(), before);
+    let command = serde_json::from_str(r#"{"cmd":"study.adapt","step":"heat","targetError":0.01}"#).unwrap();
+    let mut cancel = |p: Progress| p.phase == "study";
+    assert_eq!(pollster::block_on(e.dispatch(command, &mut cancel)).unwrap_err().code, ErrorCode::Cancelled);
+    assert_eq!(e.export_file(), before);
+    assert!(e.field(Some("heat"), Field::Temperature).is_err());
+}
