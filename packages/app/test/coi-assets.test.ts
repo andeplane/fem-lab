@@ -9,7 +9,7 @@ function worker(storageFails = false) {
   const fetch = vi.fn(async () => new Response('engine bytes'));
   const cache = {
     match: async (r: Request) => saved.get(r.url)?.clone(),
-    put: async (r: Request, response: Response) => { saved.set(r.url, response); },
+    put: vi.fn(async (r: Request, response: Response) => { saved.set(r.url, response); }),
   };
   runInNewContext(source, {
     self: { registration: { scope: 'https://example.test/fem-lab/' }, addEventListener: (name: string, fn: (event: unknown) => void) => listeners.set(name, fn) },
@@ -17,9 +17,9 @@ function worker(storageFails = false) {
     fetch, URL, Request, Response, Headers, console: { error: vi.fn() },
   });
   const request = (path: string) => new Promise<Response>((resolve) => {
-    listeners.get('fetch')!({ request: new Request(`https://example.test${path}`), respondWith: resolve });
+    listeners.get('fetch')!({ request: new Request(`https://example.test${path}`), respondWith: resolve, waitUntil: () => {} });
   });
-  return { fetch, request };
+  return { fetch, request, cache };
 }
 
 describe('deployed worker assets', () => {
@@ -39,6 +39,15 @@ describe('deployed worker assets', () => {
     }
     expect(w.fetch).toHaveBeenCalledTimes(2);
     expect((await w.request('/fem-lab/')).status).toBe(404);
+  });
+  it('streams the network response without waiting for Cache Storage to finish writing', async () => {
+    const w = worker();
+    let finish!: () => void;
+    w.cache.put.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+    const response = await w.request('/fem-lab/assets/engine-abcdefgh.wasm');
+    expect(await response.text()).toBe('engine bytes');
+    expect(w.cache.put).toHaveBeenCalledOnce();
+    finish();
   });
   it('returns a network-error Response on rejected fetch, never undefined', async () => {
     const w = worker();
