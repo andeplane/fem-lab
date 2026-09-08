@@ -114,21 +114,25 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 other => Command::GeometryAdd { name: b.name.clone(), shape: shape(other)? },
             }
         }
-        // A Section is stored as its resolved properties, so its definition comes back in the
-        // `generic` form: the same numbers, and re-applying it is exactly idempotent.
+        // Restore a shell's thickness; line sections use their resolved `generic` properties.
+        // Both forms are exactly idempotent when re-applied.
         ObjectKind::Section => {
             let x = m.section(name).ok_or_else(missing)?;
             Command::SectionAdd {
                 name: x.name.clone(),
-                shape: SectionSpec::Generic {
-                    a: si_text(x.section.a, "m^2"),
-                    i_y: si_text(x.section.i_y, "m^4"),
-                    i_z: si_text(x.section.i_z, "m^4"),
-                    j: si_text(x.section.j, "m^4"),
-                    k_y: Some(x.section.k_y),
-                    k_z: Some(x.section.k_z),
-                    c_y: Some(si_text(x.section.c_y, "m")),
-                    c_z: Some(si_text(x.section.c_z, "m")),
+                shape: if let Some(thickness) = x.section.thickness {
+                    SectionSpec::Shell { thickness: si_text(thickness, "m") }
+                } else {
+                    SectionSpec::Generic {
+                        a: si_text(x.section.a, "m^2"),
+                        i_y: si_text(x.section.i_y, "m^4"),
+                        i_z: si_text(x.section.i_z, "m^4"),
+                        j: si_text(x.section.j, "m^4"),
+                        k_y: Some(x.section.k_y),
+                        k_z: Some(x.section.k_z),
+                        c_y: Some(si_text(x.section.c_y, "m")),
+                        c_z: Some(si_text(x.section.c_z, "m")),
+                    }
                 },
             }
         }
