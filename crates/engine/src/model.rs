@@ -552,6 +552,8 @@ pub struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damping_ratios: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd: Option<Vec<[f64; 2]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rayleigh_alpha: Option<f64>,
@@ -909,6 +911,7 @@ mod tests {
             sweep: None,
             damping_ratio: None,
             damping_ratios: None,
+            psd: None,
             alpha: None,
             rayleigh_alpha: None,
             rayleigh_beta: None,

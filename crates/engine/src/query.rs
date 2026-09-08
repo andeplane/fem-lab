@@ -855,9 +855,9 @@ pub struct CostEstimate {
     pub result_mesh_bytes: u64,
     /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
     pub retained_frames: u64,
-    /// Logical f64 bytes for retained times and unpadded primary values.
+    /// Logical f64 bytes for retained times and unpadded primary values, or random-response RMS fields.
     pub retained_bytes: u64,
-    /// Conservative full-field allowance for procedure working f64 vectors live with History.
+    /// Conservative full-field allowance for procedure working f64 vectors live with History or RMS fields.
     /// Free-DOF vectors are charged at the full nodal length.
     pub transient_work_bytes: u64,
     /// One normalized three-component f64 frame owned by a native Query result.

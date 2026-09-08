@@ -550,6 +550,7 @@ pub async fn run(
         frequencies: Vec::new(),
         buckling_factors: Vec::new(),
         modes: Vec::new(),
+        modal_dofs: Vec::new(),
         history: Some(history),
         sweep: None,
         prestress_from: None,

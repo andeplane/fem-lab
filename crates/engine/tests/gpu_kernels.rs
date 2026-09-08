@@ -54,6 +54,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
         body_of_block: &bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
         section_of_block: vec![None; mesh.blocks.len()],
+        orientation_of_block: vec![None; mesh.blocks.len()],
         sections: Vec::new(),
         points: Vec::new(),
         materials: vec![Material {
@@ -70,7 +71,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
         constraints: vec![Constraint {
             name: "root".into(),
             nodes: "xmin".into(),
-            dofs: [true, true, true],
+            dofs: [true, true, true, false, false, false],
             value: 0.0,
         }],
         couplings: Vec::new(),
@@ -473,6 +474,7 @@ fn tied_cantilever() -> (Csr, Vec<f64>) {
         body_of_block: &bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
         section_of_block: vec![None; mesh.blocks.len()],
+        orientation_of_block: vec![None; mesh.blocks.len()],
         sections: Vec::new(),
         points: Vec::new(),
         materials: vec![Material {
@@ -489,7 +491,7 @@ fn tied_cantilever() -> (Csr, Vec<f64>) {
         constraints: vec![Constraint {
             name: "root".into(),
             nodes: "a.xmin".into(),
-            dofs: [true, true, true],
+            dofs: [true, true, true, false, false, false],
             value: 0.0,
         }],
         couplings: vec![Coupling::Bonded {

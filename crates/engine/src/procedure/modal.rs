@@ -218,6 +218,7 @@ pub fn run(
         }
         mpc::recover(&mpc, &mut full);
         res.modes.push(vector_field(&full, dpn));
+        res.modal_dofs.push(full);
     }
     res.warnings = mpc.warnings;
     res.fields.insert(Field::Displacement, res.modes[0].clone());
