@@ -3,7 +3,7 @@
 import OpenAI from 'openai';
 import type { ChatEvent, ChatRequest, Message, Provider } from './provider';
 
-export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'] satisfies OpenAI.ChatModel[];
+export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini'] satisfies OpenAI.ChatModel[];
 export const OPENAI_DEFAULT = OPENAI_MODELS[0]!;
 
 export interface OpenAILike {
