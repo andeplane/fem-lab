@@ -833,7 +833,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             </Cmd>
           </label>
           <span class="source">
-            {key.source === 'stored' ? 'from sessionStorage in this tab' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
+            {key.source === 'stored' ? 'from localStorage in this browser' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
           </span>
         </div>
       ) : null}

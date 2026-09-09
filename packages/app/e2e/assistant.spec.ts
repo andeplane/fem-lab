@@ -74,7 +74,7 @@ test('@cpu composer suggestions and skills prepare editable drafts by keyboard',
 
 test('@cpu Assistant observations survive tab changes and collapse, then become stale after an edit', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
-    sessionStorage.setItem('femlab.ai.key.openai', 'test-only');
+    localStorage.setItem('femlab.ai.key.openai', 'test-only');
     localStorage.setItem('femlab.ai.model', 'gpt-5.4-mini');
     localStorage.setItem('femlab.tour.dismissed', '1');
     const original = window.fetch.bind(window);
