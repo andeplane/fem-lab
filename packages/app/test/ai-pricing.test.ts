@@ -6,6 +6,8 @@ describe('OpenAI Standard request pricing', () => {
   it.each([
     ['gpt-6-astra', 1.5],
     ['gpt-5.6-sol', 0.6],
+    ['gpt-5.6-terra', 0.32],
+    ['gpt-5.6-luna', 0.032],
     ['gpt-5.5', 0.8],
     ['gpt-5.4-mini', 0.12],
   ])('prices uncached input and all output tokens for %s', (model, expected) => {
@@ -19,6 +21,9 @@ describe('OpenAI Standard request pricing', () => {
     // 70k ordinary + 30k writes + 20k reads + 10k output at Astra Standard rates.
     expect(costOf('gpt-6-astra', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(1.595, 12);
     expect(costOf('gpt-5.6-sol', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.638, 12);
+    // 70k × 2 + 30k × 2.5 + 20k × 0.2 + 10k × 12, then the same shape at Luna's tenth-scale rates.
+    expect(costOf('gpt-5.6-terra', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.339, 12);
+    expect(costOf('gpt-5.6-luna', { input: 100_000, cacheWrite: 30_000, cacheRead: 20_000, output: 10_000 })).toBeCloseTo(0.0339, 12);
     expect(costOf('gpt-5.5', { input: 1, cacheWrite: 1, cacheRead: 0, output: 0 })).toBeNull();
   });
   it('applies long-context rates to the entire request only above 272k including cached input', () => {

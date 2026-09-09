@@ -529,7 +529,7 @@ export const HOST_COMMANDS: HostDef[] = [
     }),
   def('example.open', 'replacement', 'Open a bundled example by name (see the examples gallery), replaying its Journal Commands. A complete open establishes the saved baseline. If replay fails partway through, the partial Model remains visible and the previous saved baseline is preserved.', z.object({ name: z.string() }), ({ name }, ctx) => ctx.examples.open(name)),
   def('solve.cancel', 'control', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'workspace', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
+  def('ai.setKey', 'workspace', 'Store an AI provider key in this browser (localStorage, across tabs and sessions), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'workspace', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
 ];
 

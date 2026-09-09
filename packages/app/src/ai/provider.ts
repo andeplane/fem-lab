@@ -87,10 +87,12 @@ export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0 };
  * an unknown id yields `null` and the panel shows tokens and seconds without a price rather than
  * a made-up number.
  */
-// OpenAI Standard rates verified 2026-09-06 against the model pages linked in docs/AI-PRICING.md.
+// OpenAI Standard rates verified 2026-09-09 against the model pages linked in docs/AI-PRICING.md.
 export const PRICES: Record<string, { in: number; out: number; cached?: number; write?: number; longContext?: boolean }> = {
   'gpt-6-astra': { in: 10, cached: 1, write: 12.5, out: 50, longContext: true },
   'gpt-5.6-sol': { in: 4, cached: 0.4, write: 5, out: 20, longContext: true },
+  'gpt-5.6-terra': { in: 2, cached: 0.2, write: 2.5, out: 12, longContext: true },
+  'gpt-5.6-luna': { in: 0.2, cached: 0.02, write: 0.25, out: 1.2, longContext: true },
   'gpt-5.5': { in: 5, cached: 0.5, out: 30, longContext: true },
   'gpt-5.4-mini': { in: 0.75, cached: 0.075, out: 4.5 },
   'claude-opus-5': { in: 5, out: 25 },

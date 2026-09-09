@@ -12,20 +12,21 @@ export function readStorage(storage: Storage | null, slot: string): string | nul
   try { return storage?.getItem(slot) ?? null; } catch { return null; }
 }
 
-export function storeKey(id: ProviderId, key: string | null, storage: Storage | null = browserStorage('sessionStorage')): void {
+/** Keys live in `localStorage`, so one paste lasts across tabs and sessions in this browser (#485). */
+export function storeKey(id: ProviderId, key: string | null, storage: Storage | null = browserStorage('localStorage')): void {
   try {
     if (key) storage?.setItem(KEY_SLOT[id], key);
     else storage?.removeItem(KEY_SLOT[id]);
   } catch { /* Refused storage is treated as an unavailable key. */ }
 }
 
-/** Move old persistent keys into this session, then remove the persistent copies.
- * A newly entered session key wins. Model preferences remain persistent.
+/** Adopt a key the earlier session-only build left in this tab's `sessionStorage`, then remove
+ * that copy. A key already stored persistently wins. Model preferences are untouched.
  */
-export function migratePersistentKeys(persistent: Storage | null = browserStorage('localStorage'), session: Storage | null = browserStorage('sessionStorage')): void {
+export function adoptSessionKeys(persistent: Storage | null = browserStorage('localStorage'), session: Storage | null = browserStorage('sessionStorage')): void {
   for (const id of ['anthropic', 'openai'] as const) {
-    const old = readStorage(persistent, KEY_SLOT[id]);
-    if (old && !readStorage(session, KEY_SLOT[id])) storeKey(id, old, session);
-    try { persistent?.removeItem(KEY_SLOT[id]); } catch { /* Storage may be inaccessible. */ }
+    const left = readStorage(session, KEY_SLOT[id]);
+    if (left && !readStorage(persistent, KEY_SLOT[id])) storeKey(id, left, persistent);
+    try { session?.removeItem(KEY_SLOT[id]); } catch { /* Storage may be inaccessible. */ }
   }
 }
