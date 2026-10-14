@@ -39,17 +39,20 @@ export interface AssistantPanelProps {
  *  Before the panel is mounted `send` keeps the line in `pending` instead of dropping it, and the
  *  panel drains it the moment it mounts (issue #40). Without that, "open the drawer, then
  *  `chat.send`" is a race that both callers lose: the start screen's composer and the error card's
- *  "Send this error to the Assistant" each toggle the panel and send in the same tick. */
+ *  "Send this error to the Assistant" each toggle the panel and send in the same tick.
+ *  References are buffered too, so a tree reference can open the drawer and insert in one tick. */
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
   pendingProducer: undefined as Promise<RegistryProducer> | undefined,
   pendingDraft: null as string | null,
+  pendingMentions: [] as string[],
   setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
   send: (text: string, producer?: Promise<RegistryProducer>): void => buffer(text, producer),
-  insertMention: (ref: string): void => void ref,
+  insertMention: (ref: string): void => bufferMention(ref),
   clear: (): void => {
     chatBridge.pending = null;
+    chatBridge.pendingMentions = [];
   },
 };
 
@@ -59,6 +62,8 @@ const buffer = (text: string, producer?: Promise<RegistryProducer>): void => {
   chatBridge.pendingProducer = producer;
   chatBridge.pending = text;
 };
+
+const bufferMention = (ref: string): void => { chatBridge.pendingMentions.push(ref); };
 
 interface QueuedMessage { producer: Promise<RegistryProducer>; text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
 
@@ -492,9 +497,17 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       chatBridge.setDraft(chatBridge.pendingDraft);
       chatBridge.pendingDraft = null;
     }
-    chatBridge.insertMention = insert;
+    chatBridge.insertMention = (ref) => {
+      store.togglePanel('assistant', true);
+      insert(ref);
+      focusDraft.current = true;
+    };
+    const mentions = chatBridge.pendingMentions;
+    chatBridge.pendingMentions = [];
+    mentions.forEach(chatBridge.insertMention);
     chatBridge.clear = () => {
       chatBridge.pending = null;
+      chatBridge.pendingMentions = [];
       if (activeRequest.current) return;
       messages.current = [];
       setItems([]);
@@ -508,7 +521,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     return () => {
       chatBridge.send = buffer;
       chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
-
+      chatBridge.insertMention = bufferMention;
     };
   });
 

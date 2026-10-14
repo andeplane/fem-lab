@@ -272,13 +272,18 @@ export function makeHostContext(
           tab: 'script',
         }),
     },
-    // The drawer rebinds these the moment it mounts; until then they are no-ops, so a
-    // `chat.send` from a script or the palette never throws at a person. The `import()` keeps
+    // The drawer rebinds the bridge when it mounts; until then it buffers sends and references.
+    // Open it before inserting a reference so a first-use tree click mounts the consumer.
+    // The `import()` keeps
     // the two AI SDKs off the boot path: a static `chatBridge` import would drag `src/ai/**`,
     // and with it @anthropic-ai/sdk and openai, into the landing chunk.
     chat: {
       send: (text) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.send(text); }),
-      insertMention: (ref) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.insertMention(ref); }),
+      insertMention: (ref) => import('./ai').then(async (m) => {
+        await session.active();
+        store.togglePanel('assistant', true);
+        return m.chatBridge.insertMention(ref);
+      }),
       setDraft: (text) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.setDraft(text); }),
       clear: () => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.clear(); }),
     },
