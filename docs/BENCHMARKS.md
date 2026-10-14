@@ -794,6 +794,11 @@ Known expansion and yield properties may remain stored on a thermal-only Materia
 presence leaves the steady heat profile unchanged and does not supply mechanical stiffness.
 A rotated anisotropic conductor independently retains `Delta T = q L/k2` when a 90° rotation
 puts material axis 2 along the heated bar, preserving the existing orthotropic heat path.
+The Chromium counterpart (`e2e/thermal-material.spec.ts`) checks both orders at two mesh sizes:
+material definitions and recorded Journals omit all elastic stiffness, every retained frame
+matches `T(t) = t`, and those exact browser Journals replay with matching hashes and frame
+catalogues on native hosts at 1/4 threads and Node wasm. A mechanical solve reports missing
+stiffness before assembly.
 
 The registry's E1 VTU export is also read, unmodified, by the independent `vtkio` reader.
 Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
