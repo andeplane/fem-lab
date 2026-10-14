@@ -9,6 +9,7 @@ test('@cpu heat example shows conductivity and specific heat in its material row
   const material = page.locator('.tree .row-main').filter({ has: page.locator('.name', { hasText: /^slab$/ }) });
   await expect(material).toContainText('k 35 W/(m K)');
   await expect(material).toContainText('cp 440.5 J/(kg K)');
+  await expect(material.locator('strong')).toHaveText(['ρ 7200 kg/m^3', 'k 35 W/(m K)', 'cp 440.5 J/(kg K)']);
   const summary = material.locator('.material-summary');
   expect(await summary.evaluate((element) => getComputedStyle(element).whiteSpace)).toBe('normal');
   expect(await summary.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);

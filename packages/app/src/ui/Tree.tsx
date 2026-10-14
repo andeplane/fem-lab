@@ -211,7 +211,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       'Assign Materials to Bodies. Each Step uses the mechanical or thermal properties it needs.',
       { what: 'material', cmd: 'material.add' },
       (m?.materials ?? []).map((x) => {
-        const properties = [...materialProperties(x), { key: 'assignment', text: `on ${x.assignedTo.join(', ') || 'nothing'}` }];
+        const properties: MaterialProperty[] = [...materialProperties(x, m!), { key: 'assignment', text: `on ${x.assignedTo.join(', ') || 'nothing'}`, usedBy: [] }];
         return {
           cmd: 'form.edit',
           args: { kind: 'material', name: x.name },
@@ -477,7 +477,10 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           <span class="row-text">
                             <span class="mono name">{item.name}</span>
                             <span class={`summary${item.properties ? ' material-summary' : ''}`}>
-                              {item.properties ? item.properties.map((property, index) => <span class="material-property" key={property.key}>{index > 0 ? ' · ' : ''}{property.text}</span>) : item.summary}
+                              {item.properties ? item.properties.map((property, index) => <span class="material-property" key={property.key}>
+                                {index > 0 ? ' · ' : ''}
+                                {property.usedBy.length ? <strong title={`Used by ${property.usedBy.join(', ')}`}>{property.text}</strong> : property.text}
+                              </span>) : item.summary}
                             </span>
                           </span>
                         </Cmd>

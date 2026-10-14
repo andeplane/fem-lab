@@ -543,6 +543,10 @@ textarea:focus {
 .material-property {
   overflow-wrap: anywhere;
 }
+.material-property strong {
+  color: var(--text-body);
+  font-weight: 500;
+}
 .at {
   flex: none;
   padding: 4px 8px 0 2px;
