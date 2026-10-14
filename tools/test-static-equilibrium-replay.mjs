@@ -131,3 +131,127 @@ try {
     } finally { engine.free(); }
   }
 } finally { rmSync(scratch, { recursive: true, force: true }); }
+
+
+// Reachable representability boundaries over the same checked host as ordinary replay.
+// Finite authored quantities can still overflow an assembled wrench or its display unit.
+function query(engine, input) { return JSON.parse(engine.query(JSON.stringify(input))); }
+async function dispatch(engine, input) { await engine.dispatch(JSON.stringify(input)); }
+function selected(engine) { return query(engine, { query: 'query.result', step: 'static' }); }
+function snapshot(engine, includeSelected = true) {
+  return {
+    file: engine.export_file(), revision: engine.revision(), hash: engine.model_hash(),
+    records: query(engine, { query: 'query.results' }),
+    ...(includeSelected ? { selected: selected(engine) } : {}),
+  };
+}
+function unchanged(engine, before) {
+  assert.deepEqual(snapshot(engine, Object.hasOwn(before, 'selected')), before,
+    'a rejected boundary operation must preserve authored state and the selected Result');
+}
+function boundaryError(error, code, display = false) {
+  assert.equal(error.code, code);
+  assert.equal(typeof error.where, 'string');
+  assert.ok(error.where.startsWith('staticEquilibrium.'), JSON.stringify(error));
+  if (display) {
+    assert.equal(error.where, 'staticEquilibrium.forceScale');
+    assert.ok(error.suggestion.includes('model.setUnits'), JSON.stringify(error));
+  }
+  return true;
+}
+async function replacePair(engine, magnitude) {
+  for (const [name, on, sign] of [['positive', 'shaft.p0', 1], ['negative', 'shaft.p1', -1]]) {
+    await dispatch(engine, { cmd: 'load.moment', name, on, total: ['0 N m', `${sign * magnitude} N m`, '0 N m'] });
+  }
+}
+async function heldPair(engine, magnitude) {
+  // Keep B25's ordinary material/section and line setup, but use SI display units and
+  // fully hold every node so no huge physical displacement or iterative solve is involved.
+  for (const command of benchmark.journal) {
+    if (command.cmd === 'model.setUnits' || command.cmd.startsWith('load.') || command.cmd === 'step.add' || command.cmd === 'solve.run') continue;
+    await dispatch(engine, { ...command, ...(command.cmd === 'geometry.addLine' ? { divisions: 4 } : {}) });
+  }
+  await dispatch(engine, { cmd: 'geometry.nameRegion', name: 'shaft-all', where: { kind: 'body', name: 'shaft' } });
+  await dispatch(engine, { cmd: 'constraint.fix', name: 'all', on: 'shaft-all' });
+  await replacePair(engine, magnitude);
+  await dispatch(engine, { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['all'], loads: ['positive', 'negative'] });
+  await dispatch(engine, { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' });
+  return selected(engine);
+}
+
+{
+  const engine = new Engine(1);
+  try {
+    const initial = await heldPair(engine, 1000);
+    await replacePair(engine, 1e308);
+    const before = snapshot(engine);
+    assert.equal(before.selected.resultId, initial.resultId);
+    assert.equal(before.selected.stale, true);
+    await assert.rejects(engine.dispatch(JSON.stringify({ cmd: 'solve.run', step: 'static', solver: 'cpu-direct' })), error => boundaryError(error, 'solve.diverged'));
+    unchanged(engine, before);
+    console.log('WASM: opposing finite +/-1e308 N m actions reject overflowing scales before publishing; prior selected Result and authored state preserved.');
+  } finally { engine.free(); }
+}
+
+{
+  const engine = new Engine(1);
+  try {
+    const solved = await heldPair(engine, 1e307);
+    const ledger = solved.staticEquilibrium;
+    assert.ok(ledger);
+    assert.equal(ledger.forceScale.unit, 'N');
+    assert.equal(ledger.momentScale.unit, 'N m');
+    assert.equal(ledger.forceScale.value, 2e307);
+    assert.equal(ledger.momentScale.value, 2e307);
+    assert.ok(Number.isFinite(ledger.forceScale.value) && Number.isFinite(ledger.momentScale.value));
+    vector(ledger.forceResidual, [0, 0, 0], 'N', 0);
+    vector(ledger.appliedMoment, [0, 0, 0], 'N m', 0);
+    vector(ledger.momentResidual, [0, 0, 0], 'N m', 0);
+    assert.equal(solved.balance, 0);
+    assert.equal(ledger.momentBalance, 0);
+    await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'mN', length: 'mm' } });
+    const before = snapshot(engine, false);
+    for (const input of [{ query: 'query.result', step: 'static' }, { query: 'query.report', step: 'static' }]) {
+      assert.throws(() => query(engine, input), error => boundaryError(error, 'schema', true));
+      unchanged(engine, before);
+    }
+    const retained = query(engine, { query: 'query.result', resultId: solved.resultId });
+    assert.equal(retained.resultId, solved.resultId);
+    assert.deepEqual(retained.staticEquilibrium, ledger, 'retained-ID lookup must use the solved SI display units');
+    unchanged(engine, before);
+    console.log('WASM: +/-1e307 N m actions remain finite in SI; mN/mm queries reject display overflow, while retained-ID SI ledger stays exact and read-only.');
+  } finally { engine.free(); }
+}
+
+{
+  const engine = new Engine(1);
+  try {
+    const initial = await heldPair(engine, 1000);
+    await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'mN', length: 'mm' } });
+    await replacePair(engine, 1e307);
+    const before = snapshot(engine);
+    assert.equal(before.selected.resultId, initial.resultId);
+    assert.equal(before.selected.stale, true);
+    await assert.rejects(engine.dispatch(JSON.stringify({ cmd: 'solve.run', step: 'static', solver: 'cpu-direct' })), error => boundaryError(error, 'schema', true));
+    unchanged(engine, before);
+    console.log('WASM: a new finite-SI but unrepresentable-display solve cannot replace the prior readable Result or mutate its authored state.');
+  } finally { engine.free(); }
+}
+
+{
+  const engine = new Engine(1);
+  try {
+    await heldPair(engine, 1000);
+    await dispatch(engine, { cmd: 'geometry.addLine', name: 'shaft', kind: 'beam', divisions: 2, points: [['0 m', '0 m', '0 m'], ['100 m', '0 m', '0 m']] });
+    await dispatch(engine, { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['all'], loads: [] });
+    await dispatch(engine, { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' });
+    await dispatch(engine, { cmd: 'load.force', name: 'push', on: 'shaft.p1', total: ['0 N', '0 N', '-1e308 N'] });
+    await dispatch(engine, { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['all'], loads: ['push'] });
+    const before = snapshot(engine);
+    assert.equal(before.selected.stale, true);
+    // (100 m) x (1e308 N) overflows although the force and coordinates are finite.
+    await assert.rejects(engine.dispatch(JSON.stringify({ cmd: 'solve.run', step: 'static', solver: 'cpu-direct' })), error => boundaryError(error, 'solve.diverged'));
+    unchanged(engine, before);
+    console.log('WASM: finite far-end force with overflowing 100 m lever arm rejects before publishing and preserves the prior Result.');
+  } finally { engine.free(); }
+}
