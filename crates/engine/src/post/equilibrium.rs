@@ -64,7 +64,9 @@ struct WrenchSums {
     reaction_moment_scale: f64,
 }
 
-/// Pure wrench accounting; arrays use full Problem DOF order and Constraint ownership.
+/// Pure wrench accounting for a nonempty Mesh; arrays use full Problem DOF order
+/// and Constraint ownership. Both static recovery paths run checks::all first:
+/// an empty Cartesian Problem leaves every rigid mode free and is rejected.
 fn account(
     mesh: &Mesh,
     dpn: usize,
@@ -74,7 +76,7 @@ fn account(
     rc: &ResolvedConstraints,
     pool: &Pool,
 ) -> StaticEquilibrium {
-    let reference = mesh.coords.chunks_exact(3).next().map_or([0.0; 3], |p| [p[0], p[1], p[2]]);
+    let reference = mesh.node(0);
     // Fixed-size chunks and index-order reduction match the engine's dot-product
     // convention. The injected Pool determines concurrency, never summation order.
     let partials = pool.install(|| {
@@ -175,35 +177,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_wrench_sum_is_the_zero_accounting_identity() {
-        let mesh = Mesh {
-            dim: 3,
-            coords: vec![],
-            blocks: vec![],
-            node_sets: Default::default(),
-            elem_sets: Default::default(),
-            face_sets: Default::default(),
-        };
-        let rc = ResolvedConstraints { fixed: vec![], owner: vec![], inert: vec![] };
-        let ledger = account(&mesh, 3, &[], None, &[], &rc, &Pool::new(1));
-        assert_eq!(
-            ledger,
-            StaticEquilibrium {
-                reference: [0.0; 3],
-                characteristic_length: 0.0,
-                force_residual: [0.0; 3],
-                force_scale: 0.0,
-                applied_moment: [0.0; 3],
-                reaction_moments: vec![],
-                moment_residual: [0.0; 3],
-                moment_scale: 0.0,
-            }
-        );
-        assert_eq!(relative(ledger.force_residual, ledger.force_scale), 0.0);
-        assert_eq!(relative(ledger.moment_residual, ledger.moment_scale), 0.0);
-    }
-
-    #[test]
     fn opposing_force_couple_pairs_account_for_every_chunk_at_one_and_four_threads() {
         // Each adjacent pair at x=2k and x=2k+1 carries +2/-2 N about y and a
         // +2 N m z couple on the second node: their combined force and moment vanish.
@@ -269,6 +242,16 @@ mod tests {
         assert_eq!(relative(ledger.force_residual, ledger.force_scale), 0.);
         assert_eq!(ledger.moment_scale, 0.);
         assert_eq!(relative(ledger.moment_residual, ledger.moment_scale), 0.);
+        let no_supports = ResolvedConstraints { fixed: vec![], owner: vec![], inert: vec![] };
+        let zero = account(&mesh, 3, &[0.; 3], None, &[0.; 3], &no_supports, &Pool::new(1));
+        assert_eq!(zero.reference, [3., 4., 5.]);
+        assert_eq!(zero.force_residual, [0.; 3]);
+        assert_eq!(zero.moment_residual, [0.; 3]);
+        assert_eq!(zero.force_scale, 0.);
+        assert_eq!(zero.moment_scale, 0.);
+        assert_eq!(zero.reaction_moments, vec![]);
+        assert_eq!(relative(zero.force_residual, zero.force_scale), 0.);
+        assert_eq!(relative(zero.moment_residual, zero.moment_scale), 0.);
     }
 
     #[test]
