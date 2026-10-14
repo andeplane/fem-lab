@@ -1,0 +1,40 @@
+import {execFileSync} from 'node:child_process';
+import {readFile} from 'node:fs/promises';
+import {expect,test} from '@playwright/test';
+import type {AccountState} from '@femlab/registry';
+
+test('email login, real Assistant tools, private export and durable deletion on staging',async({page},testInfo)=>{
+  test.skip(!process.env['FEMLAB_LIVE_LOGIN_PATH'],'Requires a disposable staging email action link; no real email is sent.');
+  expect(process.env['FEMLAB_LIVE_ORIGIN']).toBe('https://femlab-app-staging.web.app');
+  const qa=JSON.parse(await readFile(process.env['FEMLAB_LIVE_LOGIN_PATH']!,'utf8')) as {link:string;email:string};
+  expect(qa.email.endsWith('@example.invalid')).toBe(true);
+  await page.addInitScript(email=>{sessionStorage.setItem('femlab.signInEmail',email);localStorage.setItem('femlab.tour.dismissed','1')},qa.email);
+  const signinResponse=page.waitForResponse(response=>response.url().includes('accounts:signInWithEmailLink')&&response.status()===200);
+  await page.goto(qa.link);await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});
+  await expect.poll(async()=>await page.evaluate(()=>window.fem.registry.query({query:'query.account'})) as AccountState,{timeout:30000}).toMatchObject({status:'active',email:qa.email});
+  const signin=await signinResponse,credential=await signin.json() as {idToken:string},firebaseKey=new URL(signin.url()).searchParams.get('key')!;
+  const account=await page.evaluate(()=>window.fem.registry.query({query:'query.account'})) as AccountState;
+  expect(account.profile?.usage).toMatchObject({plan:'free',availableCredits:200000});expect(account.disclosureAccepted).toBe(false);
+  await page.evaluate(()=>window.fem.dispatch({cmd:'model.new',name:'Live account smoke'}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'assistant',open:true}));
+  await expect(page.locator('aside.assistant input[type=password]')).toHaveCount(0);await page.getByRole('button',{name:'Accept and enable AI'}).click();
+  await page.evaluate(()=>window.fem.dispatch({cmd:'chat.send',text:'Reply with exactly OK. Do not call any tools.'}));
+  await expect(page.locator('aside.assistant .messages .prose')).toContainText('OK',{timeout:90000});
+  await expect.poll(async()=>(await page.evaluate(()=>window.fem.registry.query({query:'query.account'})) as AccountState).profile?.usage?.availableCredits,{timeout:30000}).toBeLessThan(200000);
+  await page.evaluate(()=>window.fem.dispatch({cmd:'chat.send',text:'Add a box named live_box, 1 m on each side, to this existing Model using run_script. Confirm after querying the Model.'}));
+  await expect.poll(async()=>(await page.evaluate(()=>window.fem.query.model())).bodies.some(body=>body.name==='live_box'),{timeout:90000}).toBe(true);
+  await expect.poll(async()=>(await page.evaluate(()=>window.fem.registry.query({query:'query.account'})) as AccountState).profile?.usage?.reservedCredits,{timeout:30000}).toBe(0);
+  await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));await expect(page.getByRole('dialog',{name:'Your AI allowance'})).toContainText(qa.email);
+  await page.screenshot({path:testInfo.outputPath('hosted-account-desktop.png')});await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('hosted-account-mobile.png')});
+  await page.getByRole('button',{name:'Close account'}).click();await page.evaluate(()=>window.fem.dispatch({cmd:'account.signOut'}));
+  expect(await page.evaluate(()=>window.fem.registry.query({query:'query.account'}))).toMatchObject({status:'anonymous',uid:null,profile:null});await expect(page.locator('aside.assistant .messages')).toBeEmpty();expect((await page.evaluate(()=>window.fem.query.model())).name).toBe('Live account smoke');
+
+  const api=process.env['FEMLAB_LIVE_API_ORIGIN']!,headers={Authorization:`Bearer ${credential.idToken}`,'Content-Type':'application/json'};
+  const directDelete=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${firebaseKey}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idToken:credential.idToken})});expect(directDelete.ok).toBe(false);
+  const request=async(path:string,body:unknown)=>{const response=await fetch(api+path,{method:'POST',headers,body:JSON.stringify(body)});expect(response.status).toBe(200);return response.json()};
+  const runJob=()=>execFileSync('gcloud',['run','jobs','execute','femlab-recover','--region=europe-west3','--project=femlab-app-staging',`--account=${process.env['FEMLAB_LIVE_GOOGLE_ACCOUNT']!}`,'--wait'],{stdio:'pipe'});
+  expect(await request('/v1/account/export',{})).toMatchObject({status:'queued'});runJob();
+  const artifact=await request('/v1/account/export',{}) as {status:string;url:string};expect(artifact.status).toBe('ready');const download=await fetch(artifact.url);expect(download.status).toBe(200);
+  const data=await download.json() as {account:{id:string;email:string};requests:unknown[]};expect(data.account).toMatchObject({id:account.profile!.id,email:qa.email});expect(data.requests.length).toBeGreaterThan(0);expect(data).not.toHaveProperty('prompts');
+  expect(await request('/v1/account/delete',{confirm:'DELETE'})).toMatchObject({status:'queued'});runJob();const deleted=await fetch(api+'/v1/account',{headers});expect([401,403]).toContain(deleted.status);
+});
