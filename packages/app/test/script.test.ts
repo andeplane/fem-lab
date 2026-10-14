@@ -55,6 +55,14 @@ const host = (dispatch = vi.fn(async () => 'ack'), query = vi.fn(async () => ({ 
 });
 
 describe('ScriptHost', () => {
+  it('never forwards account, billing or credential authority from a generated program',async()=>{
+    const {scripts,dispatch,query}=host();const run=scripts.run('program()');const worker=FakeWorker.last!;
+    for(const cmd of ['account.signIn','account.delete','billing.checkout','ai.setKey']) await expect(worker.call('dispatch',{cmd})).rejects.toThrow('explicit user action');
+    await expect(worker.call('query',{query:'query.account'})).rejects.toThrow('explicit user action');
+    expect(dispatch).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled();
+    await expect(worker.call('dispatch',{cmd:'view.fit'})).resolves.toBe('ack');
+    worker.finish({console:[]});await run;
+  });
   it('hands the Worker code and a channel, then returns bounded output', async () => {
     const { scripts } = host();
     const run = scripts.run('fem.view.fit()');
