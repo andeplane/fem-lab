@@ -78,10 +78,18 @@ export class ResultComparison implements ResultComparisonHost {
         await this.lifecycle.restoreSingle();
         return;
       }
-      const catalogue = await this.transport.query({ query: 'query.results' }) as RetainedResults;
       const [left, right] = await Promise.all([this.prepare('left', configuration.left), this.prepare('right', configuration.right)]);
       const difference = configuration.mode === 'difference' ? await this.prepareDifference(configuration, left, right) : null;
+      // Model writes from a separate producer can occur between these immutable payload reads.
+      // Read status after preparation, so an earlier summary/catalogue cannot undo that edit.
+      const catalogue = await this.transport.query({ query: 'query.results' }) as RetainedResults;
       if (!this.current(ticket)) return;
+      for (const payload of [left, right]) {
+        const record = catalogue.records.find(record => record.id === payload.operand.resultId);
+        if (!record) throw new FemError('not-found', `retained Result '${payload.operand.resultId}' was evicted while loading`, 'resultId', 'select an available id from query.results');
+        payload.summary = { ...payload.summary, stale: record.stale };
+      }
+      if (difference) difference.payload.summary = { ...difference.payload.summary, stale: left.summary.stale || right.summary.stale };
       this.payloads = { left, right, ...(difference ? { difference: difference.payload } : {}) };
       this.store.set({ viewMode: 'results', playing: false });
       this.publish({ configuration, catalogue, left: this.pane(left), right: this.pane(right), difference: difference ? this.pane(difference.payload) : null,
@@ -162,7 +170,7 @@ export class ResultComparison implements ResultComparisonHost {
     const values = projectValues(response.values, response.components);
     const conversion = await this.conversion(response.unit, target.unit);
     const vector = response.components > 1;
-    const payload: Payload = { ...target, pane: 'difference', values, field: { ...target.field, field: 'difference', per: 'node', components: response.components, unit: response.unit, nodeCount: response.nodeCount, entityCount: response.nodeCount, values: [] },
+    const payload: Payload = { ...target, summary: { ...target.summary, stale: left.summary.stale || right.summary.stale }, pane: 'difference', values, field: { ...target.field, field: 'difference', per: 'node', components: response.components, unit: response.unit, nodeCount: response.nodeCount, entityCount: response.nodeCount, values: [] },
       ...displayValues(values, conversion.scale, 0), scale: conversion.scale, offset: 0,
       label: vector ? `|${configuration.left.field} left − ${configuration.right.field} right|` : `${left.label} − ${right.label}` };
     return { response, payload };

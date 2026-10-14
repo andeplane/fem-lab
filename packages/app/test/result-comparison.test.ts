@@ -121,6 +121,7 @@ it('uses the engine difference on the explicit target surface with nullable cove
   reply(async (query, original) => query.query === 'query.difference' ? diff([0.001234567891, null, -0.003]) : original(query));
   await comparison.configure({ mode: 'difference', left: operand('old', 'displacement', 0), right: operand('new', 'displacement', 0), onto: 'right' });
   expect(left.setSurface.mock.lastCall?.[0].resultId).toBe('new');
+  expect(comparison.state().difference?.summary.stale).toBe(true);
   expect(comparison.state().difference?.legend?.min).toEqual(q(-3, 'mm'));
   expect(left.setFieldValidity).toHaveBeenLastCalledWith(Uint8Array.of(1, 0, 1));
   expect((await comparison.pick({ pane: 'difference', resultId: 'new', at: [q(2.001234567891), q(0), q(0)] }))?.value).toBeNull();
@@ -217,5 +218,22 @@ it('cancels a first comparison load when the user explicitly switches to current
     store.set({ viewMode: mode }); comparison.suspend(); release(surface('old')); await pending;
     expect(store.state.viewMode).toBe(mode); expect(comparison.state().loading).toBe(false);
     expect(comparison.state().configuration.mode).toBe('single'); expect(left.setSurface).not.toHaveBeenCalled();
+  }
+});
+
+it('does not overwrite a concurrent Model edit or eviction with status captured before deferred payload reads', async () => {
+  for (const evicted of [false, true]) {
+    const { comparison, catalogue, transport } = setup(); await comparison.configure(pair);
+    let release!: (value: Surface) => void;
+    transport.surface = vi.fn(selector => selector!.resultId === 'old' ? new Promise<Surface>(resolve => { release = resolve; }) : Promise.resolve(surface('new')));
+    const pending = comparison.configure({ ...pair, left: operand('old', 'displacement', 0) });
+    const rejected = evicted ? expect(pending).rejects.toMatchObject({ code: 'not-found' }) : pending;
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const current = comparison.state().catalogue;
+    catalogue({ ...current, records: current.records.filter(r => !evicted || r.id !== 'new').map(r => ({ ...r, stale: true })) });
+    await comparison.refresh(); release(surface('old')); await rejected;
+    expect(comparison.state().catalogue.records.every(record => record.stale)).toBe(true);
+    if (evicted) expect(comparison.state().right?.error?.code).toBe('not-found');
+    else expect(comparison.state().right?.summary.stale).toBe(true);
   }
 });
