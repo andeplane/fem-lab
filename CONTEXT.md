@@ -314,3 +314,15 @@ coordinates are SI. Original labels distinguish coincident nodes; dense Mesh ind
 only a deterministic mapping of participating nodes. Unused labels remain in the source
 and exact memberships, are explicitly reported, and have no FE DOFs or Result values. Replacing the source is `mesh.set`, never editing a
 mesh cache or individual generated Set. See ADR 0026 and issue #501.
+
+## Hosted AI accounts
+
+**Account** — One verified Firebase identity mapped to service-owned status, entitlements
+and billing. It is not an engine Model, Session or Journal entry.
+
+**AI token credit** — A versioned billing unit weighted by model and token category,
+separate from a raw LLM token or the browser's supplier-cost estimate.
+
+**Usage reservation** — An atomic hold against an Account's allowance and service
+supplier-cost budget before one provider round. It becomes a confirmed debit or
+pending reconciliation; losing the browser stream does not erase it. See ADR 0028.

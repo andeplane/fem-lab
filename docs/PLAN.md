@@ -202,6 +202,10 @@ Scordelis–Lo (0.3024), LE3 (0.185 m) and the SS plate (0.00406 qa⁴/D) are co
 
 ## 6. Phase 4: the AI
 
+Production account-based inference follows [ADR 0028](adr/0028-hosted-ai-account-and-service-boundary.md)
+and issues #546–#557. The direct-provider description in 4.4 is the development
+adapter during migration; #554 gates the production Assistant through the hosted service.
+
 Goal: the in-page agent does the proposal's story end to end; Claude Code can drive the page.
 
 | # | Task | Done when |

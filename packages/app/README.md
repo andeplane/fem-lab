@@ -62,3 +62,8 @@ What is deliberately *not* in the landing chunk, and how it stays out:
 
 Give the AI SDKs their own `advancedChunks` group and rolldown hoists the shared chunk into the
 entry's *static* imports — the one thing that undoes all of this. `npm run size` catches it.
+
+Production hosted AI is being implemented under #546–#557 and ADR 0028. The static
+app and local engine remain independent of account/API availability. Provider blocks
+and the injected OpenAI Responses adapter are shared through `@femlab/ai`; this
+foundation alone does not change the current key-based UI.
