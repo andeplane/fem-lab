@@ -67,6 +67,49 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('opens a heat Material form with thermal and mass fields first and stiffness hidden', () => {
+    const { root, store } = mount('material.add', { name: 'conductor' });
+    store.set({ model: { ...model(), steps: [{ name: 'heat', procedure: 'heat-steady', loads: [], constraints: [], solved: false }] } });
+    expect([...root.querySelectorAll('.props-body > [data-field]')].map(f => f.getAttribute('data-field'))).toEqual(['name', 'k', 'cp', 'rho', 'source']);
+    expect(field(root, 'E')).toBeNull();
+    expect(field(root, 'k').textContent).toContain('thermal conductivity');
+    expect(root.querySelector('[aria-label="Material physics"] [aria-pressed="true"]')!.textContent).toBe('mass');
+  });
+
+  it('uses callable Material chips and preserves hidden values through edits, Apply and Revert', () => {
+    const original = { name: 'steel', E: '210 GPa', nu: 0.3, k: '45 W/(m K)', cp: '460 J/(kg K)', rho: '7850 kg/m^3', source: 'EN 10025' };
+    const { root, store, sent } = mount('material.add', original);
+    const chip = () => [...root.querySelectorAll<HTMLButtonElement>('[aria-label="Material physics"] button')].find(b => b.textContent === 'stiffness')!;
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    chip().click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'material.add', args: original, keepInitial: true, materialPhysics: ['mass', 'thermal'] });
+    expect(field(root, 'E')).toBeNull();
+    type(field(root, 'k').querySelector('input')!, '50 W/(m K)');
+    expect(store.state.form!.materialPhysics).toEqual(['mass', 'thermal']);
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'material.add', ...original, k: '50 W/(m K)' });
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('E: "210 GPa"');
+    root.querySelector<HTMLButtonElement>('[data-cmd="form.open"].outline')!.click();
+    expect(store.state.form!.values).toEqual(original);
+    expect(store.state.form!.materialPhysics).toEqual(['mass', 'thermal']);
+    expect(field(root, 'E')).toBeNull();
+    chip().click();
+    expect(field(root, 'E').querySelector('input')!.value).toBe('210 GPa');
+    store.openForm('material.add', { name: 'fresh' });
+    expect(store.state.form!.materialPhysics).toBeUndefined();
+    expect(field(root, 'E')).not.toBeNull();
+  });
+
+  it('allows empty Material view groups without changing the definition, and shows hidden errors', async () => {
+    const { root, store, dispatch } = mount('material.add', { name: 'steel', E: '210 GPa', nu: 0.3 });
+    await dispatch({ cmd: 'form.open', command: 'material.add', args: store.state.form!.values, keepInitial: true, materialPhysics: [] });
+    expect(root.querySelectorAll('.props-body > [data-field]').length).toBe(2);
+    expect(store.state.form!.values['E']).toBe('210 GPa');
+    store.set({ formError: { code: 'schema', cause: 'E must be positive', where: 'E', suggestion: 'material.add with positive E' } });
+    expect(root.querySelector('.surface.error')!.textContent).toContain('E must be positive');
+    await expect(dispatch({ cmd: 'form.open', command: 'material.add', materialPhysics: ['nonsense'] })).rejects.toThrow();
+  });
+
   it('changes Step fields with the selected procedure while keeping full values for Apply and Revert', async () => {
     const original = { name: 'cooling', procedure: 'heat-transient', constraints: [], loads: [], dt: '1 s', tEnd: '10 s', theta: 0.5, initial: '300 K', alpha: -0.05, initialVelocity: [] };
     const { root, store, sent } = mount('step.add', original);

@@ -123,27 +123,38 @@ impl Axis {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Orthotropic {
+    #[schemars(extend("x-physics" = "stiffness"))]
     #[serde(rename = "E1")]
     pub e1: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
     #[serde(rename = "E2")]
     pub e2: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
     #[serde(rename = "E3")]
     pub e3: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
     #[serde(rename = "G12")]
     pub g12: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
     #[serde(rename = "G13")]
     pub g13: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
     #[serde(rename = "G23")]
     pub g23: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
     pub nu12: f64,
+    #[schemars(extend("x-physics" = "stiffness"))]
     pub nu13: f64,
+    #[schemars(extend("x-physics" = "stiffness"))]
     pub nu23: f64,
     /// Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
     /// `material.add`, never both.
+    #[schemars(extend("x-physics" = "expansion"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha: Option<[Q<ThermalExpansion>; 3]>,
     /// Conductivity along the three material axes. Give this *or* the isotropic `k` on
     /// `material.add`, never both.
+    #[schemars(extend("x-physics" = "thermal"))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k: Option<[Q<Conductivity>; 3]>,
 }
@@ -233,6 +244,7 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
     #[schemars(extend("x-results" = ["u", "stress", "reactions"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness"]))]
     Static,
     /// Static equilibrium with geometric nonlinearity: large displacement and large rotation,
     /// solved by Newton–Raphson over `increments` load increments. The strain measure is
@@ -246,6 +258,7 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "yield", "plasticity", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
     #[schemars(extend("x-results" = ["u", "Cauchy stress", "reactions"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "plasticity"]))]
     StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
     ///
@@ -267,6 +280,7 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["natural frequencies", "mode shapes"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     Modal,
     /// Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening
     /// that state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`
@@ -285,21 +299,25 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness"]))]
     #[schemars(extend("x-results" = ["load factors", "mode shapes"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness"]))]
     Buckling,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
     #[schemars(extend("x-material-properties" = ["k", "orthotropic"]))]
     #[schemars(extend("x-material-needs" = ["k"]))]
     #[schemars(extend("x-results" = ["T", "reaction power"]))]
+    #[schemars(extend("x-material-physics" = ["thermal", "mass"]))]
     HeatSteady,
     /// Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.
     #[schemars(extend("x-material-properties" = ["k", "orthotropic", "rho", "cp"]))]
     #[schemars(extend("x-material-needs" = ["k", "ρ", "cp"]))]
     #[schemars(extend("x-results" = ["T", "reaction power", "stored-energy rate"]))]
+    #[schemars(extend("x-material-physics" = ["thermal", "mass"]))]
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     Explicit,
     /// Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on
     /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
@@ -307,6 +325,7 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     Implicit,
     /// Steady-state response to a sinusoidal load over a frequency sweep, by mode
     /// superposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,
@@ -314,6 +333,7 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["amplitude", "phase", "frequency response"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     Harmonic,
     /// One-sided PSD response of the solved modal Step named by `after`. Produces
     /// componentwise 1σ displacement and stress, including cross-modal correlations.
@@ -321,6 +341,7 @@ pub enum Procedure {
     #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["1σ displacement", "1σ stress"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     RandomVibration,
 }
 
@@ -1429,28 +1450,52 @@ pub enum Command {
     #[serde(rename = "material.add", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialAdd {
+        /// Unique Material name; reusing a name replaces its full definition.
+        #[schemars(extend("x-physics" = "common"))]
         name: String,
+        /// Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.
+        #[schemars(extend("x-physics" = "stiffness"))]
         #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
         e: Option<Q<Stress>>,
+        /// Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.
+        #[schemars(extend("x-physics" = "stiffness"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nu: Option<f64>,
+        /// Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.
+        #[schemars(extend("x-physics" = "anisotropy"))]
         // Boxed: the nine quantities are much larger than any other Command's payload.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orthotropic: Option<Box<Orthotropic>>,
+        /// Rotation of the Material axes from global axes; omitted means the global axes.
+        #[schemars(extend("x-physics" = "anisotropy"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         orientation: Option<Orientation>,
+        /// Mass density for gravity, inertia and transient heat capacity.
+        #[schemars(extend("x-physics" = "mass"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rho: Option<Q<Density>>,
+        /// Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.
+        #[schemars(extend("x-physics" = "expansion"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alpha: Option<Q<ThermalExpansion>>,
+        /// Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.
+        #[schemars(extend("x-physics" = "thermal"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         k: Option<Q<Conductivity>>,
+        /// Specific heat per unit mass for transient heat conduction; used with rho.
+        #[schemars(extend("x-physics" = "thermal"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cp: Option<Q<SpecificHeat>>,
+        /// Initial yield stress for plasticity and the reported safety factor.
+        #[schemars(extend("x-physics" = "plasticity"))]
         #[serde(default, skip_serializing_if = "Option::is_none", rename = "yield")]
         yield_: Option<Q<Stress>>,
+        /// J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.
+        #[schemars(extend("x-physics" = "plasticity"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         plasticity: Option<Plasticity>,
+        /// Source or reference for these property values, retained with the Material.
+        #[schemars(extend("x-physics" = "common"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },

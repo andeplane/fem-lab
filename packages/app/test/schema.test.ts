@@ -129,6 +129,22 @@ describe('fieldsOf', () => {
     expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true, options: expect.arrayContaining(['stressTop', 'stressBottom', 'stress']) });
   });
 
+  it('assigns every Material field exactly one physics group and a meaningful hint', () => {
+    const fields = fieldsOf(byName('material.add'), DEFS);
+    const grouped: Record<string, Field[]> = {};
+    for (const field of fields) (grouped[field.physics!] ??= []).push(field);
+    expect(Object.keys(grouped).sort()).toEqual(['anisotropy', 'common', 'expansion', 'mass', 'plasticity', 'stiffness', 'thermal']);
+    expect(Object.values(grouped).flat()).toHaveLength(fields.length);
+    expect(grouped['thermal']!.map(f => f.path[0])).toEqual(['k', 'cp']);
+    expect(grouped['common']!.map(f => f.path[0])).toEqual(['name', 'source']);
+    expect(fields.every(f => f.hint.length > 20)).toBe(true);
+    const orthotropic = fields.find(f => f.path[0] === 'orthotropic')!;
+    expect(orthotropic.kind).toBe('object');
+    if (orthotropic.kind !== 'object') throw new Error('expected a group');
+    expect(orthotropic.fields.every(f => typeof f.physics === 'string')).toBe(true);
+    expect(orthotropic.fields.find(f => f.path.at(-1) === 'k')!.physics).toBe('thermal');
+  });
+
   it('unwraps an optional and keeps its dimension', () => {
     const rho = fieldsOf(byName('material.add'), DEFS).find((f) => f.path[0] === 'rho')!;
     expect(rho).toMatchObject({ kind: 'quantity', dimension: 'density', required: false });

@@ -9,7 +9,7 @@ import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
 import { TABS, type Tab } from './ui/tabs';
-import { getAt, setAt } from './ui/schema';
+import { getAt, setAt, type MaterialPhysics } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 import type { TransientState } from './transient';
 
@@ -45,6 +45,8 @@ export interface FormState {
   values: Record<string, unknown>;
   /** What Revert goes back to: the values the form was opened with. */
   initial: Record<string, unknown>;
+  /** Visible Material property groups; view state, never part of the engine Command. */
+  materialPhysics?: MaterialPhysics[];
   /** Existing object being edited; unsaved field values must not change its chat reference. */
   target?: { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
 }
@@ -455,10 +457,11 @@ export class Store {
    * Open the Properties form on a Command, pre-filled with `values`. Every field edit comes
    * back through here with `keepInitial`, so Revert still knows where the form started.
    */
-  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false, target?: FormState['target']): void {
+  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false, target?: FormState['target'], materialPhysics?: MaterialPhysics[]): void {
     const initial = keepInitial && this.state.form?.cmd === cmd ? this.state.form.initial : values;
     const edited = target ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.target : undefined);
-    this.set({ form: { cmd, values, initial, ...(edited ? { target: edited } : {}) }, formError: null, pickInto: null });
+    const physics = materialPhysics ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.materialPhysics : undefined);
+    this.set({ form: { cmd, values, initial, ...(edited ? { target: edited } : {}), ...(physics ? { materialPhysics: physics } : {}) }, formError: null, pickInto: null });
   }
 
   log(level: ConsoleLevel, text: string): void {

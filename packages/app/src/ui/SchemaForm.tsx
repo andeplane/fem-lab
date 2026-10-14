@@ -9,8 +9,9 @@ import { Cmd, type Dispatch } from './cmd';
 import { materialPickerSummary } from './materialSummary';
 import { PressurePreview } from './PressurePreview';
 import { SketchEditor } from './SketchEditor';
+import { materialFieldsFor, materialPhysicsFor } from './materialPhysics';
 import { procedureFields, procedureInfo, procedureSummary } from './procedures';
-import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
+import { MATERIAL_PHYSICS, applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
 
@@ -62,6 +63,7 @@ function Row({ field, children, error }: { field: Field; children: preact.Compon
         </span>
         <span class="mono field-dim">{field.tag}</span>
       </div>
+      {field.hint ? <div class="rule-note">{field.hint}</div> : null}
       {children}
       {error ? (
         <div class="surface error">
@@ -344,7 +346,8 @@ export function SchemaForm(props: FormProps) {
   }
   const fields = fieldsOf(variant, defs);
   const values = defaultFormValues(form.values, fields);
-  const visibleFields = form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
+  const physics = form.materialPhysics ?? materialPhysicsFor(s.model, values, fields, defs);
+  const visibleFields = form.cmd === 'material.add' ? materialFieldsFor(fields, physics) : form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
   const procedure = form.cmd === 'step.add' && typeof values['procedure'] === 'string' ? procedureInfo(values['procedure'], defs) : null;
   const cmd = { cmd: form.cmd, ...values };
   const name = String(values['name'] ?? '—');
@@ -376,6 +379,14 @@ export function SchemaForm(props: FormProps) {
         </div>
         <div class="prop-hint">{procedure ? procedure.hint : String(variant['description'] ?? '').split('\n').join(' ')}</div>
         {procedure ? <div class="prop-hint procedure-summary" role="status">{procedureSummary(procedure.name, defs)}</div> : null}
+        {form.cmd === 'material.add' ? (
+          <div class="material-physics">
+            <div class="rule-note">This material carries:</div>
+            <div class="chips" role="group" aria-label="Material physics">
+              {MATERIAL_PHYSICS.map(tag => <Cmd key={tag} dispatch={dispatch} cmd="form.open" class="chip-cand" pressed={physics.includes(tag)} args={{ command: form.cmd, args: values, keepInitial: true, materialPhysics: physics.includes(tag) ? physics.filter(p => p !== tag) : [...physics, tag] }}>{tag}</Cmd>)}
+            </div>
+          </div>
+        ) : null}
         {visibleFields.map((f) => (
           <FieldView key={f.path.join('.')} {...props} field={f} values={values} fields={fields} />
         ))}
