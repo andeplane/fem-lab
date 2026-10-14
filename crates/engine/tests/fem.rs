@@ -2366,6 +2366,64 @@ fn inp_writes_node_and_element_counts_that_parse_back() {
 }
 
 #[test]
+fn inp_continues_each_hex20_record_and_preserves_short_connectivity_records() {
+    let mut coords = map_nodes(ElementKind::Hex20, box_map);
+    for p in node_xi(ElementKind::Hex20) {
+        let [x, y, z] = box_map(p);
+        coords.extend([x + 2.0, y, z]);
+    }
+    let mesh = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![
+            ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 3, 4], first_elem: 0 },
+            ElementBlock { kind: ElementKind::Hex8, conn: (0..8).collect(), first_elem: 1 },
+            ElementBlock { kind: ElementKind::Hex20, conn: (0..40).collect(), first_elem: 2 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    mesh.validate().expect("the explicit connectivity fixture is valid");
+    let text = write_inp(&mesh, "records").unwrap();
+    assert_eq!(section_lines(&text, "*ELEMENT, TYPE=C3D4, ELSET=BLOCK1"), ["1, 1, 2, 4, 5"]);
+    assert_eq!(section_lines(&text, "*ELEMENT, TYPE=C3D8, ELSET=BLOCK2"), ["2, 1, 2, 3, 4, 5, 6, 7, 8"]);
+    // Independent exact records: the ID plus 15 nodes fills the first line, whose final comma
+    // continues this element. The last node line ends the record before the next element ID.
+    assert_eq!(
+        section_lines(&text, "*ELEMENT, TYPE=C3D20, ELSET=BLOCK3"),
+        [
+            "3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,",
+            "16, 17, 18, 19, 20",
+            "4, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,",
+            "36, 37, 38, 39, 40",
+        ]
+    );
+}
+
+#[test]
+fn inp_wraps_set_memberships_as_independent_data_records() {
+    let mut mesh = Structured { kind: ElementKind::Hex8, n: [17, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    mesh.node_sets.insert("WRAPPED".into(), (0..33).collect());
+    mesh.elem_sets.insert("WRAPPED".into(), (0..17).collect());
+    mesh.validate().expect("every membership refers to an existing node or element");
+    let text = write_inp(&mesh, "memberships").unwrap();
+    // NSET/ELSET allow repeated independent rows of 16 entries, without continuation commas.
+    assert_eq!(
+        section_lines(&text, "*NSET, NSET=WRAPPED"),
+        [
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16",
+            "17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32",
+            "33",
+        ]
+    );
+    assert_eq!(
+        section_lines(&text, "*ELSET, ELSET=WRAPPED"),
+        ["1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16", "17"]
+    );
+}
+
+#[test]
 fn inp_writes_every_set_and_correct_box_face_labels() {
     let m = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
     let text = write_inp(&m, "box").unwrap();
