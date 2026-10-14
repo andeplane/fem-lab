@@ -21,7 +21,7 @@ import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
 import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
-import type { AbaqusConversion, AbaqusConversionReport, AbaqusIo } from '@femlab/registry';
+import type { AbaqusIo } from '@femlab/registry';
 import { browserAbaqusIo } from './abaqus-files';
 
 /**
@@ -108,12 +108,12 @@ export interface SessionHostServices {
   projects: Projects;
   active(): Promise<void>;
   replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
-  importAbaqus(commands: Command[], report: AbaqusConversionReport): Promise<void>;
+  captureImport(): Omit<ReturnType<HostContext['abaqus']['capture']>, 'io'>;
 }
 
 const missingSession = (): never => { throw new FemError('session.expired', 'this host has no captured project session'); };
 const unboundSession: SessionHostServices = {
-  active: missingSession, replay: missingSession, importAbaqus: missingSession,
+  active: missingSession, replay: missingSession, captureImport: missingSession,
   projects: { prime: missingSession, list: missingSession, current: missingSession, new: missingSession,
     open: missingSession, rename: missingSession, delete: missingSession, save: missingSession,
     setEnabled: missingSession, enabled: missingSession, flush: missingSession },
@@ -141,7 +141,7 @@ export function makeHostContext(
   };
   return {
     transport,
-    abaqus: { capture: () => ({ io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder), convert: async query => await transport.query(query) as AbaqusConversion, replace: (commands, report) => session.importAbaqus(commands, report) }) },
+    abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {
       fit: () => v().fit(),
       setCamera: (c) => v().setCamera(c as CameraState),

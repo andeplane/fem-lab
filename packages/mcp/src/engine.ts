@@ -19,7 +19,7 @@ export interface EngineHandle {
   query(q: Record<string, unknown>): Promise<unknown>;
   /** Host import publication: validate converted Commands in a private checked Candidate. */
   replaceCommands(commands: Record<string, unknown>[]): Promise<void>;
-  /** Capture this operation's session before async input; later own replacement cannot rebind it. */
+  /** Capture the session and state before async input; intervening edits cannot authorize publication. */
   captureImport(): ImportEngineHandle;
   /** The `femlab/1` file: the Model snapshot plus its Journal. */
   modelFile(): unknown;

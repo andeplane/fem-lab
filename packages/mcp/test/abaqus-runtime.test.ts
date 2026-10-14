@@ -56,7 +56,8 @@ it('imports a scoped static deck through the actual converter, solves, exports a
     { overrides: { unitForce: '0 N' }, expected: { code: 'schema', where: 'unitForce' } },
     { overrides: { mode: 'mesh' }, expected: { code: 'schema', where: 'unitForce' } },
   ]) {
-    await expect(registry.dispatch({ cmd: 'file.importAbaqus', text: await readFile(staticFixture, 'utf8'), name: 'rejected', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', ...overrides })).rejects.toMatchObject(expected);
+    const command = { cmd: 'file.importAbaqus', text: await readFile(staticFixture, 'utf8'), name: 'rejected', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' };
+    await expect(registry.dispatch({ ...command, ...overrides })).rejects.toMatchObject(expected);
     expect(await registry.query({ query: 'query.journal' })).toEqual(before);
     expect(await registry.query({ query: 'query.result', step: 'AXIAL' })).toEqual(result);
   }
@@ -71,4 +72,38 @@ it('uses the same real inline import in an MCP script for a sparse mesh-only dec
   expect(scripted.result.report).toMatchObject({ mode: 'mesh', sourceNodes: 5, activeNodes: 4, sourceElements: 1, sourceLabels: { unusedNodes: [99] }, analysisConfigured: false });
   expect(scripted.result.mesh).toMatchObject({ nodes: 4, elements: 1 });
   expect(scripted.result.model).toMatchObject({ name: 'MCP sparse mesh', materials: [], steps: [] });
+});
+
+it.each(['initiating', 'independent'] as const)('preserves an edit by the %s producer admitted while an actual import read is deferred', async producer => {
+  const project = await mkdtemp(path.join(tmpdir(), 'femlab-504-admission-')); directories.push(project);
+  const engine = loadEngine(here);
+  let initiating!: Awaited<ReturnType<typeof engine.acquire>>;
+  let release!: (bytes: Uint8Array) => void;
+  const bytes = await readFile(meshFixture);
+  const pendingRead = new Promise<Uint8Array>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const registry = createRegistry({
+    engine: { acquire: async () => { initiating = await engine.acquire(); return initiating; } }, project,
+    abaqusIo: { pick: async () => null, read: async () => ({ name: 'deferred.inp', size: bytes.length, read: () => { started(); return pendingRead; } }), sha256: async value => createHash('sha256').update(value).digest('hex') },
+  });
+  await registry.dispatch({ cmd: 'file.importAbaqus', text: await readFile(staticFixture, 'utf8'), name: 'original bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' });
+  await registry.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' });
+  const pending = registry.dispatch({ cmd: 'file.importAbaqus', path: 'deferred.inp', name: 'late mesh', body: 'tet', mode: 'mesh', unitLength: '1 m' }).then(() => null, error => error as { code: string });
+  await reading;
+  const writer = producer === 'initiating' ? initiating : await engine.acquire();
+  try {
+    await writer.dispatch({ cmd: 'material.add', name: 'STEEL', E: '400 GPa', nu: 0 });
+    const before = await writer.modelFile();
+    const result = await writer.query({ query: 'query.result', step: 'AXIAL' });
+    release(bytes);
+    expect(await pending).toMatchObject({ code: 'session.conflict' });
+    const current = await engine.acquire();
+    try {
+      expect(await current.modelFile()).toEqual(before);
+      expect(await current.query({ query: 'query.result', step: 'AXIAL' })).toEqual(result);
+    } finally { await current.release(); }
+    await registry.dispatch({ cmd: 'export.file', format: 'journal', path: 'preserved.femlab.json' });
+    expect(JSON.parse(await readFile(path.join(project, 'preserved.femlab.json'), 'utf8'))).toEqual(before);
+  } finally { if (producer === 'independent') await writer.release(); }
 });

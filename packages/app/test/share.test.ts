@@ -47,7 +47,7 @@ function autosaveRegistry(save: ReturnType<typeof makeAutosave>) {
   const transport = { dispatch: vi.fn(async () => ({ seq: 0, revision: 1, hash: 'h', warnings: [], output: { type: 'none' } })) } as unknown as WorkerTransport;
   const replay = vi.fn(async (_commands: ShareCommand[]) => undefined);
   const host = makeHostContext(new Store(), transport, { current: null }, {} as never, undefined, undefined, save,
-    undefined, undefined, undefined, { active: async () => undefined, replay, importAbaqus: vi.fn(async () => undefined),
+    undefined, undefined, undefined, { active: async () => undefined, replay, captureImport: () => fakeHost().abaqus.capture(),
       projects: { ...fakeHost().projects, prime: async () => [], list: () => [], current: () => null,
         setEnabled: () => undefined, enabled: () => true, flush: async () => undefined } });
   return { registry: new Registry({ schema: schema as unknown as EngineSchema, host }), replay };

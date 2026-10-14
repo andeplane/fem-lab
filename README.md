@@ -42,7 +42,9 @@ with named Sets. Static mode adds one homogeneous isotropic elastic Material, tr
 constraints, CLOAD and one linear STATIC Step representing final equilibrium. PART,
 ASSEMBLY, INSTANCE, INCLUDE, OUTPUT blocks, other element types, `.odb` and `.cae` are
 rejected. Unsupported static content does not fall back to mesh mode. Input and the saved
-Model file each have a 16 MiB UTF-8 limit; a failed import keeps the current project.
+Model file each have a 16 MiB UTF-8 limit; a failed import keeps the current project. An edit
+or project switch during a pending browser/MCP import rejects that import and preserves the
+newer state. View-only actions remain usable while input is read.
 
 The CLI writes an unsolved normal Model file:
 
