@@ -3,7 +3,7 @@
 // puts back in the form (an edit is the create Command re-issued, brief §2.1).
 import schema from '../../registry/src/generated/engine.schema.json';
 import { humanise } from '../src/ui/schema';
-import type { ModelSummary } from '@femlab/registry';
+import { parseRef, type ModelSummary } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import { Store, initialState, type UiState } from '../src/store';
 import { reorderSteps, shapeMenu, treeGroups } from '../src/ui/Tree';
@@ -32,6 +32,7 @@ const MODEL = {
 
 /** Enough of `query.result` for the Results group: one contourable field on one Step. */
 const RESULT = {
+  resultId: 'result-7',
   step: 'uls',
   revision: 9,
   stale: false,
@@ -49,6 +50,14 @@ const state = (model: ModelSummary | null): UiState => ({ ...initialState, model
 const group = (s: UiState, label: string) => treeGroups(s).find((g) => g.label === label)!;
 
 describe('treeGroups', () => {
+  it('supplies an explicit supported context target for every reference button', () => {
+    const s = { ...state(MODEL), result: RESULT };
+    const rows = treeGroups(s).flatMap(group => group.items);
+    expect(rows.map(row => row.ref)).toEqual(['body:beam', 'set:tip_face', 'material:steel', 'mesh:mesh', 'constraint:root', 'constraint:weld', 'load:tip', 'step:uls', 'step:sls', 'result:id:result-7']);
+    for (const row of rows) expect(parseRef(row.ref)).not.toBeNull();
+    expect(rows.at(-1)!.name).toBe('σ_vM');
+    expect(rows.at(-1)!.ref).not.toContain('σ_vM');
+  });
   it('lists the design\'s nine groups in workflow order, even with no Model at all', () => {
     expect(treeGroups(state(null)).map((g) => g.label)).toEqual(['Geometry', 'Materials', 'Mesh', 'Constraints', 'Connections', 'Loads', 'Steps', 'Results', 'Plugins']);
     for (const g of treeGroups(state(null))) {

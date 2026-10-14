@@ -4,7 +4,7 @@ import { useStore } from '../ui/cmd';
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
 // holds this panel against `registry.list()` the same way it holds the shell.
-import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
+import { FemError, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
@@ -12,7 +12,7 @@ import { verificationState, type AssistantVerification, type Store, type UiState
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
-import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
+import { buildSystem, buildTurn, downscaleImage, mentionLabel, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
@@ -94,6 +94,7 @@ const KIND_LABEL: Record<string, string> = {
   constraint: 'constraints',
   load: 'loads',
   step: 'steps',
+  mesh: 'mesh',
   result: 'results',
   journal: 'journal',
   file: 'files',
@@ -331,7 +332,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   };
 
   const insert = (ref: string) => {
-    setTokens((cur) => (cur.includes(ref) ? cur : [...cur, ref]));
+    const target = parseRef(ref)?.ref ?? ref;
+    setTokens((cur) => (cur.includes(target) ? cur : [...cur, target]));
     store.togglePanel('assistant.mentions', false);
     // The token is a chip now, so the half-typed `@bo` that summoned the picker has to go with it —
     // otherwise it is sent to the model as an orphan word.
@@ -683,8 +685,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         <div class="box">
           <div class="tokens">
             {tokens.map((t) => (
-              <span class="token" key={t}>
-                <span>@{t}</span>
+              <span class="token" key={t} data-ref={t}>
+                <span>@{mentionLabel(t, index)}</span>
                 <X label={`remove ${t}`} onRemove={() => setTokens((cur) => cur.filter((c) => c !== t))} />
               </span>
             ))}

@@ -9,7 +9,7 @@ test('@cpu tree references open the Assistant on first use and after collapse', 
   });
   const drawer = page.locator('.assistant');
   await expect(drawer).toHaveCount(0);
-  const reference = page.locator('.tree button[data-cmd="chat.insertMention"][title="reference @body:beam in chat"]');
+  const reference = page.locator('.tree button[data-cmd="chat.insertMention"][title="Reference beam in chat"]');
   await reference.click();
   await expect(drawer).toBeVisible();
   await expect(drawer.locator('.tokens .token')).toContainText('@body:beam');

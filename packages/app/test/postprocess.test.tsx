@@ -17,6 +17,7 @@ import { resultItems } from '../src/ui/Tree';
 const v = (value: number, unit: string) => ({ value, unit });
 
 const RESULT = {
+  resultId: 'result-2',
   step: 'modal',
   revision: 9,
   stale: false,
@@ -255,6 +256,7 @@ describe('the Results group of the tree', () => {
     expect(resultItems(state({}))).toEqual([]);
     const rows = resultItems(state({ result: modal, fieldKey: 'mode:1', yieldStress: 355e6 }));
     expect(rows.map((r) => r.name)).toEqual(['σ_vM', 'mode 1', 'mode 2', 'mode 3', 'n_y', 'σ/f_y']);
+    expect(rows.every(row => row.ref === 'result:id:result-2')).toBe(true);
     expect(rows.every((r) => r.cmd === 'view.showField')).toBe(true);
     expect(rows[1]).toMatchObject({ args: { field: 'mode:1' }, active: true, summary: '41.2 Hz · mode shape' });
     expect(rows[0]!.summary).toBe('0.1 MPa … 12.4 MPa on modal');

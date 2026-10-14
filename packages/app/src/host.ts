@@ -216,7 +216,7 @@ export function makeHostContext(
         invalidateDefinition(store);
         store.select(s);
         const ref = s.refs?.[0];
-        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => `${candidate.kind}:${candidate.name}` === ref) : undefined;
+        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
         if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },

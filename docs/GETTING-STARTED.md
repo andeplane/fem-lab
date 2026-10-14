@@ -45,6 +45,21 @@ reference values and mesh convergence.
 The bundled file is a Journal entry array, not a saved `femlab/1` ModelFile. Use the example
 command for bundled examples and `file.open` for files produced by `file.save`.
 
+## Reference an analysis in the Assistant
+
+The tree's `@` buttons add context chips. Bodies, Materials, Sets, Loads and Steps reference
+their names. `@mesh:mesh` reads the current global Mesh settings and generated mesh summary.
+Every Results row references its producing solve, including rows labelled `σ_vM` or `mode 1`:
+`@result:id:result-1` reads that retained Result by its immutable ID. Re-solving the same Step
+does not change an existing chip. `@result:static` remains a latest-Result alias for the Step
+named `static`.
+
+Retained IDs belong to the engine session that produced them (see [ADR 0018](adr/0018-retained-solve-identities.md)).
+An evicted or cleared Result reports an unresolved reference rather than substituting a newer
+solve. Do not carry an ID into a different engine session. For names or file paths containing
+spaces, quotes or separators, use JSON quotes, for example `@file:"reports/beam checks.md"`.
+Chips display the decoded names while preserving their full targets.
+
 ## Commands, units and history
 
 Commands change the Model and enter the engine Journal. Queries read it. Quantity arguments

@@ -2,7 +2,7 @@
 // Command variant in, the design's fields out. Editing a field is itself a Command (`form.open`
 // with the new arguments), so the AI can fill this form and ADR 0003 still holds for every
 // control. Apply dispatches exactly one Command; Revert goes back to what the form opened with.
-import type { JsonSchema } from '@femlab/registry';
+import { refOf, type JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
@@ -367,8 +367,8 @@ export function SchemaForm(props: FormProps) {
       <form class="props-body" onSubmit={(e) => (e.preventDefault(), apply())}>
         <div class="prop-name">
           <span class="mono">{name}</span>
-          {form.target ? <Cmd dispatch={dispatch} cmd="chat.insertMention" class="link" onRun={() => {
-            const ref = `${form.target!.kind}:${form.target!.name}`;
+          {form.target ? <Cmd dispatch={dispatch} cmd="chat.insertMention" class="link" args={{ ref: refOf(form.target.kind, form.target.name) }} onRun={() => {
+            const ref = refOf(form.target!.kind, form.target!.name);
             return dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }));
           }}>
             @ reference in chat

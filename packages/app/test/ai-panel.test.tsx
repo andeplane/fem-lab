@@ -23,7 +23,7 @@ import { fakeDir } from './project-fake';
 
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
-  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : q.query === 'query.results' ? { limit: 8, records: [] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
   const viewer = { current: null };
   const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}));
@@ -316,6 +316,18 @@ describe('the assistant drawer', () => {
     entry.click();
     await tick();
     expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+  });
+  it('drains buffered quoted targets unchanged, deduplicates equivalent names and keeps decoded chip labels on reopen', async () => {
+    chatBridge.pendingMentions = ['body:"beam"', 'file:"notes and \\"checks\\".md"'];
+    const { root, registry, store } = await mount();
+    const refs = () => [...root.querySelectorAll('.token')].map(token => token.getAttribute('data-ref'));
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(root.querySelectorAll('.token')[1]!.textContent).toContain('@file:notes and "checks".md');
+    await registry.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root); await paint();
+    render(<AssistantPanel registry={registry} store={store} />, root); await paint();
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(chatBridge.pendingMentions).toEqual([]);
   });
 
   it('expands @selection into one token per selected object', async () => {
