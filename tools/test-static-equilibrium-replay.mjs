@@ -138,15 +138,29 @@ try {
 function query(engine, input) { return JSON.parse(engine.query(JSON.stringify(input))); }
 async function dispatch(engine, input) { await engine.dispatch(JSON.stringify(input)); }
 function selected(engine) { return query(engine, { query: 'query.result', step: 'static' }); }
-function snapshot(engine, includeSelected = true) {
+function snapshot(engine, includeSelected = true, readableModel = true) {
+  let authored;
+  if (readableModel) {
+    authored = { file: engine.export_file(), revision: engine.revision(), hash: engine.model_hash() };
+  } else {
+    // #580 rejects the deliberately unreadable authored display summary. #591 tracks
+    // checked file export's dependence on that summary; this test does not bypass it.
+    const unreadable = error => error.code === 'unit.display' && typeof error.where === 'string';
+    assert.throws(() => engine.export_file(), unreadable);
+    assert.throws(() => engine.snapshot(), unreadable);
+    authored = {
+      journal: query(engine, { query: 'query.journal' }),
+      loads: ['positive', 'negative'].map(name => query(engine, { query: 'query.definition', kind: 'load', name })),
+    };
+  }
   return {
-    file: engine.export_file(), revision: engine.revision(), hash: engine.model_hash(),
+    ...authored,
     records: query(engine, { query: 'query.results' }),
     ...(includeSelected ? { selected: selected(engine) } : {}),
   };
 }
 function unchanged(engine, before) {
-  assert.deepEqual(snapshot(engine, Object.hasOwn(before, 'selected')), before,
+  assert.deepEqual(snapshot(engine, Object.hasOwn(before, 'selected'), Object.hasOwn(before, 'file')), before,
     'a rejected boundary operation must preserve authored state and the selected Result');
 }
 function boundaryError(error, code, display = false) {
@@ -210,7 +224,7 @@ async function heldPair(engine, magnitude) {
     assert.equal(solved.balance, 0);
     assert.equal(ledger.momentBalance, 0);
     await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'mN', length: 'mm' } });
-    const before = snapshot(engine, false);
+    const before = snapshot(engine, false, false);
     for (const input of [{ query: 'query.result', step: 'static' }, { query: 'query.report', step: 'static' }]) {
       assert.throws(() => query(engine, input), error => boundaryError(error, 'schema', true));
       unchanged(engine, before);
@@ -229,7 +243,7 @@ async function heldPair(engine, magnitude) {
     const initial = await heldPair(engine, 1000);
     await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'mN', length: 'mm' } });
     await replacePair(engine, 1e307);
-    const before = snapshot(engine);
+    const before = snapshot(engine, true, false);
     assert.equal(before.selected.resultId, initial.resultId);
     assert.equal(before.selected.stale, true);
     for (const command of [
@@ -266,7 +280,7 @@ async function heldPair(engine, magnitude) {
     ]) await dispatch(engine, command);
     // Every tet4 DOF is held: motion and the ZZ estimate are zero. Only the
     // preferred-unit conversion of finite opposing forces is unrepresentable.
-    const before = snapshot(engine);
+    const before = snapshot(engine, true, false);
     await assert.rejects(engine.dispatch(JSON.stringify({ cmd: 'study.adapt', step: 'static', targetError: 0.01, maxIterations: 1 })), error => boundaryError(error, 'schema', true));
     unchanged(engine, before);
     await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'N', length: 'm' } });
