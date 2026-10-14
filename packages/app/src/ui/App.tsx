@@ -465,7 +465,8 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         // An auto scale of ×1000 has to be reachable, and the thumb must not sit pinned at the
         // end of a 0–400 track when it is: the track grows to whatever is drawn.
         max={String(Math.max(400, s.deformScale))}
-        step={String(Math.max(1, Math.round(Math.max(400, s.deformScale) / 100)))}
+        // Registry scales include ×1 and fractions; native step rounding must not change them.
+        step="any"
         aria-label="exaggeration"
         title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
