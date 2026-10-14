@@ -5,7 +5,7 @@ import { ServiceFailure } from './errors';
 export const CREDIT_SCALE = 30n;
 export const TARIFF_VERSION = '2026-10-14.v1';
 export const PLANS = {
-  free: { priceUsd: 0, credits: 200_000, models: ['gpt-5.4-mini'], maxOutput: 2048 },
+  free: { priceUsd: 0, credits: 200_000, models: ['gpt-5.4-mini'], maxOutput: 4096 },
   plus: { priceUsd: 49, credits: 4_000_000, models: ['gpt-5.4-mini', 'gpt-6-astra'], maxOutput: 8192 },
   pro: { priceUsd: 149, credits: 16_000_000, models: ['gpt-5.4-mini', 'gpt-6-astra'], maxOutput: 16000 },
   studio: { priceUsd: 499, credits: 50_000_000, models: ['gpt-5.4-mini', 'gpt-6-astra'], maxOutput: 16000 },

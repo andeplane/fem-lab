@@ -47,13 +47,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
     await expect(prepare(accountId)).rejects.toMatchObject({code:'request-outstanding'});
   });
   it('does not admit a request whose worst-case cost exceeds the allowance',async()=>{
-    const accountId=await owner(), spent=await admit(accountId,128000);
-    await a.dispatch(accountId,spent); await a.settle(accountId,spent,{input:128000,cacheRead:0,output:1000});
+    const accountId=await owner();
+    for(let i=0;i<2;i++){const spent=await admit(accountId,64000);await a.dispatch(accountId,spent);await a.settle(accountId,spent,{input:64000,cacheRead:0,output:1000});}
     const request=await prepare(accountId);
-    await expect(a.reserve(accountId,request.id,128000)).rejects.toMatchObject({code:'credits-insufficient'});
+    await expect(a.reserve(accountId,request.id,64000)).rejects.toMatchObject({code:'credits-insufficient'});
     expect((await a.status(accountId,request.id)).state).toBe('preflight');
     await a.release(accountId,request.id);
-    expect(await ledger.balance(accountId)).toMatchObject({availableCredits:66000,reservedCredits:0});
+    expect(await ledger.balance(accountId)).toMatchObject({availableCredits:60000,reservedCredits:0});
     await expect(a.dispatch(accountId,request.id)).rejects.toMatchObject({code:'request-state'});
   });
   it('settles confirmed usage once and refuses cross-account reads/settlements',async()=>{
@@ -131,7 +131,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
   });
   it('limits account attempts and bounds output by the server plan',async()=>{
     const accountId=await owner();
-    for(let i=0;i<20;i++) { const request=await prepare(accountId,`attempt-${i}`,'gpt-5.4-mini',16000); expect(request.maxOutput).toBe(2048); await a.release(accountId,request.id); }
+    for(let i=0;i<20;i++) { const request=await prepare(accountId,`attempt-${i}`,'gpt-5.4-mini',16000); expect(request.maxOutput).toBe(4096); await a.release(accountId,request.id); }
     await expect(prepare(accountId)).rejects.toMatchObject({code:'rate-limited'});
   });
 });

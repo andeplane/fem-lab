@@ -43,8 +43,10 @@ response receive an unbilled rejection receipt. SDK generation retries are disab
 
 `GET /v1/ai/requests/:id` returns only the authenticated owner's status/receipt;
 it never replays response text. `GET /v1/ai/models` reports the owner's effective
-allowlist and limits. Launch context is bounded at 128,000 counted input tokens;
-HTTP bodies are bounded at 8 MiB and remote file references are not accepted.
+allowlist and limits. Launch context is bounded at 64,000 counted input tokens for
+Free / 128,000 for paid, with 4,096 / up to 16,000 output tokens. HTTP bodies are
+bounded at 16 MiB. At most two PNG/JPEG/WebP images are accepted, each at most
+5 MiB and 1568 pixels on the longest edge; remote file references are rejected.
 
 Deploy long SSE directly to Cloud Run/the API load balancer. Firebase Hosting
 rewrites time out at 60 seconds. Run `node dist/main.mjs --recover` as a scheduled,

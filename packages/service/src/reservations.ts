@@ -77,7 +77,7 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
       const account = (await sql.query('SELECT status FROM accounts WHERE id=$1 FOR UPDATE', [accountId])).rows[0];
       if (account?.status !== 'active') throw new ServiceFailure(403, 'account-inactive', 'This account cannot use hosted AI.', 'account');
       // Launch context ceiling, including images, schemas and encrypted continuation. Never truncate.
-      if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > 128_000) throw new ServiceFailure(422, 'context-too-large', 'Reduce conversation context or start a new chat.', 'admission', 'ai.newChat');
+      if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > (row.plan==='free'?64_000:128_000)) throw new ServiceFailure(422, 'context-too-large', 'Reduce conversation context or start a new chat.', 'admission', 'ai.newChat');
       const heldCredits = maximumCharge(String(row.model), inputTokens, Number(row.max_output), String(row.tariff_version)), cost = supplierMicros(heldCredits);
       const limits = (await sql.query('SELECT * FROM ai_limits WHERE id=true')).rows[0]!;
       const day = new Date(Date.UTC(clock.getUTCFullYear(),clock.getUTCMonth(),clock.getUTCDate())), month = calendarPeriod(clock).start;

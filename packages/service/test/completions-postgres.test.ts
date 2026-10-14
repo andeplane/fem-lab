@@ -79,7 +79,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
   it('bounds and validates the HTTP body and MIME type',async()=>{
     const headers={authorization:'Bearer owner','content-type':'application/json','idempotency-key':'invalid'};
     const invalid=await fetch(`${url}/v1/ai/completions`,{method:'POST',headers,body:'{broken'});expect(invalid.status).toBe(400);
-    const large=await fetch(`${url}/v1/ai/completions`,{method:'POST',headers,body:JSON.stringify({text:'x'.repeat(8*1024*1024)})});expect(large.status).toBe(413);
+    const large=await fetch(`${url}/v1/ai/completions`,{method:'POST',headers,body:JSON.stringify({text:'x'.repeat(16*1024*1024)})});expect(large.status).toBe(413);
     const mime=await fetch(`${url}/v1/ai/completions`,{method:'POST',body:'plain'});expect(mime.status).toBe(415);
     expect(generated).toBe(0);
   });
@@ -95,5 +95,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     await response.body!.getReader().read();abort.abort();
     await expect.poll(async()=>(await db.query("SELECT state FROM ai_requests WHERE idempotency_key='cancel'")).rows[0].state).toBe('pending_reconciliation');
     expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+  });
+  it('accepts bounded real image bytes and rejects excessive dimensions/count before admission',async()=>{
+    const base64='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZI0AAAAASUVORK5CYII=';
+    const image={type:'image',mediaType:'image/png',base64};
+    const valid=await send('image',{...body,messages:[{role:'user',content:[image]}]});
+    expect(valid.status).toBe(200);await valid.text();expect(counted?.messages[0]!.content[0]).toMatchObject({base64});
+    const huge=Buffer.from(base64,'base64');huge.writeUInt32BE(2000,16);
+    const bounds=await send('huge',{...body,messages:[{role:'user',content:[{...image,base64:huge.toString('base64')}]}]});expect(bounds.status).toBe(422);
+    const many=await send('many',{...body,messages:[{role:'user',content:[image,image,image]}]});expect(await many.json()).toMatchObject({code:'too-many-images'});
+    const mismatch=await send('mime',{...body,messages:[{role:'user',content:[{...image,mediaType:'image/jpeg'}]}]});expect(mismatch.status).toBe(422);
+    expect(generated).toBe(1);
   });
 });

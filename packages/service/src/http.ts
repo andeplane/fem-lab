@@ -19,7 +19,7 @@ async function readJson(req:IncomingMessage):Promise<unknown> {
   const chunks:Buffer[]=[]; let length=0;
   for await(const chunk of req.iterator({destroyOnReturn:false})) {
     const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk); length+=bytes.length;
-    if(length>8*1024*1024) { req.resume(); throw new ServiceFailure(413,'request-too-large','Reduce attachments or chat context.','request'); }
+    if(length>16*1024*1024) { req.resume(); throw new ServiceFailure(413,'request-too-large','Reduce attachments or chat context.','request'); }
     chunks.push(bytes);
   }
   try { return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks))); }
@@ -28,6 +28,7 @@ async function readJson(req:IncomingMessage):Promise<unknown> {
 function failure(res:ServerResponse,error:unknown,requestId:string) {
   const publicError=error instanceof ServiceFailure ? error : new ServiceFailure(503,'service-unavailable','The service is temporarily unavailable.','http');
   res.statusCode=publicError.status;
+  if(publicError.status===429) res.setHeader('retry-after','60');
   res.end(JSON.stringify({code:publicError.code,cause:publicError.message,where:publicError.where,suggestion:publicError.suggestion,requestId}));
 }
 
@@ -68,7 +69,7 @@ export function serviceServer(deps: HttpDependencies) {
       return;
     }
     if(req.method==='GET'&&req.url==='/v1/ai/models'&&deps.account) {
-      try { const account=await deps.account(req.headers.authorization); res.end(JSON.stringify({models:account.usage?.models??[],maxOutput:account.usage?.maxOutput??0,contextLimit:128000,tariffVersion:account.usage?.tariffVersion??null})); }
+      try { const account=await deps.account(req.headers.authorization); res.end(JSON.stringify({models:account.usage?.models??[],maxOutput:account.usage?.maxOutput??0,contextLimit:account.usage?.contextLimit??0,tariffVersion:account.usage?.tariffVersion??null})); }
       catch(error) { failure(res,error,requestId); } return;
     }
     if(req.method==='GET'&&/^\/v1\/ai\/requests\/[a-f0-9-]{36}$/.test(req.url??'')&&deps.completions) {

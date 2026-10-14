@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { imageSize } from 'image-size';
 import { CompletionInput, type ChatEvent, type ChatRequest } from '@femlab/ai';
 import type { Account } from './accounts';
 import type { CreditLedger } from './ledger';
@@ -25,11 +26,19 @@ export function completionService(deps:{account(authorization:string|undefined):
       const parsed=CompletionInput.safeParse(call.body);
       if(!parsed.success) throw new ServiceFailure(422,'invalid-request','The AI request does not match the supported protocol.','request');
       const input=parsed.data;
+      let imageCount=0;
       for(const message of input.messages) {
         if(message.continuation && (message.role!=='assistant'||message.continuation.provider!=='openai'||!continuation.safeParse(message.continuation.value).success))
           throw new ServiceFailure(422,'invalid-continuation','This chat contains unsupported provider continuation. Start a new chat.','request','ai.newChat');
-        for(const block of message.content) if(block.type==='image'&&(!block.base64.length||block.base64.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(block.base64)))
-          throw new ServiceFailure(422,'invalid-image','Attach a valid PNG, JPEG or WebP image.','request');
+        for(const block of message.content) if(block.type==='image') {
+          if(++imageCount>2) throw new ServiceFailure(422,'too-many-images','Use at most two images in a chat request. Start a new chat to attach more.','request','ai.newChat');
+          try {
+            if(!block.base64.length||block.base64.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(block.base64)) throw new Error('invalid base64');
+            const bytes=Buffer.from(block.base64,'base64');const dimensions=imageSize(bytes);
+            const expected={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[block.mediaType];
+            if(bytes.length>5*1024*1024||dimensions.type!==expected||dimensions.width<1||dimensions.height<1||Math.max(dimensions.width,dimensions.height)>1568) throw new Error('image bounds');
+          } catch { throw new ServiceFailure(422,'invalid-image','Use a PNG, JPEG or WebP of at most 5 MiB and 1568 pixels on its longest edge.','request'); }
+        }
       }
       await deps.ledger.ensureFree(account.id);
       const prepared=await deps.reservations.prepare({accountId:account.id,key:call.key??'',digest:createHash('sha256').update(JSON.stringify(input)).digest('hex'),turnId:input.turnId,round:input.round,model:input.model,maxOutput:input.maxTokens});

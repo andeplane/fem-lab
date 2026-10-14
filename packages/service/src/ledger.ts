@@ -36,7 +36,7 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
     const period = calendarPeriod(clock);
     const reserved = (await sql.query('SELECT COALESCE(sum(held_subcredits),0) AS amount FROM ai_requests WHERE account_id=$1 AND state=ANY($2)', [accountId, ['reserved','dispatched','pending_reconciliation']])).rows[0]!;
     return { plan, totalCredits: Number(total / CREDIT_SCALE), availableCredits: Number(remaining / CREDIT_SCALE), reservedCredits: Number(BigInt(String(reserved.amount)) / CREDIT_SCALE),
-      periodEndsAt: (activePaid?.expires_at as Date | undefined ?? period.end).toISOString(), models: [...PLANS[plan].models], maxOutput: PLANS[plan].maxOutput, tariffVersion: TARIFF_VERSION };
+      periodEndsAt: (activePaid?.expires_at as Date | undefined ?? period.end).toISOString(), models: [...PLANS[plan].models], maxOutput: PLANS[plan].maxOutput, contextLimit:plan==='free'?64000:128000, tariffVersion: TARIFF_VERSION };
   }
   return { grant, ensureFree, balance };
 }
