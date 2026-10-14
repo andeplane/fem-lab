@@ -8,7 +8,7 @@ use femlab_engine::command::ExportFormat;
 use femlab_engine::query::Output;
 use femlab_engine::Command;
 
-use crate::run::{dispatch, new_engine, read_input};
+use crate::run::{bounded_model_file_text, dispatch, new_engine, read_input};
 
 /// What `--format` accepts. The five the engine writes go through `mesh.export`; the other two
 /// are reads of the Journal itself.
@@ -26,7 +26,7 @@ pub enum ExportKind {
     Report,
     /// The Journal as a TypeScript script against the `fem` API.
     Script,
-    /// The `femlab/1` model file: the Model snapshot plus its Journal.
+    /// The `femlab/1` model file: Model plus Journal, at most 16 MiB including pretty JSON and LF.
     Journal,
 }
 
@@ -67,7 +67,13 @@ pub fn export(file: &Path, out: Option<&Path>, opts: ExportOptions) -> i32 {
     let text = match opts.format.engine_format() {
         None => match engine.snapshot() {
             Ok(snapshot) if opts.format == ExportKind::Script => snapshot.script,
-            Ok(snapshot) => serde_json::to_string_pretty(&snapshot.file).unwrap_or_default() + "\n",
+            Ok(snapshot) => match bounded_model_file_text(&snapshot.file) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                    return 1;
+                }
+            },
             Err(error) => {
                 eprintln!("{error}");
                 return 1;

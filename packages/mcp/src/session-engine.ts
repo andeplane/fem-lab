@@ -1,6 +1,6 @@
 // One checked owner, with host serialization around wasm's exclusive mutable borrow. A new
 // MCP request explicitly acquires a lease; nested calls retain it across their own replacement.
-import { FemError, type DocumentSnapshot, type RunLease, type Stamp, type WriteReply } from '@femlab/registry';
+import { FemError, MAX_MODEL_FILE_BYTES, modelFileEncoder, type DocumentSnapshot, type RunLease, type Stamp, type WriteReply } from '@femlab/registry';
 import type { PreparedEngine, SessionEngine } from '../../app/src/generated/wasm/femlab_engine_wasm';
 import type { EngineHandle, EngineProvider } from './engine';
 
@@ -38,7 +38,7 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
               try {
                 candidate = await wasm.PreparedEngine.create(ticket, { threads, gpu: false });
                 await candidate.commands(JSON.stringify([cmd]));
-                candidate.finish();
+                candidate.finish(modelFileEncoder(true), MAX_MODEL_FILE_BYTES);
                 context(); // cancellation during candidate preparation cannot publish it
                 consumed = true;
                 const snapshot = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;

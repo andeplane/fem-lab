@@ -48,6 +48,17 @@ integration binary; browser, MCP and CLI production builds do not enable it. The
 exports SessionEngine and PreparedEngine only. Test and replay tools use an isolated checked
 batch producer rather than a second unchecked WASM export.
 
+Candidate finish requires a captured, typed ModelFile encoder and byte budget. It snapshots
+once and bounds the complete actual saved UTF-8 text before creating a committable candidate,
+including each host's pretty formatting and trailing newline. Native writers can retain
+`PreparedCandidate::file_bytes()` before commit and write those exact bytes. WASM receives a
+trusted local formatting callback; that function is never posted through the Worker or
+registry transport. The encoder faithfully preserves the complete supplied ModelFile and
+performs no I/O, replay or mutation. Callback and size failures consume the candidate, so
+failure cleanup abandons its ticket before the old producer resumes. The browser and MCP
+use the registry formatter for both finish and file output; see [ADR 0027](adr/0027-prepared-model-file-byte-bound.md)
+and [#536](https://github.com/andeplane/fem-lab/issues/536).
+
 Registry host handlers receive engine access constrained by their declared execution policy.
 Read/view handlers can query but cannot dispatch; workspace/producer handlers cannot obtain
 engine access; writes cannot smuggle model.new through dispatch; replacement uses the private

@@ -1,9 +1,9 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
-import type { Command, DocumentSnapshot } from '@femlab/registry';
+import { modelFileEncoder, type Command, type DocumentSnapshot, type ModelFilePublicationPolicy } from '@femlab/registry';
 import { SessionRuntime } from '../src/session-runtime';
 import { SessionWorkspace } from '../src/session-workspace';
-import { SessionChannel } from '../src/session-transport';
+import { SessionChannel, type SessionTransport } from '../src/session-transport';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
 const fresh: Command = { cmd: 'model.new', name: 'same' };
@@ -16,7 +16,10 @@ class TestWorker {
   terminated = false;
   requests: SessionRequest[] = [];
   pause: Promise<void> = Promise.resolve();
-  readonly runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options));
+  readonly runtime: SessionRuntime;
+  constructor(publication?: ModelFilePublicationPolicy) {
+    this.runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options), publication);
+  }
   postMessage(request: SessionRequest): void {
     this.requests.push(structuredClone(request));
     void this.pause.then(() => this.runtime.accept(request, (reply) => {
@@ -41,6 +44,41 @@ function setup() {
 }
 
 describe('session workspace using the checked WASM runtime', () => {
+  it('rejects an oversized prepared file before project persistence and keeps the old producer usable', async () => {
+    const build = vi.fn(async (_transport: SessionTransport, snapshot: DocumentSnapshot) => ({
+      file: structuredClone(snapshot.file), dispose: vi.fn(),
+    }));
+    const publish = vi.fn();
+    const workers: TestWorker[] = [];
+    let epoch = 0;
+    const workspace = new SessionWorkspace({
+      spawn: () => {
+        const worker = new TestWorker({ encode: modelFileEncoder(), maxBytes: 1024 });
+        workers.push(worker);
+        return worker as unknown as Worker;
+      },
+      epoch: () => `size-${++epoch}`, engine: { gpu: false, threads: 1 }, build, publish,
+    });
+    const active = await workspace.start();
+    const producer = await active.transport.fork();
+    await producer.dispatch(body);
+    const before = await producer.snapshot();
+    const savedProject = structuredClone(active.resources.file);
+    await expect(workspace.replace(producer, {
+      kind: 'commands', commands: [{ ...fresh, name: '☃🚀"\\'.repeat(200) }],
+    })).rejects.toMatchObject({ code: 'schema', where: 'file' });
+    expect(workspace.active).toBe(active);
+    expect(await producer.snapshot()).toEqual(before);
+    expect(active.resources.file).toEqual(savedProject);
+    expect(build).toHaveBeenCalledOnce(); // no candidate resource/persistence claim
+    expect(publish).toHaveBeenCalledOnce();
+    expect(active.resources.dispose).not.toHaveBeenCalled();
+    expect(workers[1]!.terminated).toBe(true);
+    await producer.dispatch(remove);
+    expect((await producer.snapshot()).file.model.bodies).toEqual([]);
+    producer.channel.close();
+  });
+
   it('atomically swaps resources and makes retained same-name handles unusable', async () => {
     const { workspace, workers, publications } = setup();
     const initial = await workspace.start();

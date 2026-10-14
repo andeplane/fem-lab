@@ -33,6 +33,12 @@ errors and progress retain the request’s execution identity.
 A captured persistence destination and generation. Its immutable save jobs carry a Session,
 StateVersion and ModelFile; switching or deleting projects cannot redirect an old save.
 
+**Prepared candidate**:
+A private replacement whose replay, validation, first snapshot and complete saved-file
+UTF-8 byte bound have succeeded. Only its captured owner ticket can authorize publication.
+Its retained file bytes use the injected host's exact save formatter; see
+[ADR 0027](docs/adr/0027-prepared-model-file-byte-bound.md).
+
 ## The model
 
 **Model**:
