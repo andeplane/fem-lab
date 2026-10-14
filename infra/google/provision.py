@@ -22,7 +22,7 @@ def gcloud(*arguments, allow_missing=False):
 if gcloud('projects', 'describe', project, allow_missing=True).returncode:
     gcloud('projects', 'create', project, '--name=FEM Lab' + (' staging' if args.environment == 'staging' else ''))
 gcloud('billing', 'projects', 'link', project, f'--billing-account={args.billing_account}')
-services = ['firebase', 'identitytoolkit', 'run', 'sqladmin', 'secretmanager', 'artifactregistry', 'cloudbuild', 'cloudscheduler', 'compute', 'storage', 'billingbudgets']
+services = ['firebase', 'identitytoolkit', 'run', 'sqladmin', 'secretmanager', 'artifactregistry', 'cloudbuild', 'cloudscheduler', 'compute', 'storage', 'billingbudgets', 'iamcredentials']
 gcloud('services', 'enable', *(service + '.googleapis.com' for service in services))
 subprocess.run(['firebase', 'projects:addfirebase', project, f'--account={args.account}', '--non-interactive'], text=True, capture_output=True)
 
@@ -41,8 +41,9 @@ except urllib.error.HTTPError as error:
     request(f'{base}/v2/projects/{project}/identityPlatform:initializeAuth', {}, 'POST')
 domains = [project + '.firebaseapp.com', project + '.web.app']
 domains += ['localhost'] if args.environment == 'staging' else ['femlab.app', 'www.femlab.app']
-request(f'{base}/admin/v2/projects/{project}/config?updateMask=signIn.email,signIn.anonymous,signIn.phoneNumber,authorizedDomains', {
+request(f'{base}/admin/v2/projects/{project}/config?updateMask=signIn.email,signIn.anonymous,signIn.phoneNumber,authorizedDomains,client.permissions.disabledUserDeletion', {
     'signIn': {'email': {'enabled': True, 'passwordRequired': False}, 'anonymous': {'enabled': False}, 'phoneNumber': {'enabled': False}},
     'authorizedDomains': domains,
+    'client': {'permissions': {'disabledUserDeletion': True}},
 }, 'PATCH')
 print(project + ': billing, APIs and email-link Auth configured. Google OAuth requires its web client configuration.')
