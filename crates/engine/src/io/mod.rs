@@ -2,6 +2,7 @@
 //! the browser and a server without a bytes channel; the host saves the text (plan C §3).
 
 pub mod abaqus;
+pub mod abaqus_static;
 pub mod inp;
 pub mod msh;
 pub mod stl;

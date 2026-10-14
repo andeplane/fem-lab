@@ -2545,6 +2545,18 @@ export type Query =
             value: number;
             unit: string;
           };
+      /**
+       * Mandatory in static mode; absent in mesh mode. Positive force per source force.
+       */
+      unitForce?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
       sha256: string;
       query: "query.convertAbaqus";
     }
@@ -2606,9 +2618,9 @@ export type Quantity =
       unit: string;
     };
 /**
- * The strict mesh converter never discards physics from a model deck.
+ * The chosen strict subset; unsupported physics is rejected rather than discarded.
  */
-export type AbaqusImportMode = "mesh";
+export type AbaqusImportMode = "mesh" | "static";
 /**
  * One section of the Markdown report. `query.report` writes the ones asked for in this order.
  */
@@ -7726,6 +7738,18 @@ export interface AbaqusConversionReport {
         value: number;
         unit: string;
       };
+  /**
+   * Newtons per source force, present only for static analysis conversion.
+   */
+  unitForce?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
   sourceNodes: number;
   activeNodes: number;
   sourceElements: number;
@@ -7734,6 +7758,7 @@ export interface AbaqusConversionReport {
    * Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.
    */
   analysisConfigured: boolean;
+  analysis?: AbaqusStaticAnalysis | null;
   /**
    * Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.
    *
@@ -7797,7 +7822,19 @@ export interface AbaqusConversionReport {
   }[];
 }
 /**
- * One authored Abaqus Set and its exact, namespace-qualified FEM Lab name.
+ * Retained homogeneous static objects. Only the final linear equilibrium is configured;
+ * there is no Abaqus increment history and conversion never produces a solved Result.
+ */
+export interface AbaqusStaticAnalysis {
+  material: string;
+  sectionElset: string;
+  step: string;
+  constraints: string[];
+  loads: string[];
+  finalEquilibriumOnly: boolean;
+}
+/**
+ * One authored Abaqus Set or numeric node target and its exact qualified FEM Lab name.
  */
 export interface AbaqusSetMapping {
   kind: AbaqusSetKind;
