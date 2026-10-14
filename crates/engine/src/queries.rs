@@ -80,6 +80,10 @@ impl Engine {
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
+            Query::ConvertAbaqus { text, name, body, mode: _, unit_length, sha256 } => {
+                crate::io::abaqus::convert_mesh(&text, &name, &body, &unit_length, &sha256)
+                    .map(QueryResult::AbaqusConversion)
+            }
             Query::MaterialLibrary { name } => {
                 crate::material_library::query(name.as_deref()).map(QueryResult::MaterialLibrary)
             }
