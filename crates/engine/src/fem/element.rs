@@ -18,7 +18,7 @@
 use std::f64::consts::PI;
 use std::marker::PhantomData;
 
-use femlab_geometry::mesh::ElementKind;
+use femlab_geometry::mesh::{ElementKind, FaceKind};
 use femlab_geometry::{Face, Mesh};
 
 use crate::command::Formulation;
@@ -762,7 +762,8 @@ fn thermal_load_of(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Re
 
 /// Loaded area through the same boundary quadrature as pressure and traction. This needs no
 /// material: plane stress includes thickness, axisymmetry includes 2πr, and plane strain
-/// uses the solver's unit-depth convention.
+/// uses the solver's unit-depth convention. Shell faces measure the original midsurface,
+/// independent of Material/Section; physical shell loads retain their thickness offsets.
 pub(crate) fn loaded_face_measure(mesh: &Mesh, face: Face, idealisation: &Idealisation) -> f64 {
     let kind = mesh.kind_of(face.elem);
     let mut coords = vec![0.0; kind.n_nodes() * 3];
@@ -773,11 +774,11 @@ pub(crate) fn loaded_face_measure(mesh: &Mesh, face: Face, idealisation: &Ideali
     force.iter().step_by(dofs).sum()
 }
 
-/// The outward normal times the Jacobian of a face map from its two tangents: the cross
-/// product in 3D, the tangent rotated by −90° in 2D (where the second tangent is unused).
-/// Shared by every boundary integral so the 2D and 3D forms live in one place.
-fn face_area_vector(dim: usize, t: &[[f64; 3]; 2]) -> [f64; 3] {
-    if dim == 3 {
+/// The outward normal times the Jacobian of a face map: a surface's two tangents give a
+/// cross product; an edge's tangent is rotated by −90°. Face topology decides the form:
+/// a Shell4 is a 2D element whose Quad4 faces are surfaces embedded in 3D, not edges.
+fn face_area_vector(kind: FaceKind, t: &[[f64; 3]; 2]) -> [f64; 3] {
+    if kind.n_corners() > 2 {
         [
             t[0][1] * t[1][2] - t[0][2] * t[1][1],
             t[0][2] * t[1][0] - t[0][0] * t[1][2],
@@ -799,7 +800,6 @@ fn face_scalar_integral(
     local_face: u8,
     g: impl Fn([f64; 3]) -> f64,
 ) -> f64 {
-    let dim = kind.dim();
     let fk = kind.face_kind();
     let nodes = kind.face_nodes(local_face as usize);
     let rule = face_rule_of(fk);
@@ -820,7 +820,7 @@ fn face_scalar_integral(
                 t[1][k] += ds[i][1] * xc[k];
             }
         }
-        let area = face_area_vector(dim, &t);
+        let area = face_area_vector(fk, &t);
         let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
         let w = rule.weights[gp] * scale_at(idealisation, x);
         total += g(x) * jac * w;
@@ -868,7 +868,7 @@ fn face_load_of(
                 t[1][k] += ds[i][1] * xc[k];
             }
         }
-        let area = face_area_vector(dim, &t);
+        let area = face_area_vector(fk, &t);
         let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
         let w = rule.weights[g] * scale_at(idealisation, x);
         // Torque has no spatial traction component (`dim` stays untouched); its coefficient
