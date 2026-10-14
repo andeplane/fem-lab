@@ -12,9 +12,14 @@ need the staging checks below.
 
 Keep FEM Lab usable without an account. Require a verified account for AI, give
 it a small monthly allowance, and sell subscriptions with more AI token credits.
-Start with one TypeScript API service, Supabase Auth and Postgres, Stripe Checkout
-and Billing, and OpenAI behind the existing provider interface. Deploy the API on
-a paid Render web service in Frankfurt and the database in an EU region.
+Buy the chosen domain through **Cloudflare Registrar** and use its DNS. Run one
+TypeScript API on **Google Cloud Run**, accounts and the ledger on **Cloud SQL for
+PostgreSQL**, and login through **Firebase Authentication / Identity Platform**.
+Use **Firebase Hosting** for the static app and **Cloud Storage** for private
+downloadable account exports and future opt-in file storage. Stripe Checkout/Billing
+and the existing OpenAI provider interface remain the payment and LLM boundaries.
+Place API, database and private buckets together in `europe-west3` (Frankfurt),
+subject to service/SKU availability checks during provisioning.
 
 The browser keeps the agent loop and executes tools through its existing registry.
 The service owns identity, entitlements, admission, provider credentials and usage
@@ -26,6 +31,59 @@ tax. These are deliberately high: roughly 12–16 times the example LLM allowanc
 cost at full consumption. Keep prices, grants and model multipliers versioned so
 they can change without rewriting the service. These numbers are a commercial
 hypothesis, not evidence of willingness to pay.
+
+## Domain shortlist and Cloudflare purchase
+
+Recommendation: **`meshvero.com`** for a distinct public brand, subject to the
+user's name choice and Cloudflare's final availability/price check. It is short,
+has no hyphen, and can cover more than one solver or AI feature. Keep repository
+names unchanged during this planning work.
+
+There is a material reason to reconsider the public name FEM Lab:
+[COMSOL's company history](https://www.comsol.com/company) records FEMLAB's release
+in 1998 and its renaming to COMSOL Multiphysics in 2005. That is evidence of a
+same-category naming collision, not a determination of current trademark rights.
+A matching domain being unregistered does not resolve that concern.
+
+Checked on 2026-10-14 through registry RDAP endpoints selected from the
+[IANA bootstrap](https://data.iana.org/rdap/dns.json):
+
+| Candidate | Registry result | Assessment |
+| --- | --- | --- |
+| `meshvero.com` | [Verisign RDAP](https://rdap.verisign.com/com/v1/domain/meshvero.com) returned 404 | First choice for a new brand; no obvious exact-name product surfaced in the web pass. |
+| `meshvero.app` | [Google Registry RDAP](https://pubapi.registry.google/rdap/domain/meshvero.app) returned 404 | Optional companion/redirect if the primary name is selected. |
+| `elementpilot.app` | [Google Registry RDAP](https://pubapi.registry.google/rdap/domain/elementpilot.app) returned 404 | Clear AI-assistance meaning; its `.com` is registered. |
+| `elementdesk.app` | [Google Registry RDAP](https://pubapi.registry.google/rdap/domain/elementdesk.app) returned 404 | A broad engineering-workspace name; its `.com` is registered. |
+| `femlab.app` | [Google Registry RDAP](https://pubapi.registry.google/rdap/domain/femlab.app) returned 404 | Closest to today's name, with the COMSOL collision above. |
+| `femlab.dev` | [Google Registry RDAP](https://pubapi.registry.google/rdap/domain/femlab.dev) returned 404 | Developer-oriented alternative with the same naming concern. |
+| `getfemlab.com` | [Verisign RDAP](https://rdap.verisign.com/com/v1/domain/getfemlab.com) returned 404 | A `.com` fallback, with the same naming concern. |
+
+A 404 means no domain registration object was found at the registry at check time;
+it does not establish that a reserved/premium domain can be purchased. No checkout
+quote or purchase was completed. Recheck the exact name in
+[Cloudflare's domain search](https://www.cloudflare.com/domains/) before buying.
+The public name searches are preliminary and are not trademark clearance.
+
+Cloudflare's [published standard extension prices](https://pricing.registrar.cloudflare.com/)
+show `.com` registration/renewal at $10.46/year, `.app` renewal at $14.20/year
+and `.ai` registration/renewal at $80/year. Promotional registration and premium
+names can differ; the checkout's term, tax and exact-name price control. Prefer
+`.com` or `.app` here. An `.ai` suffix adds recurring cost without improving the
+engineering product's identity.
+
+Other checked candidates are weaker: `femlab.com`, `meshpilot.com`,
+`meshpilot.app`, `formsolver.com`, `formsolver.app`, `femforge.com`,
+`femforge.app` and `meshcraft.app` are registered. MeshBench, FEM Studio and
+SolidPilot also already name software, including simulation/CAD products; a
+free `.app` would still invite confusion. Sources:
+[MeshBench](https://meshbench.github.io/docs/),
+[FEM Studio](https://masoudmim.com/femstudio/),
+[SolidPilot](https://www.dynmech.com/en/resources/manuals/solidpilot-user-guide/).
+
+Proposed routing once a name is chosen: apex for the current start screen/app,
+`www` redirecting to it, and `api.<domain>` for the service. Cloudflare remains
+the registrar/DNS provider; its nameservers work with Google-hosted services.
+Configure renewal, registrant email verification and DNSSEC during purchase/setup.
 
 ## What exists and what must change
 
@@ -69,15 +127,19 @@ smallest package layout in the first issue; do not build a general gateway frame
 Inject `IdentityVerifier`, `UsageStore`, `BillingClient`, `ProviderClient`, `Clock`,
 ID generation, HTTP transport and operational limits. Fakes implement the same
 typed interfaces. Postgres transactions enforce balances; in-memory counters are
-not authoritative across processes. A Postgres-backed maintenance job handles
-reconciliation. Redis and a separate queue service are unnecessary initially.
+not authoritative across processes. Cloud Scheduler invokes an authenticated
+Cloud Run Job for Postgres-backed reconciliation. The durable database inbox is
+the work source. No correctness-critical work depends on an in-process timer or
+continuing after a Cloud Run HTTP response. Redis and a separate queue service
+are unnecessary initially.
 
 ```mermaid
 flowchart LR
     U[Anonymous or signed-in browser] --> E[Local registry and Rust/WASM engine]
-    U --> A[Supabase Auth]
-    U --> S[TypeScript AI service]
-    S --> D[Postgres accounts and usage ledger]
+    U --> A[Firebase Authentication]
+    U --> S[Cloud Run TypeScript AI service]
+    S --> D[Cloud SQL Postgres accounts and usage ledger]
+    S --> G[Private Cloud Storage exports]
     S --> L[OpenAI Responses API]
     S --> B[Stripe Checkout and Billing]
     B -->|signed webhooks| S
@@ -97,35 +159,37 @@ can build, mesh, solve, inspect, save and export. The Assistant explains its val
 and offers **Log in to use AI**; sending through any route, including `chat.send`,
 requires the same account check. Preserve the unsent draft and current Model.
 
-Use Supabase email OTP first, with Google OAuth as the additional sign-in option.
-OTP avoids a password/recovery implementation. Google uses authorization-code
-PKCE, a fixed callback under the deployed app base path and an allowlist of return
-locations. Exchange the callback in the initiating tab. Supabase documents the
-[PKCE verifier's browser/device requirement](https://supabase.com/docs/guides/auth/sessions/pkce-flow)
-and [passwordless email sign-in](https://supabase.com/docs/guides/auth/auth-email-passwordless).
-Configure a production SMTP sender and test delivery; default development email
-limits are not a production plan.
+Use Firebase's [Google sign-in](https://firebase.google.com/docs/auth/web/google-signin)
+and [passwordless email-link sign-in](https://firebase.google.com/docs/auth/web/email-link-auth).
+This replaces the earlier OTP proposal with Google's supported email flow. Use
+the SDK's redirect flow for Google, fixed/allowlisted callbacks and pre-navigation
+local autosave. The Firebase Hosting custom app domain also becomes `authDomain`,
+following Google's [redirect guidance](https://firebase.google.com/docs/auth/web/redirect-best-practices).
+Email-link completion requires the matching email again if this tab has no saved
+address; never put it in the return URL. Test delivery, expired links, link reuse,
+account linking and the actual Chromium isolation/CSP policy.
 
-The static GitHub Pages origin and API may be different sites. Use bearer access
-tokens rather than relying on third-party cookies. Configure explicit tab-scoped
-`sessionStorage` for the auth SDK, with access tokens read into memory; do not
-silently accept persistent `localStorage` defaults. This still exposes tokens to
-trusted same-origin code and XSS, which the ADR must acknowledge. Remember-me and
-a same-site HttpOnly session design can be evaluated separately if hosting changes.
+Use bearer ID tokens for the API rather than relying on cross-origin cookies.
+Explicitly set [browserSessionPersistence](https://firebase.google.com/docs/auth/web/auth-state-persistence)
+before sign-in. Access tokens are read into memory; the session is tab-scoped
+instead of the SDK's default persistent local storage. This still exposes tokens
+to trusted same-origin code and XSS, which the ADR must acknowledge. Remember-me
+and an HttpOnly session design are separate future decisions.
 
-The service verifies signature, issuer, audience and expiry using asymmetric
-[Supabase signing keys](https://supabase.com/docs/guides/auth/signing-keys).
-Require email verification from the trusted Auth record, not user-editable
-metadata, and derive the account ID from the verified identity. Never accept an
-account ID, tier or balance from the request body. Check account suspension/deletion
-on every inference admission; test signing-key rotation and token refresh. A local
-logout clears credentials and cancels the active turn. Previously issued JWTs may
-remain valid until expiry; use a short configured lifetime and do not promise
-instant global revocation from local logout.
+The service uses the Admin SDK's [ID-token verification](https://firebase.google.com/docs/auth/admin/verify-id-tokens)
+and [revocation checks](https://firebase.google.com/docs/auth/admin/manage-sessions),
+including signature, issuer/project, audience, expiry and trusted email verification.
+Map the verified `uid` to the account. Never accept an account ID, tier or balance
+from the request body or user-editable profile metadata. Check database account
+suspension/deletion on every admission and use `verifyIdToken(token, true)` where
+revoked/disabled sessions must be rejected. Firebase ID tokens normally last one
+hour; local logout clears credentials and cancels the turn, while backend revocation
+requires its explicit Admin flow and checks. Do not promise global revocation from
+local logout. Test key rotation, refresh, linking and deletion.
 
 Create an account and its first free grant atomically on first verified use.
 Unique subject/grant keys prevent concurrent callbacks and account linking from
-minting multiple allowances. Disable anonymous Supabase accounts for hosted AI.
+minting multiple allowances. Disable anonymous Firebase sign-in for hosted AI.
 
 The account menu shows plan, remaining/held credits, reset date, usage, upgrade,
 manage subscription, logout and delete account. At zero available credits, keep
@@ -393,26 +457,86 @@ Choose provider processing region and contractual terms before making a residenc
 claim. Complete the privacy notice, subprocessors and account export/delete paths
 before public signup.
 
-Use separate staging/production Supabase projects, Stripe test/live keys and provider
-projects, migrations, least-privilege database roles and managed secrets. The browser
-gets only public auth configuration and the API URL. Confirm the production bundle
-contains no service-role, payment or LLM secret. CORS permits exact production and
-explicit development origins; bearer authentication remains mandatory for non-browser
-clients because CORS is not an account gate.
+Use separate staging/production Google Cloud/Firebase projects, Stripe test/live
+keys and provider projects. Store payment/LLM secrets in Secret Manager. Cloud Run
+uses a dedicated service account and Application Default Credentials; CI deploys
+through Workload Identity Federation rather than exported service-account keys.
+The browser receives public Firebase configuration and the API URL. Confirm the
+production bundle contains no Admin credential, payment or LLM secret. CORS permits
+exact app/development origins; bearer authentication remains mandatory for clients
+outside a browser because CORS is not an account gate.
 
-Keep the frontend on static hosting initially. Add only the API and auth project
-origins to CSP; OAuth/Checkout use top-level navigation and no third-party page
-scripts. Test PKCE callbacks, refresh, SSE and billing returns with the actual
-GitHub Pages base path, CSP and cross-origin isolation serviceworker in Chromium.
-Stage a long stream against the actual reverse proxy; do not assume localhost
-proves its buffering, idle timeouts or cancellation behavior.
+### Google service choices and routing
 
-Render lists [Frankfurt as a service region](https://render.com/docs/regions).
-Supabase [Pro starts at $25/month](https://supabase.com/pricing). Budget roughly
-$50–100/month for a small production service/database/SMTP/telemetry setup, plus
-staging, provider usage and payment fees. That is a planning estimate, not a
-verified combined vendor quote; obtain the selected Render compute price and all
-add-ons before provisioning. Free sleeping services are unsuitable for paid chat.
+| Responsibility | Proposed Google service | Boundary |
+| --- | --- | --- |
+| Static Chromium app | Firebase Hosting on the selected custom domain | Serve the existing Vite output with CSP/COOP/COEP; preserve the GitHub Pages build/URL while migrating. |
+| Login | Firebase Authentication with Identity Platform | Google and email-link sign-in; identity only, with entitlements in our database. |
+| API and Stripe receiver | Cloud Run Node service | Stateless instances, injected adapters, SSE and request-level admission. |
+| Ledger/subscriptions | Cloud SQL for PostgreSQL | Durable transactions, unique constraints, migrations, backups and point-in-time recovery. |
+| Export objects | Cloud Storage private regional bucket | Account-authorized, short-lived signed download links; lifecycle expiry. Cloud Model sync is a later opt-in feature. |
+| Reconciliation | Cloud Scheduler → authenticated Cloud Run Job | Recover durable inbox/request leases; no post-response background-timer dependency. |
+| Secrets/images/operations | Secret Manager, Artifact Registry, Cloud Logging/Monitoring | Workload identity, redacted logs, alerts and deployment evidence. |
+| Production API domain/TLS | External Application Load Balancer + serverless NEG | `api.<domain>` routes to Cloud Run independently of the static hosting proxy. |
+
+Cloud Run [supports streaming HTTP responses](https://docs.cloud.google.com/run/docs/triggering/https-request).
+Set a service request timeout above the app's 180-second turn limit, provisionally
+300 seconds, with an explicit lower provider/request deadline. Test terminal events,
+flush behavior, heartbeat/backpressure and cancellation with the production proxy.
+A timeout can return 504 while container work continues, so persist request state
+and cancel the provider explicitly instead of assuming platform timeout settles it.
+See [request timeout behavior](https://docs.cloud.google.com/run/docs/configuring/request-timeout).
+
+Do **not** send AI streaming requests through Firebase Hosting's API rewrite:
+Google documents a [60-second Hosting request timeout](https://firebase.google.com/docs/hosting/cloud-run).
+Use the Cloud Run `run.app` URL during staging and an External Application Load
+Balancer/serverless NEG for `api.<domain>` in production. Google's direct
+[Cloud Run domain mappings](https://docs.cloud.google.com/run/docs/mapping-custom-domains)
+are still preview and not recommended for production. Cloudflare hosts the DNS
+records; start with the API record in DNS-only mode so Google terminates TLS.
+Evaluate Cloudflare proxying with a real long-stream test before enabling it.
+
+Connect Cloud Run to Cloud SQL through the
+[Cloud SQL connector](https://cloud.google.com/sql/docs/postgres/connect-run),
+with a least-privilege database role and bounded pool. Start with a small dedicated
+database instance; choose single-zone versus HA from the accepted availability
+target and quote both before provisioning. Set Cloud Run concurrency/max instances
+against the database pool and supplier quota; autoscaling cannot bypass ledger
+limits. Preserve SQL for the balance/financial model instead of changing the ledger
+to Firestore purely because it is a Firebase product.
+
+For request-based Cloud Run billing, work after a response is not a reliable worker
+mechanism. Persist work before acknowledging it and use the scheduled Job for
+recovery; a crash or disconnect can always leave a dispatched request pending.
+Google's [billing/execution guidance](https://docs.cloud.google.com/run/docs/configuring/billing-settings)
+distinguishes request processing from background CPU allocation. Process webhook
+effects within an active request where practical, with the durable inbox Job as
+fallback; never acknowledge an event before the inbox transaction commits.
+
+Keep Cloud Storage objects private and account-scoped, with uniform bucket-level
+access. Temporary account exports expire after 24 hours; signed links expire after
+15 minutes. Use IAM-based signing rather than downloaded keys. Chat bodies/images
+remain transient. An object bucket does not replace the SQL ledger or automatically
+upload local Models/Journals.
+
+Add only the actual API/auth helper origins to CSP. Serve Firebase auth helpers
+on the app's custom domain and test redirect callbacks, email links, token refresh,
+SSE and billing returns with the real CSP/cross-origin isolation policy in Chromium.
+Authentication pages need their own scoped headers; keep the engine page isolated.
+Test local autosave/recovery across the full-page sign-in redirect.
+
+Budget provisionally **$100–250/month** for small production Google infrastructure,
+excluding staging, LLM usage, payment fees and tax. This is a planning allowance,
+not a quote. Cloud SQL, API load balancing, backups, a warm Cloud Run instance if
+selected, and network egress create costs even at low request volume. Obtain a
+region/SKU/HA/traffic estimate from the
+[Cloud Run](https://cloud.google.com/run/pricing),
+[Cloud SQL](https://cloud.google.com/sql/pricing),
+[load balancing](https://cloud.google.com/load-balancing/pricing),
+[Identity Platform](https://cloud.google.com/identity-platform/pricing), and
+[Storage](https://cloud.google.com/storage/pricing) pricing pages before provisioning.
+Do not describe this paid service as entirely free because individual services have
+free allowances. Google budget alerts supplement our transactional spend ceilings.
 
 Release migrations before dependent app/API versions and support the current/previous
 protocol during rollout. Exercise database backup restore, key rotation, deployment
@@ -426,14 +550,14 @@ using the same service logic. No admin dashboard is required for v1.
 | Gate | Required evidence |
 | --- | --- |
 | Anonymous app | Chromium can create/open/solve/save/export with auth/API offline; chat refuses through UI and callable routes without login. |
-| Identity | Fake verifier tests plus real staging OTP/OAuth, callback/refresh/logout; expired/wrong-issuer/wrong-audience JWTs and deleted accounts refused. |
+| Identity | Fake verifier tests plus real staging Google/email-link, callback/refresh/logout/revocation; expired/wrong-project/wrong-audience ID tokens and disabled/deleted accounts refused. |
 | Isolation | Another account cannot read a receipt, create its portal, change its subscription or spend its credits. All account IDs come from verified identity. |
 | Ledger | Independent arithmetic fixtures for cache/write/reasoning/model weights; real Postgres race tests show no negative available balance or duplicate grant/debit. |
 | Failures | Cancel before/after dispatch, missing final usage, process kill, retries, request-body mismatch, database failure and period expiry recover with bounded holds/losses. |
 | Streaming/tools | Fixture streams preserve images, ordered continuation and complete tool arguments; no partial/error tool execution; stale Session responses cannot mutate a new Model. |
 | Billing | Stripe test clock/fixtures cover first payment, duplicate/out-of-order events, renewal, failed payment, scheduled plan change/cancel, refund/dispute and deletion. Redirect alone grants nothing. |
 | Operational limits | Cross-process reservation/spend limits, signup/rate limiting, pending-cost caps and provider outage tested. Load test records real proxy SSE latency/cancel behavior. |
-| Secrets/privacy | Production bundle scan, redacted logs, no transcript persistence, export/delete and CSP/COI checks. Restore test produces reconciled balances. |
+| Secrets/privacy | Production bundle scan, redacted logs, no transcript persistence, private/expiring object exports, export/delete and CSP/COI checks. Restore test produces reconciled balances. |
 | Engineering quality | Coordinate #297: frozen live prompts/build/model config, independent numerical checks, recorded credits and cost per task; meet the existing 80% criterion before claiming launch readiness. |
 
 Pure pricing/ledger state logic needs meaningful unit/property tests; balances also
@@ -449,7 +573,7 @@ All implementation is written by AI. Each row is a separately owned, verifiable
 slice with its own green PR; split by scope and acceptance evidence. None is claimed
 by this planning change.
 
-Estimate **12–24 hours of active AI execution and verification** for the full
+Estimate **14–28 hours of active AI execution and verification** for the full
 backend in this plan, assuming one AI worker, the present provider/registry seams,
 ready vendor accounts/credentials, and the proposed feature scope. This is an
 unmeasured planning range, not a conversion from another staffing model or a
@@ -464,8 +588,12 @@ within that total.
 | Streaming endpoint and hosted Assistant integration | #550, #554 | 2–4 hours |
 | Subscription lifecycle, Checkout and Portal | #551, #552 | 1.5–3 hours |
 | Account UI, privacy, export and deletion | #553, #555 | 1.5–3 hours |
-| Deployment, integration repair and live launch verification | #556, #557 | 4–8 hours |
-| **Total** | | **12–24 hours** |
+| Google deployment/domain routing, integration repair and live launch verification | #556, #557 | 6–12 hours |
+| **Total** | | **14–28 hours** |
+
+The Google deployment/domain route adds a provisional 2–4 AI hours over the earlier
+service-hosting sketch: Cloud SQL connectivity, workload identity, scheduled Jobs,
+custom API TLS and auth-helper routing need explicit verification.
 
 This is active AI time, not a promised end-to-end elapsed duration. CI queue/runtime,
 DNS/email propagation, missing access, vendor approvals and other external waiting
@@ -488,21 +616,24 @@ speedup is assumed in these estimates.
    once-only paid grants, test-clock renewals/failures/cancellations and adjustments.
 7. [#552](https://github.com/andeplane/fem-lab/issues/552) — Checkout/portal service: account-bound customer creation, price allowlist,
    scheduled tier changes and explicit effective dates; no redirect-based grants.
-8. [#553](https://github.com/andeplane/fem-lab/issues/553) — Account/billing UI: host Commands, OTP/OAuth login, callback, balance/plan menu,
+8. [#553](https://github.com/andeplane/fem-lab/issues/553) — Account/billing UI: host Commands, Google/email-link login, callback, balance/plan menu,
    upgrade/portal/logout and anonymous-mode Chromium smoke tests.
 9. [#554](https://github.com/andeplane/fem-lab/issues/554) — Hosted Assistant: transport behind Provider, all-route login gate, model tariffs,
    quota/pending/error states, draft retention, session cancellation and BYO migration.
 10. [#555](https://github.com/andeplane/fem-lab/issues/555) — Privacy/lifecycle: first-use disclosure, redacted metadata/export, reauthenticated
     deletion with durable subscription cancellation and specified retention tests.
-11. [#556](https://github.com/andeplane/fem-lab/issues/556) — Deployment/operations: staged EU hosting, secrets/migrations, real proxy SSE,
-    SMTP, spend alerts, maintenance jobs, restore/drain/rollback and load tests.
+11. [#556](https://github.com/andeplane/fem-lab/issues/556) — Deployment/operations: Cloudflare DNS and staged Google Hosting/Cloud Run/SQL/Storage,
+    workload identity, domain TLS, real proxy SSE, auth email delivery, spend alerts,
+    scheduled Jobs, restore/drain/rollback and load tests. Split its independently
+    verifiable resource/routing steps into child issues before implementation.
 12. [#557](https://github.com/andeplane/fem-lab/issues/557) — Release evidence: run the coordinated live engineering evaluation and purchase
     lifecycle in staging; record quality/cost/limits and release only after all gates.
 
 ## Decisions to settle before implementation
 
 The defaults above are sufficient to start design review. Confirm or revise the
-commercial currency/prices/allowances; EU hosting and provider processing region;
-Supabase/Render/Stripe vendor choice; seller/tax/retention policy; and the evaluated
-mini/premium model catalogue. The first ADR settles the API and credential design.
+public name/domain; commercial currency/prices/allowances; EU hosting and provider
+processing region; Google database sizing/HA and infrastructure quote;
+seller/tax/retention policy; and the evaluated mini/premium model catalogue.
+The first ADR settles the API, identity and credential design.
 Leave teams, annual contracts, top-ups and remote solving for later scoped issues.
