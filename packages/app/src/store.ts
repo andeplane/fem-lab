@@ -44,6 +44,8 @@ export interface FormState {
   values: Record<string, unknown>;
   /** What Revert goes back to: the values the form was opened with. */
   initial: Record<string, unknown>;
+  /** Existing object being edited; unsaved field values must not change its chat reference. */
+  target?: { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
 }
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
 export type ExampleDifficulty = 1 | 2 | 3;
@@ -429,9 +431,10 @@ export class Store {
    * Open the Properties form on a Command, pre-filled with `values`. Every field edit comes
    * back through here with `keepInitial`, so Revert still knows where the form started.
    */
-  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false): void {
+  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false, target?: FormState['target']): void {
     const initial = keepInitial && this.state.form?.cmd === cmd ? this.state.form.initial : values;
-    this.set({ form: { cmd, values, initial }, formError: null, pickInto: null });
+    const edited = target ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.target : undefined);
+    this.set({ form: { cmd, values, initial, ...(edited ? { target: edited } : {}) }, formError: null, pickInto: null });
   }
 
   log(level: ConsoleLevel, text: string): void {

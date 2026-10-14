@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 test('@cpu overlapping replacements stay atomic and the next new project starts empty', async ({ page }) => {
   await page.goto('./');
@@ -46,7 +46,8 @@ test('@cpu a new project clears the previous selection and editable body form', 
   await expect(page.locator('.selection-chip')).toContainText('brick_shaft');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'empty' }));
   await expect(page.locator('.selection-chip')).toHaveCount(0);
-  await expect(page.locator('.props .prop-name')).toHaveText('body@ reference in chat');
+  await expect(page.locator('.props .prop-name')).toHaveText('body');
+  await expect(page.locator('.props .prop-name [data-cmd="chat.insertMention"]')).toHaveCount(0);
   await expect(page.locator('.error-card')).toHaveCount(0);
   expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.selection' }))).toMatchObject({ refs: [], bodies: [], faces: [], sets: [] });
 });
