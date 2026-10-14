@@ -322,6 +322,29 @@ describe('TutorialPanel', () => {
     expect(theory.tagName).not.toBe('PRE');
   });
 
+  it('keeps the truss step actions outside its scroll region and dispatches all joints and members', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    const registry = fakeRegistry();
+    render(<TutorialPanel registry={registry} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Steel roof truss')), 'the truss tutorial'));
+    for (let i = 0; i < 2; i++) await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    await waitForText(() => root.querySelector('.tutorial-step-title'), 'The truss, as lines');
+    const content = root.querySelector('.tutorial-content')!;
+    const actions = root.querySelector('.tutorial-actions')!;
+    expect(content.contains(actions)).toBe(false);
+    expect(content.nextElementSibling).toBe(actions);
+    expect([...content.querySelectorAll('dt')].map(el => el.textContent)).toEqual(['points', 'members', 'divisions']);
+    expect([...content.querySelectorAll('dd')].map(el => el.textContent)).toEqual(['12 joints', '21 members', '1']);
+    await click(root.querySelector('.tutorial-btn.primary'));
+    await waitForText(progress, 'step 4 of');
+    const command = tutorialById('steel-roof-truss')!.steps[2]!.doIt!;
+    expect(registry.dispatch).toHaveBeenCalledExactlyOnceWith(command);
+    expect(command['points']).toHaveLength(12);
+    expect(command['members']).toHaveLength(21);
+  });
+
   it('Skip moves past a step without the Command ever appearing', async () => {
     const store = new Store();
     store.togglePanel('tutorial', true);

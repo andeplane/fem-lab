@@ -74,7 +74,33 @@ test.describe('@cpu the guided tutorial', () => {
     await expect(theory.locator('code').first()).toHaveText('bearing-a');
     await expect(theory.locator('li')).toHaveCount(3);
     expect(await theory.textContent()).not.toMatch(/\$|\*\*/);
-    expect(await page.locator('.tutorial-panel').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    expect(await page.locator('.tutorial-content').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  });
+
+  test('keeps Do-it and Skip reachable when the truss step overflows its card', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 400 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
+    await page.locator('.tutorial-pick', { hasText: 'Steel roof truss' }).click();
+    for (let step = 0; step < 2; step++) await page.locator('.tutorial-btn.primary', { hasText: 'Do it for me' }).click();
+    await expect(page.locator('.tutorial-step-title')).toHaveText('The truss, as lines');
+    const content = page.locator('.tutorial-content');
+    expect(await content.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    for (const label of ['Do it for me', 'Skip']) {
+      const button = page.locator('.tutorial-btn', { hasText: label });
+      const bounds = (await button.boundingBox())!;
+      const card = (await page.locator('.tutorial-panel').boundingBox())!;
+      expect(bounds.y).toBeGreaterThanOrEqual(card.y);
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(card.y + card.height);
+      // trial checks hit testing without Playwright scrolling the button into view.
+      await button.click({ trial: true });
+      expect(await content.evaluate(el => el.scrollTop)).toBe(0);
+    }
+    await page.locator('.tutorial-btn.primary', { hasText: 'Do it for me' }).click();
+    await expect(page.locator('.tutorial-step-title')).toHaveText('S355');
+    await expect(page.locator('.jrow').last()).toContainText('geometry.addLine');
   });
 
   test('a stale saved position with no Model starts the tutorial over', async ({ page }) => {
