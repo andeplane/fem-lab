@@ -506,6 +506,7 @@ function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: {
   const comparing = s.viewMode === 'results' && s.resultComparison.configuration.mode !== 'single';
   const paneName = s.resultComparison.configuration.mode === 'difference' ? 'difference' : side;
   const pane = comparing ? s.resultComparison[paneName] : null;
+  const comparisonDeforms = paneName === 'difference' ? pane?.canDeform : s.resultComparison.left?.canDeform || s.resultComparison.right?.canDeform;
   const results = s.viewMode === 'results' && s.result !== null && !comparing;
   useEffect(() => {
     const el = canvas.current;
@@ -515,7 +516,7 @@ function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: {
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;
-    const onResize = () => v?.resize();
+    const onResize = () => { v?.resize(); comparison?.resize(); };
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
       try {
@@ -622,7 +623,7 @@ function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: {
       {results ? <Legend s={s} dispatch={dispatch} /> : null}
       {results ? <DeformBar s={s} store={store} dispatch={dispatch} viewer={viewer} /> : null}
       {pane ? <ComparisonPaneChrome pane={pane} name={paneName} s={s} dispatch={dispatch} /> : null}
-      {comparing && side === 'left' ? <div class="deform-bar comparison-deform">
+      {comparing && comparisonDeforms && side === 'left' ? <div class="deform-bar comparison-deform">
         <span>Shared deformation ×{formatNumber(s.deformScale)}</span>
         <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'true' }}>True</Cmd>
         <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'auto' }}>Auto</Cmd>

@@ -5,7 +5,7 @@ import type { Store } from './store';
 import type { CameraState, Viewer, ViewPreset } from './viewer/viewer';
 
 /** The renderer boundary is injectable without pretending a fake owns a WebGL context. */
-export type ComparisonViewer = Pick<Viewer, 'animate' | 'setField' | 'setDeformed' | 'setSurface' | 'setVisible' | 'setMode' | 'setDim' | 'setColormap' | 'setFieldValidity' | 'setSelection' | 'setCamera' | 'getCamera' | 'preset' | 'setProjection' | 'getProjection' | 'setComparisonFrameHeight' | 'getCameraZoom' | 'setCameraZoom' | 'setLayer' | 'setClip' | 'setTheme' | 'setHover' | 'setHighlight'>;
+export type ComparisonViewer = Pick<Viewer, 'animate' | 'setField' | 'setDeformed' | 'setSurface' | 'setVisible' | 'setMode' | 'setDim' | 'setColormap' | 'setFieldValidity' | 'setSelection' | 'setCamera' | 'getCamera' | 'preset' | 'setProjection' | 'getProjection' | 'setComparisonFrameHeight' | 'getCameraZoom' | 'setCameraZoom' | 'setLayer' | 'setClip' | 'setTheme' | 'setHover' | 'setHighlight' | 'viewportAspect' | 'screenshot'>;
 export interface ComparisonViewerRef { current: ComparisonViewer | null }
 
 type PairConfiguration = Exclude<ComparisonConfiguration, { mode: 'single' }>;
@@ -51,7 +51,7 @@ export class ResultComparison implements ResultComparisonHost {
     readonly viewers: { left: ComparisonViewerRef; right: ComparisonViewerRef }, private readonly lifecycle: ComparisonLifecycle) {}
 
   get configured(): boolean { return this.store.state.resultComparison.configuration.mode !== 'single'; }
-  get active(): boolean { return this.configured && this.store.state.viewMode === 'results'; }
+  get active(): boolean { return !this.disposed && this.configured && this.store.state.viewMode === 'results'; }
   state(): ResultComparisonState { return structuredClone({ ...this.store.state.resultComparison, viewMode: this.store.state.viewMode }); }
   private publish(patch: Partial<ResultComparisonState>): void {
     this.store.set({ resultComparison: { ...this.store.state.resultComparison, ...patch, viewMode: this.store.state.viewMode } });
@@ -128,6 +128,11 @@ export class ResultComparison implements ResultComparisonHost {
   /** Current geometry/mesh modes borrow the primary renderer without replacing pinned ids. */
   suspend(): void { this.invalidate(); this.publish({ loading: false }); this.resetPresentation(); }
   resume(): void { this.draw(); }
+  resize(): void {
+    if (!this.active) return;
+    const height = this.frameHeight();
+    this.viewers.left.current?.setComparisonFrameHeight(height); this.viewers.right.current?.setComparisonFrameHeight(height);
+  }
   private resetPresentation(): void {
     if (!Object.keys(this.payloads).length) return;
     for (const viewer of [this.viewers.left.current, this.viewers.right.current]) {
@@ -181,7 +186,7 @@ export class ResultComparison implements ResultComparisonHost {
     const retain = prior && key(prior.operand) === key(payload.operand);
     return { operand: payload.operand, summary: payload.summary, label: payload.label,
       legend: this.legendOf(payload, retain ? prior.legend : null), bodyNames: [...payload.surface.bodyNames],
-      hiddenBodies: retain ? prior.hiddenBodies : [], pick: null, error: null };
+      hiddenBodies: retain ? prior.hiddenBodies : [], canDeform: payload.displacement !== null, pick: null, error: null };
   }
   private legendOf(payload: Payload, prior: ComparisonLegendState | null): ComparisonLegendState | null {
     const bounds = extent(payload.values, payload.scale, payload.offset);
@@ -289,12 +294,43 @@ export class ResultComparison implements ResultComparisonHost {
     this.requestedScale = scale;
     this.draw();
   }
+  /** Capture each actual retained pane with its own label/physical legend; the host joins PNGs. */
+  captureGuard(): () => void {
+    const ticket = this.epoch;
+    return () => {
+      if (this.disposed) throw new FemError('session.expired', 'comparison capture belongs to a closed project');
+      if (!this.current(ticket)) throw new FemError('result.stale', 'comparison changed while its capture was being prepared', 'query.screenshot', 'retry query.screenshot for the current comparison');
+    };
+  }
+  capture(input: { width?: number; height?: number; title?: string; legend?: boolean }): string[] {
+    if (!this.active) throw new FemError('unsupported', 'comparison capture requires Results view', 'query.screenshot');
+    const payloads = this.displayedPayloads();
+    if (input.width !== undefined && input.width < payloads.length) throw new FemError('schema', 'image width must allow at least one pixel per pane', 'width');
+    return payloads.map((payload, index) => {
+      const viewer = this.viewers[payload.pane === 'right' ? 'right' : 'left'].current;
+      if (!viewer) throw new FemError('unsupported', 'both comparison viewers must be mounted before capture', 'query.screenshot');
+      const metadata = this.store.state.resultComparison[payload.pane]!;
+      const legend = metadata.legend;
+      const burn = input.legend === false || !legend || metadata.error ? undefined : {
+        title: payload.label, unit: `${legend.difference ? 'Δ ' : ''}${legend.min.unit}`, min: legend.min.value, max: legend.max.value, colormap: legend.colormap,
+      };
+      const width = input.width === undefined ? undefined : Math.floor(input.width / payloads.length) + (index < input.width % payloads.length ? 1 : 0);
+      const title = `${input.title ? `${input.title} · ` : ''}${payload.pane} · ${payload.operand.resultId} · ${metadata.summary.stale ? 'stale' : 'current'}${metadata.error ? ' · unavailable' : ''}`;
+      return viewer.screenshot(burn, { ...input, width, title });
+    });
+  }
+  private frameHeight(): number {
+    const bounds = unionBounds(this.displayedPayloads().map(p => p.surface.positions));
+    const radius = Math.hypot(...bounds.max.map((v, i) => v - bounds.min[i]!)) * 0.7;
+    const viewers = this.store.state.resultComparison.configuration.mode === 'sideBySide' ? [this.viewers.left.current, this.viewers.right.current] : [this.viewers.left.current];
+    const aspect = Math.min(1, ...viewers.flatMap(viewer => viewer ? [viewer.viewportAspect()] : []));
+    return Math.max(radius / aspect, 1e-6);
+  }
   private draw(): void {
     if (!this.active || this.disposed) return;
     const configuration = this.store.state.resultComparison.configuration;
     const names: ComparisonPaneName[] = configuration.mode === 'difference' ? ['difference'] : ['left', 'right'];
-    const bounds = unionBounds(this.displayedPayloads().map(p => p.surface.positions));
-    const height = Math.max(Math.hypot(...bounds.max.map((v, i) => v - bounds.min[i]!)) * 0.7, 1e-6);
+    const height = this.frameHeight();
     let deformScale = this.requestedScale === 'true' ? 1 : this.requestedScale === 'auto' ? this.autoScale() : this.requestedScale;
     if (!Number.isFinite(deformScale)) deformScale = 1;
     if (this.store.state.deformScale !== deformScale) this.store.set({ deformScale });

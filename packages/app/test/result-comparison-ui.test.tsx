@@ -34,7 +34,7 @@ it('scopes all pane controls to a retained id and shows honest stale, units, cov
   const { store, dispatch, root } = setup();
   const pane = { operand: { resultId: 'old', field: 'temperature' }, summary: { ...RESULT, stale: true }, label: 'temperature left − temperature right',
     legend: { min: { value: -10, unit: 'degC' }, max: { value: 10, unit: 'degC' }, colormap: 'viridis' as const, automatic: true, difference: true },
-    bodyNames: ['old-body'], hiddenBodies: [], pick: { resultId: 'old', pane: 'difference' as const, field: 'temperature', component: null, at: [{ value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }] as [{ value: number; unit: string }, { value: number; unit: string }, { value: number; unit: string }], body: 'old-body', face: null, node: 2, value: null, difference: true }, error: null };
+    bodyNames: ['old-body'], hiddenBodies: [], canDeform: false, pick: { resultId: 'old', pane: 'difference' as const, field: 'temperature', component: null, at: [{ value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }] as [{ value: number; unit: string }, { value: number; unit: string }, { value: number; unit: string }], body: 'old-body', face: null, node: 2, value: null, difference: true }, error: null };
   store.set({ resultComparison: { ...store.state.resultComparison, coverage: { insideNodes: 2, totalNodes: 3, outsideNodes: [2] }, interpolated: true } });
   await act(async () => render(<ComparisonPaneChrome pane={pane} name="difference" s={store.state} dispatch={dispatch} />, root));
   expect(root.textContent).toContain('stale'); expect(root.textContent).toContain('2/3 nodes covered'); expect(root.textContent).toContain('interpolated'); expect(root.textContent).toContain('Δ degC'); expect(root.textContent).toContain('unavailable coverage');
@@ -46,4 +46,16 @@ it('scopes all pane controls to a retained id and shows honest stale, units, cov
   expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.setComparisonLegend', pane: 'difference', resultId: 'old', range: [{ value: -5, unit: 'degC' }, { value: 10, unit: 'degC' }] });
   await act(async () => render(<ComparisonPaneChrome pane={{ ...pane, legend: null }} name="difference" s={store.state} dispatch={dispatch} />, root)); await afterEffects();
   expect(root.textContent).toContain('No covered data'); expect(root.querySelector('.comparison-gradient')).toBeNull();
+});
+
+it('keeps an available pane field picker usable when the other retained id has been evicted', async () => {
+  const { store, dispatch, root, query } = setup();
+  const read = async (input: Parameters<Query>[0]) => {
+    if (input['resultId'] === 'old') throw new Error('evicted Result');
+    return query(input);
+  };
+  await act(async () => render(<ComparisonControls s={store.state} dispatch={dispatch} query={read} />, root));
+  await waitFor(() => root.querySelector<HTMLSelectElement>('[aria-label="right field"]')?.options.length === 5);
+  expect(root.querySelector('[aria-label="left field"]')?.textContent).toContain('No available fields');
+  expect(root.querySelector<HTMLButtonElement>('.comparison-actions .apply')?.disabled).toBe(true);
 });

@@ -21,6 +21,7 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
   const [left, setLeft] = useState<ComparisonOperandInput>({ resultId: '', field: '' });
   const [right, setRight] = useState<ComparisonOperandInput>({ resultId: '', field: '' });
   const [summaries, setSummaries] = useState<Record<string, ResultSummary>>({});
+  const [fieldsLoading, setFieldsLoading] = useState(false);
   useEffect(() => {
     if (configuration.mode !== 'single') {
       setMode(configuration.mode); setLeft(configuration.left); setRight(configuration.right);
@@ -33,8 +34,13 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
   useEffect(() => {
     let gone = false;
     const ids = [...new Set([left.resultId, right.resultId].filter(Boolean))];
-    void Promise.all(ids.map(async resultId => [resultId, await query({ query: 'query.result', resultId }) as ResultSummary] as const))
-      .then(entries => { if (!gone) setSummaries(Object.fromEntries(entries)); }, () => { if (!gone) setSummaries({}); });
+    setFieldsLoading(ids.length > 0);
+    void Promise.allSettled(ids.map(async resultId => [resultId, await query({ query: 'query.result', resultId }) as ResultSummary] as const))
+      .then(results => {
+        if (gone) return;
+        setSummaries(Object.fromEntries(results.flatMap(result => result.status === 'fulfilled' && result.value[0] === result.value[1].resultId ? [result.value] : [])));
+        setFieldsLoading(false);
+      });
     return () => { gone = true; };
   }, [left.resultId, right.resultId, query]);
   const choices = (operand: ComparisonOperandInput): FieldChoice[] => {
@@ -61,7 +67,7 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
       <select aria-label={`${side} field`} data-cmd="view.compareResults" value={options.find(c => selected && sameChoice(c, selected))?.key ?? ''} onChange={e => {
         const choice = options.find(c => c.key === e.currentTarget.value); if (choice) set(operandChoice(choice, operand.resultId));
       }}>
-        {!options.length ? <option value="">Loading fields…</option> : null}
+        {!options.length ? <option value="">{fieldsLoading ? 'Loading fields…' : 'No available fields'}</option> : null}
         {options.map(choice => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
       </select>
     </fieldset>;

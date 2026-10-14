@@ -100,6 +100,7 @@ test('@cpu independent retained panes preserve physics, surfaces, legends, scope
   expect((await raster(page, 'left')).png).not.toBe(leftBefore); expect((await raster(page, 'right')).png).not.toBe(rightBefore);
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(before);
   await page.screenshot({ path: info.outputPath('retained-two-meshes-two-materials.png') });
+  await info.attach('retained-two-meshes-two-materials', { path: info.outputPath('retained-two-meshes-two-materials.png'), contentType: 'image/png' });
   await page.evaluate(() => window.fem.load.traction({ name: 'tip', on: 'bar.xmax', total: ['200 N', '0 N', '0 N'] }));
   expect((await read(page)).left!.summary.stale).toBe(true); expect((await read(page)).right!.summary.stale).toBe(true);
   await page.evaluate(() => window.fem.solve.run({ step: 'axial', solver: 'cpu-direct' }));
@@ -138,10 +139,88 @@ test('@cpu engine differences retain the target mesh, missing coverage and ident
   expect(pick).toMatchObject({ resultId: latest.resultId, difference: true, value: null });
   await expect(page.locator('.probe')).toContainText('unavailable coverage');
   await page.screenshot({ path: info.outputPath('difference-missing-coverage.png') });
+  await info.attach('difference-missing-coverage', { path: info.outputPath('difference-missing-coverage.png'), contentType: 'image/png' });
   await page.evaluate(async () => { for (let i = 0; i < 8; i++) await window.fem.solve.run({ step: 'axial', solver: 'cpu-direct' }); });
   const unavailable = await read(page); expect(unavailable.configuration).toEqual(input); expect(unavailable.difference!.error?.code).toBe('not-found');
   await expect(page.locator('.comparison-pane-title')).toContainText('unavailable or evicted');
   expect((await raster(page, 'difference')).count).toBe(0);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'replacement session' }));
   expect((await read(page)).configuration.mode).toBe('single'); expect((await read(page)).catalogue.records).toEqual([]);
+});
+
+test('@cpu portrait panes fit without legend overlap, wheel zoom is shared, left-target differences and structured rejection are explicit', async ({ page }, info) => {
+  test.setTimeout(180_000); await boot(page); const ids = await axialPair(page);
+  const configuration = { mode: 'sideBySide', left: { resultId: ids.left, field: 'displacement', component: 0 }, right: { resultId: ids.right, field: 'displacement', component: 0 } };
+  await page.evaluate(configuration => window.fem.dispatch({ cmd: 'view.compareResults', ...configuration }), configuration); await cleanView(page);
+  const camera = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const name of ['left', 'right']) {
+    await expect.poll(async () => (await raster(page, name)).count).toBeGreaterThan(200);
+    const picture = await raster(page, name), canvas = (await page.locator(`[data-comparison-pane="${name}"] canvas`).boundingBox())!, legend = (await page.getByLabel(`${name} legend`, { exact: true }).boundingBox())!;
+    expect(picture.minX).toBeGreaterThan(2); expect(picture.maxX).toBeLessThan(picture.width - 2);
+    expect(canvas.x + canvas.width).toBeLessThanOrEqual(legend.x);
+  }
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(camera);
+  await page.screenshot({ path: info.outputPath('portrait-shared-fit-docked-legends.png') });
+  await info.attach('portrait-shared-fit-docked-legends', { path: info.outputPath('portrait-shared-fit-docked-legends.png'), contentType: 'image/png' });
+  const captured = await page.evaluate(async () => {
+    const { png } = await window.fem.registry.query({ query: 'query.screenshot', width: 902, height: 500, title: 'Retained Result comparison' }) as { png: string };
+    const image = new Image(); const ready = new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = reject; }); image.src = png; await ready;
+    return { png, width: image.naturalWidth, height: image.naturalHeight };
+  });
+  expect(captured.width).toBe(902); expect(captured.height).toBe(500);
+  await info.attach('comparison-both-pane-capture', { body: Buffer.from(captured.png.split(',')[1]!, 'base64'), contentType: 'image/png' });
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(camera);
+  const leftBefore = await raster(page, 'left'), rightBefore = await raster(page, 'right');
+  const rect = (await page.locator('[data-comparison-pane="right"] canvas').boundingBox())!;
+  await page.mouse.move(rect.x + rect.width * 0.5, rect.y + rect.height * 0.55); await page.mouse.wheel(0, -120);
+  await expect.poll(async () => (await page.evaluate(() => window.fem.registry.query({ query: 'query.view' })) as { zoom?: number }).zoom ?? 1).toBeGreaterThan(1);
+  await expect.poll(async () => (await raster(page, 'left')).png).not.toBe(leftBefore.png);
+  await expect.poll(async () => (await raster(page, 'right')).png).not.toBe(rightBefore.png);
+  const rejected = await page.evaluate(async ids => {
+    try {
+      await window.fem.dispatch({ cmd: 'view.compareResults', mode: 'difference', left: { resultId: ids.left, field: 'displacement', component: 0 }, right: { resultId: ids.right, field: 'vonMises', component: 0 }, onto: 'left' });
+      return null;
+    } catch (error) { const e = error as { code: string; cause: string; where: string | null; suggestion: string | null }; return { code: e.code, cause: e.cause, where: e.where, suggestion: e.suggestion }; }
+  }, ids);
+  expect(rejected?.code).toBeTruthy(); expect(rejected?.cause).toBeTruthy();
+  expect((await read(page)).configuration).toEqual(configuration); expect((await read(page)).error?.code).toBe(rejected!.code);
+  const input = { mode: 'difference', left: configuration.left, right: configuration.right, onto: 'left' };
+  await page.evaluate(input => window.fem.dispatch({ cmd: 'view.compareResults', ...input }), input);
+  const result = await read(page), surface = await page.evaluate(resultId => window.fem.query.surface({ resultId }), ids.left);
+  expect(result.difference!.operand.resultId).toBe(ids.left); expect(result.coverage!.totalNodes).toBe(surface.nodeCount);
+  expect(result.difference!.legend!.max.value).toBeCloseTo(0.005, 7); expect(result.error).toBeNull();
+  await page.screenshot({ path: info.outputPath('difference-onto-left.png') });
+  await info.attach('difference-onto-left', { path: info.outputPath('difference-onto-left.png'), contentType: 'image/png' });
+});
+
+test('@cpu thermal comparisons use scalar component zero, signed Celsius differences and no fabricated deformation', async ({ page }, info) => {
+  test.setTimeout(180_000); await boot(page);
+  const ids = await page.evaluate(async () => {
+    await window.fem.model.new({ name: 'retained heat comparison' });
+    await window.fem.model.setUnits({ units: { length: 'mm', temperature: 'degC' } });
+    await window.fem.geometry.addBox({ name: 'bar', size: ['1 m', '100 mm', '100 mm'] });
+    await window.fem.material.add({ name: 'conductor', k: '45 W/(m K)' });
+    await window.fem.material.assign({ material: 'conductor', bodies: ['bar'] });
+    await window.fem.mesh.set({ mesher: { kind: 'lattice', size: '100 mm' } });
+    await window.fem.constraint.temperature({ name: 'cold', on: 'bar.xmin', value: '0 degC' });
+    await window.fem.constraint.temperature({ name: 'hot', on: 'bar.xmax', value: '100 degC' });
+    await window.fem.step.add({ name: 'conduct', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [], output: ['temperature'] });
+    await window.fem.solve.run({ step: 'conduct', solver: 'cpu-direct' });
+    const left = (await window.fem.query.result()).resultId;
+    await window.fem.constraint.temperature({ name: 'hot', on: 'bar.xmax', value: '120 degC' });
+    await window.fem.solve.run({ step: 'conduct', solver: 'cpu-direct' });
+    return { left, right: (await window.fem.query.result()).resultId };
+  });
+  await page.getByLabel('left Result', { exact: true }).selectOption(ids.left); await page.getByLabel('right Result', { exact: true }).selectOption(ids.right);
+  await page.locator('.comparison-actions .apply').click(); await expect(page.locator('[data-comparison-pane]')).toHaveCount(2);
+  const pair = await read(page); expect(pair.left!.operand.component).toBe(0); expect(pair.right!.operand.component).toBe(0);
+  expect(pair.left!.legend!.max).toEqual({ value: 100, unit: 'degC' }); expect(pair.right!.legend!.max).toEqual({ value: 120, unit: 'degC' });
+  expect(pair.left!.canDeform).toBe(false); expect(pair.right!.canDeform).toBe(false); await expect(page.locator('.comparison-deform')).toHaveCount(0);
+  await page.evaluate(pair => window.fem.dispatch({ cmd: 'view.compareResults', mode: 'difference', left: pair.left, right: pair.right, onto: 'left' }), { left: pair.left!.operand, right: pair.right!.operand });
+  const difference = await read(page);
+  expect(difference.difference!.legend!.min.value).toBeCloseTo(-20, 7); expect(difference.difference!.legend!.max.value).toBeCloseTo(0, 7);
+  await expect(page.getByLabel('difference legend', { exact: true })).toContainText('Δ degC'); await expect(page.locator('.comparison-deform')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('signed-temperature-difference.png') });
+  await info.attach('signed-temperature-difference', { path: info.outputPath('signed-temperature-difference.png'), contentType: 'image/png' });
 });

@@ -14,6 +14,7 @@ function viewer() {
     animate: vi.fn(), setField: vi.fn(), setDeformed: vi.fn(), setSurface: vi.fn(), setVisible: vi.fn(), setMode: vi.fn(),
     setDim: vi.fn(), setColormap: vi.fn(), setFieldValidity: vi.fn(), setSelection: vi.fn(), preset: vi.fn(), setProjection: vi.fn(), getProjection: () => 'perspective' as const,
     setLayer: vi.fn(() => true), setClip: vi.fn(), setTheme: vi.fn(), setHover: vi.fn(), setHighlight: vi.fn(),
+    viewportAspect: vi.fn(() => 4 / 3), screenshot: vi.fn(() => 'data:image/png;base64,pane'),
     setCamera: vi.fn((next: CameraState) => { camera = next; }), getCamera: () => camera,
     setComparisonFrameHeight: vi.fn(), getCameraZoom: () => zoom, setCameraZoom: vi.fn((next: number) => { zoom = next; }),
   } satisfies ComparisonViewer;
@@ -100,6 +101,26 @@ it('shares camera, orthographic span and zoom across unequal meshes without chan
   expect(left.preset).toHaveBeenCalledWith('top', { min: [0, 0, 0], max: [2, 1, 0] });
 });
 
+it('fits portrait panes with one shared world span, preserves camera on resize, and captures each pane with its own identity/legend', async () => {
+  const { comparison, left, right } = setup();
+  left.viewportAspect.mockReturnValue(0.25); right.viewportAspect.mockReturnValue(0.5);
+  await comparison.configure(pair);
+  expect(left.setComparisonFrameHeight.mock.lastCall?.[0]).toBeCloseTo(Math.sqrt(5) * 0.7 / 0.25);
+  const before = left.getCamera();
+  left.viewportAspect.mockReturnValue(0.5); right.viewportAspect.mockReturnValue(0.75); comparison.resize();
+  expect(left.getCamera()).toEqual(before);
+  expect(left.setComparisonFrameHeight.mock.lastCall?.[0]).toBeCloseTo(Math.sqrt(5) * 0.7 / 0.5);
+  expect(left.setComparisonFrameHeight.mock.lastCall).toEqual(right.setComparisonFrameHeight.mock.lastCall);
+  expect(comparison.capture({ width: 901, height: 500 })).toHaveLength(2);
+  expect(left.screenshot).toHaveBeenLastCalledWith(expect.objectContaining({ unit: 'mm', max: 2 }), expect.objectContaining({ width: 451, height: 500, title: 'left · old · stale' }));
+  expect(right.screenshot).toHaveBeenLastCalledWith(expect.objectContaining({ unit: 'MPa', max: 6 }), expect.objectContaining({ width: 450, height: 500, title: 'right · new · current' }));
+  expect(() => comparison.capture({ width: 1 })).toThrowError(expect.objectContaining({ code: 'schema' }));
+  const guard = comparison.captureGuard(); comparison.suspend();
+  expect(guard).toThrowError(expect.objectContaining({ code: 'result.stale' }));
+  const closed = comparison.captureGuard(); comparison.dispose();
+  expect(closed).toThrowError(expect.objectContaining({ code: 'session.expired' }));
+});
+
 it('suspends comparison for current geometry/mesh and resumes the same pins; single resets independent hides', async () => {
   const { comparison, store, left, lifecycle } = setup(); await comparison.configure(pair);
   comparison.visible({ pane: 'left', resultId: 'old', bodies: ['body-old'], on: false });
@@ -154,6 +175,7 @@ it('uses difference amounts rather than absolute temperature offsets for contour
   });
   await comparison.configure({ mode: 'difference', left: operand('old', 'temperature'), right: operand('new', 'temperature'), onto: 'right' });
   expect(comparison.state().difference?.legend?.min).toEqual(q(-5, 'degC'));
+  expect(comparison.state().difference?.canDeform).toBe(false);
   expect(comparison.state().difference?.legend?.max).toEqual(q(10, 'degC'));
   await comparison.legend({ pane: 'difference', resultId: 'new', range: [q(-10, 'K'), q(20, 'K')] });
   expect(comparison.state().difference?.legend?.min).toEqual(q(-10, 'degC'));

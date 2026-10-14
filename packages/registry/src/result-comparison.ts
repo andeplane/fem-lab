@@ -83,6 +83,8 @@ export interface ComparisonPaneState {
   legend: ComparisonLegendState | null;
   bodyNames: string[];
   hiddenBodies: string[];
+  /** The selected retained payload contains a displacement/mode field usable for deformation. */
+  canDeform: boolean;
   pick: ComparisonPick | null;
   error: EngineError | null;
 }

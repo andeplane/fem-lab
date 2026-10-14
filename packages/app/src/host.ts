@@ -217,6 +217,11 @@ export function makeHostContext(
       },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
+        if (comparison?.active) {
+          const guard = comparison.captureGuard(), png = await composePaneImages(comparison.capture(o));
+          guard();
+          return { png };
+        }
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
@@ -433,6 +438,26 @@ export function makeHostContext(
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };
+}
+
+/** Browser I/O stays in the host; the comparison controller supplies already-rendered panes. */
+async function composePaneImages(pngs: string[]): Promise<string> {
+  if (pngs.length === 1) return pngs[0]!;
+  const images = await Promise.all(pngs.map(png => new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = document.createElement('img');
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new FemError('internal', 'a captured comparison pane could not be decoded', 'query.screenshot'));
+    image.src = png;
+  })));
+  const canvas = document.createElement('canvas');
+  canvas.width = images.reduce((width, image) => width + image.naturalWidth, 0);
+  canvas.height = Math.max(...images.map(image => image.naturalHeight));
+  const context = canvas.getContext('2d');
+  if (!context) throw new FemError('unsupported', 'a 2D canvas is required to join comparison panes', 'query.screenshot');
+  context.fillStyle = '#0d0f13'; context.fillRect(0, 0, canvas.width, canvas.height);
+  let left = 0;
+  for (const image of images) { context.drawImage(image, left, 0); left += image.naturalWidth; }
+  return canvas.toDataURL('image/png');
 }
 
 /** Metadata and inputs are prepared before the session owner attempts activation. */

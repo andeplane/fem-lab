@@ -2,7 +2,8 @@
 
 Implementation issue: [#283](https://github.com/andeplane/fem-lab/issues/283).
 Parent decomposition: [Result and Journal comparison](16-result-journal-comparison.md), #16.
-Inspected source: `191c4d65` (main, 2026-10-15).
+Initial inspected source: `191c4d65` (main, 2026-10-15). Final host composition preserves
+the account, hosted-AI and service changes on `e11a0285`.
 Transient frame selection and playback remain #286; comparison here uses each immutable
 Result's final fields.
 
@@ -99,3 +100,25 @@ as scripts/AI. These are host capabilities, never Journal entries or a new engin
 6. Commit green feature-sized steps, publish one #283 PR, and report source/artifact provenance
    and actual checks. #286 playback is separate; a missing numerical prerequisite is filed and
    reported rather than reconstructed in the host or silently omitted.
+
+## Implemented acceptance
+
+| Public behavior | Permanent regression |
+| --- | --- |
+| Distinct retained ids, unequal meshes, independent fields/units/clamps, scoped picking/hiding and shared orbit | `packages/app/e2e/result-comparison.spec.ts`, independent retained panes case. Its axial oracles are `PL/EA = 0.01 mm` and `P/A = 0.01 MPa`, with 1/2 GPa materials and 100/50 mm meshes. |
+| Explicit right target, partial coverage, null probes, edit/re-solve identity, mode transitions, eviction and project replacement | The engine differences Chromium case. Outside nodes remain neutral and absent from extrema. |
+| Portrait fit with docked legends, synchronized wheel zoom, both-pane PNG export, explicit left target and structured incompatible-field rejection preserving the prior configuration | The portrait panes Chromium case. Rendered bounds are checked against each actual canvas; resize/export preserve the public camera. |
+| Scalar thermal component zero, independent absolute Celsius legends, signed Celsius differences and absence of deformation for heat-only payloads | The thermal Chromium case uses the E1 linear steady conduction oracle. Temperature differences remove the unit origin offset. |
+| Concurrent per-pane legend updates, hide/pick ordering, interrupted first load, late Model edits/eviction, session disposal and screenshot replacement fences | Deferred typed transport regressions in `packages/app/test/result-comparison.test.ts`. |
+| Retained nulls on triangles and line elements, scientific missing picks, shared camera span/zoom and disposal | `packages/app/test/sheet-viewer-lifecycle.test.ts` exercises real three.js geometry/controls with only the GPU boundary replaced. |
+| UI/AI/script parity, physical quantities, exact pane/id targets, unsupported headless host and existing camera compatibility | `packages/registry/test/result-comparison.test.ts` plus the exhaustive host registry samples and coverage gate. |
+| Existing single-Result fields, playback, selection, session replacement and accepted account UI | The complete app suite includes `results.test.tsx`, `transient-results.test.ts`, `main-session.test.ts` and `account-ui.test.tsx`; leaving comparison restores the existing workflow. |
+
+The engine, Cargo/build inputs and generated engine schema are unchanged from the authentic
+`d0cd3769` runtime producer. Final verification uses its complete eight-file browser/Node
+bindings (artifact `11930522380`, WASM SHA256 `cb8408f4…`), after byte-level source and binding
+checks. Renderer surfaces stage coordinates in f32; nodal scientific values remain f64. A
+comparison pick returns the staged surface node coordinate with physical units and the
+scientific nodal value, rather than claiming a new exact-coordinate interpolation Query.
+Chromium screenshots and raster bounds establish browser acceptance; they do not claim
+physical-device validation.

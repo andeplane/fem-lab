@@ -742,19 +742,21 @@ textarea:focus {
 .result-workspace { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .comparison-canvases { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .comparison-canvases.paired { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border-divider); }
+.comparison-pane canvas { width: calc(100% - 145px); }
 .comparison-controls { padding: 8px 10px; background: var(--bg-panel); border-bottom: 1px solid var(--border-divider); font-size: 11px; }
 .comparison-actions, .comparison-operands { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.comparison-actions .apply { flex: 0 0 auto; min-width: 72px; }
 .comparison-controls fieldset { display: flex; gap: 4px; border: 0; margin: 3px 0 0; padding: 0; min-width: 0; flex: 1; }
 .comparison-controls legend { float: left; padding: 4px 5px 0 0; color: var(--text-low); }
 .comparison-controls select { max-width: 100%; min-width: 0; font-size: 11px; padding: 3px; }
 .comparison-controls fieldset select:first-of-type { flex: 1; width: 100px; }
 .comparison-controls p { margin: 5px 0 0; color: var(--text-low); }
 .comparison-error, .comparison-warnings { color: var(--warn-text); overflow-wrap: anywhere; }
-.comparison-pane-title { position: absolute; top: 75px; left: 10px; right: 10px; display: flex; flex-direction: column; font-size: 11px; gap: 2px; pointer-events: none; overflow-wrap: anywhere; }
+.comparison-pane-title { position: absolute; top: 75px; left: 10px; right: 150px; display: flex; flex-direction: column; font-size: 11px; gap: 2px; pointer-events: none; overflow-wrap: anywhere; }
 .comparison-pane-title.stale { color: var(--warn-text); }
 .comparison-body-controls { position: absolute; bottom: 65px; left: 10px; display: flex; flex-wrap: wrap; gap: 3px; max-width: calc(100% - 160px); }
 .comparison-body-controls button { font-size: 10px; padding: 3px 6px; }
-.comparison-legend { position: absolute; top: 165px; right: 10px; width: 125px; background: #101218e8; padding: 7px; font-size: 10px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.comparison-legend { position: absolute; top: 75px; right: 10px; width: 125px; background: #101218e8; padding: 7px; font-size: 10px; display: grid; gap: 4px; overflow-wrap: anywhere; }
 .comparison-gradient { height: 70px; width: 12px; grid-column: 1; grid-row: 3; }
 .comparison-ticks { grid-column: 1; grid-row: 3; height: 70px; padding-left: 20px; display: flex; flex-direction: column; justify-content: space-between; font-family: var(--mono); }
 .comparison-colormaps { display: flex; gap: 3px; }
