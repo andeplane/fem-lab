@@ -1,5 +1,5 @@
 //! Public checked-display boundaries, with exact authored values and independent SI oracles.
-use super::{engine, ok, Engine, ErrorCode, Query, IMPORTED_TET};
+use super::{engine, err, heat_bar, ok, Engine, ErrorCode, Query, IMPORTED_TET};
 use serde_json::{json, Value};
 
 fn command(e: &mut Engine, value: Value) {
@@ -23,18 +23,55 @@ fn read(e: &mut Engine, value: Value) -> Value {
 }
 
 fn rejected_read(e: &mut Engine, query: Value) {
+    rejected_read_code(e, query, ErrorCode::UnitDisplay);
+}
+
+fn rejected_read_code(e: &mut Engine, query: Value, code: ErrorCode) {
     let file = e.export_file();
     let hash = e.model_hash();
     let revision = e.revision();
     let catalogue = e.query(Query::Results {}).unwrap();
     let error = e.query(serde_json::from_value(query).unwrap()).unwrap_err();
-    assert_eq!(error.code, ErrorCode::UnitDisplay);
-    assert_eq!(error.where_.as_deref(), Some("displayUnits"));
-    assert!(error.suggestion.as_deref().unwrap().contains("model.setUnits"));
+    assert_eq!(error.code, code, "{error:?}");
+    if code == ErrorCode::UnitDisplay {
+        assert_eq!(error.where_.as_deref(), Some("displayUnits"));
+        assert!(error.suggestion.as_deref().unwrap().contains("model.setUnits"));
+    }
     assert_eq!(e.export_file(), file);
     assert_eq!(e.model_hash(), hash);
     assert_eq!(e.revision(), revision);
     assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+}
+
+fn rejected_command(e: &mut Engine, value: Value) {
+    let file = e.export_file();
+    let hash = e.model_hash();
+    let revision = e.revision();
+    let catalogue = e.query(Query::Results {}).unwrap();
+    assert_eq!(err(e, &value.to_string()).code, ErrorCode::UnitDisplay);
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+}
+
+fn axial_bar() -> Engine {
+    let mut e = fresh();
+    for value in [
+        json!({"cmd":"geometry.addLine","name":"shaft","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"divisions":2,"kind":"beam"}),
+        json!({"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}),
+        json!({"cmd":"material.assign","material":"steel","bodies":["shaft"]}),
+        json!({"cmd":"section.add","name":"round","shape":{"kind":"circle","radius":"50 mm"}}),
+        json!({"cmd":"section.assign","section":"round","bodies":["shaft"]}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}),
+        json!({"cmd":"constraint.fix","name":"root","on":"shaft.p0"}),
+        json!({"cmd":"load.force","name":"tip","on":"shaft.p1","total":["1000 N","0 N","0 N"]}),
+        json!({"cmd":"step.add","name":"axial","procedure":"static","constraints":["root"],"loads":["tip"]}),
+        json!({"cmd":"solve.run","step":"axial","solver":"cpu-direct"}),
+    ] {
+        command(&mut e, value);
+    }
+    e
 }
 
 #[test]
@@ -244,5 +281,243 @@ fn checked_display_empty_line_set_has_a_real_no_boundary_diagnostic() {
     let error = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!(error.code, ErrorCode::SetEmpty);
     assert!(error.cause.contains("no boundary face"));
+    assert_eq!(e.export_file(), file);
+}
+
+#[test]
+fn checked_display_probe_path_and_study_field_errors_preserve_the_solved_context() {
+    let mut e = axial_bar();
+    let mut original = read(&mut e, json!({"query":"query.result","step":"axial"}));
+    let probe = json!({"query":"query.probe","step":"axial","field":"stress","component":0,"at":["0.5 m","0 m","0 m"]});
+    let path = json!({"query":"query.path","step":"axial","field":"stress","component":0,"from":["0 m","0 m","0 m"],"to":["1 m","0 m","0 m"],"n":3});
+    let sigma = 1000.0 / (std::f64::consts::PI * 0.05_f64.powi(2));
+    assert!((read(&mut e, probe.clone())["value"]["value"].as_f64().unwrap() - sigma).abs() < 1e-8);
+    for value in read(&mut e, path.clone())["values"].as_array().unwrap() {
+        assert!((value.as_f64().unwrap() - sigma).abs() < 1e-8);
+    }
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"stress":"Pa*nm^34/m^34"}}));
+    original["stale"] = json!(true);
+    for query in [probe, path] {
+        rejected_read_code(&mut e, query, ErrorCode::ResultStale);
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+    }
+    rejected_command(
+        &mut e,
+        json!({"cmd":"study.converge","step":"axial","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"stress","component":0}}),
+    );
+    assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+}
+
+#[test]
+fn checked_display_convergence_size_rejects_before_replacing_the_mesh_or_result() {
+    let mut e = axial_bar();
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"length":"nm^35/m^34"}}));
+    rejected_command(
+        &mut e,
+        json!({"cmd":"study.converge","step":"axial","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"displacement","component":0}}),
+    );
+}
+
+#[test]
+fn checked_display_retained_frame_and_history_times_are_fallible_read_only_values() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"temperature":"K","length":"m"}}));
+    command(&mut e, json!({"cmd":"constraint.temperature","name":"held","on":"bar.xmin","value":"1 K"}));
+    command(
+        &mut e,
+        json!({"cmd":"step.add","name":"constant","procedure":"heat-transient","constraints":["held"],"loads":[],"initial":"1 K","dt":"1 s","tEnd":"1 s"}),
+    );
+    command(&mut e, json!({"cmd":"solve.run","step":"constant","solver":"cpu-direct"}));
+    let mut original = read(&mut e, json!({"query":"query.result","step":"constant"}));
+    let frames = read(&mut e, json!({"query":"query.frames","step":"constant"}));
+    assert_eq!(frames["frames"][1]["time"], json!({"value":1.0,"unit":"s"}));
+    let frame = read(&mut e, json!({"query":"query.frame","step":"constant","index":1}));
+    for node in frame["values"].as_array().unwrap().chunks_exact(3) {
+        assert!((node[0].as_f64().unwrap() - 1.0).abs() < 2e-14);
+        assert_eq!(node[1], 0.0);
+        assert_eq!(node[2], 0.0);
+    }
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"time":"s*nm^35/m^35"}}));
+    original["stale"] = json!(true);
+    rejected_read_code(&mut e, json!({"query":"query.frame","step":"constant","index":1}), ErrorCode::ResultStale);
+    for query in [json!({"query":"query.frames","step":"constant"}), json!({"query":"query.result","step":"constant"})]
+    {
+        rejected_read(&mut e, query);
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+    }
+}
+
+#[test]
+fn checked_display_thermal_history_extrema_do_not_hide_an_earlier_unrepresentable_frame() {
+    for cold in ["0 K", "10 K"] {
+        let mut e = engine();
+        heat_bar(&mut e);
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"temperature":"K","length":"m"}}));
+        command(&mut e, json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}));
+        command(&mut e, json!({"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"10 K"}));
+        command(&mut e, json!({"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":cold}));
+        command(
+            &mut e,
+            json!({"cmd":"step.add","name":"cool","procedure":"heat-transient","constraints":["left","right"],"loads":[],"initial":"0 K","dt":"1 s","tEnd":"1 s","amplitude":{"kind":"table","t":["0 s","1 s"],"value":[1,0]}}),
+        );
+        command(&mut e, json!({"cmd":"solve.run","step":"cool","solver":"cpu-direct"}));
+        let mut original = read(&mut e, json!({"query":"query.result","step":"cool"}));
+        assert_eq!(original["history"][0]["max"]["value"], 10.0);
+        assert_eq!(original["history"][0]["min"]["value"], if cold == "0 K" { 0.0 } else { 10.0 });
+        assert_eq!(original["history"][1]["max"]["value"], 0.0);
+        let mean_initial = if cold == "0 K" { 5.0 } else { 10.0 };
+        // Stored thermal power is C*ΔT/Δt: rho*cp*V = 36110J/K, Δt=1s.
+        assert!((original["storagePower"]["value"].as_f64().unwrap() + 36110.0 * mean_initial).abs() < 2e-9);
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"temperature":"K*nm^35/m^35"}}));
+        original["stale"] = json!(true);
+        rejected_read(&mut e, json!({"query":"query.result","step":"cool"}));
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"power":"W*nm^34/m^34"}}));
+        rejected_read(&mut e, json!({"query":"query.result","step":"cool"}));
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+    }
+}
+
+#[test]
+fn checked_display_thermal_reactions_and_applied_power_are_independently_checked() {
+    for (loads, unit, individual) in
+        [(Vec::new(), "W*nm^34*mm/m^35", 0.45), (vec!["source"], "W*nm^34*cm*cm/m^36", 0.01)]
+    {
+        let mut e = engine();
+        heat_bar(&mut e);
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"temperature":"K","length":"m"}}));
+        command(&mut e, json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}));
+        command(&mut e, json!({"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"0 K"}));
+        let hot = if loads.is_empty() { "1 K" } else { "0 K" };
+        command(&mut e, json!({"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":hot}));
+        command(&mut e, json!({"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"2 W/m^3"}));
+        command(
+            &mut e,
+            json!({"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["left","right"],"loads":loads}),
+        );
+        command(&mut e, json!({"cmd":"solve.run","step":"heat","solver":"cpu-direct"}));
+        let mut original = read(&mut e, json!({"query":"query.result","step":"heat"}));
+        // Fourier q=k*A*ΔT/L=0.45W, or uniform source q*V/2=0.01W per held end.
+        assert!((original["reactions"][0]["total"][0]["value"].as_f64().unwrap().abs() - individual).abs() < 1e-13);
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"power":unit}}));
+        original["stale"] = json!(true);
+        rejected_read(&mut e, json!({"query":"query.result","step":"heat"}));
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+        if loads.is_empty() {
+            // The final temperature's independent range0..1K has a representable minimum
+            // but an unrepresentable maximum in this selected temperature unit.
+            command(&mut e, json!({"cmd":"model.setUnits","units":{"temperature":"K*nm^35/m^35"}}));
+            rejected_read(&mut e, json!({"query":"query.result","step":"heat"}));
+        }
+    }
+}
+
+#[test]
+fn checked_display_public_vector_norm_rejects_a_truly_unrepresentable_magnitude() {
+    let mut e = fresh();
+    for value in [
+        json!({"cmd":"geometry.addLine","name":"line","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"kind":"truss"}),
+        json!({"cmd":"material.add","name":"soft","E":"1 Pa","nu":0}),
+        json!({"cmd":"material.assign","material":"soft","bodies":["line"]}),
+        json!({"cmd":"section.add","name":"small","shape":{"kind":"circle","radius":"0.1 m"}}),
+        json!({"cmd":"section.assign","section":"small","bodies":["line"]}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}),
+        json!({"cmd":"geometry.nameRegion","name":"all","where":{"kind":"body","name":"line"}}),
+    ] {
+        command(&mut e, value);
+    }
+    for (dof, value) in [("ux", f64::MAX), ("uy", f64::MAX), ("uz", 0.0)] {
+        command(
+            &mut e,
+            json!({"cmd":"constraint.prescribe","name":dof,"on":"all","dof":dof,"value":{"value":value,"unit":"m"}}),
+        );
+    }
+    command(
+        &mut e,
+        json!({"cmd":"step.add","name":"rigid","procedure":"static","constraints":["ux","uy","uz"],"loads":[]}),
+    );
+    command(&mut e, json!({"cmd":"solve.run","step":"rigid","solver":"cpu-direct"}));
+    let original = read(&mut e, json!({"query":"query.result","step":"rigid"}));
+    // Rigid translation has zero strain/stress/reaction. Both components are exactly MAX;
+    // their mathematical norm is sqrt(2)*MAX, which cannot fit even with a stable norm.
+    assert_eq!(original["staticEquilibrium"]["forceScale"]["value"], 0.0);
+    for field in ["strain", "stress"] {
+        let values = read(&mut e, json!({"query":"query.field","step":"rigid","field":field}));
+        assert!(values["values"].as_array().unwrap().iter().all(|value| value.as_f64().unwrap() == 0.0));
+    }
+    for reaction in original["reactions"].as_array().unwrap() {
+        for component in reaction["total"].as_array().unwrap() {
+            assert_eq!(component["value"], 0.0);
+        }
+    }
+    for component in [0, 1] {
+        assert_eq!(
+            read(
+                &mut e,
+                json!({"query":"query.probe","step":"rigid","field":"displacement","component":component,"at":["0.5 m","0 m","0 m"]})
+            )["value"]["value"],
+            f64::MAX
+        );
+    }
+    for query in [
+        json!({"query":"query.probe","step":"rigid","field":"displacement","at":["0.5 m","0 m","0 m"]}),
+        json!({"query":"query.path","step":"rigid","field":"displacement","from":["0 m","0 m","0 m"],"to":["1 m","0 m","0 m"],"n":3}),
+    ] {
+        rejected_read(&mut e, query);
+        assert_eq!(read(&mut e, json!({"query":"query.result","step":"rigid"})), original);
+    }
+    rejected_command(
+        &mut e,
+        json!({"cmd":"study.converge","step":"rigid","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"displacement"}}),
+    );
+    assert_eq!(read(&mut e, json!({"query":"query.result","step":"rigid"})), original);
+}
+
+#[test]
+fn checked_display_extremum_coordinates_are_checked_after_a_readable_wrench_ledger() {
+    for force in [1000.0, -1000.0] {
+        let mut e = axial_bar();
+        command(
+            &mut e,
+            json!({"cmd":"geometry.addLine","name":"shaft","points":[["1 m","0 m","0 m"],["2 m","0 m","0 m"]],"divisions":2,"kind":"beam"}),
+        );
+        command(
+            &mut e,
+            json!({"cmd":"load.force","name":"tip","on":"shaft.p1","total":[format!("{force} N"),"0 N","0 N"]}),
+        );
+        command(&mut e, json!({"cmd":"solve.run","step":"axial","solver":"cpu-direct"}));
+        let mut original = read(&mut e, json!({"query":"query.result","step":"axial"}));
+        assert_eq!(original["staticEquilibrium"]["characteristicLength"]["value"], 1.0);
+        // Length factor1e-308 keeps the unit span and reference1m readable. Endpoint2m
+        // is unrepresentable: tension selects maxAt, compression minAt at that endpoint.
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"length":"nm^34*cm/m^34","force":"GN"}}));
+        rejected_read(&mut e, json!({"query":"query.result","step":"axial"}));
+        original["stale"] = json!(true);
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":original["resultId"]})), original);
+    }
+}
+
+#[test]
+fn checked_display_admitted_thermal_coefficients_and_sources_keep_their_fixed_si_contract() {
+    let mut e = box_model();
+    for load in [
+        json!({"cmd":"load.convection","name":"film","on":"box.xmax","h":"1e308 W/(m^2 K)","tInf":"1 K"}),
+        json!({"cmd":"load.heatFlux","name":"flux","on":"box.xmax","q":"1e308 W/m^2"}),
+        json!({"cmd":"load.heatSource","name":"source","bodies":["box"],"q":"1e308 W/m^3"}),
+        json!({"cmd":"contact.add","name":"tie","master":"box.xmin","slave":"box.xmax","kind":"bonded"}),
+        json!({"cmd":"contact.thermal","name":"conductance","of":"tie","conductance":"1e308 W/(m^2 K)"}),
+    ] {
+        command(&mut e, load);
+    }
+    let file = e.export_file();
+    let summary = read(&mut e, json!({"query":"query.model"}));
+    for load in summary["loads"].as_array().unwrap() {
+        assert!(load["summary"].as_str().unwrap().contains("1e308 SI"));
+    }
+    for (name, field) in [("film", "h"), ("flux", "q"), ("source", "q"), ("conductance", "conductance")] {
+        let definition = read(&mut e, json!({"query":"query.definition","kind":"load","name":name}));
+        assert_eq!(definition["command"][field]["value"], 1e308);
+    }
     assert_eq!(e.export_file(), file);
 }

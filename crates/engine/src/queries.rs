@@ -8,9 +8,7 @@ use crate::error::{Error, ErrorCode};
 use crate::model::{Axial, ConstraintKind, Idealisation, LoadKind, SetSource};
 use crate::post::FieldData;
 use crate::query::*;
-use crate::units::{
-    self, Acceleration, Density, Dim, Dimension, Force, HeatTransfer, Length, Mass, Stress, Temperature, Q,
-};
+use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature, Q};
 
 /// Three lengths in SI, with the field path an error names.
 pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
@@ -483,7 +481,9 @@ impl Engine {
                     }
                     LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM)?)),
                     LoadKind::Convection { h, t_inf, .. } => {
-                        let hv = display(m, *h, HeatTransfer::DIM)?;
+                        // Typed Command admission stores finite h/q. These thermal
+                        // dimensions have no configurable unit; their label is always SI.
+                        let hv = Valued { value: *h, unit: "SI".into() };
                         let t = display(m, *t_inf, Temperature::DIM)?;
                         (
                             "convection",
@@ -509,11 +509,11 @@ impl Engine {
                         )
                     }
                     LoadKind::HeatFlux { q, .. } => {
-                        let v = display(m, *q, crate::units::HeatFlux::DIM)?;
+                        let v = Valued { value: *q, unit: "SI".into() };
                         ("heatFlux", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
                     LoadKind::HeatSource { bodies, q } => {
-                        let v = display(m, *q, crate::units::HeatSource::DIM)?;
+                        let v = Valued { value: *q, unit: "SI".into() };
                         ("heatSource", format!("{} {} on {}", units::fmt_sig(v.value, 4), v.unit, bodies.join(", ")))
                     }
                     LoadKind::Torque { total, .. } => {
@@ -536,7 +536,7 @@ impl Engine {
                         )
                     }
                     LoadKind::ThermalContact { of, h } => {
-                        let v = display(m, *h, HeatTransfer::DIM)?;
+                        let v = Valued { value: *h, unit: "SI".into() };
                         ("thermalContact", format!("h = {} {} across '{of}'", units::fmt_sig(v.value, 4), v.unit))
                     }
                 };

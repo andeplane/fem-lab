@@ -2488,3 +2488,31 @@ mass conversions. Two individually readable `1e308 N` forces have an unrepresent
 so its ordinary `set.empty` diagnostic remains available. Two unused imported labels at
 the same `1e308 m` coordinate retain that exact centroid and a literal zero node measure;
 the separate three-MAX centroid arithmetic defect is tracked by #593.
+
+A fully prescribed rigid translation of a real truss has finite components `ux = uy =
+f64::MAX`, zero strain and zero reactions. Component probes return the exact prescribed
+values; the mathematical norm `sqrt(2) * MAX` exceeds the largest f64, so public norm
+probes, paths and convergence metrics reject with `unit.display` while the actual native
+file, hash, Journal and readable selected Result remain unchanged. This does not depend
+on an intermediate-overflow example whose correct mathematical norm would be finite.
+
+Unit changes conservatively stale Results (ADR 0017). Current probe/path/frame reads retain
+that fence; explicit Result IDs retain their solved units and scientific values. Stale-readable
+frame lists and summaries still check their requested time unit: a retained one-second frame
+cannot fit in a unit with factor `1e-315`. A prescribed cooling case retains initial ranges
+`[0,10] K` and `[10,10] K` and a final zero-temperature field, testing both historical
+extrema separately. Its storage power follows `rho cp V DeltaT / DeltaT_time`, with
+`rho cp V = 36110 J/K` and a one-second interval.
+
+Steady heat checks independently use Fourier power `k A DeltaT / L = 0.45 W` and a uniform
+source delivering `q V = 0.02 W`, shared equally by two held ends (`0.01 W` each). Selected
+power factors independently make a whole reaction or the applied sum unrepresentable while
+earlier nodal values stay finite. A translated axial bar from `1 m` to `2 m` has a readable
+one-metre wrench reference but an unrepresentable two-metre extremum coordinate; tension
+and compression select the maximum and minimum coordinate checks respectively.
+
+Convection, flux, source and contact conductance Commands admit finite `1e308` values in
+their actual typed SI dimensions. These four authored dimensions have no configurable
+UnitSet field, so their Model rows retain the existing literal `SI` label and exact admitted
+values. This invariant does not bypass checks for temperatures, computed quantities,
+frequencies or contact forces.

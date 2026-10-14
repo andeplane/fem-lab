@@ -106,13 +106,18 @@ impl Engine {
                 .at("index")
                 .suggest("query.frames lists zero-based retained indices")
         })?;
-        let resolved = ResolvedFrame {
-            result_id: record.id.clone(),
-            step: name.clone(),
-            model_hash: record.model_hash.clone(),
-            frame: Self::frame_stamp(model, index, history.times[index])?,
-        };
-        Ok((vector_field(values, values.len() / nodes), resolved, selected))
+        // selected_record fences stale current units; explicit IDs use solved units. The
+        // retained history passed summary validation before publication. Compose the final
+        // checked stamp directly, preserving its Result without another unpack/rebuild.
+        Self::frame_stamp(model, index, history.times[index]).map(|frame| {
+            let resolved = ResolvedFrame {
+                result_id: record.id.clone(),
+                step: name.clone(),
+                model_hash: record.model_hash.clone(),
+                frame,
+            };
+            (vector_field(values, values.len() / nodes), resolved, selected)
+        })
     }
 
     pub(crate) fn query_frame(
