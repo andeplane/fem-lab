@@ -23,12 +23,14 @@ export function accountPrivacy(deps:Dependencies) {
     if(!z.strictObject({}).safeParse(body).success)throw new ServiceFailure(422,'invalid-export','Export accepts no account selector.','account');
     const account=await deps.account(header);
     return lease(account.id,async()=>{
-      const previous=(await db.query('SELECT object_name,expires_at FROM account_exports WHERE account_id=$1',[account.id])).rows[0];if(previous?.object_name&&(previous.expires_at as Date)<=now())await deps.objects.remove(String(previous.object_name));
       const row=await transaction(db,async sql=>{
         const owner=(await sql.query('SELECT status FROM accounts WHERE id=$1 FOR UPDATE',[account.id])).rows[0];if(owner?.status!=='active')throw new ServiceFailure(403,'account-inactive','This account is being deleted.','account');
-        let row=(await sql.query('SELECT * FROM account_exports WHERE account_id=$1',[account.id])).rows[0];
-        if(!row||(row.expires_at as Date)<=now()){row=(await sql.query(`INSERT INTO account_exports(id,account_id,created_at,expires_at) VALUES($1,$2,$3,$4)
-          ON CONFLICT(account_id) DO UPDATE SET id=EXCLUDED.id,state='queued',object_name=NULL,created_at=EXCLUDED.created_at,expires_at=EXCLUDED.expires_at,attempts=0,last_error=NULL RETURNING *`,[newId(),account.id,now(),new Date(now().getTime()+86400000)])).rows[0]!}return row;
+        let row=(await sql.query("SELECT * FROM account_exports WHERE account_id=$1 AND state<>'expired'",[account.id])).rows[0];
+        if(!row||(row.expires_at as Date)<=now()){
+          if(row)await sql.query("UPDATE account_exports SET state='expired' WHERE id=$1",[row.id]);
+          row=(await sql.query('INSERT INTO account_exports(id,account_id,created_at,expires_at) VALUES($1,$2,$3,$4) RETURNING *',[newId(),account.id,now(),new Date(now().getTime()+86400000)])).rows[0]!;
+        }
+        return row;
       });
       if(row.state==='ready'&&row.object_name)return {status:'ready',url:await deps.objects.url(String(row.object_name),new Date(Math.min(now().getTime()+900000,(row.expires_at as Date).getTime())))};
       return {status:'queued'};
@@ -82,11 +84,11 @@ export function accountPrivacy(deps:Dependencies) {
     });
   }
   async function recover(){let exported=0,deleted=0,expired=0,pending=0,failed=0;
-    const cleanup=(await db.query("SELECT * FROM account_exports WHERE state<>'expired' AND expires_at <= $1 LIMIT 100",[now()])).rows;
-    for(const row of cleanup)try{await lease(String(row.account_id),async()=>{if(row.object_name)await deps.objects.remove(String(row.object_name));await db.query("UPDATE account_exports SET state='expired',object_name=NULL WHERE account_id=$1 AND id=$2",[row.account_id,row.id]);expired++})}catch{failed++}
+    const cleanup=(await db.query("SELECT * FROM account_exports WHERE expires_at <= $1 LIMIT 100",[now()])).rows;
+    for(const row of cleanup)try{await lease(String(row.account_id),async()=>{if(row.object_name)await deps.objects.remove(String(row.object_name));await db.query("DELETE FROM account_exports WHERE account_id=$1 AND id=$2",[row.account_id,row.id]);expired++})}catch{failed++}
     const pendingExports=(await db.query("SELECT e.* FROM account_exports e JOIN accounts a ON a.id=e.account_id WHERE e.state='queued' AND e.expires_at>$1 AND a.status='active' ORDER BY e.created_at LIMIT 100",[now()])).rows;
     for(const row of pendingExports)try{await lease(String(row.account_id),async()=>{
-      const fresh=(await db.query("SELECT e.id,a.status FROM account_exports e JOIN accounts a ON a.id=e.account_id WHERE e.account_id=$1",[row.account_id])).rows[0];if(!fresh||fresh.id!==row.id||fresh.status!=='active')return;
+      const fresh=(await db.query("SELECT e.id,a.status FROM account_exports e JOIN accounts a ON a.id=e.account_id WHERE e.account_id=$1 AND e.id=$2 AND e.state='queued'",[row.account_id,row.id])).rows[0];if(!fresh||fresh.id!==row.id||fresh.status!=='active')return;
       const connection=await db.connect();let data:string;try{await connection.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');data=await records(connection,String(row.account_id));await connection.query('COMMIT')}catch(error){await connection.query('ROLLBACK');throw error}finally{connection.release()}
       const objectName=`accounts/${row.account_id}/${row.id}.json`;
       await deps.objects.write(objectName,data,row.expires_at as Date);await db.query("UPDATE account_exports SET state='ready',object_name=$2,last_error=NULL WHERE account_id=$1 AND id=$3",[row.account_id,objectName,row.id]);exported++;

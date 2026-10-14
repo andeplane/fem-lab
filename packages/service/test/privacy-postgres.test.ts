@@ -27,7 +27,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private exports and durable del
     expect(await service.export('Bearer a',{})).toEqual({status:'queued'});expect(await service.export('Bearer a',{})).toEqual({status:'queued'});
     expect((await service.recover()).exported).toBe(1);const call=objects.write.mock.calls[0] as unknown as [string,string,Date],data=JSON.parse(call[1]);expect(data.account.id).toBe(a.id);expect(JSON.stringify(data)).not.toContain('b@example.com');expect(data.credit_grants).toHaveLength(1);expect(data).not.toHaveProperty('prompts');
     expect(await service.export('Bearer a',{})).toEqual({status:'ready',url:'https://storage.example.com/signed'});expect((objects.url.mock.calls[0] as unknown as [string,Date])[1]).toEqual(new Date(clock.getTime()+900000));
-    clock=new Date(clock.getTime()+86400001);expect((await service.recover()).expired).toBe(1);expect(objects.remove).toHaveBeenCalledWith(call[0]);
+    clock=new Date(clock.getTime()+86400001);expect(await service.export('Bearer a',{})).toEqual({status:'queued'});expect(objects.remove).not.toHaveBeenCalled();expect((await service.recover()).expired).toBe(1);expect(objects.remove).toHaveBeenCalledWith(call[0]);
   });
   it('requires explicit confirmation and recent authentication before freezing an account',async()=>{
     const a=await owner('Bearer a');await expect(service.delete('Bearer a',{confirm:'DELETE',accountId:randomUUID()})).rejects.toMatchObject({code:'delete-confirmation-required'});recent=false;await expect(service.delete('Bearer a',{confirm:'DELETE'})).rejects.toMatchObject({code:'recent-login-required'});expect((await db.query('SELECT status FROM accounts WHERE id=$1',[a.id])).rows[0].status).toBe('active');

@@ -71,7 +71,7 @@ if (process.argv.includes('--migrate')) {
   const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
-    ready: async () => { if (!pool||!completions||!privacy) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='007-account-privacy.sql'"); return versions.rowCount===1; },
+    ready: async () => { if (!pool||!completions||!privacy) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='008-export-expiry-ownership.sql'"); return versions.rowCount===1; },
   });
   server.listen(port, '0.0.0.0');
   server.requestTimeout=120000; server.headersTimeout=30000;
