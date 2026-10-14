@@ -473,6 +473,87 @@ fn abaqus_static_rejects_unsupported_keywords_parameters_and_conflicts_without_m
 }
 
 #[test]
+fn abaqus_static_rejects_invalid_keyword_arguments_and_records_without_mutation() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+    let before = e.export_file();
+    let stress = e.field(Some("static"), Field::Stress).unwrap().clone();
+    for (from, to, code, location) in [
+        ("*END STEP", "*MATERIAL,NAME=SECOND\n*END STEP", ErrorCode::Unsupported, "*MATERIAL keyword"),
+        ("*MATERIAL,NAME=STEEL", "*MATERIAL", ErrorCode::Schema, "*MATERIAL NAME"),
+        ("NAME=STEEL\n*ELASTIC", "NAME=BAD.NAME\n*ELASTIC", ErrorCode::Unsupported, "*MATERIAL NAME"),
+        ("*END STEP", "*ELASTIC\n*END STEP", ErrorCode::Unsupported, "*ELASTIC keyword"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*ELASTIC,TYPE", ErrorCode::Schema, "*ELASTIC TYPE"),
+        (
+            "*END STEP",
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL\n*END STEP",
+            ErrorCode::Unsupported,
+            "*SOLIDSECTION keyword",
+        ),
+        (
+            "ELSET=SOLID,MATERIAL=STEEL",
+            "ELSET=SOLID,MATERIAL=STEEL,CONTROLS=HOURGLASS",
+            ErrorCode::Unsupported,
+            "*SOLIDSECTION CONTROLS",
+        ),
+        (
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL",
+            "*SOLID SECTION,MATERIAL=STEEL",
+            ErrorCode::Schema,
+            "*SOLIDSECTION ELSET",
+        ),
+        (
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL",
+            "*SOLID SECTION,ELSET=BAD.NAME,MATERIAL=STEEL",
+            ErrorCode::Unsupported,
+            "*SOLIDSECTION ELSET",
+        ),
+        (
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL",
+            "*SOLID SECTION,ELSET=SOLID",
+            ErrorCode::Schema,
+            "*SOLIDSECTION MATERIAL",
+        ),
+        (
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL",
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=BAD.NAME",
+            ErrorCode::Unsupported,
+            "*SOLIDSECTION MATERIAL",
+        ),
+        ("*BOUNDARY\n", "*BOUNDARY,OP=NEW\n", ErrorCode::Unsupported, "*BOUNDARY OP"),
+        ("*BOUNDARY\n", "*BOUNDARY,TYPE\n", ErrorCode::Schema, "*BOUNDARY TYPE"),
+        ("NLGEOM=NO", "NLGEOM=NO,INC=100", ErrorCode::Unsupported, "*STEP INC"),
+        ("NLGEOM=NO", "NLGEOM", ErrorCode::Schema, "*STEP NLGEOM"),
+        ("NAME=AXIAL", "NAME", ErrorCode::Schema, "*STEP NAME"),
+        ("NAME=AXIAL", "NAME=BAD.NAME", ErrorCode::Unsupported, "*STEP NAME"),
+        ("*END STEP", "*END STEP,EXTRA=YES", ErrorCode::Unsupported, "*ENDSTEP EXTRA"),
+        ("200000,0\n", "BAD,0\n", ErrorCode::Schema, "*ELASTIC E"),
+        ("200000,0\n", "200000,BAD\n", ErrorCode::Schema, "*ELASTIC nu"),
+        ("1.0\n*BOUNDARY", "1.0,1.0\n*BOUNDARY", ErrorCode::Schema, "*SOLIDSECTION record"),
+        ("1.0\n*BOUNDARY", "BAD\n*BOUNDARY", ErrorCode::Schema, "*SOLIDSECTION attribute"),
+        ("ROOT,1,3", "ROOT,1,3,0,EXTRA", ErrorCode::Schema, "*BOUNDARY record"),
+        ("ROOT,1,3", "BAD.NAME,1,3", ErrorCode::Unsupported, "*BOUNDARY target"),
+        ("ROOT,1,3", "ROOT,1,3,BAD", ErrorCode::Schema, "*BOUNDARY magnitude"),
+        ("1,1,1e-5", "1,1,1e-5,,EXTRA", ErrorCode::Schema, "*STATIC record"),
+        ("1,1,1e-5", "BAD,1,1e-5", ErrorCode::Schema, "*STATIC increment field 1"),
+        ("1,1,1e-5", "0,0,0,0", ErrorCode::Unsupported, "*STATIC increment field 4"),
+        ("ROOT,1,3", "ABSENT,1,3", ErrorCode::Schema, "*BOUNDARY target"),
+        ("*HEADING", "*HEADING\n\0", ErrorCode::Schema, "*INPUT physical line"),
+        ("*NODE\n", "*NODE,NSET=A,NSET=B\n", ErrorCode::Schema, "*NODE parameter"),
+    ] {
+        let text = HEX.replace(from, to);
+        assert_ne!(text, HEX);
+        let error = convert(&mut e, &text, "1 mm", "1 N").unwrap_err();
+        assert_eq!(error.code, code, "{to}: {error:?}");
+        assert!(error.where_.as_deref().unwrap().contains(location), "{to}: {error:?}");
+        assert!(error.suggestion.is_some());
+        assert_eq!(e.export_file(), before);
+        assert_eq!(e.field(Some("static"), Field::Stress).unwrap(), &stress);
+    }
+}
+
+#[test]
 fn abaqus_static_requires_explicit_finite_scales_and_full_material_section_step_coverage() {
     let mut e = engine();
     for (length, force, code, path) in [
