@@ -977,5 +977,54 @@ fn retained_line_surfaces_keep_member_connectivity_and_body_identity() {
     assert_eq!(surface["edgeBody"], json!([0, 0, 0, 0]));
     assert_eq!(surface["edgeFace"], json!(vec![u32::MAX; 4]));
     assert_eq!(surface["edges"].as_array().unwrap().len(), 8);
+    assert_eq!(surface["edgeElement"], json!([0, 1, 2, 3]));
+    assert_eq!(surface["edgeElementNode"], json!([0, 1, 2, 3, 4, 5, 6, 7]));
     assert_eq!(surface["bodyNames"], json!(["truss"]));
+}
+
+#[test]
+fn retained_line_endpoint_mapping_preserves_independent_member_stresses_at_a_joint() {
+    let mut e = engine();
+    for command in [
+        json!({"cmd":"model.new","name":"loaded-members"}),
+        json!({"cmd":"geometry.addBox","name":"anchor","size":["0.1 m","0.1 m","0.1 m"],"at":["-1 m","0 m","0 m"]}),
+        json!({"cmd":"geometry.addLine","name":"bars","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["2 m","0 m","0 m"]],"members":[[0,1],[1,2]],"divisions":1}),
+        json!({"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}),
+        json!({"cmd":"material.assign","material":"steel","bodies":["anchor","bars"]}),
+        json!({"cmd":"section.add","name":"rod","shape":{"kind":"circle","radius":"10 mm"}}),
+        json!({"cmd":"section.assign","section":"rod","bodies":["bars"]}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"},"order":1}),
+        json!({"cmd":"geometry.nameRegion","name":"all","where":{"kind":"bbox","min":["-1 m","-1 m","-1 m"],"max":["3 m","1 m","1 m"]}}),
+        json!({"cmd":"constraint.fix","name":"lateral","on":"all","dofs":["uy","uz"]}),
+        json!({"cmd":"constraint.fix","name":"root","on":"bars.p0","dofs":["ux"]}),
+        json!({"cmd":"constraint.fix","name":"anchor-root","on":"anchor.xmin"}),
+        json!({"cmd":"load.force","name":"joint","on":"bars.p1","total":["10 kN","0 N","0 N"]}),
+        json!({"cmd":"load.force","name":"tip","on":"bars.p2","total":["10 kN","0 N","0 N"]}),
+        json!({"cmd":"step.add","name":"static","procedure":"static","constraints":["lateral","root","anchor-root"],"loads":["joint","tip"],"output":["stressUnaveraged"]}),
+    ] {
+        ok(&mut e, &command.to_string());
+    }
+    let id = retained_solve(&mut e, "static");
+    let surface = retained_query(&mut e, json!({"query":"query.surface","resultId":id}));
+    let field = retained_query(&mut e, json!({"query":"query.field","resultId":id,"field":"stressUnaveraged"}));
+    assert_eq!(field["per"], "elementNode");
+    // The solid owns global element 0 and its eight element-nodes. Lines must retain the
+    // resulting offsets rather than assuming their segment number is a field identity.
+    assert_eq!(surface["edgeElement"], json!([1, 2]));
+    assert_eq!(surface["edgeElementNode"], json!([8, 9, 10, 11]));
+    let ends = surface["edgeElementNode"].as_array().unwrap();
+    let nodes = surface["edges"].as_array().unwrap();
+    assert_eq!(nodes[1], nodes[2]);
+    assert_ne!(ends[1], ends[2]);
+    let values = field["values"].as_array().unwrap();
+    // Cut equilibrium gives N_left = 20 kN and N_right = 10 kN, so σ = N / (πr²).
+    for (end, force) in ends.iter().zip([20_000.0, 20_000.0, 10_000.0, 10_000.0]) {
+        let index = end.as_u64().unwrap() as usize;
+        assert!((values[index * 6].as_f64().unwrap() - force / (std::f64::consts::PI * 0.01 * 0.01)).abs() < 1e-6);
+    }
+    ok(&mut e, r#"{"cmd":"load.force","name":"tip","on":"bars.p2","total":["30 kN","0 N","0 N"]}"#);
+    assert_eq!(retained_query(&mut e, json!({"query":"query.surface","resultId":id})), surface);
+    assert_eq!(retained_query(&mut e, json!({"query":"query.field","resultId":id,"field":"stressUnaveraged"})), field);
+    retained_solve(&mut e, "static");
+    assert_eq!(retained_query(&mut e, json!({"query":"query.surface","resultId":id})), surface);
 }

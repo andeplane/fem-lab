@@ -16672,6 +16672,24 @@
               "minimum": 0
             }
           },
+          "edgeElement": {
+            "description": "Global element behind each boundary edge or line member; indexes element-based fields.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "edgeElementNode": {
+            "description": "Element-node field index for each edge endpoint, in the same order as edges.\nMembers sharing a mesh node retain their own values at that joint.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "edgeFace": {
             "description": "u32::MAX means no face Set, including line members.",
             "type": "array",
@@ -16707,6 +16725,8 @@
           "triSets",
           "bodyNames",
           "edges",
+          "edgeElement",
+          "edgeElementNode",
           "edgeFace",
           "edgeBody"
         ]
@@ -44124,6 +44144,24 @@
               "minimum": 0
             }
           },
+          "edgeElement": {
+            "description": "Global element behind each boundary edge or line member; indexes element-based fields.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "edgeElementNode": {
+            "description": "Element-node field index for each edge endpoint, in the same order as edges.\nMembers sharing a mesh node retain their own values at that joint.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "edgeFace": {
             "description": "u32::MAX means no face Set, including line members.",
             "type": "array",
@@ -44159,6 +44197,8 @@
           "triSets",
           "bodyNames",
           "edges",
+          "edgeElement",
+          "edgeElementNode",
           "edgeFace",
           "edgeBody"
         ]

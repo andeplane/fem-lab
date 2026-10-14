@@ -290,6 +290,8 @@ impl SessionEngine {
                     ("triSetOffsets", &mut surface.tri_set_offsets),
                     ("triSets", &mut surface.tri_sets),
                     ("edges", &mut surface.edges),
+                    ("edgeElement", &mut surface.edge_element),
+                    ("edgeElementNode", &mut surface.edge_element_node),
                     ("edgeFace", &mut surface.edge_face),
                     ("edgeBody", &mut surface.edge_body),
                 ] {

@@ -7136,6 +7136,15 @@ export interface ResultSurface {
    */
   edges: number[];
   /**
+   * Global element behind each boundary edge or line member; indexes element-based fields.
+   */
+  edgeElement: number[];
+  /**
+   * Element-node field index for each edge endpoint, in the same order as edges.
+   * Members sharing a mesh node retain their own values at that joint.
+   */
+  edgeElementNode: number[];
+  /**
    * u32::MAX means no face Set, including line members.
    */
   edgeFace: number[];

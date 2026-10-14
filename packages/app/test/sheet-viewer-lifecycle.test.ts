@@ -22,6 +22,7 @@ const surface: AppSurface = {
   source: 'mesh', positions: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]),
   indices: Uint32Array.from([0, 1, 2]), triBody: Uint32Array.of(0), triFace: Uint32Array.of(0),
   edges: Uint32Array.from([0, 1, 1, 2, 2, 0]), edgeFace: Uint32Array.from([0, 1, 2]),
+  edgeElementNode: Uint32Array.from([0, 1, 1, 2, 2, 0]), edgeElement: Uint32Array.of(0, 0, 0),
   edgeBody: Uint32Array.from([0, 0, 0]), bodyNames: ['sheet'], faceNames: ['bottom', 'diagonal', 'left'],
 };
 const lineSurface: AppSurface = {
@@ -84,6 +85,53 @@ it('colours line members from endpoint results and keeps body emphasis on outlin
   viewer.setHighlight({ bodies: ['truss'] });
   viewer.setDim(true);
   expect(colours()[0]).toBeLessThan(resultColours[0]!);
+});
+
+it('keeps line element-node colours distinct at shared joints through hiding and deformation', () => {
+  const { viewer, objects } = setup();
+  const retained: AppSurface = { ...lineSurface,
+    triElementNode: new Uint32Array(),
+    // Reversed field identities deliberately differ from the drawn segment and mesh node ids.
+    edgeElement: Uint32Array.of(1, 0), edgeElementNode: Uint32Array.of(3, 2, 1, 0),
+    edgeBody: Uint32Array.of(0, 1), bodyNames: ['first', 'second'],
+  };
+  viewer.setSurface(retained);
+  viewer.setMode('results');
+  viewer.setField(Float32Array.of(0, 0, 1, 1), [0, 1], 'elementNode');
+  const colours = () => objects.outlines.geometry.getAttribute('color');
+  const colour = (i: number) => [colours().getX(i), colours().getY(i), colours().getZ(i)];
+  const first = colour(0), second = colour(2);
+  expect(colour(1)).toEqual(first);
+  expect(colour(3)).toEqual(second);
+  expect(first).not.toEqual(second); // endpoints 1 and 2 are the same mesh joint
+  const canvas = document.querySelector('canvas')!;
+  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, left: 0, top: 0, right: 640, bottom: 480, width: 640, height: 480, toJSON: () => ({}),
+  });
+  viewer.setProjection('orthographic');
+  viewer.setCamera({ position: [1, 0.5, 8], target: [1, 0.5, 0], up: [0, 1, 0] });
+  const halfHeight = Math.hypot(2, 1) * 0.7;
+  const pick = (x: number, y: number) => viewer.pick(320 + (x - 1) * 240 / halfHeight, 240 - (y - 0.5) * 240 / halfHeight);
+  // The GPU fake does not update camera matrices during render as WebGLRenderer does.
+  (viewer as unknown as { camera: import('three').Camera }).camera.updateMatrixWorld();
+  expect(pick(0.5, 0)?.value).toBe(1);
+  expect(pick(1.5, 0.5)?.value).toBe(0);
+  viewer.setDeformed(Float32Array.from([0, 1, 0, 0, 2, 0, 0, 3, 0]), 2);
+  expect(colour(1)).toEqual(first);
+  expect(colour(2)).toEqual(second);
+  viewer.setVisible(['first'], false);
+  expect(colour(0)).toEqual(second);
+  expect(colour(1)).toEqual(second);
+  viewer.setVisible(['first'], true);
+  viewer.setField(Float32Array.of(0, 1), [0, 1], 'element');
+  expect(colour(0)).toEqual(first);
+  expect(colour(2)).toEqual(second);
+  viewer.setField(Float32Array.of(0, 0.5, 1), [0, 1]);
+  expect(colour(1)).toEqual(colour(2)); // nodal fields still share the joint value
+  viewer.setField(null, [0, 1]);
+  viewer.setSurface({ ...lineSurface, triElementNode: new Uint32Array() });
+  expect(() => viewer.setField(Float32Array.of(1, 2, 3, 4), [0, 4], 'elementNode')).toThrow('no edge element-node field mapping');
+  expect(() => viewer.setField(Float32Array.of(1, 2), [0, 2], 'element')).toThrow('no edge element field mapping');
 });
 
 it('keeps separate element-node colours at a shared mesh node', () => {

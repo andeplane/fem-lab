@@ -148,6 +148,56 @@ try {
       engine.free();
     }
   }
+  // #494: the same explicit line identities cross native and WASM hosts at every refinement.
+  for (const divisions of [1, 2, 4]) {
+    const bars = new Engine(1);
+    try {
+      for (const command of [
+        { cmd: 'model.new', name: 'member identity parity' },
+        { cmd: 'geometry.addLine', name: 'bars', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m'], ['2 m', '0 m', '0 m']], members: [[0, 1], [1, 2]], divisions },
+        { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
+        { cmd: 'material.assign', material: 'steel', bodies: ['bars'] },
+        { cmd: 'section.add', name: 'rod', shape: { kind: 'circle', radius: '10 mm' } },
+        { cmd: 'section.assign', section: 'rod', bodies: ['bars'] },
+        { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' }, order: 1 },
+        { cmd: 'geometry.nameRegion', name: 'all', where: { kind: 'bbox', min: ['-1 m', '-1 m', '-1 m'], max: ['3 m', '1 m', '1 m'] } },
+        { cmd: 'constraint.fix', name: 'lateral', on: 'all', dofs: ['uy', 'uz'] },
+        { cmd: 'constraint.fix', name: 'root', on: 'bars.p0', dofs: ['ux'] },
+        { cmd: 'load.force', name: 'joint', on: 'bars.p1', total: ['10 kN', '0 N', '0 N'] },
+        { cmd: 'load.force', name: 'tip', on: 'bars.p2', total: ['10 kN', '0 N', '0 N'] },
+        { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['lateral', 'root'], loads: ['joint', 'tip'], output: ['stressUnaveraged'] },
+        { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' },
+      ]) await bars.dispatch(JSON.stringify(command));
+      const queries = [{ query: 'query.surface', step: 'static' }, { query: 'query.field', step: 'static', field: 'stressUnaveraged' }];
+      const expected = queries.map(q => JSON.parse(bars.query(JSON.stringify(q))));
+      const entries = JSON.parse(bars.export_file()).journal.entries;
+      const file = path.join(scratch, 'members.json');
+      writeFileSync(file, JSON.stringify(entries));
+      for (const threads of [1, 4]) {
+        const args = ['run', file, '--cpu', '--threads', String(threads), '--verify'];
+        assert.deepEqual(execFileSync(native, [...args, '--hashes'], { encoding: 'utf8' }).trim().split(/\r?\n/), entries.map(e => e.hashAfter));
+        const actual = JSON.parse(execFileSync(native, [...args, ...queries.flatMap(q => ['--query', JSON.stringify(q)])], { encoding: 'utf8' }));
+        assert.deepEqual(actual[0], expected[0]);
+        assert.deepEqual(actual[0].edgeElement, Array.from({ length: 2 * divisions }, (_, i) => i));
+        assert.deepEqual(actual[0].edgeElementNode, Array.from({ length: 4 * divisions }, (_, i) => i));
+        const { values, ...metadata } = actual[1];
+        const { values: wasmValues, ...wasmMetadata } = expected[1];
+        assert.deepEqual(metadata, wasmMetadata);
+        assert.equal(metadata.per, 'elementNode');
+        assert.equal(values.length, 24 * divisions);
+        // Left-cut equilibrium carries both applied loads; the right cut carries only the tip.
+        values.forEach((value, i) => {
+          const force = i < 12 * divisions ? 20_000 : 10_000;
+          const exact = i % 6 === 0 ? force / (Math.PI * 0.01 ** 2) : 0;
+          assert.ok(Math.abs(value - exact) < 1e-6);
+          assert.ok(Math.abs(wasmValues[i] - exact) < 1e-6);
+        });
+        console.log(`line member identities and N/A stresses: ${divisions} subdivisions, native ${threads} threads vs WASM passed`);
+      }
+    } finally {
+      bars.free();
+    }
+  }
 } finally {
   engine.free();
   rmSync(scratch, { recursive: true, force: true });

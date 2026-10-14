@@ -2015,6 +2015,20 @@ verify detachment and repeated exact f64 reads, and isolate f32 casts to rendere
 `query.surface` require a compatible solved Result, while explicit IDs permit stale
 retained solves. Replies identify the immutable solve even when selected by Step.
 
+Line endpoints also retain their global element and element-node field identities (#494).
+Two collinear members, fixed at the left end and carrying 10 kN at their shared joint and
+another 10 kN at the tip, have independent cut-equilibrium forces of 20 kN and 10 kN.
+With circular radius 10 mm, each member's recovered axial stress is `N / (πr²)`; the two
+values remain distinct at the shared mesh node. Native tests include a solid element before
+the members to check that line field indices retain the correct global offsets. The WASM
+transfer test checks the same closed forms after f64 scientific reads, detached topology
+buffers and f32 renderer staging. `tools/test-retained-replay.mjs` additionally compares
+native execution at one and four threads with WASM at 1/2/4 subdivisions per member: Journal
+hashes and surface topology/identities agree exactly, and every member-end stress is the
+cut-equilibrium closed form. Retained identities survive load edits and later solves.
+Chromium additionally checks the steel-roof-truss tutorial's 60.7 MPa tensile bottom chord
+and −68.3 MPa compressive top chord through distinct rendered colours and member probes.
+
 ### ZZ recovery estimator (#83)
 
 Energy is evaluated as ||L⁻¹q||² with C=LLᵀ, avoiding cancellation in an

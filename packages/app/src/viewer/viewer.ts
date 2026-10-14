@@ -384,8 +384,9 @@ export class Viewer {
           (bodyName !== null && this.highlightedBodies.has(bodyName));
         for (let k = 0; k < 2; k++) {
           const node = s.edges?.[edge * 2 + k];
-          if (this.mode === 'results' && this.field && this.fieldPer === 'node') {
-            const value = node === undefined ? lo : this.field[node] ?? lo;
+          if (this.mode === 'results' && this.field) {
+            const entity = this.fieldPer === 'elementNode' ? s.edgeElementNode?.[edge * 2 + k] : this.fieldPer === 'element' ? s.edgeElement?.[edge] : node;
+            const value = entity === undefined ? lo : this.field[entity] ?? lo;
             const [r, g, b] = sample(this.colormap, (value - lo) / span);
             c.setRGB(r, g, b);
           } else {
@@ -455,6 +456,12 @@ export class Viewer {
     if (values && per !== 'node' && per !== 'elementNode' && per !== 'element') throw new FemError('unsupported', `cannot contour ${per} fields`);
     if (values && per === 'elementNode' && this.surface?.triElementNode?.length !== this.surface?.indices.length) {
       throw new FemError('internal', 'the Result surface has no element-node field mapping');
+    }
+    if (values && per === 'elementNode' && (this.surface?.edges?.length ?? 0) > 0 && this.surface?.edgeElementNode?.length !== this.surface?.edges?.length) {
+      throw new FemError('internal', 'the Result surface has no edge element-node field mapping', 'view.showField', 'query.surface with this Result id');
+    }
+    if (values && per === 'element' && (this.surface?.edges?.length ?? 0) > 0 && this.surface?.edgeElement?.length !== (this.surface?.edges?.length ?? 0) / 2) {
+      throw new FemError('internal', 'the Result surface has no edge element field mapping', 'view.showField', 'query.surface with this Result id');
     }
     this.field = values;
     this.fieldPer = per;
@@ -782,12 +789,14 @@ export class Viewer {
       const segment = Math.floor(hit.index / 2);
       const edge = this.line[segment]!;
       const node = this.nearestOutlineNode(segment, edge, hit.point);
+      const end = [0, 1].find(k => s.edges?.[edge * 2 + k] === node);
+      const entity = this.fieldPer === 'elementNode' && end !== undefined ? s.edgeElementNode?.[edge * 2 + end] : this.fieldPer === 'element' ? s.edgeElement?.[edge] : node;
       return {
         face: s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null,
         body: s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null,
         point: [hit.point.x, hit.point.y, hit.point.z],
         node,
-        value: node !== null && this.field && this.fieldPer === 'node' ? (this.field[node] ?? null) : null,
+        value: entity != null && this.field ? (this.field[entity] ?? null) : null,
       };
     }
     if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
