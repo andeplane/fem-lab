@@ -2134,3 +2134,9 @@ sufficient certificate, rather than falsely classified as invalid. Pure arithmet
 tests check exact closed-form polynomials, de Casteljau coefficients and depth/work
 limits including an interior zero at 1/3. Proof budgets are deterministic; exhaustion
 is explicitly inconclusive, never accepted.
+
+`certificate_separates_rotated_affine_cells_with_overlapping_boxes` has one unit
+cube with `x+y<=2` and an affine cell `(5/4+(s-t)/2,7/8+(s+t)/2,r)` with
+`x+y>=17/8` and determinant `1/2`. All three AABB ranges overlap; an independent
+strict plane gap of `1/8` proves separation in both source record orders. Negative-z
+broad-phase separation also preserves the existing positive/negative axis cases.

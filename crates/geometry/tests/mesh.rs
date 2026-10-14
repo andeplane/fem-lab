@@ -2959,7 +2959,16 @@ fn certificate_requires_an_identically_zero_interface_not_just_zero_corners() {
 #[test]
 fn certificate_accepts_labelled_hex_face_edge_vertex_and_separated_cells() {
     use femlab_geometry::imported_certificate::certify_imported_geometry;
-    for offset in [[1., 0., 0.], [1., 1., 0.], [1., 1., 1.], [3., 0., 0.], [0., 3., 0.], [0., 0., 3.], [0., -3., 0.]] {
+    for offset in [
+        [1., 0., 0.],
+        [1., 1., 0.],
+        [1., 1., 1.],
+        [3., 0., 0.],
+        [0., 3., 0.],
+        [0., 0., 3.],
+        [0., -3., 0.],
+        [0., 0., -3.],
+    ] {
         let mut points = SOURCE_HEX.to_vec();
         let next = SOURCE_HEX.map(|p| std::array::from_fn(|k| p[k] + offset[k]));
         let second = append_source_hex(&mut points, &next, true);
@@ -2969,6 +2978,24 @@ fn certificate_accepts_labelled_hex_face_edge_vertex_and_separated_cells() {
     }
     certify_imported_geometry(&authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>())).unwrap();
     certify_imported_geometry(&Mesh { blocks: Vec::new(), ..authored_hex(&[], &[]) }).unwrap();
+}
+
+#[test]
+fn certificate_separates_rotated_affine_cells_with_overlapping_boxes() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // A has x+y<=2. B=(5/4+(s-t)/2,7/8+(s+t)/2,r) has
+    // x+y=17/8+s>=17/8 and detJ=1/2. Their AABBs overlap in
+    // every coordinate, but their interiors/closures have a strict 1/8 gap.
+    // The separator comes from B and leaves A's zero entity empty; source
+    // record order cannot affect the geometric sweep or sign orientation.
+    let next = SOURCE_HEX.map(|[s, t, r]| [1.25 + (s - t) / 2., 0.875 + (s + t) / 2., r]);
+    for reversed in [false, true] {
+        let mut points = if reversed { next.to_vec() } else { SOURCE_HEX.to_vec() };
+        let second = append_source_hex(&mut points, if reversed { &SOURCE_HEX } else { &next }, false);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap();
+    }
 }
 
 #[test]

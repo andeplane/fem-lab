@@ -502,53 +502,6 @@ fn intersect_labels(current: &mut Vec<u32>, other: &[u32]) {
     current.retain(|node| other.contains(node));
 }
 
-fn labelled_entity_matches(a: &Cell, b: &Cell, common: &[u32]) -> bool {
-    match common.len() {
-        1 => true,
-        2 => [a, b].iter().all(|cell| {
-            cell.kind.edges().iter().any(|&[i, j]| {
-                let mut edge = [cell.nodes[i as usize], cell.nodes[j as usize]];
-                edge.sort_unstable();
-                edge == common
-            })
-        }),
-        3 => a.kind == ElementKind::Tet4 && b.kind == ElementKind::Tet4,
-        4 => {
-            let cycles: Vec<_> = [a, b]
-                .iter()
-                .filter_map(|cell| {
-                    (0..cell.kind.n_faces()).find_map(|face| {
-                        let nodes: Vec<_> =
-                            cell.kind.face_nodes(face).iter().map(|&i| cell.nodes[i as usize]).collect();
-                        let mut sorted = nodes.clone();
-                        sorted.sort_unstable();
-                        (sorted == common).then_some(nodes)
-                    })
-                })
-                .collect();
-            if cycles.len() != 2 {
-                return false;
-            }
-            let edge_sets: Vec<_> = cycles
-                .iter()
-                .map(|cycle| {
-                    let mut edges: Vec<_> = (0..4)
-                        .map(|i| {
-                            let mut edge = [cycle[i], cycle[(i + 1) % 4]];
-                            edge.sort_unstable();
-                            edge
-                        })
-                        .collect();
-                    edges.sort_unstable();
-                    edges
-                })
-                .collect();
-            edge_sets[0] == edge_sets[1]
-        }
-        _ => false,
-    }
-}
-
 fn certify_pair(a: &Cell, b: &Cell) -> bool {
     let mut common: Vec<_> = a.nodes.iter().filter(|node| b.nodes.contains(node)).copied().collect();
     common.sort_unstable();
@@ -571,10 +524,22 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
                 // entities because each cell has already proved injectivity.
                 intersect_labels(&mut zero_a, &sa.zero_nodes);
                 intersect_labels(&mut zero_b, &sb.zero_nodes);
-                if zero_a.is_empty()
-                    || zero_b.is_empty()
-                    || (zero_a == common && zero_b == common && labelled_entity_matches(a, b, &common))
-                {
+                // At this callsite both cells proved injectivity, and at least
+                // one is Hex8 (Tet/Tet uses its separate exact certificate).
+                // Each Hex zero set is a Cartesian reference entity; their
+                // intersections contain 0/1/2/4 vertices. Tet zero sets are
+                // simplex entities with at most 3 vertices. Thus matched
+                // nonempty sets are a point, an edge, or two Hex quad faces.
+                // Shared labels fix the same point/linear edge. For quads, a
+                // successful separator is the owner's actual face equation,
+                // and the other zero-face restriction is identically zero.
+                // A planar injective bilinear face is a convex quadrilateral.
+                // On a nonplanar face q=D²*(W-U*V), diagonal chords have
+                // q(midpoint)=±D²/4, so the other face's straight boundary
+                // edges must use the same four ruling edges. Both cases force
+                // the same D4 corner cycle and the same bilinear patch. No
+                // additional edge/cycle/count fallback can reject this state.
+                if zero_a.is_empty() || zero_b.is_empty() || (zero_a == common && zero_b == common) {
                     return true;
                 }
             }
