@@ -140,3 +140,116 @@ try {
   assertDisplaySnapshot(publicationDisplay, held);
 } finally { publicationDisplay.free(); }
 console.log('Checked display/compound units and atomic Result publication passed in shipped WASM; scoped equilibrium errors retain their contract.');
+
+// The native #580 geometry/Set/edge fixtures also cross the actual checked-owner ABI.
+// #591 still owns unreadable-model export independence. Explicitly assert that known
+// snapshot error, then preserve public Journal/catalogue; ordinary models use full files.
+async function checkedDisplayReads(commands, oracle, queries, unreadableModel = false) {
+  const owner = new Engine(1);
+  try {
+    for (const command of commands.slice(0, -1)) await displayCommand(owner, command);
+    oracle(owner);
+    const baseline = JSON.parse(owner.export_file());
+    const baselineHash = owner.model_hash();
+    const baselineJournal = displaySnapshot(owner);
+    const baselineCatalogue = displayRead(owner, { query: 'query.results' });
+    await displayCommand(owner, commands.at(-1));
+    const journal = displaySnapshot(owner);
+    const catalogue = displayRead(owner, { query: 'query.results' });
+    let file, hash;
+    if (unreadableModel) {
+      assert.throws(() => owner.export_file(), displayError);
+      assert.throws(() => owner.snapshot(), displayError);
+    } else {
+      displayRead(owner, { query: 'query.model' });
+      file = owner.export_file();
+      hash = owner.model_hash();
+    }
+    for (const query of queries) {
+      assert.throws(() => displayRead(owner, query), displayError);
+      assertDisplaySnapshot(owner, journal);
+      assert.deepEqual(displayRead(owner, { query: 'query.results' }), catalogue);
+      if (!unreadableModel) {
+        assert.equal(owner.export_file(), file);
+        assert.equal(owner.model_hash(), hash);
+      }
+    }
+    if (unreadableModel) {
+      // Recovery is an expected new Command; the whole Journal gains entries. The
+      // physical Model/hash returns exactly, while the original prefix stays intact.
+      await displayCommand(owner, { cmd: 'model.setUnits', units: baseline.model.units ?? {} });
+      assert.deepEqual(JSON.parse(owner.export_file()).model, baseline.model);
+      assert.equal(owner.model_hash(), baselineHash);
+      assert.deepEqual(displaySnapshot(owner).entries.slice(0, baselineJournal.entries.length), baselineJournal.entries);
+      assert.deepEqual(displayRead(owner, { query: 'query.results' }), baselineCatalogue);
+    }
+  } finally { owner.free(); }
+}
+const sparseTet = JSON.parse(readFileSync(new URL('../crates/engine/tests/fixtures/imported/sparse-tet.json', import.meta.url), 'utf8'));
+for (const [unit, queries] of [
+  ['nm^35/m^34', [{ query: 'query.model' }]],
+  ['nm^12/m^11', [{ query: 'query.model' }, { query: 'query.set', name: 'part.elset_ALL' }]],
+  ['nm^19/m^18', [{ query: 'query.set', name: 'part.surface_BASE' }]],
+]) {
+  await checkedDisplayReads([
+    { cmd: 'model.new', name: 'sparse unit simplex' }, sparseTet,
+    { cmd: 'model.setUnits', units: { length: unit } },
+  ], owner => {
+    const body = displayRead(owner, { query: 'query.model' }).bodies[0];
+    assert.equal(body.measure.unit, 'm^3');
+    assert.ok(Math.abs(body.measure.value - 1 / 6) < 1e-15);
+    assert.deepEqual(displayRead(owner, { query: 'query.set', name: 'part.surface_BASE' }).measure, { value: .5, unit: 'm^2' });
+  }, queries, true);
+}
+await checkedDisplayReads([
+  { cmd: 'model.new', name: 'loaded versus geometric face area' },
+  { cmd: 'model.setIdealisation', idealisation: { kind: 'planeStress', thickness: '1e100 m' } },
+  { cmd: 'mesh.set', mesher: { kind: 'mapped', body: 'square', blocks: [{ corners: [['0 m', '0 m'], ['1 m', '0 m'], ['1 m', '1 m'], ['0 m', '1 m']], n: [1, 1], tags: ['bottom', 'right', 'top', 'left'] }] } },
+  { cmd: 'model.setUnits', units: { length: 'nm^12/m^11' } },
+], owner => {
+  const face = displayRead(owner, { query: 'query.set', name: 'square.bottom' });
+  assert.deepEqual(face.measure, { value: 1, unit: 'm' });
+  assert.equal(face.pressureArea.unit, 'm^2');
+  assert.ok(Math.abs(face.pressureArea.value / 1e100 - 1) < 1e-14);
+}, [{ query: 'query.set', name: 'square.bottom' }]);
+for (const [points, min, max] of [
+  [[[-1, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], Math.SQRT2, 2],
+  [[[1, 1, 1], [-1, -1, 1], [-1, 1, -1], [1, -1, -1]], Math.sqrt(8), Math.sqrt(8)],
+]) {
+  await checkedDisplayReads([
+    { cmd: 'model.new', name: 'readable bounds, unreadable edge' },
+    { cmd: 'mesh.set', mesher: { kind: 'imported', body: 'part', nodes: points.map((point, i) => ({ label: i + 1, at: point.map(x => `${x} m`) })), elements: [{ label: 10, kind: 'tet4', nodes: [1, 2, 3, 4] }] } },
+    { cmd: 'model.setUnits', units: { length: 'nm^34*mm*in/(m^33*cm*ft)' } },
+  ], owner => {
+    const mesh = displayRead(owner, { query: 'query.mesh' });
+    assert.deepEqual(mesh.minEdge, { value: min, unit: 'm' });
+    assert.deepEqual(mesh.maxEdge, { value: max, unit: 'm' });
+  }, [{ query: 'query.mesh' }], true);
+}
+console.log('Imported Body/Set measures, loaded pressureArea and checked min/max edge boundaries passed in shipped WASM.');
+
+// Exercise the new report composition with exact authored inputs and an independent FL/EA.
+const checkedReport = new Engine(1);
+try {
+  for (const command of [
+    { cmd: 'model.new', name: 'authored axial reference' },
+    { cmd: 'model.setUnits', units: { length: 'mm', force: 'kN', stress: 'MPa' } },
+    { cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '.1 m', '.1 m'] },
+    { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: .3 },
+    { cmd: 'material.assign', material: 'steel', bodies: ['bar'] },
+    { cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 1, ny: 1, nz: 1 } } },
+    { cmd: 'constraint.fix', name: 'root', on: 'bar.xmin' },
+    { cmd: 'load.traction', name: 'pull', on: 'bar.xmax', total: ['100 kN', '0 N', '0 N'] },
+    { cmd: 'step.add', name: 'axial', procedure: 'static', constraints: ['root'], loads: ['pull'] },
+    { cmd: 'solve.run', step: 'axial', solver: 'cpu-direct' },
+  ]) await displayCommand(checkedReport, command);
+  const file = checkedReport.export_file();
+  const hash = checkedReport.model_hash();
+  const report = displayRead(checkedReport, { query: 'query.report' }).markdown;
+  assert.ok(report.includes('end load = total [100, 0, 0] kN, L = 1000 mm, A = 10000 mm^2, E = 210000 MPa'));
+  assert.ok(report.includes('F/P is the magnitude of the end load\'s sole nonzero component.'));
+  assert.ok(report.includes('| Hand calculation | 0.047619 mm |')); // 100000*1/(210e9*.01), in mm.
+  assert.equal(checkedReport.export_file(), file);
+  assert.equal(checkedReport.model_hash(), hash);
+} finally { checkedReport.free(); }
+console.log('Checked report givens retain authored force and the independent FL/EA reference in shipped WASM.');
