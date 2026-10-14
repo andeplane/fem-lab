@@ -1,4 +1,4 @@
-import { FemError, type DocumentSnapshot, type RunLease } from '@femlab/registry';
+import { FemError, type DocumentSnapshot, type RunLease, type Stamp } from '@femlab/registry';
 import type { ReplacementSource, SessionOptions } from './session-protocol';
 import { sameSession, SessionChannel, SessionTransport } from './session-transport';
 
@@ -43,7 +43,7 @@ export class SessionWorkspace<T extends SessionResources> {
     try {
       const created = await channel.request({ op: 'create', epoch: this.options.epoch(), options: this.options.engine });
       const run = await channel.request({ op: 'beginRun', session: created.stamp.session });
-      return new SessionTransport(channel, run.value as RunLease, (origin, source) => this.replace(origin, source), origin => this.recover(origin));
+      return new SessionTransport(channel, run.value as RunLease, (origin, source, admission) => this.replace(origin, source, admission), origin => this.recover(origin));
     } catch (error) { channel.close(); throw error; }
   }
   async start(): Promise<ActiveSession<T>> {
@@ -84,7 +84,7 @@ export class SessionWorkspace<T extends SessionResources> {
       if (!published) { candidate?.channel.close(); try { await resources?.abandon?.(); } finally { resources?.dispose(); } }
     }
   }
-  async replace(origin: SessionTransport, source: ReplacementSource): Promise<SessionTransport> {
+  async replace(origin: SessionTransport, source: ReplacementSource, admission?: Stamp): Promise<SessionTransport> {
     const expected = this.active;
     if (!sameSession(origin.stamp.session, expected.transport.stamp.session)) throw new FemError('session.expired', 'replacement belongs to an inactive session');
     if (this.preparing) throw new FemError('session.transitioning', 'another replacement is being prepared');
@@ -96,7 +96,7 @@ export class SessionWorkspace<T extends SessionResources> {
     try {
       // Reservation occurs under the old engine's exclusive execution, so writes cannot race
       // validation/publication. Reads keep the old document usable during preparation.
-      ticket = await origin.reserve();
+      ticket = await origin.reserve(admission);
       await expected.resources.prepareToLeave?.();
       candidate = await this.create();
       const initial = await candidate.prepare(structuredClone(source), this.options.engine);
