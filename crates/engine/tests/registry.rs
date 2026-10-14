@@ -6943,7 +6943,7 @@ fn the_report_is_the_whole_analysis_in_order_and_reproducible() {
     assert!(md.contains("#### Extremes"), "{md}");
     assert!(md.contains("#### Reactions and applied load"), "{md}");
     assert!(md.contains("| **Σ applied** | 0 | 0 | -1 | kN |"), "{md}");
-    assert!(md.contains("Reaction balance |Σ reactions + Σ applied| / max|F| ="), "{md}");
+    assert!(md.contains("Reaction balance |Σ reactions + Σ applied| / force scale ="), "{md}");
     assert!(md.contains("— **pass** (tolerance 1e-9)."), "{md}");
     // verification: the checks, the verdict and the hand calculation next to the FEM number
     assert!(md.contains("- no element is inverted (min det J > 0 everywhere);"), "{md}");
@@ -10939,7 +10939,13 @@ fn a_loose_accepted_solve_fails_public_report_equilibrium_until_refined() {
         assert!(loose.balance > 1e-9);
         let before = serde_json::to_value(e.export_file()).unwrap();
         let note = report(&mut e, Some("static"), Some(vec![ReportSection::Results, ReportSection::Verification]));
-        assert_eq!(note.markdown.matches("**fail** (tolerance 1e-9)").count(), 2);
+        assert_eq!(
+            note.markdown
+                .lines()
+                .filter(|line| line.contains("Reaction balance") && line.contains("**fail** (tolerance 1e-9)"))
+                .count(),
+            2
+        );
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
 
         // The same physical model passes the report once the accepted answer is refined.
@@ -10949,7 +10955,20 @@ fn a_loose_accepted_solve_fails_public_report_equilibrium_until_refined() {
         assert!((refined.reactions[0].total[2].value - 1.0).abs() < 1e-9);
         assert!(refined.balance <= 1e-9);
         let note = report(&mut e, Some("static"), Some(vec![ReportSection::Results, ReportSection::Verification]));
-        assert_eq!(note.markdown.matches("**pass** (tolerance 1e-9)").count(), 2);
+        assert_eq!(
+            note.markdown
+                .lines()
+                .filter(|line| line.contains("Reaction balance") && line.contains("**pass** (tolerance 1e-9)"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            note.markdown
+                .lines()
+                .filter(|line| line.contains("Static moment balance") && line.contains("**pass** (tolerance 1e-9)"))
+                .count(),
+            2
+        );
         assert!(!note.markdown.contains("**fail**"));
     }
 }
@@ -11293,6 +11312,9 @@ mod geometry_namespace;
 
 #[path = "registry/abaqus.rs"]
 mod abaqus;
+
+#[path = "registry/equilibrium.rs"]
+mod equilibrium;
 
 #[path = "registry/abaqus_static.rs"]
 mod abaqus_static;

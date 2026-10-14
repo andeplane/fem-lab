@@ -603,6 +603,7 @@ pub async fn run(
         });
     }
     Ok(StepResult {
+        static_equilibrium: None,
         reaction_quantity: crate::units::ReactionQuantity::Force,
         ply_stresses: Vec::new(),
         fields,

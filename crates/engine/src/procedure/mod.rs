@@ -414,6 +414,8 @@ pub(crate) fn retained_payload_bytes(frames: usize, values_per_frame: usize) -> 
 /// stay readable — and honest about being stale — after that.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepResult {
+    /// Retained SI wrench ledger for linear Cartesian static recovery only.
+    pub static_equilibrium: Option<crate::post::equilibrium::StaticEquilibrium>,
     /// Kept with the solved Result, so later model edits cannot change its reaction units.
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub fields: BTreeMap<Field, FieldData>,
@@ -583,6 +585,7 @@ pub(crate) fn time_grid(max_dt: f64, t_end: f64) -> Result<(usize, f64), Error> 
 /// rest alone, so adding a field to `StepResult` does not touch five constructors.
 pub(crate) fn blank(solver: SolveInfo) -> StepResult {
     StepResult {
+        static_equilibrium: None,
         reaction_quantity: crate::units::ReactionQuantity::Force,
         fields: BTreeMap::new(),
         ply_stresses: Vec::new(),

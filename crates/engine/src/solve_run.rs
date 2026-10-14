@@ -20,8 +20,8 @@ use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
-    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary,
-    StudyReport, StudyRow, SweepRow, Valued,
+    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, MomentReactionRow, Output, ReactionRow, ResultAssumption,
+    ResultSummary, StaticEquilibrium, StudyReport, StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
 use crate::units::{
@@ -1383,6 +1383,10 @@ impl Engine {
             residual = (applied[0] - removed - storage).abs();
             biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
         }
+        if let Some(ledger) = &res.static_equilibrium {
+            residual = crate::post::equilibrium::norm(ledger.force_residual);
+            biggest = ledger.force_scale;
+        }
         Ok(ResultSummary {
             result_id: record.id.clone(),
             step: name.to_string(),
@@ -1418,6 +1422,26 @@ impl Engine {
                 })
                 .collect(),
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
+            static_equilibrium: res.static_equilibrium.as_ref().map(|ledger| {
+                Box::new(StaticEquilibrium {
+                    reference: vec3(m, ledger.reference, Length::DIM),
+                    characteristic_length: display(m, ledger.characteristic_length, Length::DIM),
+                    force_residual: vec3(m, ledger.force_residual, Force::DIM),
+                    force_scale: display(m, ledger.force_scale, Force::DIM),
+                    applied_moment: vec3(m, ledger.applied_moment, Torque::DIM),
+                    reaction_moments: ledger
+                        .reaction_moments
+                        .iter()
+                        .map(|(name, total)| MomentReactionRow {
+                            constraint: name.clone(),
+                            total: vec3(m, *total, Torque::DIM),
+                        })
+                        .collect(),
+                    moment_residual: vec3(m, ledger.moment_residual, Torque::DIM),
+                    moment_scale: display(m, ledger.moment_scale, Torque::DIM),
+                    moment_balance: crate::post::equilibrium::relative(ledger.moment_residual, ledger.moment_scale),
+                })
+            }),
             assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             prestress_from: res.prestress_from.clone(),
@@ -1437,7 +1461,7 @@ impl Engine {
                 })
                 .collect(),
             sweep: res.sweep.iter().flat_map(|s| sweep_rows(m, s)).collect(),
-            balance: residual / biggest,
+            balance: if biggest == 0.0 { 0.0 } else { residual / biggest },
             contacts: res
                 .contacts
                 .iter()

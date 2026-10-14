@@ -398,6 +398,7 @@ pub(crate) async fn post(
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
+        static_equilibrium: crate::post::equilibrium::recover(p, &rc, &f, Some(&a.f_thermal), &r, pool),
         reaction_quantity: crate::units::ReactionQuantity::Force,
         ply_stresses: pool
             .install(|| stress::shell_ply_stresses(p, &u))
@@ -565,6 +566,7 @@ pub fn run_history(
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
+        static_equilibrium: crate::post::equilibrium::recover(p, &rc, &other, None, &r, pool),
         reaction_quantity: crate::units::ReactionQuantity::Force,
         ply_stresses: pool
             .install(|| stress::shell_ply_stresses(p, &u))
