@@ -1,5 +1,26 @@
 import { expect, test } from '@playwright/test';
 
+test('@cpu Material physics resolves heat predecessors from the Model query', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+  await page.goto('./');
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
+  await page.evaluate(async () => {
+    await window.fem.model.new({ name: 'coupled material form' });
+    await window.fem.step.add({ name: 'heat', procedure: 'heat-steady', constraints: [], loads: [] });
+    await window.fem.step.add({ name: 'continuation', procedure: 'heat-transient', after: 'heat', constraints: [], loads: [] });
+    await window.fem.dispatch({ cmd: 'form.open', command: 'material.add', args: { name: 'conductor' } });
+  });
+  const panel = page.locator('.props');
+  await expect(panel.locator('[data-field="alpha"]')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'expansion', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await page.evaluate(async () => {
+    await window.fem.step.add({ name: 'stress', procedure: 'static', after: 'heat', constraints: [], loads: [] });
+    await window.fem.dispatch({ cmd: 'form.open', command: 'material.add', args: { name: 'conductor' } });
+  });
+  await expect(panel.locator('[data-field="alpha"]')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'expansion', exact: true })).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('@cpu Material physics chips lead with heat properties and preserve hidden definition values', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
