@@ -44,6 +44,8 @@ export default defineConfig(({ command }) => ({
   }],
   build: {
     target: 'es2022',
+    // The strict CSP permits only same-origin fonts, including the smallest KaTeX files.
+    assetsInlineLimit: (filePath) => /\.(?:woff2?|ttf|otf|eot)$/i.test(filePath) ? false : undefined,
     // `tools/size-check.mjs` reads this to tell the landing chunk (the entry and its static
     // import closure) from everything that only arrives when someone asks for it.
     manifest: true,

@@ -67,3 +67,41 @@ test('@cpu rejected file imports retain the Model and current project', async ({
   expect(result.after).toEqual(result.before);
   expect(result.errors).toHaveLength(3);
 });
+
+// #542: Vite previously inlined this small font as data:, which font-src 'self' blocks.
+test('@cpu @sw bundled mathematics fonts load from same-origin assets under the strict CSP', async ({ page }, testInfo) => {
+  const fontResponses: { url: string; status: number }[] = [];
+  page.on('response', response => {
+    if (/KaTeX_Size3-Regular-[^/]+\.woff2$/.test(response.url())) {
+      fontResponses.push({ url: response.url(), status: response.status() });
+    }
+  });
+  await page.addInitScript(() => {
+    const state = window as typeof window & { fontPolicyViolations: string[] };
+    state.fontPolicyViolations = [];
+    document.addEventListener('securitypolicyviolation', event => {
+      if (event.effectiveDirective === 'font-src') state.fontPolicyViolations.push(event.blockedURI);
+    });
+  });
+  await page.goto('./');
+  await page.waitForFunction(() => !!window.fem, undefined, { timeout: 60_000 });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'example.open', name: 'cantilever' }));
+  await expect(page.locator('.katex').first()).toBeVisible();
+  const loaded = await page.evaluate(async () => {
+    const fonts = await document.fonts.load('16px KaTeX_Size3');
+    return {
+      fonts: fonts.map(font => ({ family: font.family, status: font.status })),
+      violations: (window as typeof window & { fontPolicyViolations: string[] }).fontPolicyViolations,
+      policy: document.querySelector<HTMLMetaElement>('meta[http-equiv="Content-Security-Policy"]')!.content,
+      origin: location.origin,
+    };
+  });
+  expect(loaded.fonts.length).toBeGreaterThan(0);
+  expect(loaded.fonts.every(font => font.status === 'loaded')).toBe(true);
+  expect(loaded.violations).toEqual([]);
+  expect(loaded.policy).toContain("font-src 'self'");
+  expect(fontResponses).toEqual([{ url: expect.stringMatching(/\/assets\/KaTeX_Size3-Regular-[^/]+\.woff2$/), status: 200 }]);
+  expect(new URL(fontResponses[0]!.url).origin).toBe(loaded.origin);
+  await testInfo.attach('mathematics-font-proof.json', { body: JSON.stringify({ ...loaded, fontResponses }, null, 2), contentType: 'application/json' });
+  await testInfo.attach('rendered-mathematics.png', { body: await page.screenshot(), contentType: 'image/png' });
+});
