@@ -26,34 +26,41 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         if (revoked) throw new FemError('cancelled', 'this request has ended');
         return { session: lease.stamp.session, runId: lease.runId, operationId: String(++operation) };
       };
+      const replaceCommands = async (commands: Record<string, unknown>[]): Promise<DocumentSnapshot> => {
+        const ticket = owner.begin_replacement(JSON.stringify(context()), lease.stamp.stateVersion);
+        let candidate: PreparedEngine | undefined;
+        let consumed = false;
+        try {
+          candidate = await wasm.PreparedEngine.create(ticket, { threads, gpu: false });
+          await candidate.commands(JSON.stringify(commands));
+          candidate.finish(modelFileEncoder(true), MAX_MODEL_FILE_BYTES);
+          context(); // cancellation during candidate preparation cannot publish it
+          consumed = true;
+          const snapshot = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
+          current = snapshot.stamp;
+          lease = { ...lease, stamp: snapshot.stamp };
+          return snapshot;
+        } finally {
+          if (!consumed) { candidate?.free(); owner.abandon_replacement(ticket); }
+        }
+      };
       const handle: EngineHandle = {
         dispatch: input => {
           const cmd = structuredClone(input);
           return ordered(async () => {
-            const captured = context();
             if (cmd['cmd'] === 'model.new') {
-              const ticket = owner.begin_replacement(JSON.stringify(captured), lease.stamp.stateVersion);
-              let candidate: PreparedEngine | undefined;
-              let consumed = false;
-              try {
-                candidate = await wasm.PreparedEngine.create(ticket, { threads, gpu: false });
-                await candidate.commands(JSON.stringify([cmd]));
-                candidate.finish(modelFileEncoder(true), MAX_MODEL_FILE_BYTES);
-                context(); // cancellation during candidate preparation cannot publish it
-                consumed = true;
-                const snapshot = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
-                current = snapshot.stamp;
-                lease = { ...lease, stamp: snapshot.stamp };
-                return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash, warnings: [], output: { type: 'none' } };
-              } finally {
-                if (!consumed) { candidate?.free(); owner.abandon_replacement(ticket); }
-              }
+              const snapshot = await replaceCommands([cmd]);
+              return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash, warnings: [], output: { type: 'none' } };
             }
-            const reply = JSON.parse(await owner.dispatch(JSON.stringify({ context: captured, expectedVersion: lease.stamp.stateVersion, command: cmd }))) as WriteReply;
+            const reply = JSON.parse(await owner.dispatch(JSON.stringify({ context: context(), expectedVersion: lease.stamp.stateVersion, command: cmd }))) as WriteReply;
             current = reply.stamp;
             lease = { ...lease, stamp: reply.stamp };
             return reply.ack;
           });
+        },
+        replaceCommands: input => {
+          const commands = structuredClone(input);
+          return ordered(async () => { await replaceCommands(commands); });
         },
         query: input => {
           const query = structuredClone(input);

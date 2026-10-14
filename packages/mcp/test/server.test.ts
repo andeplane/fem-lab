@@ -30,6 +30,7 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
     seen,
     acquire: async function () { return this; },
     release: async () => undefined,
+    replaceCommands: async commands => { seen.push(...commands); },
     dispatch: (cmd) => {
       seen.push(cmd);
       if (cmd['cmd'] === 'material.add' && (cmd['nu'] === undefined || Number(cmd['nu']) < 0)) {
