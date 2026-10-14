@@ -114,7 +114,10 @@ averaged across a joint.
 _Avoid_: internal force, stress resultant, BMD/SFD
 
 **Material**:
-A named constitutive description with SI properties (density, Young's modulus, ...).
+A named elastic or thermal description with SI properties (density, Young's modulus,
+conductivity, ...). Heat-only Materials need positive conductivity and omit elastic stiffness;
+transient heat also needs positive density and specific heat. Mechanical Steps require elastic
+stiffness on every assigned Material, including laminate plies.
 _Avoid_: mat, property card
 
 **Constraint**:

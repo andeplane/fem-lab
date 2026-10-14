@@ -685,9 +685,13 @@ face"). Use this instead of nodal forces on solids: point loads give singular st
 
 ### material.add
 
-Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
-ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one
-of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
+Define a Material: elastic stiffness is either isotropic, by Young's modulus `E` and
+Poisson's ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — never
+both. A heat-only Material omits both stiffness forms and gives positive conductivity
+`k`; `rho` and `cp`, when stated, must also be positive and are required by heat-transient.
+Heat-only Materials may retain `alpha` and `yield` for later structural use; `plasticity`
+requires isotropic stiffness, and mechanical Steps require elastic stiffness.
+`orientation` turns the material axes (wood grain, fibre direction, rolling
 direction) away from the global axes; without it they are the global axes. Density `rho`
 is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
 heat transfer; `source` records where the numbers came from. `yield` is the yield
@@ -5009,7 +5013,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's\nratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one\nof the two. `orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. `yield` is the yield\nstress the safety factor and the `plasticity` block read; `plasticity` makes the\nmaterial elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing\nwith an existing name edits the material in place, so an omitted `orientation` or\n`plasticity` clears the previous one.",
+      "description": "Define a Material: elastic stiffness is either isotropic, by Young's modulus `E` and\nPoisson's ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — never\nboth. A heat-only Material omits both stiffness forms and gives positive conductivity\n`k`; `rho` and `cp`, when stated, must also be positive and are required by heat-transient.\nHeat-only Materials may retain `alpha` and `yield` for later structural use; `plasticity`\nrequires isotropic stiffness, and mechanical Steps require elastic stiffness.\n`orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. `yield` is the yield\nstress the safety factor and the `plasticity` block read; `plasticity` makes the\nmaterial elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing\nwith an existing name edits the material in place, so an omitted `orientation` or\n`plasticity` clears the previous one.",
       "type": "object",
       "properties": {
         "name": {

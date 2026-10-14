@@ -750,10 +750,14 @@ impl Engine {
                 let isotropic = match (e, nu) {
                     (Some(e), Some(nu)) => Some((e, nu)),
                     (None, None) => None,
-                    _ => return Err(Error::schema("E and nu go together: give both or neither").at("E")),
+                    _ => {
+                        return Err(Error::schema("E and nu go together: give both or neither")
+                            .at("E")
+                            .suggest("material.add with both E and nu, or neither for heat-only material"))
+                    }
                 };
                 let (e_si, nu) = match (isotropic, orthotropic.is_some()) {
-                    (Some(_), true) | (None, false) => {
+                    (Some(_), true) => {
                         return Err(Error::schema(
                             "give exactly one of (E, nu) for an isotropic material and orthotropic for an \
                              orthotropic one",
@@ -771,7 +775,7 @@ impl Engine {
                         }
                         (Some(e_si), Some(*nu))
                     }
-                    (None, true) => (None, None),
+                    (None, _) => (None, None),
                 };
                 let ortho = orthotropic.as_deref().map(orthotropic_si).transpose()?;
                 if let Some(o) = &ortho {
@@ -803,6 +807,9 @@ impl Engine {
                     plasticity,
                     source: source.clone(),
                 };
+                if mat.e.is_none() && mat.orthotropic.is_none() {
+                    thermal_only_properties(&mat)?;
+                }
                 Ok(upsert(&mut self.model.materials, mat, |m| &m.name, ObjectKind::Material))
             }
             Command::MaterialAssign { material, bodies } => {
@@ -2020,6 +2027,28 @@ fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<
     }
 }
 
+/// Without elastic stiffness a Material is a conductor. Capacity is optional for steady heat,
+/// but every stated transport property must be positive; transient heat requires both rho and
+/// cp when it runs. Other known properties may be retained for later mechanical use.
+fn thermal_only_properties(mat: &Material) -> Result<(), Error> {
+    let k = mat.k.ok_or_else(|| {
+        Error::schema("a heat-only material needs conductivity k; otherwise give elastic stiffness")
+            .at("k")
+            .suggest("material.add with k, or with E and nu, or with an orthotropic block")
+    })?;
+    for (field, value) in [("k", Some(k.axes()[0])), ("rho", mat.rho), ("cp", mat.cp)] {
+        if let Some(value) = value {
+            // Quantity::si already rejects nonfinite input and unit-conversion overflow.
+            if value <= 0.0 {
+                return Err(Error::schema(format!("{field} must be finite and positive for a heat-only material"))
+                    .at(field)
+                    .suggest(format!("material.add with positive {field}")));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A property that is either one isotropic value or one per material axis, resolved to the three
 /// components the element sees. Giving both forms is a Schema error rather than a silent winner.
 fn axis_property<D: crate::units::Dim>(
@@ -2061,7 +2090,7 @@ fn plasticity_si(
     let schema = |cause: String, at: &str, fix: &str| Error::schema(cause).at(at).suggest(fix);
     if e_si.is_none() {
         return Err(schema(
-            "plasticity needs an isotropic material: J2 plasticity has no orthotropic form".into(),
+            "plasticity needs isotropic elastic stiffness (E and nu): J2 plasticity has no orthotropic form".into(),
             "plasticity",
             "material.add with E and nu",
         ));

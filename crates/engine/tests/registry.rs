@@ -3474,6 +3474,7 @@ fn probe_at(e: &mut Engine, step: &str, field: Field, component: Option<u8>, at:
 fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
     let mut e = engine();
     heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","k":"45 W/(m K)"}"#);
     ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
     ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
     ok(
@@ -5329,6 +5330,7 @@ fn simplex_heat_bar_preserves_faces_and_the_exact_profile() {
         for nx in [1, 2, 4] {
             let mut e = engine();
             heat_bar(&mut e);
+            ok(&mut e, r#"{"cmd":"material.add","name":"steel","k":"45 W/(m K)"}"#);
             ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","temperature":"K"}}"#);
             ok(
                 &mut e,
@@ -8023,6 +8025,7 @@ fn frame_box(e: &mut Engine, nx: usize, order: u8) {
 
 fn frame_ramp(e: &mut Engine, nx: usize, order: u8, dt: f64, end: f64, every: u32) {
     frame_box(e, nx, order);
+    ok(e, r#"{"cmd":"material.add","name":"mat","rho":"2 kg/m^3","k":"6 W/(m*K)","cp":"3 J/(kg*K)"}"#);
     ok(e, r#"{"cmd":"constraint.temperature","name":"ramp","on":"bar.xmin","value":"1 K"}"#);
     ok(e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"6 W/m^3"}"#);
     ok(
@@ -9945,16 +9948,16 @@ fn lamina_command(extra: serde_json::Value) -> String {
     cmd.to_string()
 }
 
-/// `material.add` takes exactly one of the isotropic and orthotropic stiffness forms, refuses an
+/// `material.add` takes at most one of the isotropic and orthotropic stiffness forms, refuses an
 /// inadmissible one outright, and stores the orientation as a unit axis and an angle in radians.
 #[test]
 fn material_add_takes_one_stiffness_form_and_an_orientation() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"ortho"}"#);
-    // Neither form.
+    // Neither stiffness nor conductivity.
     let none = err(&mut e, r#"{"cmd":"material.add","name":"ply"}"#);
-    assert_eq!((none.code, none.where_.as_deref()), (ErrorCode::Schema, Some("E")));
-    assert!(none.cause.contains("exactly one"), "{none:?}");
+    assert_eq!((none.code, none.where_.as_deref()), (ErrorCode::Schema, Some("k")));
+    assert!(none.cause.contains("conductivity"), "{none:?}");
     assert!(none.suggestion.is_some());
     // Both forms.
     let both = err(&mut e, &lamina_command(serde_json::json!({ "E": "210 GPa", "nu": 0.3 })));
@@ -10025,6 +10028,9 @@ fn material_add_takes_one_stiffness_form_and_an_orientation() {
     assert_eq!(steel.e, Some(210e9));
     assert!(steel.orientation.is_some() && steel.orthotropic.is_none());
 }
+
+#[path = "registry/thermal_only.rs"]
+mod thermal_only;
 
 /// Expansion and conductivity are either one isotropic value or one per material axis, never
 /// both, and the three components reach the Model in the material axes' order.

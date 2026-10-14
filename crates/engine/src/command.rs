@@ -1379,9 +1379,13 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAddMass { name: String, at: [Q<Length>; 3], mass: Q<Mass> },
 
-    /// Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
-    /// ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one
-    /// of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
+    /// Define a Material: elastic stiffness is either isotropic, by Young's modulus `E` and
+    /// Poisson's ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — never
+    /// both. A heat-only Material omits both stiffness forms and gives positive conductivity
+    /// `k`; `rho` and `cp`, when stated, must also be positive and are required by heat-transient.
+    /// Heat-only Materials may retain `alpha` and `yield` for later structural use; `plasticity`
+    /// requires isotropic stiffness, and mechanical Steps require elastic stiffness.
+    /// `orientation` turns the material axes (wood grain, fibre direction, rolling
     /// direction) away from the global axes; without it they are the global axes. Density `rho`
     /// is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
     /// heat transfer; `source` records where the numbers came from. `yield` is the yield

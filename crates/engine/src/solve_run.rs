@@ -35,9 +35,9 @@ const J2_LAW: &str = "j2-plasticity";
 
 /// One Model material as the numbers an element needs.
 ///
-/// `material.add` guarantees exactly one of the isotropic and orthotropic forms is present. A
-/// Model that says neither — which only a hand-edited file can — resolves to a zero-stiffness
-/// isotropic material rather than panicking, and `fem::checks` reports the singular system.
+/// Heat-only Materials have no constitutive stiffness: heat kernels consume their transport
+/// properties and never call the elastic law. Mechanical problems reject an assigned Material
+/// without stiffness before assembly; unassigned conductors may coexist in the same Model.
 ///
 /// The plasticity block is integrated only by the procedure that carries a Gauss-point history,
 /// `static-nonlinear`; every other procedure evaluates a law *at* a strain rather than along a
@@ -50,7 +50,13 @@ fn resolve_material(m: &crate::model::Material, procedure: Procedure) -> Materia
             props.extend(h.props());
             (J2_LAW, props)
         }
-        (None, _) => (LAW, vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)]),
+        (None, _) => {
+            let props = match m.e.zip(m.nu) {
+                Some((e, nu)) => vec![e, nu],
+                None => Vec::new(),
+            };
+            (LAW, props)
+        }
     };
     Material {
         law: crate::fem::material::builtin_law(id).expect("the built-in law"),
@@ -312,6 +318,23 @@ fn build_problem_with_temperature<'a>(
         heat,
         heat_loads: Vec::new(),
     };
+    if !heat {
+        for ((body, index), ()) in assigned_materials(model, &built.body_of_block, &p.material_of_block) {
+            let material = &model.materials[index];
+            if material.e.zip(material.nu).is_none() && material.orthotropic.is_none() {
+                return Err(Error::new(
+                    ErrorCode::MaterialProps,
+                    format!(
+                        "Body '{body}' cannot run {}: Material '{}' has no elastic stiffness",
+                        procedure_name(step.procedure),
+                        material.name
+                    ),
+                )
+                .at(format!("material '{}'", material.name))
+                .suggest("material.add with E and nu, or with an orthotropic block"));
+            }
+        }
+    }
     let mut loads = Vec::with_capacity(step.loads.len());
     let mut heat_loads = Vec::new();
     for name in &step.loads {
