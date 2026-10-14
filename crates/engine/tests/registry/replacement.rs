@@ -476,33 +476,39 @@ fn batch_replay_without_recorded_hashes_still_requires_a_consistent_file() {
 }
 
 #[test]
-fn imported_recorded_adaptation_cannot_publish_during_skipped_replay() {
+fn imported_recorded_studies_cannot_publish_during_skipped_replay() {
     let (mut owner, lease) = setup();
     let before = owner.snapshot(&context(&lease, "read")).unwrap();
     let mut source = super::engine();
     super::ok(&mut source, super::IMPORTED_TET);
     super::ok(&mut source, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":[],"loads":[]}"#);
-    let mut entries = source.export_file().journal.entries;
-    // A host may submit a Journal without trusted hashes. An empty recorded box list
-    // still requests a refinement field; the immutable source must reject it.
-    let mut recorded = entries.last().unwrap().clone();
-    recorded.seq += 1;
-    recorded.hash_after.clear();
-    recorded.cmd = command(r#"{"cmd":"study.adapt","step":"static","targetError":0.1,"refinements":[[]]}"#);
-    entries.push(recorded);
-    let ticket = owner.begin_replacement(context(&lease, "2"), lease.stamp.state_version.clone()).unwrap();
-    let error =
-        pollster::block_on(Candidate::new(ticket.clone(), None, Box::new(NoClock), 1).replay(entries, true, false))
-            .err()
-            .unwrap();
-    assert_eq!(error.code, ErrorCode::Unsupported);
-    assert_eq!(error.where_.as_deref(), Some("mesher"));
-    assert!(error.cause.contains("imported source cannot be remeshed or refined"));
-    let during = owner.snapshot(&context(&lease, "read")).unwrap();
-    assert_eq!(during.file, before.file);
-    assert_eq!(during.stamp, before.stamp);
-    owner.abandon_replacement(&ticket).unwrap();
-    let after = owner.snapshot(&context(&lease, "read")).unwrap();
-    assert_eq!(after.file, before.file);
-    assert_eq!(after.stamp, before.stamp);
+    let original = source.export_file().journal.entries;
+    // No trusted hashes are required. Empty choices and restoring convergence still
+    // request an unsupported study; a nonempty choice must reject before mutation.
+    for (i, text) in [
+        r#"{"cmd":"study.adapt","step":"static","targetError":0.1,"refinements":[[]]}"#,
+        r#"{"cmd":"study.adapt","step":"static","targetError":0.1,"refinements":[]}"#,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"vonMises"},"restore":true}"#,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"vonMises"}}"#,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"vonMises"},"restore":false}"#,
+    ].iter().enumerate() {
+        let mut entries = original.clone();
+        let mut recorded = entries.last().unwrap().clone();
+        recorded.seq += 1;
+        recorded.hash_after.clear();
+        recorded.cmd = command(text);
+        entries.push(recorded);
+        let ticket = owner.begin_replacement(context(&lease, &(i+2).to_string()), lease.stamp.state_version.clone()).unwrap();
+        let error = pollster::block_on(Candidate::new(ticket.clone(), None, Box::new(NoClock), 1).replay(entries, true, false)).err().unwrap();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some("mesher"));
+        assert!(error.cause.contains("imported source cannot be remeshed or refined"));
+        let during = owner.snapshot(&context(&lease, "read")).unwrap();
+        assert_eq!(during.file, before.file);
+        assert_eq!(during.stamp, before.stamp);
+        owner.abandon_replacement(&ticket).unwrap();
+        let after = owner.snapshot(&context(&lease, "read")).unwrap();
+        assert_eq!(after.file, before.file);
+        assert_eq!(after.stamp, before.stamp);
+    }
 }

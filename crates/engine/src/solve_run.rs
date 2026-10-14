@@ -1217,7 +1217,7 @@ impl Engine {
     }
 
     /// Mesh inputs shared by a running study and replay that omits its numerical work.
-    fn check_imported_study(&self) -> Result<(), Error> {
+    pub(crate) fn check_imported_study(&self) -> Result<(), Error> {
         if self.model.mesh.as_ref().is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_))) {
             return Err(Error::new(
                 ErrorCode::Unsupported,

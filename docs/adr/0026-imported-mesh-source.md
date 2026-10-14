@@ -55,7 +55,8 @@ is another mesh.set Command. Existing geometric meshers retain their current beh
 This prohibition also applies when a Journal skips numerical solves and applies recorded
 adaptive choices. The shared refinement helper checks the source before changing any
 settings; replacement preparation rejects such a Journal without publishing a partial
-Model or changing the active owner's Journal.
+Model or changing the active owner's Journal. Empty adaptive choices and restoring
+convergence studies also reject: skipping work does not make an unsupported study valid.
 
 ## Geometry acceptance
 

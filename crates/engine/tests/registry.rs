@@ -13299,6 +13299,38 @@ fn imported_source_geometry_and_idealisation_guards_preserve_the_document() {
 }
 
 #[test]
+fn imported_source_survives_a_legal_empty_region_and_undo_recovers_its_preview() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let body = body_row(&mut e, 0);
+    let before = e.export_file();
+    let authored = set_info(&mut e, "part.nset_ALL");
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"outside","where":{"kind":"bbox","min":["2 m","2 m","2 m"],"max":["3 m","3 m","3 m"]}}"#,
+    );
+    let after = e.export_file();
+    assert_eq!(after.model.mesh, before.model.mesh);
+    assert_eq!(after.journal.entries.len(), before.journal.entries.len() + 1);
+    // A legal selector can fail during lazy resolution. Metadata retains the authored
+    // source; query.model does not manufacture a Body row from a failed derived Mesh.
+    let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(model.bodies.is_empty());
+    assert_eq!(model.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["outside"]);
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::SetEmpty);
+    assert_eq!(error.where_.as_deref(), Some("set 'outside'"));
+    assert_eq!(set_info(&mut e, "part.nset_ALL"), authored);
+    assert_eq!(e.export_file(), after);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.export_file(), before);
+    assert_eq!(body_row(&mut e, 0), body);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.export_file(), after);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::SetEmpty);
+}
+
+#[test]
 fn imported_topology_rejects_nonmanifold_same_side_and_disconnected_tetrahedra() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);

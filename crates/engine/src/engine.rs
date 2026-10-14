@@ -367,6 +367,11 @@ impl Engine {
                 );
             let hash = if skip {
                 let before = self.model.clone();
+                if matches!(e.cmd, Command::StudyConverge { .. }) {
+                    // A restoring study still requests regeneration, even though
+                    // skipped replay would leave its original settings unchanged.
+                    self.check_imported_study()?;
+                }
                 if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
                     let (settings, h) =
                         self.study_mesh(sizes).map_err(|err| err.at(format!("journal entry {}", e.seq)))?;
@@ -377,6 +382,9 @@ impl Engine {
                     let choices = refinements
                         .as_ref()
                         .ok_or_else(|| Error::schema("skipped adaptive replay requires recorded refinements"))?;
+                    if choices.is_empty() {
+                        self.check_imported_study()?;
+                    }
                     for boxes in choices {
                         self.apply_adaptive_refinement(boxes, max_elements.unwrap_or(100_000))?;
                     }
