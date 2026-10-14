@@ -23,6 +23,16 @@ async function start(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
 }
 
+async function deferFileRead(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const original = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () {
+      if (this.name !== 'late.inp') return original.call(this);
+      return new Promise<ArrayBuffer>(resolve => { (window as unknown as { releaseAbaqusRead(): Promise<void> }).releaseAbaqusRead = async () => resolve(await original.call(this)); });
+    };
+  });
+}
+
 test('@cpu inline mesh mode imports only participating tetrahedron nodes and exact Set mappings', async ({ page }) => {
   await start(page);
   await page.getByTitle('Import Abaqus .inp', { exact: true }).click();
@@ -164,13 +174,7 @@ test('@cpu invalid inline imports and unsupported database files retain the solv
 
 test('@cpu cancelling a picker and switching projects during an actual deferred File read cannot publish an import', async ({ page }) => {
   test.setTimeout(90_000);
-  await page.addInitScript(() => {
-    const original = File.prototype.arrayBuffer;
-    File.prototype.arrayBuffer = function () {
-      if (this.name !== 'late.inp') return original.call(this);
-      return new Promise<ArrayBuffer>(resolve => { (window as unknown as { releaseAbaqusRead(): Promise<void> }).releaseAbaqusRead = async () => resolve(await original.call(this)); });
-    };
-  });
+  await deferFileRead(page);
   await start(page);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
   const before = await q<ModelSummary>(page, 'query.model');
@@ -193,4 +197,65 @@ test('@cpu cancelling a picker and switching projects during an actual deferred 
   expect(await pending).toBe('session.expired');
   await expect.poll(async () => (await q<ModelSummary>(page, 'query.model')).hash).toBe(next.hash);
   expect((await q<ModelSummary>(page, 'query.model')).name).toBe('new active project');
+});
+
+for (const producer of ['initiating', 'independent'] as const) test(`@cpu a deferred import preserves same-project edits from the ${producer} producer`, async ({ page }) => {
+  test.setTimeout(90_000);
+  await deferFileRead(page); await start(page);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.clear' }));
+  const args = { name: 'late import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', picker: true };
+  // Selection is a view-only barrier: the test opens it only once the actual File read has
+  // started, so the script's Material edit uses the importing producer during that read.
+  const code = `const late = fem.file.importAbaqus(${JSON.stringify(args)}); while (!(await fem.query.selection()).refs.includes("body:beam")) await new Promise(resolve => setTimeout(resolve,10)); await fem.material.add({name:"steel",E:"220 GPa",nu:0.3}); await late;`;
+  const chosen = page.waitForEvent('filechooser');
+  const pending = producer === 'initiating'
+    ? page.evaluate(code => window.fem.dispatch({ cmd: 'script.run', code }), code).then(result => (result as { error?: string }).error ?? null)
+    : page.evaluate(async args => { try { await window.fem.dispatch({ cmd: 'file.importAbaqus', ...args }); return null; } catch (error) { return (error as { code: string }).code; } }, args);
+  await (await chosen).setFiles({ name: 'late.inp', mimeType: 'text/plain', buffer: await readFile(fixture) });
+  await page.waitForFunction(() => typeof (window as unknown as { releaseAbaqusRead?: unknown }).releaseAbaqusRead === 'function');
+  if (producer === 'initiating') {
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.set', refs: ['body:beam'] }));
+    await expect.poll(async () => (await q<ModelSummary>(page, 'query.model')).materials.find(row => row.name === 'steel')!.E).toEqual({ value: 220000, unit: 'MPa' });
+  } else await page.evaluate(() => window.fem.dispatch({ cmd: 'material.add', name: 'steel', E: '220 GPa', nu: 0.3 }));
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'project.save' }));
+  const before = await q<ModelSummary>(page, 'query.model');
+  const journal = await q<JournalDump>(page, 'query.journal');
+  const result = await q<ResultSummary>(page, 'query.result');
+  const project = await q<OpenProject>(page, 'query.project');
+  await page.evaluate(() => (window as unknown as { releaseAbaqusRead(): Promise<void> }).releaseAbaqusRead());
+  expect(await pending).toContain(producer === 'initiating' ? 'model changed before replacement preparation' : 'session.conflict');
+  expect((await q<ModelSummary>(page, 'query.model')).hash).toBe(before.hash);
+  expect(await q<JournalDump>(page, 'query.journal')).toEqual(journal);
+  expect(await q<ResultSummary>(page, 'query.result')).toEqual(result);
+  expect((await q<OpenProject>(page, 'query.project')).id).toBe(project.id);
+  await expect(page.getByRole('dialog', { name: 'Abaqus import report', exact: true })).toBeHidden();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'check saved edit' }));
+  await page.evaluate(id => window.fem.dispatch({ cmd: 'project.open', id }), project.id);
+  expect((await q<ModelSummary>(page, 'query.model')).hash).toBe(before.hash);
+  expect(await q<JournalDump>(page, 'query.journal')).toEqual(journal);
+});
+
+test('@cpu view-only actions during a deferred read allow sequential imports on the initiating producer', async ({ page }) => {
+  test.setTimeout(90_000);
+  await deferFileRead(page); await start(page);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
+  const args = { name: 'first import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', picker: true };
+  const second = { ...input(await readFile(fixture, 'utf8'), 'second awaited import'), cmd: undefined };
+  const code = `await fem.file.importAbaqus(${JSON.stringify(args)}); await fem.file.importAbaqus(${JSON.stringify(second)}); return await fem.query.model();`;
+  const chosen = page.waitForEvent('filechooser');
+  const pending = page.evaluate(code => window.fem.dispatch({ cmd: 'script.run', code }), code);
+  await (await chosen).setFiles({ name: 'late.inp', mimeType: 'text/plain', buffer: await readFile(fixture) });
+  await page.waitForFunction(() => typeof (window as unknown as { releaseAbaqusRead?: unknown }).releaseAbaqusRead === 'function');
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'selection.set', refs: ['body:beam'] });
+    await window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true });
+    await window.fem.dispatch({ cmd: 'view.setMode', mode: 'mesh' });
+  });
+  await page.evaluate(() => (window as unknown as { releaseAbaqusRead(): Promise<void> }).releaseAbaqusRead());
+  const scripted = await pending as { error?: string; result: ModelSummary };
+  expect(scripted.error).toBeUndefined();
+  expect(scripted.result.name).toBe('second awaited import');
+  expect((await q<ModelSummary>(page, 'query.model')).hash).toBe(scripted.result.hash);
+  await expect(page.getByRole('dialog', { name: 'Abaqus import report', exact: true })).toBeVisible();
 });

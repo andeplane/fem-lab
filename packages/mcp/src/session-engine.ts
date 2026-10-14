@@ -26,8 +26,8 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         if (revoked) throw new FemError('cancelled', 'this request has ended');
         return { session: lease.stamp.session, runId: lease.runId, operationId: String(++operation) };
       };
-      const replaceCommands = async (commands: Record<string, unknown>[]): Promise<DocumentSnapshot> => {
-        const ticket = owner.begin_replacement(JSON.stringify(context()), lease.stamp.stateVersion);
+      const replaceCommands = async (commands: Record<string, unknown>[], expectedVersion = lease.stamp.stateVersion): Promise<DocumentSnapshot> => {
+        const ticket = owner.begin_replacement(JSON.stringify(context()), expectedVersion);
         let candidate: PreparedEngine | undefined;
         let consumed = false;
         try {
@@ -44,9 +44,9 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
           if (!consumed) { candidate?.free(); owner.abandon_replacement(ticket); }
         }
       };
-      const checkedReplace = (input: Record<string, unknown>[], captured?: () => void): Promise<void> => {
+      const checkedReplace = (input: Record<string, unknown>[], captured?: () => void, expectedVersion?: Stamp['stateVersion']): Promise<void> => {
         const commands = structuredClone(input);
-        return ordered(async () => { captured?.(); await replaceCommands(commands); });
+        return ordered(async () => { captured?.(); await replaceCommands(commands, expectedVersion); });
       };
       const checkedQuery = (input: Record<string, unknown>, captured?: () => void): Promise<unknown> => {
         const query = structuredClone(input);
@@ -74,9 +74,12 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         replaceCommands: input => checkedReplace(input),
         query: input => checkedQuery(input),
         captureImport: () => {
-          const admitted = JSON.stringify(context().session);
-          const active = () => { if (JSON.stringify(lease.stamp.session) !== admitted) throw new FemError('session.expired', 'this import belongs to a previous project'); };
-          return { query: input => checkedQuery(input, active), replaceCommands: input => checkedReplace(input, active) };
+          context(); // reject an already revoked producer before admitting I/O
+          const admitted = structuredClone(lease.stamp);
+          const active = () => { if (JSON.stringify(lease.stamp.session) !== JSON.stringify(admitted.session)) throw new FemError('session.expired', 'this import belongs to a previous project'); };
+          // Conversion reads may refresh the lease, but never upgrade the replacement's
+          // original authority. The checked owner compares this version at reservation.
+          return { query: input => checkedQuery(input, active), replaceCommands: input => checkedReplace(input, active, admitted.stateVersion) };
         },
         modelFile: () => ordered(() => {
           const snapshot = JSON.parse(owner.snapshot(JSON.stringify(context()))) as DocumentSnapshot;

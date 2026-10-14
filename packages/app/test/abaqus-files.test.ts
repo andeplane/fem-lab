@@ -6,7 +6,7 @@ import { ProjectFolder } from '../src/ai/project';
 import { fakeDir } from './project-fake';
 import { Store } from '../src/store';
 import { makeHostContext } from '../src/host';
-import { fakeTransport } from '../../registry/test/fakes';
+import { fakeHost, fakeTransport } from '../../registry/test/fakes';
 import { readHostCaps } from '../src/capabilities';
 
 const crypto = webcrypto as unknown as Pick<Crypto, 'subtle'>;
@@ -53,7 +53,8 @@ it('captures the folder and a File snapshot, with scoped traversal and a clear m
 
 it('admits the currently opened folder before a read and keeps that authority if the folder changes', async () => {
   const store = new Store();
-  const host = makeHostContext(store, fakeTransport(), { current: null }, readHostCaps({}));
+  const host = makeHostContext(store, fakeTransport(), { current: null }, readHostCaps({}), undefined, undefined, undefined,
+    undefined, undefined, undefined, { projects: {} as never, active: async () => undefined, replay: async () => undefined, captureImport: () => fakeHost().abaqus.capture() });
   const folder = await ProjectFolder.fromHandle(fakeDir({ 'bar.inp': 'admitted folder' }));
   store.set({ folder });
   const captured = host.abaqus.capture();
