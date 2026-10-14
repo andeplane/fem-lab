@@ -31,9 +31,9 @@ test('@cpu imported authored source previews, edits losslessly and reopens witho
     await window.fem.dispatch({ cmd: 'view.toggle', layer: 'axes', on: false });
     await window.fem.dispatch({ cmd: 'view.fit' });
   }, source);
-  await expect(page.locator('.tree')).toContainText('part');
-  await expect(page.locator('.tree')).toContainText('part.nset_COINCIDENT');
-  await expect(page.locator('.tree')).toContainText('part.elset_ALL');
+  await expect(page.locator('aside.tree')).toContainText('part');
+  await expect(page.locator('aside.tree')).toContainText('part.nset_COINCIDENT');
+  await expect(page.locator('aside.tree')).toContainText('part.elset_ALL');
   const before = await page.evaluate(() => window.fem.query.model());
   const mesh = await page.evaluate(() => window.fem.query.mesh());
   expect(mesh.nodes).toBe(4);

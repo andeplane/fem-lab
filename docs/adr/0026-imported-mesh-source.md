@@ -52,6 +52,10 @@ Imported sources cannot be swept, refined, split, upgraded to quadratic order or
 by a convergence/adaptive study. Such operations must reject rather than repeatedly solving
 the same source while claiming a new resolution. An independently authored refined source
 is another mesh.set Command. Existing geometric meshers retain their current behavior.
+This prohibition also applies when a Journal skips numerical solves and applies recorded
+adaptive choices. The shared refinement helper checks the source before changing any
+settings; replacement preparation rejects such a Journal without publishing a partial
+Model or changing the active owner's Journal.
 
 ## Geometry acceptance
 

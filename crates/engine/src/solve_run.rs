@@ -1197,6 +1197,9 @@ impl Engine {
         boxes: &[crate::command::SizeBoxSpec],
         limit: u32,
     ) -> Result<(), Error> {
+        // Recorded choices are also applied by replay with solves omitted. Validate the
+        // source before that path can mutate settings, just as a running study does.
+        self.check_imported_study()?;
         let new = crate::mesh::local_refinement(&crate::command::LocalRefinementSpec {
             boxes: boxes.to_vec(),
             max_elements: limit,

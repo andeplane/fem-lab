@@ -13169,6 +13169,8 @@ fn imported_source_malformed_inputs_and_settings_never_publish() {
         (&["mesher", "nodeSets"], serde_json::json!({"LOWERcase": [10]})),
         (&["mesher", "nodeSets"], serde_json::json!({"ABSENT": [55]})),
         (&["mesher", "elementSets"], serde_json::json!({"ABSENT": [55]})),
+        (&["mesher", "elementSets"], serde_json::json!({"bad": [409]})),
+        (&["mesher", "surfaces"], serde_json::json!({"bad": [{"element": 409, "face": 1}]})),
         (&["mesher", "surfaces"], serde_json::json!({"ABSENT": [{"element": 55, "face": 1}]})),
         (&["mesher", "surfaces"], serde_json::json!({"BAD": [{"element": 409, "face": 5}]})),
         (&["mesher", "surfaces"], serde_json::json!({"BAD": [{"element": 409, "face": 0}]})),
@@ -13178,6 +13180,8 @@ fn imported_source_malformed_inputs_and_settings_never_publish() {
         (&["mesher", "elements"], serde_json::json!([{"label": 409, "kind":"tet4", "nodes":[10,77,88,10]}])),
         (&["mesher", "elements"], serde_json::json!([{"label": 409, "kind":"tet4", "nodes":[10,88,77,301]}])),
         (&["mesher", "provenance"], serde_json::json!({"sha256": "bad", "conversionVersion":"v1"})),
+        (&["mesher", "provenance"], serde_json::json!({"sha256": "g".repeat(64), "conversionVersion":"v1"})),
+        (&["mesher", "provenance"], serde_json::json!({"sha256": "a".repeat(64), "conversionVersion":" "})),
     ];
     for (path, value) in mutations {
         let mut command = original.clone();
@@ -13189,6 +13193,221 @@ fn imported_source_malformed_inputs_and_settings_never_publish() {
         assert!(run(&mut e, &command.to_string()).is_err(), "accepted mutation {path:?}");
         assert_eq!(e.export_file(), before);
     }
+}
+
+#[test]
+fn imported_objects_named_regions_and_empty_memberships_are_queryable() {
+    let mut e = engine();
+    let mut command: serde_json::Value = serde_json::from_str(IMPORTED_TET).unwrap();
+    command["mesher"]["elementSets"]["EMPTY"] = serde_json::json!([]);
+    command["mesher"]["surfaces"]["EMPTY"] = serde_json::json!([]);
+    command["mesher"]["provenance"] = serde_json::json!({
+        "sha256": "0123456789abcdef".repeat(4), "conversionVersion": "source-test/1"
+    });
+    ok(&mut e, &command.to_string());
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"custom","where":{"kind":"body","name":"part"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0}"#);
+    let before = e.export_file();
+    let expected_sets = [
+        "part.nset_ACTIVE",
+        "part.nset_ALL",
+        "part.nset_COINCIDENT",
+        "part.nset_EMPTY",
+        "part.elset_ALL",
+        "part.elset_EMPTY",
+        "part.surface_BASE",
+        "part.surface_EMPTY",
+        "part.node_77",
+    ];
+    for kinds in [
+        None,
+        Some(vec![ObjectKind::Body]),
+        Some(vec![ObjectKind::Set]),
+        Some(vec![ObjectKind::Material]),
+        Some(vec![]),
+    ] {
+        let QueryResult::Objects(list) = e.query(Query::Objects { kinds: kinds.clone() }).unwrap() else { panic!() };
+        let names: Vec<_> = list.objects.iter().map(|o| o.name.as_str()).collect();
+        if kinds.is_none() || kinds == Some(vec![ObjectKind::Body]) {
+            let body = list.objects.iter().find(|o| o.name == "part").unwrap();
+            assert_eq!(body.ref_, "body:part");
+            assert_eq!(body.kind, "body");
+            assert_eq!(body.summary, "immutable imported mesh source");
+        }
+        if kinds.is_none() || kinds == Some(vec![ObjectKind::Set]) {
+            assert!(names.contains(&"custom"));
+            for name in expected_sets {
+                let set = list.objects.iter().find(|o| o.name == name).unwrap();
+                assert_eq!(set.ref_, format!("set:{name}"));
+                assert_eq!(set.kind, "set");
+                assert_eq!(set.summary, "immutable imported membership");
+            }
+        }
+        if kinds == Some(vec![ObjectKind::Material]) {
+            assert_eq!(names, ["steel"]);
+        }
+        if kinds == Some(vec![]) {
+            assert!(names.is_empty());
+        }
+    }
+    let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(model.sets.iter().filter(|s| s.name == "custom").count(), 1);
+    assert_eq!(set_info(&mut e, "custom").count, 1);
+    let QueryResult::Definition(definition) =
+        e.query(Query::Definition { kind: ObjectKind::Set, name: "custom".into() }).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        serde_json::to_value(definition.command).unwrap()["where"],
+        serde_json::json!({"kind":"body", "name":"part"})
+    );
+    for kind in [ObjectKind::Body, ObjectKind::Set] {
+        assert_eq!(e.query(Query::Definition { kind, name: "missing".into() }).unwrap_err().code, ErrorCode::NotFound);
+    }
+    for name in ["part.elset_EMPTY", "part.surface_EMPTY"] {
+        let error = e.query(Query::Set { name: name.into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SetEmpty);
+        assert_eq!(error.where_.as_deref(), Some("name"));
+    }
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
+fn imported_source_geometry_and_idealisation_guards_preserve_the_document() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let before = e.export_file();
+    for command in [
+        r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#,
+        r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#,
+        r#"{"cmd":"geometry.nameFace","name":"part.surface_BASE","of":"part","where":{"kind":"normal","normal":[0,0,-1]}}"#,
+    ] {
+        assert_eq!(err(&mut e, command).code, ErrorCode::Unsupported);
+        assert_eq!(e.export_file(), before);
+    }
+    for initial in [
+        r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#,
+        r#"{"cmd":"geometry.addBox","name":"existing","size":["1 m","1 m","1 m"]}"#,
+    ] {
+        let mut other = engine();
+        ok(&mut other, initial);
+        let old = other.export_file();
+        assert_eq!(err(&mut other, IMPORTED_TET).code, ErrorCode::Unsupported);
+        assert_eq!(other.export_file(), old);
+    }
+}
+
+#[test]
+fn imported_topology_rejects_nonmanifold_same_side_and_disconnected_tetrahedra() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let before = e.export_file();
+    // Every cell has an independently positive determinant. These defects concern
+    // topology and labelled contacts, rather than an invalid individual tetrahedron.
+    let nodes: Vec<_> = [
+        [0., 0., 0.],
+        [1., 0., 0.],
+        [0., 1., 0.],
+        [0., 0., 1.],
+        [0., 0., 2.],
+        [0., 0., -1.],
+        [3., 0., 0.],
+        [4., 0., 0.],
+        [3., 1., 0.],
+        [3., 0., 1.],
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, p)| serde_json::json!({"label":i+1,"at":p.map(|v|format!("{v} m"))}))
+    .collect();
+    for (connectivity, cause) in [
+        (vec![vec![1, 2, 3, 4], vec![1, 2, 3, 5], vec![1, 3, 2, 6]], "nonmanifold face"),
+        (vec![vec![1, 2, 3, 4], vec![1, 2, 3, 5]], "opposite cyclic connectivity"),
+        (vec![vec![1, 2, 3, 4], vec![7, 8, 9, 10]], "one face-connected mesh"),
+    ] {
+        let elements: Vec<_> = connectivity
+            .into_iter()
+            .enumerate()
+            .map(|(i, nodes)| serde_json::json!({"label":101+i,"kind":"tet4","nodes":nodes}))
+            .collect();
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"imported","body":"part","nodes":nodes,"elements":elements}});
+        let error = err(&mut e, &command.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert_eq!(error.where_.as_deref(), Some("mesher.elements"));
+        assert!(error.cause.contains(cause), "{:?}", error);
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+#[test]
+fn imported_public_scaling_helper_preserves_every_authored_source_value() {
+    let command: Command = serde_json::from_str(IMPORTED_TET).unwrap();
+    let Command::MeshSet { mesher, .. } = command else { panic!() };
+    let settings = femlab_engine::mesh::mesher_settings(&mesher).unwrap();
+    let original = serde_json::to_vec(&settings).unwrap();
+    for h in [1., 0.5, 0.25] {
+        let scaled = femlab_engine::mesh::scale_mesher(&settings, 1., h);
+        assert_eq!(serde_json::to_vec(&scaled).unwrap(), original);
+        let femlab_engine::model::MesherSettings::Imported(source) = scaled else { panic!() };
+        assert_eq!(source.nodes.iter().map(|n| n.label).collect::<Vec<_>>(), [10, 77, 88, 301, 999]);
+        assert_eq!(source.node_sets["COINCIDENT"], [10, 999]);
+        let (mesh, labels) = femlab_engine::imported::build(&source).unwrap();
+        assert_eq!(mesh.n_nodes(), 4);
+        assert_eq!(labels.unused_nodes, [999]);
+    }
+}
+
+#[test]
+fn imported_public_snapshot_builders_revalidate_unsupported_or_incomplete_inputs() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let snapshot = serde_json::to_value(&e.export_file().model).unwrap();
+    let solids = std::collections::BTreeMap::new();
+    let canonical: Model = serde_json::from_value(snapshot.clone()).unwrap();
+    let valid = femlab_engine::mesh::build(&canonical, &solids).unwrap();
+    assert_eq!(valid.source_labels.nodes, [10, 77, 88, 301]);
+    for (path, value, code) in [
+        (vec!["mesh", "order"], serde_json::json!(2), ErrorCode::Unsupported),
+        (vec!["mesh", "formulation"], serde_json::json!("incompatible-modes"), ErrorCode::Unsupported),
+        (vec!["mesh", "simplices"], serde_json::json!(true), ErrorCode::Unsupported),
+        (vec!["mesh", "refinement"], serde_json::json!({"boxes":[],"maxElements":100}), ErrorCode::Unsupported),
+        (vec!["idealisation"], serde_json::json!({"kind":"planeStrain"}), ErrorCode::Unsupported),
+        (vec!["mesh", "mesher", "nodes"], serde_json::json!([]), ErrorCode::Schema),
+        (vec!["mesh", "mesher", "elements"], serde_json::json!([]), ErrorCode::Schema),
+    ] {
+        // Public model snapshots are inputs to mesh::build; they never enter an Engine
+        // or bypass the SessionOwner/Candidate lifecycle checked above.
+        let mut input = snapshot.clone();
+        let mut slot = &mut input;
+        for key in path {
+            slot = &mut slot[key];
+        }
+        *slot = value;
+        let model: Model = serde_json::from_value(input).unwrap();
+        assert_eq!(femlab_engine::mesh::build(&model, &solids).unwrap_err().code, code);
+    }
+    let mut geometric = engine();
+    ok(&mut geometric, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#);
+    let mut input = snapshot;
+    input["bodies"] = serde_json::to_value(&geometric.export_file().model.bodies).unwrap();
+    let model: Model = serde_json::from_value(input).unwrap();
+    assert_eq!(femlab_engine::mesh::build(&model, &solids).unwrap_err().code, ErrorCode::Unsupported);
+    let femlab_engine::model::MesherSettings::Imported(source) = &canonical.mesh.as_ref().unwrap().mesher else {
+        panic!()
+    };
+    let mut incomplete = serde_json::to_value(source).unwrap();
+    incomplete["nodes"] = serde_json::json!([]);
+    let untrusted = serde_json::from_value(incomplete).unwrap();
+    assert_eq!(femlab_engine::imported::build(&untrusted).unwrap_err().code, ErrorCode::Schema);
+    let mut missing_members = serde_json::to_value(source).unwrap();
+    missing_members["nodeSets"]["ABSENT"] = serde_json::json!([55]);
+    let untrusted = serde_json::from_value(missing_members).unwrap();
+    let error = femlab_engine::imported::build(&untrusted).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert_eq!(error.where_.as_deref(), Some("mesher.nodeSets.ABSENT"));
+    assert!(error.cause.contains("unknown source label 55"));
+    assert_eq!(e.export_file().model, canonical);
 }
 
 /// Independently authored Cartesian connectivity: six positive tetrahedra around each

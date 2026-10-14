@@ -3634,106 +3634,6 @@ const commands = {
         }
       ]
     },
-    "ImportedNodeSpec": {
-      "type": "object",
-      "properties": {
-        "label": {
-          "description": "Positive original node label, at most 999999999.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "at": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Q_length"
-          },
-          "minItems": 3,
-          "maxItems": 3
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "label",
-        "at"
-      ]
-    },
-    "ImportedElement": {
-      "type": "object",
-      "properties": {
-        "label": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "kind": {
-          "$ref": "#/$defs/ImportedElementKind"
-        },
-        "nodes": {
-          "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "label",
-        "kind",
-        "nodes"
-      ]
-    },
-    "ImportedElementKind": {
-      "description": "Only the explicitly supported standard, first-order 3D solids.",
-      "type": "string",
-      "enum": [
-        "tet4",
-        "hex8"
-      ]
-    },
-    "ImportedFace": {
-      "type": "object",
-      "properties": {
-        "element": {
-          "description": "Original element label.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        "face": {
-          "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "element",
-        "face"
-      ]
-    },
-    "ImportedProvenance": {
-      "type": "object",
-      "properties": {
-        "sha256": {
-          "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
-          "type": "string"
-        },
-        "conversionVersion": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "sha256",
-        "conversionVersion"
-      ]
-    },
     "LatticeSize": {
       "description": "Where a lattice mesh gets its element size: one size, or counts per direction.",
       "anyOf": [
@@ -4114,6 +4014,106 @@ const commands = {
             "radius"
           ]
         }
+      ]
+    },
+    "ImportedNodeSpec": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Positive original node label, at most 999999999.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "at": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "at"
+      ]
+    },
+    "ImportedElement": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/ImportedElementKind"
+        },
+        "nodes": {
+          "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "kind",
+        "nodes"
+      ]
+    },
+    "ImportedElementKind": {
+      "description": "Only the explicitly supported standard, first-order 3D solids.",
+      "type": "string",
+      "enum": [
+        "tet4",
+        "hex8"
+      ]
+    },
+    "ImportedFace": {
+      "type": "object",
+      "properties": {
+        "element": {
+          "description": "Original element label.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "face": {
+          "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "element",
+        "face"
+      ]
+    },
+    "ImportedProvenance": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
+          "type": "string"
+        },
+        "conversionVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "conversionVersion"
       ]
     },
     "Formulation": {
@@ -5586,11 +5586,6 @@ const queries = {
     "Q_second_moment": commands.$defs["Q_second_moment"],
     "Axis": commands.$defs["Axis"],
     "MesherSpec": commands.$defs["MesherSpec"],
-    "ImportedNodeSpec": commands.$defs["ImportedNodeSpec"],
-    "ImportedElement": commands.$defs["ImportedElement"],
-    "ImportedElementKind": commands.$defs["ImportedElementKind"],
-    "ImportedFace": commands.$defs["ImportedFace"],
-    "ImportedProvenance": commands.$defs["ImportedProvenance"],
     "LatticeSize": commands.$defs["LatticeSize"],
     "QuadBlockSpec": commands.$defs["QuadBlockSpec"],
     "CurveSpec": commands.$defs["CurveSpec"],
@@ -5598,6 +5593,11 @@ const queries = {
     "SweepSpec": commands.$defs["SweepSpec"],
     "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
     "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
+    "ImportedNodeSpec": commands.$defs["ImportedNodeSpec"],
+    "ImportedElement": commands.$defs["ImportedElement"],
+    "ImportedElementKind": commands.$defs["ImportedElementKind"],
+    "ImportedFace": commands.$defs["ImportedFace"],
+    "ImportedProvenance": commands.$defs["ImportedProvenance"],
     "Formulation": commands.$defs["Formulation"],
     "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
     "SizeBoxSpec": commands.$defs["SizeBoxSpec"],

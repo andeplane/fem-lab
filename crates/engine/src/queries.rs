@@ -603,9 +603,11 @@ impl Engine {
                 let mut hi = [f64::NEG_INFINITY; 3];
                 let mut centroid = [0.0; 3];
                 for &label in &labels {
-                    let node = source.nodes.binary_search_by_key(&label, |n| n.label).map_err(|_| {
-                        Error::schema(format!("source Set references missing node {label}")).at("mesher.nodeSets")
-                    })?;
+                    // source()/build validate sorted labels and every membership before
+                    // Model publication. Replacement/replay revalidate; rename changes
+                    // only the Body name and undo restores a validated snapshot. This is
+                    // therefore the position of a known-present authored node.
+                    let node = source.nodes.partition_point(|n| n.label < label);
                     for k in 0..3 {
                         let value = source.nodes[node].at[k];
                         lo[k] = lo[k].min(value);
