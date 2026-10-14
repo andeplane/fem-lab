@@ -13,6 +13,10 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
   const values = s.form.values;
   const source = 'text' in values ? 'text' : 'path' in values ? 'path' : 'picker';
   const draft = (patch: Record<string, unknown>) => void dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { ...values, ...patch }, keepInitial: true }).catch(() => undefined);
+  const chooseMode = (next: 'mesh' | 'static') => {
+    const { unitForce: _force, ...mesh } = values;
+    void dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { ...(next === 'mesh' ? mesh : values), mode: next }, keepInitial: true }).catch(() => undefined);
+  };
   const chooseSource = (next: string) => {
     const { text: _text, path: _path, picker: _picker, ...rest } = values;
     void dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { ...rest, ...(next === 'text' ? { text: '' } : { picker: true }) }, keepInitial: true }).catch(() => undefined);
@@ -44,7 +48,7 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
         <div class="field">
           <span class="field-label">Import mode — choose explicitly</span>
           <div class="segmented" role="group" aria-label="Abaqus import mode">
-            {(['mesh', 'static'] as const).map(choice => <button type="button" data-cmd="form.open" aria-pressed={mode === choice} onClick={() => draft({ mode: choice })}>
+            {(['mesh', 'static'] as const).map(choice => <button type="button" data-cmd="form.open" aria-pressed={mode === choice} onClick={() => chooseMode(choice)}>
               {choice === 'mesh' ? 'Mesh and Sets' : 'Linear static analysis'}
             </button>)}
           </div>
