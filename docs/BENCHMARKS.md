@@ -2318,3 +2318,62 @@ rejection, and unsupported physics/options without active Model/Journal/Result m
 Native one/three-thread replay and native/WASM conversion/hash parity are separate
 checks. Only final linear equilibrium is imported; an Abaqus increment history is
 explicitly outside this supported slice.
+
+### Original quadratic-element query measurements (#524)
+
+Public Commands build a quarter annulus with radii `r=1 m`, `R=2 m`, quadratic
+mapped elements and `n=2,4,8` angular cells. `simplices:true` exercises Tri6; a
+`3 m` extrusion exercises Hex20 and Tet10. Neither tests nor hosts inject a
+private Mesh into an Engine, and this change adds no quadratic input reader.
+
+For one original P2 circular edge with half-angle `delta=pi/(4n)`, its coordinates
+in the centred frame are `x=R[1+(cos(delta)-1)t²]`, `y=R sin(delta)t`, `-1<=t<=1`.
+Green's theorem gives segment area `R² sin(delta)(4-cos(delta))/3`; subtracting
+the inner radius and summing gives original annulus area
+`A=n sin(delta)(4-cos(delta))`. Every original Quad8/Tri6 area and Hex20/Tet10
+volume sum must agree with `A` and `3A` to `3e-13` in SI. At `n=2`, the area is
+`2.3543606777341703 m²`, compared with the incorrect corner value
+`2.1213203435596424 m²`. Original quadratic geometry converges to the exact
+circular area `3pi/4` with observed order `[3.9,4.1]`.
+
+The exact original outer edge length is
+`L=2n sin(delta)[sqrt(1+k²)+asinh(k)/k]`, `k=2tan(delta/2)`.
+The public Line3 edge and Quad8/Tri6 cylindrical face measurements approach
+`L` and `3L` with each angular refinement reducing quadrature error by more
+than20 and relative error stays below `5e-6`; outer/inner measures retain their
+exact radius ratio. The coarse Hex20 face error is `4.4264e-5 m²`, reducing
+under refinement rather than being claimed exact. Three-point
+line/tensor Gauss and the positive symmetric degree5 triangle rule integrate
+the original map, but its norm is non-polynomial and is not claimed exact at
+one mesh size. Physical load quadrature is unchanged: plane-stress
+`pressureArea` still includes `2 mm` thickness and is distinct from geometric
+length, and the independently corrected Shell4 pressure area is covered under #525 above.
+
+Independent pure geometry regressions check a Tet10 map
+`(u+u²/4,v+v²/4,w+w²/4)`. Its positive diagonal Jacobian has total degree3;
+its exact volume is `1/6+0.75/12+0.1875/30+0.015625/90`, including the cubic
+moment `integral(uvw)=1/720`. The positive 27-point collapsed three-point
+Gauss rule integrates this degree exactly. For a Hex20 S2 map
+`x=u(1+0.1v²)`, `y=v(1+0.1u²)`, `z=w(1+0.1u²)`, its positive determinant
+contains `u^4`, and the exact volume is
+`8[1+0.3/3+(0.01-0.03)/9+0.009/5]`. Two-point tensor Gauss is insufficient;
+three points integrate every Hex20 determinant, whose maximum degree is5
+per coordinate. Rule tests verify positive weights and independent simplex
+monomial moments through triangle degree5 and tetrahedron degree3.
+
+Public query results, Model hashes and saved Journals are compared at one
+and four native threads and against WASM, with exact replay identity.
+Existing #523 linear volume/area and order4 bilinear-area regressions remain
+valid up to f64 roundoff, as does every physical stiffness, mass, pressure and
+traction rule. Straight-sided quadratic Quad8/Tri6 rectangles retain area
+`6 m²`, their Hex20/Tet10 extrusions retain volume `24 m³`, and side length/area
+and physical pressure area agree with the independent `3 m` / `12 m²` values.
+
+The public line-region preservation regression builds truss and beam Bodies with
+members from `(0,0,0)` to `(3,4,0)` to `(3,4,12) m`. Their independent lengths are
+`5 m` and `12 m`: the Body measure is `17 m`, while a region of these members has
+zero three-dimensional geometric volume (`0 m³`). At `1,2,4` subdivisions and
+mesh orders1/2, the elements remain two-node lines; counts, bounds, source joint
+coordinates, member connectivity, individual edge lengths and replay are checked
+at native one/four threads. A disjoint unit cube adds exactly `1 m³` to a mixed
+region, independently of the lines, preserving the ambient-volume contract.

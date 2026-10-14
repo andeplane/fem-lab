@@ -165,6 +165,7 @@ jobs:
       - run: node tools/test-abaqus-mesh-replay.mjs
       - run: node tools/test-abaqus-static-replay.mjs
       - run: node tools/test-abaqus-hosts.mjs target/release/femlab
+      - run: node tools/test-quadratic-measures-replay.mjs
       - run: node tools/test-random-vibration-replay.mjs
       - name: replay every fixture natively and in wasm
         run: |
