@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { LineSegments, Mesh, WebGLRenderer } from 'three';
+import type { Camera, LineSegments, Mesh, Object3D, WebGLRenderer } from 'three';
 import type { AppSurface } from '../src/surface';
 import { Viewer } from '../src/viewer/viewer';
 
@@ -12,7 +12,10 @@ vi.mock('three', async importOriginal => {
     localClippingEnabled = false;
     setPixelRatio(): void {}
     setSize(): void {}
-    render(): void {}
+    render(scene: Object3D, camera: Camera): void {
+      scene.updateMatrixWorld();
+      camera.updateMatrixWorld();
+    }
     dispose(): void {}
   }
   return { ...actual, WebGLRenderer: RendererStub };
@@ -139,8 +142,6 @@ it('keeps line element-node colours distinct at shared joints through hiding and
   viewer.setCamera({ position: [1, 0.5, 8], target: [1, 0.5, 0], up: [0, 1, 0] });
   const halfHeight = Math.hypot(2, 1) * 0.7;
   const pick = (x: number, y: number) => viewer.pick(320 + (x - 1) * 240 / halfHeight, 240 - (y - 0.5) * 240 / halfHeight);
-  // The GPU fake does not update camera matrices during render as WebGLRenderer does.
-  (viewer as unknown as { camera: import('three').Camera }).camera.updateMatrixWorld();
   expect(pick(0.5, 0)?.value).toBe(1);
   expect(pick(1.5, 0.5)?.value).toBe(0);
   viewer.setDeformed(Float32Array.from([0, 1, 0, 0, 2, 0, 0, 3, 0]), 2);
@@ -233,8 +234,6 @@ it.each(['lines', 'triangles'] as const)('uses arriving %s bounds for orthograph
   const point = kind === 'lines' ? [5, 0] : [5, 0.5];
   const check = (width: number, height: number) => {
     expect(viewer.getCamera()).toEqual(camera);
-    // WebGLRenderer normally updates these matrices; this suite fakes only that GPU boundary.
-    (viewer as unknown as { camera: import('three').Camera }).camera.updateMatrixWorld();
     const scale = 480 / (2 * Math.hypot(width, height) * 0.7);
     const hit = viewer.pick(320 + (point[0]! - 6) * scale, 240 - (point[1]! - 1) * scale);
     expect(hit?.body).toBe('truss');
