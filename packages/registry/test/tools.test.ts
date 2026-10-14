@@ -121,4 +121,15 @@ describe('provider object unions', () => {
       common: { type: 'string' }, a: { type: 'number' }, b: { type: 'boolean' },
     }, required: ['common'] });
   });
+
+  it('retains intersected property bounds and fields required by either part', () => {
+    const positiveCount = { type: 'integer', minimum: 1 };
+    const boundedCount = { type: 'integer', maximum: 10 };
+    expect(toolInputSchema({ description: 'bounded object', allOf: [
+      { type: 'object', properties: { count: positiveCount, name: { type: 'string' } }, required: ['count', 'name'] },
+      { type: 'object', properties: { count: boundedCount, source: { type: 'string' } }, required: ['source'] },
+    ] })).toEqual({ description: 'bounded object', type: 'object', properties: {
+      count: { allOf: [positiveCount, boundedCount] }, name: { type: 'string' }, source: { type: 'string' },
+    }, required: ['count', 'name', 'source'] });
+  });
 });
