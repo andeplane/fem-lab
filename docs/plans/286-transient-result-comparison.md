@@ -63,9 +63,10 @@ their existing meanings. No temporal interpolation, extrapolation or index pairi
 
 Use the existing `sampled_frame` result and `FieldData` layout helpers before entering the
 current difference projector. Borrow final fields; own only the requested frame staging
-needed by the difference read. Keep temperature scalar in the difference layout, matching
-ordinary `query.field temperature`, by taking its primary x component; retain three-component
-displacement including the existing zero z in 2D. This removes padding, not physical values.
+needed by the difference read. Preserve the existing public three-component primary layout:
+temperature occupies x with zero y/z, and 2D displacement has zero z. Scalar temperature
+comparisons explicitly select component0. A final steady temperature may have one component;
+mixed complete layouts retain the existing error and explicit component selection resolves it.
 Test that final-frame differences agree with final-field differences on those same layouts.
 
 A sample may read only its retained primary field (temperature or displacement, including

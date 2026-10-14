@@ -5299,7 +5299,7 @@ const queries = {
       "x-returns": "ResultField"
     },
     {
-      "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied.",
+      "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied. Each operand may independently select\na retained primary frame with the existing exact/nearest FrameSample protocol; resolved\nindices and physical times are returned. Historical derived fields are unavailable.\nOmitted samples preserve final-field comparison. There is no temporal interpolation.",
       "type": "object",
       "properties": {
         "left": {
@@ -5805,19 +5805,22 @@ const queries = {
       "format": "uint8",
       "minimum": 0,
       "maximum": 255
+    },
+    "sample": {
+      "description": "Omit for the final field. A sample selects only the retained primary field through\nquery.frame's exact/nearest resolver, with earlier ties and no extrapolation.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FrameSample"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
     "resultId",
     "field"
-  ]
-},
-    "DifferenceOnto": {
-  "description": "The retained Result whose Mesh receives the difference values.",
-  "type": "string",
-  "enum": [
-    "left",
-    "right"
   ]
 },
     "FrameSample": {
@@ -5871,6 +5874,14 @@ const queries = {
   "enum": [
     "exact",
     "nearest"
+  ]
+},
+    "DifferenceOnto": {
+  "description": "The retained Result whose Mesh receives the difference values.",
+  "type": "string",
+  "enum": [
+    "left",
+    "right"
   ]
 },
     "Field": commands.$defs["Field"],

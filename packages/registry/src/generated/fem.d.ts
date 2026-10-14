@@ -674,7 +674,10 @@ export interface Fem {
      * Subtract two explicitly retained nodal fields as `left - right` on either Result's
      * Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
      * null values; nonfinite arithmetic is a structured error. No current Result, display
-     * conversion, or node-number pairing is implied.
+     * conversion, or node-number pairing is implied. Each operand may independently select
+     * a retained primary frame with the existing exact/nearest FrameSample protocol; resolved
+     * indices and physical times are returned. Historical derived fields are unavailable.
+     * Omitted samples preserve final-field comparison. There is no temporal interpolation.
      */
     difference(args: Omit<Extract<Query, { query: 'query.difference' }>, 'query'>): Promise<DifferenceField>;
     /**

@@ -1,5 +1,6 @@
 //! Immutable solve instances. Records own the context needed to interpret their fields.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -11,10 +12,11 @@ use crate::procedure::StepResult;
 
 struct DifferenceInput<'a> {
     record: &'a ResultRecord,
-    field: &'a crate::post::FieldData,
+    field: Cow<'a, crate::post::FieldData>,
     which: crate::command::Field,
     component: Option<u8>,
     name: &'a str,
+    sample: Option<crate::query::ResolvedFrame>,
 }
 
 /// Insertion-ordered lifetime; reads never pin a record or extend its lifetime.
@@ -202,17 +204,35 @@ impl ResultRecord {
 }
 
 fn difference_input<'a>(
+    engine: &Engine,
     record: &'a ResultRecord,
     operand: &'a crate::query::DifferenceOperand,
     path: &str,
 ) -> Result<DifferenceInput<'a>, Error> {
-    let (field, which) = record.named_field(&operand.field).map_err(|mut error| {
-        error.where_ = Some(format!("{path}.field"));
-        if error.suggestion.is_none() {
-            error.suggestion = Some("query.result lists fields retained by this solve".into());
-        }
-        error
-    })?;
+    let (field, which, sample) = if let Some(sample) = &operand.sample {
+        let which = serde_json::from_value(serde_json::Value::String(operand.field.clone())).map_err(|_| {
+            Error::new(ErrorCode::Unsupported, format!("'{}' is not a retained primary frame field", operand.field))
+                .at(format!("{path}.field"))
+                .suggest("query.frames lists retained primary fields; omit sample for a final derived field")
+        })?;
+        let (field, resolved, which) =
+            engine.sampled_frame(None, Some(&record.id), Some(which), sample).map_err(|mut error| {
+                let location = error.where_.as_deref().unwrap_or("sample");
+                let location = if location == "index" { "sample.index" } else { location };
+                error.where_ = Some(format!("{path}.{location}"));
+                error
+            })?;
+        (Cow::Owned(field), which, Some(resolved))
+    } else {
+        let (field, which) = record.named_field(&operand.field).map_err(|mut error| {
+            error.where_ = Some(format!("{path}.field"));
+            if error.suggestion.is_none() {
+                error.suggestion = Some("query.result lists fields retained by this solve".into());
+            }
+            error
+        })?;
+        (Cow::Borrowed(field), which, None)
+    };
     if field.per != crate::post::Per::Node || field.data.len() != record.built.mesh.n_nodes() * field.comps {
         return Err(Error::new(ErrorCode::Unsupported, format!("'{}' is not a supported nodal field", operand.field))
             .at(format!("{path}.field"))
@@ -228,7 +248,7 @@ fn difference_input<'a>(
         .at(format!("{path}.component"))
         .suggest("omit component for the complete field, or select an index within sourceComponents"));
     }
-    Ok(DifferenceInput { record, field, which, component: operand.component, name: &operand.field })
+    Ok(DifferenceInput { record, field, which, component: operand.component, name: &operand.field, sample })
 }
 
 fn same_field_topology(left: &femlab_geometry::Mesh, right: &femlab_geometry::Mesh) -> bool {
@@ -267,6 +287,7 @@ fn resolved_operand(input: &DifferenceInput<'_>) -> crate::query::ResolvedDiffer
         field: input.name.into(),
         component: input.component,
         source_components: input.field.comps,
+        sample: input.sample.clone(),
     }
 }
 
@@ -448,8 +469,8 @@ impl Engine {
             error.where_ = Some("right.resultId".into());
             error
         })?;
-        let left = difference_input(left_record, left_spec, "left")?;
-        let right = difference_input(right_record, right_spec, "right")?;
+        let left = difference_input(self, left_record, left_spec, "left")?;
+        let right = difference_input(self, right_record, right_spec, "right")?;
         if left.component.is_some() != right.component.is_some() {
             let path = if left.component.is_none() { "left.component" } else { "right.component" };
             return Err(Error::schema("component must be supplied for both operands or omitted for both")
@@ -493,12 +514,12 @@ impl Engine {
         let mut values = Vec::with_capacity(total_nodes * components);
         let mut outside_nodes = Vec::new();
         let sampled = (0..total_nodes).try_for_each(|node| {
-            let target_value = selected_at(target.field, node, target.component);
+            let target_value = selected_at(&target.field, node, target.component);
             let source_value = if direct {
-                Ok(Some(selected_at(source.field, node, source.component)))
+                Ok(Some(selected_at(&source.field, node, source.component)))
             } else {
                 let point = target.record.built.mesh.node(node as u32);
-                projected_at(&source.record.built.mesh, source.field, source.component, point)
+                projected_at(&source.record.built.mesh, &source.field, source.component, point)
             };
             source_value.and_then(|source_value| {
                 if let Some(source_value) = source_value {
@@ -628,11 +649,13 @@ mod tests {
                     result_id: "result-1".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 &crate::query::DifferenceOperand {
                     result_id: "result-2".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 crate::query::DifferenceOnto::Right,
             )
@@ -655,11 +678,13 @@ mod tests {
                     result_id: "result-1".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 &crate::query::DifferenceOperand {
                     result_id: "result-2".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 crate::query::DifferenceOnto::Left,
             )

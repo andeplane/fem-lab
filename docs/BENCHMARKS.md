@@ -2683,3 +2683,40 @@ the stiff interior-ply outer face agrees with this independent constant-curvatur
 remain below0.1Pa. A selected stress-unit factor≈1e-308 admits those fields and rejects
 the interior ply. Failed current reads and new solves preserve the prior original-unit
 Result and consume no Result ID; restoring SI lets the next solve publish result-2.
+
+### Retained transient-frame difference reads (#286)
+
+The public `query.difference` accepts each operand's existing typed `FrameSample`
+independently. Its result identifies both resolved retained indices/times and the
+explicit target Mesh. No time interpolation, extrapolation or final derived-field
+substitution is performed. Omitted samples preserve final-field behavior.
+
+The conservation fixture retains uniform `T_left(t)=t K` and `T_right(t)=2t K`
+on 2/4/8 axial cells against twice those counts, at both element orders. Its
+different integration/output schedules retain left 0/0.4/0.8/1 s and right
+0/0.3/0.6/0.9 s. Exact 400 ms versus explicitly nearest 450 ms resolves to
+0.4 s versus 0.3 s (the earlier midpoint tie), so every target-node scalar
+difference is −0.2 K within `1e-10 K`. Reversing operands gives +0.2 K; both
+target meshes must agree with the closed form. The old solved Celsius/minute
+metadata stays attached to the old id after current units change to Kelvin/seconds.
+Mixed final/sampled reads and final-frame equality are checked. Full transient
+temperature layout remains x with zero y/z; scalar reads explicitly select
+component 0, preserving the existing unsampled wire layout.
+
+The rigid free-fall fixture compares actual intermediate left output against the
+right final output from independently retained 1.3/1.7 ms schedules and 0.5/0.9
+CFL factors. Mapped quad4/quad8 and lattice hex8/hex20 use 1/2/4 axial cells
+against twice those counts. Every target node must satisfy
+`Delta u_y = −4.905 (t_left² − t_right²) m` within `1e-12 m`; x/z remain zero,
+including the 2D zero-padding convention. Complete vector, component 1, reversal
+and both projection targets are checked. These exact rigid fields must pass at
+every refinement; no asymptotic rate is invented for this patch case.
+
+Full-solve thermal replay at one/four native threads checks exact Journal hashes,
+solved files and retained catalogues/times. Every pair of saved times is read on
+both target meshes, checked bit-exactly across thread counts and independently
+against `Delta T=t_left−t_right K`. Skip-solves replay reports missing ids.
+Invalid index/time/dimensions, historical derived fields, final-only History and
+evicted ids fail without changing the authoritative file or retained catalogue.
+The rest of #286's Fourier/refinement, Node-WASM and two-pane playback/browser
+acceptance remains required by its linked implementation plan before closing it.
