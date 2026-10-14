@@ -530,6 +530,10 @@ textarea:focus {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.step-row .row-text .summary {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .at {
   flex: none;
   padding: 4px 8px 0 2px;

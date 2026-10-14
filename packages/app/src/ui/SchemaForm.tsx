@@ -8,6 +8,7 @@ import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 import { PressurePreview } from './PressurePreview';
 import { SketchEditor } from './SketchEditor';
+import { procedureFields, procedureInfo, procedureSummary } from './procedures';
 import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
@@ -342,6 +343,8 @@ export function SchemaForm(props: FormProps) {
   }
   const fields = fieldsOf(variant, defs);
   const values = defaultFormValues(form.values, fields);
+  const visibleFields = form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
+  const procedure = form.cmd === 'step.add' && typeof values['procedure'] === 'string' ? procedureInfo(values['procedure'], defs) : null;
   const cmd = { cmd: form.cmd, ...values };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
@@ -370,11 +373,12 @@ export function SchemaForm(props: FormProps) {
             @ reference in chat
           </Cmd> : null}
         </div>
-        <div class="prop-hint">{String(variant['description'] ?? '').split('\n').join(' ')}</div>
-        {fields.map((f) => (
+        <div class="prop-hint">{procedure ? procedure.hint : String(variant['description'] ?? '').split('\n').join(' ')}</div>
+        {procedure ? <div class="prop-hint procedure-summary" role="status">{procedureSummary(procedure.name, defs)}</div> : null}
+        {visibleFields.map((f) => (
           <FieldView key={f.path.join('.')} {...props} field={f} values={values} fields={fields} />
         ))}
-        {s.formError && !fields.some((f) => errorFor(s.formError, f.path)) ? (
+        {s.formError && !visibleFields.some((f) => errorFor(s.formError, f.path)) ? (
           <div class="surface error">
             <span>✕</span>
             <span>

@@ -434,7 +434,10 @@ export interface Fem {
      * temperature field and turns it into thermal stress, and a modal Step after a static one
      * picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
      * which is what a tensioned or preloaded member needs. The remaining fields belong to one
-     * procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+     * procedure each and are ignored by the others. Each field declares `x-procedures` in the
+     * schema (`*` means common to every procedure), so hosts can present the selected procedure
+     * without discarding values when it changes. The Procedure enum declares material inputs
+     * and result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`
      * alone (default 1) to buckling, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
      * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,

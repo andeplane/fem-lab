@@ -4,6 +4,7 @@ import type { EngineSchema, JsonSchema } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { applyLabel, blockers, commandLine, defaultFormValues, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, missingRequired, parseQuantity, resolve, setAt, shapeKinds, siUnit, step, tsValue } from '../src/ui/schema';
+import { procedureFields, procedureInfo, procedureSummary } from '../src/ui/procedures';
 
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
@@ -11,6 +12,78 @@ const variants = doc.commands.oneOf as unknown as JsonSchema[];
 const byName = (name: string): JsonSchema => variants.find((v) => (v['properties'] as Record<string, { const?: string }>)['cmd']?.const === name)!;
 
 const flat = (fields: Field[]): Field[] => fields.flatMap((f) => (f.kind === 'object' ? [f, ...flat(f.fields)] : f.kind === 'union' ? [f, ...flat(f.variants.flatMap((v) => v.fields))] : [f]));
+
+describe('procedure contracts', () => {
+  const common = ['name', 'procedure', 'constraints', 'loads', 'output', 'after'];
+  const owned: Record<string, string[]> = {
+    static: ['dt', 'tEnd', 'outputEvery', 'amplitude'],
+    'static-nonlinear': ['tEnd', 'amplitude', 'increments', 'maxCutbacks', 'nonlinearTolerance', 'nonlinearMaxIterations'],
+    modal: ['nModes', 'shift'],
+    buckling: ['nModes'],
+    'heat-steady': ['nonlinearTolerance', 'nonlinearMaxIterations'],
+    'heat-transient': ['dt', 'tEnd', 'theta', 'outputEvery', 'amplitude', 'initial', 'nonlinearTolerance', 'nonlinearMaxIterations'],
+    explicit: ['tEnd', 'outputEvery', 'dtFactor', 'initialVelocity'],
+    implicit: ['dt', 'tEnd', 'outputEvery', 'amplitude', 'alpha', 'rayleighAlpha', 'rayleighBeta', 'initialVelocity'],
+    harmonic: ['outputEvery', 'rayleighAlpha', 'rayleighBeta', 'fStart', 'fStop', 'points', 'sweep', 'dampingRatio', 'dampingRatios'],
+    randomVibration: ['rayleighAlpha', 'rayleighBeta', 'dampingRatio', 'dampingRatios', 'psd'],
+  };
+
+  it('tags every Step field and covers the full field union without unknown procedures', () => {
+    const variant = byName('step.add');
+    const fields = fieldsOf(variant, DEFS);
+    const properties = variant['properties'] as Record<string, JsonSchema>;
+    const covered = new Set<string>();
+    for (const field of fields) {
+      const tags = properties[field.path[0]!]!['x-procedures'] as string[];
+      expect(tags.length, field.path[0]).toBeGreaterThan(0);
+      expect(tags.every(tag => tag === '*' || tag in owned)).toBe(true);
+    }
+    for (const procedure of Object.keys(owned)) {
+      for (const field of procedureFields(fields, variant, DEFS, procedure)) covered.add(field.path[0]!);
+      const info = procedureInfo(procedure);
+      expect(info.hint.length).toBeGreaterThan(0);
+      expect(info.materialNeeds.length).toBeGreaterThan(0);
+      expect(info.results.length).toBeGreaterThan(0);
+      const materialProperties = byName('material.add')['properties'] as Record<string, JsonSchema>;
+      expect(info.materialProperties.every(name => name in materialProperties)).toBe(true);
+    }
+    expect([...covered].sort()).toEqual(fields.map(field => field.path[0]!).sort());
+  });
+
+  it.each(Object.entries(owned))('shows only common and relevant fields for %s', (procedure, expected) => {
+    const variant = byName('step.add');
+    expect(procedureFields(fieldsOf(variant, DEFS), variant, DEFS, procedure).map(field => field.path[0])).toEqual([...common, ...expected]);
+  });
+
+  it('keeps unchosen or unknown procedures editable and tolerates missing presentation metadata', () => {
+    const variant = byName('step.add');
+    const fields = fieldsOf(variant, DEFS);
+    expect(procedureFields(fields, variant, DEFS, undefined)).toBe(fields);
+    expect(procedureFields(fields, variant, DEFS, 'plugin-procedure')).toBe(fields);
+    expect(procedureFields(fields, variant, { Procedure: {} }, 'static')).toBe(fields);
+    const properties = variant['properties'] as Record<string, JsonSchema>;
+    const noTag = { ...variant, properties: { ...properties, shift: {} } };
+    expect(procedureFields(fields, noTag, DEFS, 'heat-steady').map(field => field.path[0])).toContain('shift');
+    expect(procedureInfo('future', {})).toEqual({ name: 'future', hint: '', materialProperties: [], materialNeeds: [], results: [] });
+    expect(procedureSummary('future', { Procedure: { oneOf: [{ const: 'future' }] } })).toBe('future');
+  });
+
+  it('names thermal inputs and temperature output without imposing elastic stiffness', () => {
+    expect(procedureInfo('heat-steady').materialProperties).toEqual(['k', 'orthotropic']);
+    expect(procedureInfo('heat-transient').materialNeeds).toEqual(['k', 'ρ', 'cp']);
+    expect(procedureSummary('heat-transient')).toBe('heat-transient · needs k, ρ, cp · gives T, reaction power, stored-energy rate');
+    expect(procedureSummary('static')).toContain('E, ν or orthotropic');
+  });
+
+  it('declares optional thermal expansion only for procedures that consume thermal strain', () => {
+    for (const name of ['static', 'static-nonlinear', 'buckling', 'explicit', 'implicit']) {
+      expect(procedureInfo(name).materialProperties, name).toContain('alpha');
+    }
+    for (const name of ['modal', 'heat-steady', 'heat-transient', 'harmonic', 'randomVibration']) {
+      expect(procedureInfo(name).materialProperties, name).not.toContain('alpha');
+    }
+  });
+});
 
 describe('fieldsOf', () => {
   it('renders a field list for every Command in the schema, with no `json` fallback at the top level', () => {
