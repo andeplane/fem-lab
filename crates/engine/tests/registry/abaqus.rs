@@ -52,8 +52,8 @@ fn abaqus_sparse_labels_sets_faces_and_si_replay_have_independent_oracles() {
     assert_eq!(conversion.report.source_labels.elements, [900]);
     assert_eq!(conversion.report.source_labels.unused_nodes, [99]);
     assert!(!conversion.report.analysis_configured);
-    assert_eq!(conversion.report.preprint[0]["ECHO"], false);
-    assert_eq!(conversion.report.preprint[0]["MODEL"], true);
+    assert!(!conversion.report.preprint[0]["ECHO"]);
+    assert!(conversion.report.preprint[0]["MODEL"]);
     let source = serde_json::to_value(&conversion.commands[2]).unwrap();
     assert_eq!(source["order"], 1);
     assert_eq!(source["formulation"], "full");
