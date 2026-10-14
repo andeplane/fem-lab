@@ -342,7 +342,7 @@ pub struct ImportedPatchRow {
 #[serde(rename_all = "camelCase")]
 pub struct MaterialRow {
     pub name: String,
-    /// Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.
+    /// Young's modulus for isotropic stiffness; absent for orthotropic or thermal-only materials.
     #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
     pub e: Option<Valued>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

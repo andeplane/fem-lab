@@ -10609,7 +10609,7 @@
             "type": "string"
           },
           "E": {
-            "description": "Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.",
+            "description": "Young's modulus for isotropic stiffness; absent for orthotropic or thermal-only materials.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"
@@ -38124,7 +38124,7 @@
             "type": "string"
           },
           "E": {
-            "description": "Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.",
+            "description": "Young's modulus for isotropic stiffness; absent for orthotropic or thermal-only materials.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"
@@ -45978,7 +45978,7 @@
             "type": "string"
           },
           "E": {
-            "description": "Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.",
+            "description": "Young's modulus for isotropic stiffness; absent for orthotropic or thermal-only materials.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"

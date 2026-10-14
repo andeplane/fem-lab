@@ -41,6 +41,7 @@ describe('material summaries', () => {
     expect(used(material, model('heat-transient'))).toEqual(['rho', 'k', 'cp']);
     expect(used(material, model('static'))).toEqual(['E', 'nu']);
     expect(used(material, model('modal'))).toEqual(['E', 'nu', 'rho']);
+    expect(materialProperties(material).every((property) => property.usedBy.length === 0)).toBe(true);
     expect(used({ ...material, assignedTo: [] }, model('heat-transient'))).toEqual([]);
     expect(used(material, model('future-procedure'))).toEqual([]);
     expect(materialProperties(material, model('heat-transient')).filter((property) => property.usedBy?.length).every((property) => property.usedBy?.[0] === 'analysis')).toBe(true);
@@ -61,5 +62,26 @@ describe('material summaries', () => {
     expect(used(material, summary)).toEqual(['E', 'nu', 'rho']);
     expect(used(material, model('static-nonlinear'))).toEqual(['E', 'nu']);
     expect(used({ ...material, plasticity: true }, model('static-nonlinear'))).toEqual(['E', 'nu', 'yield', 'plasticity']);
+  });
+
+  it('emphasizes expansion only for supported procedures with an active thermal input', () => {
+    const material: MaterialRow = { name: 'steel', E: value(200000), nu: 0.3, alpha: value(1.2e-5, '1/K'), assignedTo: ['bar'] };
+    for (const procedure of ['static', 'static-nonlinear', 'buckling', 'explicit', 'implicit']) {
+      const summary = { ...model(procedure), loads: [{ name: 'warm', kind: 'temperature', summary: '100 K on bar' }] };
+      expect(used(material, summary)).not.toContain('alpha');
+      summary.steps[0]!.loads = ['warm'];
+      expect(used(material, summary)).toContain('alpha');
+      summary.steps[0]!.loads = [];
+      summary.steps[0]!.after = 'heat';
+      summary.steps.push({ name: 'heat', procedure: 'heat-steady', loads: [], constraints: [], solved: true });
+      expect(used(material, summary)).toContain('alpha');
+      summary.steps[1]!.procedure = 'modal';
+      expect(used(material, summary)).not.toContain('alpha');
+    }
+    for (const procedure of ['modal', 'heat-steady', 'heat-transient', 'harmonic', 'randomVibration']) {
+      const summary = { ...model(procedure), loads: [{ name: 'warm', kind: 'temperature', summary: '100 K on bar' }] };
+      summary.steps[0]!.loads = ['warm'];
+      expect(used(material, summary)).not.toContain('alpha');
+    }
   });
 });

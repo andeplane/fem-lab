@@ -6571,7 +6571,7 @@ export interface ImportedPatchRow {
 export interface MaterialRow {
   name: string;
   /**
-   * Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.
+   * Young's modulus for isotropic stiffness; absent for orthotropic or thermal-only materials.
    */
   E?: Valued | null;
   nu?: number | null;
