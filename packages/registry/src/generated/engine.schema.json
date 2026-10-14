@@ -4636,7 +4636,7 @@
     "description": "Every Query. Serialised with a `query` tag: `{ \"query\": \"query.model\" }`.",
     "oneOf": [
       {
-        "description": "Everything about the Model in one read: bodies with volumes and materials, imported\nface patches with paste-ready naming predicates, named Sets, constraints, loads with\ntheir totals, steps, mesh settings, and the well-posedness warnings that would block a\nsolve. Read this before changing anything.",
+        "description": "Everything about the Model in one read: bodies with volumes and materials, imported\nface patches with paste-ready naming predicates, named Sets, constraints, loads with\ntheir totals, steps and predecessor links, mesh settings, and the well-posedness warnings\nthat would block a solve. Material properties include thermal expansion `alpha` in 1/K,\nconductivity `k` in W/(m K), specific heat `cp` in J/(kg K), and the supplied `source`.\nExpansion and conductivity preserve one isotropic value or three material-axis values.\nRead this before changing anything.",
         "type": "object",
         "properties": {
           "query": {
@@ -10658,6 +10658,39 @@
               }
             ]
           },
+          "alpha": {
+            "description": "Thermal expansion in 1/K, as one isotropic value or three values in material-axis order.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AxialRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "description": "Conductivity in W/(m K), as one isotropic value or three values in material-axis order.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AxialRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cp": {
+            "description": "Specific heat in J/(kg K), when specified.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "yield": {
             "description": "Current yield strength in the Model's display stress unit, when specified.",
             "anyOf": [
@@ -10672,6 +10705,13 @@
           "plasticity": {
             "description": "Whether the Material carries a plasticity block (J2, isotropic hardening).",
             "type": "boolean"
+          },
+          "source": {
+            "description": "The material definition's property source or citation, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "assignedTo": {
             "type": "array",
@@ -10753,6 +10793,22 @@
         "required": [
           "axis",
           "degrees"
+        ]
+      },
+      "AxialRow": {
+        "description": "One isotropic property or its three material-axis values, each with an explicit unit.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Valued"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
         ]
       },
       "SetRow": {
@@ -10899,6 +10955,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "after": {
+            "description": "Earlier Step whose Result this Step continues, including heat-to-stress coupling.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "solved": {
             "type": "boolean"
@@ -31031,7 +31094,7 @@
         "description": "Every Query. Serialised with a `query` tag: `{ \"query\": \"query.model\" }`.",
         "oneOf": [
           {
-            "description": "Everything about the Model in one read: bodies with volumes and materials, imported\nface patches with paste-ready naming predicates, named Sets, constraints, loads with\ntheir totals, steps, mesh settings, and the well-posedness warnings that would block a\nsolve. Read this before changing anything.",
+            "description": "Everything about the Model in one read: bodies with volumes and materials, imported\nface patches with paste-ready naming predicates, named Sets, constraints, loads with\ntheir totals, steps and predecessor links, mesh settings, and the well-posedness warnings\nthat would block a solve. Material properties include thermal expansion `alpha` in 1/K,\nconductivity `k` in W/(m K), specific heat `cp` in J/(kg K), and the supplied `source`.\nExpansion and conductivity preserve one isotropic value or three material-axis values.\nRead this before changing anything.",
             "type": "object",
             "properties": {
               "query": {
@@ -38110,6 +38173,39 @@
               }
             ]
           },
+          "alpha": {
+            "description": "Thermal expansion in 1/K, as one isotropic value or three values in material-axis order.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AxialRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "description": "Conductivity in W/(m K), as one isotropic value or three values in material-axis order.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AxialRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cp": {
+            "description": "Specific heat in J/(kg K), when specified.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "yield": {
             "description": "Current yield strength in the Model's display stress unit, when specified.",
             "anyOf": [
@@ -38124,6 +38220,13 @@
           "plasticity": {
             "description": "Whether the Material carries a plasticity block (J2, isotropic hardening).",
             "type": "boolean"
+          },
+          "source": {
+            "description": "The material definition's property source or citation, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "assignedTo": {
             "type": "array",
@@ -38205,6 +38308,22 @@
         "required": [
           "axis",
           "degrees"
+        ]
+      },
+      "AxialRow": {
+        "description": "One isotropic property or its three material-axis values, each with an explicit unit.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Valued"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
         ]
       },
       "SetRow": {
@@ -38351,6 +38470,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "after": {
+            "description": "Earlier Step whose Result this Step continues, including heat-to-stress coupling.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "solved": {
             "type": "boolean"
@@ -45901,6 +46027,39 @@
               }
             ]
           },
+          "alpha": {
+            "description": "Thermal expansion in 1/K, as one isotropic value or three values in material-axis order.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AxialRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "description": "Conductivity in W/(m K), as one isotropic value or three values in material-axis order.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AxialRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cp": {
+            "description": "Specific heat in J/(kg K), when specified.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "yield": {
             "description": "Current yield strength in the Model's display stress unit, when specified.",
             "anyOf": [
@@ -45915,6 +46074,13 @@
           "plasticity": {
             "description": "Whether the Material carries a plasticity block (J2, isotropic hardening).",
             "type": "boolean"
+          },
+          "source": {
+            "description": "The material definition's property source or citation, when supplied.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "assignedTo": {
             "type": "array",
@@ -45996,6 +46162,22 @@
         "required": [
           "axis",
           "degrees"
+        ]
+      },
+      "AxialRow": {
+        "description": "One isotropic property or its three material-axis values, each with an explicit unit.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Valued"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
         ]
       },
       "SetRow": {
@@ -46142,6 +46324,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "after": {
+            "description": "Earlier Step whose Result this Step continues, including heat-to-stress coupling.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "solved": {
             "type": "boolean"

@@ -24,8 +24,11 @@ pub struct Valued {
 pub enum Query {
     /// Everything about the Model in one read: bodies with volumes and materials, imported
     /// face patches with paste-ready naming predicates, named Sets, constraints, loads with
-    /// their totals, steps, mesh settings, and the well-posedness warnings that would block a
-    /// solve. Read this before changing anything.
+    /// their totals, steps and predecessor links, mesh settings, and the well-posedness warnings
+    /// that would block a solve. Material properties include thermal expansion `alpha` in 1/K,
+    /// conductivity `k` in W/(m K), specific heat `cp` in J/(kg K), and the supplied `source`.
+    /// Expansion and conductivity preserve one isotropic value or three material-axis values.
+    /// Read this before changing anything.
     #[serde(rename = "query.model")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ModelSummary"))]
@@ -352,13 +355,33 @@ pub struct MaterialRow {
     pub orientation: Option<OrientationRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
+    /// Thermal expansion in 1/K, as one isotropic value or three values in material-axis order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<AxialRow>,
+    /// Conductivity in W/(m K), as one isotropic value or three values in material-axis order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<AxialRow>,
+    /// Specific heat in J/(kg K), when specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cp: Option<Valued>,
     /// Current yield strength in the Model's display stress unit, when specified.
     #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
     pub yield_: Option<Valued>,
     /// Whether the Material carries a plasticity block (J2, isotropic hardening).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plasticity: bool,
+    /// The material definition's property source or citation, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub assigned_to: Vec<String>,
+}
+
+/// One isotropic property or its three material-axis values, each with an explicit unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AxialRow {
+    Isotropic(Valued),
+    Axes([Valued; 3]),
 }
 
 /// The orthotropic constants of a Material, in the Model's display stress unit.
@@ -517,6 +540,9 @@ pub struct StepRow {
     pub procedure: String,
     pub constraints: Vec<String>,
     pub loads: Vec<String>,
+    /// Earlier Step whose Result this Step continues, including heat-to-stress coupling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
     pub solved: bool,
 }
 

@@ -570,8 +570,11 @@ export interface Fem {
     /**
      * Everything about the Model in one read: bodies with volumes and materials, imported
      * face patches with paste-ready naming predicates, named Sets, constraints, loads with
-     * their totals, steps, mesh settings, and the well-posedness warnings that would block a
-     * solve. Read this before changing anything.
+     * their totals, steps and predecessor links, mesh settings, and the well-posedness warnings
+     * that would block a solve. Material properties include thermal expansion `alpha` in 1/K,
+     * conductivity `k` in W/(m K), specific heat `cp` in J/(kg K), and the supplied `source`.
+     * Expansion and conductivity preserve one isotropic value or three material-axis values.
+     * Read this before changing anything.
      */
     model(): Promise<ModelSummary>;
     /**
