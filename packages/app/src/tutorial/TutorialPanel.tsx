@@ -200,28 +200,30 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
             ×
           </button>
         </div>
-        <h3 class="tutorial-step-title">{step.title}</h3>
-        <p class="tutorial-explain">{step.explain}</p>
-        {fallback && step.expect ? (
-          <p class="tutorial-where">
-            Nothing on screen runs <code class="mono">{step.expect.cmd}</code> yet — press <kbd>⌘K</kbd>, type it and press ↵.
-          </p>
-        ) : name ? (
-          <p class="tutorial-where">
-            Click <b>{name}</b> — it is the outlined control.
-          </p>
-        ) : null}
-        {values.length > 0 ? (
-          <dl class="tutorial-values mono">
-            {values.map(([label, value]) => (
-              <>
-                <dt key={`${label}-k`}>{label}</dt>
-                <dd key={`${label}-v`}>{value}</dd>
-              </>
-            ))}
-          </dl>
-        ) : null}
-        {step.theory ? <div class="tutorial-theory"><TheoryText text={step.theory} /></div> : null}
+        <div class="tutorial-content">
+          <h3 class="tutorial-step-title">{step.title}</h3>
+          <p class="tutorial-explain">{step.explain}</p>
+          {fallback && step.expect ? (
+            <p class="tutorial-where">
+              Nothing on screen runs <code class="mono">{step.expect.cmd}</code> yet — press <kbd>⌘K</kbd>, type it and press ↵.
+            </p>
+          ) : name ? (
+            <p class="tutorial-where">
+              Click <b>{name}</b> — it is the outlined control.
+            </p>
+          ) : null}
+          {values.length > 0 ? (
+            <dl class="tutorial-values mono">
+              {values.map(([label, value]) => (
+                <>
+                  <dt key={`${label}-k`}>{label}</dt>
+                  <dd key={`${label}-v`}>{value}</dd>
+                </>
+              ))}
+            </dl>
+          ) : null}
+          {step.theory ? <div class="tutorial-theory"><TheoryText text={step.theory} /></div> : null}
+        </div>
         <div class="tutorial-actions">
           {step.doIt ? (
             <button type="button" class="tutorial-btn primary" disabled={busy} onClick={() => void doIt()}>

@@ -42,6 +42,11 @@
         }
       },
       "highlight": "geometry.addLine",
+      "fields": {
+        "points": "12 joints",
+        "members": "21 members",
+        "divisions": "1"
+      },
       "doIt": {
         "cmd": "geometry.addLine",
         "name": "truss",
