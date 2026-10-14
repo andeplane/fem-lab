@@ -29,6 +29,7 @@ describe('solve input blockers', () => {
     ]);
     expect(solveBlockers(m, 'bend').map(w => w.code)).toEqual(['W-1101']);
     expect(solveBlockers(m, 'warm').map(w => w.code)).toEqual(['W-1101', 'W-1103']);
+    expect(solveBlockers(m, 'warm').find(w => w.code === 'W-1101')?.text).toBe('unassigned Body');
   });
 
   it('keeps all required predecessor inputs and ignores an unrelated Step', () => {

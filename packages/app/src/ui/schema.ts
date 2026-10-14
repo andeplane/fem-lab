@@ -389,7 +389,7 @@ export interface Blocker {
 const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.empty': { code: 'W-1000', text: 'Nothing to analyse yet. Add the first body.', fix: 'geometry.addBox' },
   'model.ill-posed': { code: 'W-1002', text: 'A Body and the idealisation disagree on dimension.', fix: 'model.setIdealisation' },
-  'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
+  'model.no-material': { code: 'W-1101', text: 'A Body has no material assignment.', fix: 'material.assign' },
   'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
   'model.unconstrained': { code: 'W-1300', text: 'No active mechanical support.', fix: 'constraint.fix' },
   'model.no-temperature-reference': { code: 'W-1301', text: 'Steady heat needs a temperature reference.', fix: 'constraint.temperature' },
@@ -418,7 +418,7 @@ export function blockers(warnings: readonly ModelWarning[], hasMesh: boolean, ha
       return { code: m!.code, text: w.text, fixLabel: fix, fixCmd: fix, where: w.where ?? null };
     }
     return m
-      ? { code: m.code, text: ['model.unconstrained', 'model.no-temperature-reference', 'material.missing-property'].includes(w.code) ? w.text : m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
+      ? { code: m.code, text: ['model.no-material', 'model.unconstrained', 'model.no-temperature-reference', 'material.missing-property'].includes(w.code) ? w.text : m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
       : { code: w.code, text: w.text, fixLabel: '', fixCmd: '', where: w.where ?? null };
   });
   if (hasBodies && !hasMesh) mapped.push(MESH);

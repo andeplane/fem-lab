@@ -306,7 +306,7 @@ describe('blockers', () => {
       true,
     );
     expect(list.map((b) => b.code)).toEqual(['W-1101', 'W-1500']);
-    expect(list[0]).toMatchObject({ fixCmd: 'material.assign', where: "body 'beam'" });
+    expect(list[0]).toMatchObject({ text: "Body 'beam' has no material", fixCmd: 'material.assign', where: "body 'beam'" });
   });
 
   it('adds W-1200 when there are bodies but no mesh settings, and nothing when there are no bodies', () => {
