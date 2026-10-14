@@ -144,18 +144,18 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.open" class="tbutton" args={{ picker: true }} title="Open a femlab/1 file">
         Open
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp">
-        Import .inp
+      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton file-action" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp" label="Import Abaqus .inp">
+        <span class="file-action-label" aria-hidden="true">Import .inp</span><span class="file-action-icon" aria-hidden="true">⇥</span>
       </Cmd>
-      {s.abaqusReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'abaqusReport', open: true }} title="View this import’s source units, counts and Set mappings">Abaqus report</Cmd> : null}
+      {s.abaqusReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'abaqusReport', open: true }} title="View this import’s source units, counts and Set mappings" label="Abaqus report"><span class="file-action-label" aria-hidden="true">Abaqus report</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
       <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.compare" class="tbutton" args={{ picker: true }} title="Compare a saved femlab/1 file without opening it">
         Compare
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
-        Save as file
+      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton file-action" title="Download the Model and its Journal as a femlab/1 file" label="Save as file">
+        <span class="file-action-label" aria-hidden="true">Save as file</span><span class="file-action-icon" aria-hidden="true">↓</span>
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share

@@ -98,6 +98,30 @@ test('@cpu Abaqus picker imports explicit units, solves, edits source with undo/
   await expect(page.locator('aside.tree')).toContainText('AXIAL');
   await expect(page.locator('aside.tree')).toContainText('bar.nset_ROOT');
   await expect(page.locator('.topbar button[data-cmd="solve.run"]')).toBeEnabled();
+  // Imported projects add a receipt action as well as Import. Every action must still fit,
+  // and the compact controls must retain useful accessible names and native keyboard input.
+  for (const width of [1180, 1199, 1200, 1280, 1399, 1400, 1440, 1699, 1700, 1800]) {
+    await page.setViewportSize({ width, height: 1100 });
+    const layout = await page.locator('.topbar').evaluate(header => ({
+      client: header.clientWidth, scroll: header.scrollWidth,
+      actions: [...header.querySelectorAll('button')].map(button => button.getBoundingClientRect().toJSON()),
+    }));
+    expect(layout.scroll, `imported top bar overflows at ${width}px`).toBe(layout.client);
+    for (const action of layout.actions) {
+      expect(action.left).toBeGreaterThanOrEqual(0);
+      expect(action.right).toBeLessThanOrEqual(width);
+    }
+  }
+  await page.setViewportSize({ width: 1180, height: 1100 });
+  await page.getByRole('button', { name: 'Abaqus report', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(report).toBeVisible();
+  await report.getByTitle('Close Abaqus import report', { exact: true }).click();
+  await page.getByRole('button', { name: 'Import Abaqus .inp', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await dialog.getByTitle('Close Abaqus import', { exact: true }).click();
+  await page.setViewportSize({ width: 1800, height: 1100 });
   await expect(page.locator('canvas')).toBeVisible();
   await page.locator('canvas').screenshot({ path: info.outputPath('imported-hex-mesh.png') });
   await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' }));
