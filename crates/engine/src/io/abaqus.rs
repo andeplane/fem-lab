@@ -1027,6 +1027,8 @@ mod tests {
         ] {
             assert_eq!(keyword(text).unwrap_err().code, ErrorCode::Schema);
         }
+        let continuation_error = keyword("*NODE,\n∞\n").unwrap_err();
+        assert_eq!(continuation_error.where_.as_deref(), Some("line 2 *INPUT physical line"));
     }
 
     #[test]

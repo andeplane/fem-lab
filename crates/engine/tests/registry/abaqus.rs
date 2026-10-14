@@ -354,6 +354,9 @@ fn abaqus_bounds_hash_units_and_expanded_memberships_fail_before_publication() {
     for text in ["", "*HEADING\n", "*NODE\n1,0\n", "1,0\n", "*NODE\n", "*PREPRINT\nDATA\n"] {
         assert!(e.query(request(text, "1 m")).is_err(), "{text}");
     }
+    let missing_lf = TET.trim_end_matches('\n');
+    let rejected = e.query(request(missing_lf, "1 m")).unwrap_err();
+    assert!(rejected.where_.as_deref().unwrap().ends_with(" *INPUT line ending"));
     for digest in ["0".repeat(63), "A".repeat(64)] {
         let mut invalid = serde_json::to_value(request(TET, "1 m")).unwrap();
         invalid["sha256"] = json!(digest);
