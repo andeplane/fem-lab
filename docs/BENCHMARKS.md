@@ -2516,3 +2516,22 @@ their actual typed SI dimensions. These four authored dimensions have no configu
 UnitSet field, so their Model rows retain the existing literal `SI` label and exact admitted
 values. This invariant does not bypass checks for temperatures, computed quantities,
 frequencies or contact forces.
+
+Additional checked display fixtures use publicly admitted imported unit tetrahedra: volume
+`det(I)/6 = 1/6 m³`, right-triangle face area `1/2 m²`, and active Set values in those same
+physical dimensions. Tiny valid composite length units leave ordinary coordinates readable
+while derived volume or area units cannot represent the value. A mapped plane-stress unit
+square with thickness `1e100 m` has geometric edge length `1 m` and loaded pressure area
+`1e100 m²`; length factor `1e-108` leaves bbox, thickness and Body area readable while the
+loaded area overflows. Its ordinary quadrature oracle uses relative tolerance `1e-14`.
+Two directly admitted tetrahedra have bounded coordinates `|x| <= 1`: one has shortest edge
+`sqrt(2) m` and longest edge `2 m`, the regular one has every edge `sqrt(8) m`. Length factor
+`8.333e-309` leaves every bbox coordinate finite but respectively rejects the longest edge
+or the shortest edge. Each failed public Query preserves the full native file, model hash,
+revision and Result catalogue.
+
+The automatic origin-Box hand calculation reuses checked bbox dimensions, material E and
+exact authored LoadRow text from the Model summary. Its formula keeps the authored SI force;
+F/P denotes the magnitude of that vector's sole nonzero component. Computed cross-sectional
+area and analytical deflection retain checked conversions. Reusing assembled nodal force as
+the independent reference would admit quadrature rounding into the oracle and is avoided.

@@ -6951,7 +6951,7 @@ fn the_report_is_the_whole_analysis_in_order_and_reproducible() {
     assert!(md.contains("- no element is inverted (min det J > 0 everywhere);"), "{md}");
     assert!(md.contains("### Hand calculation for step `static`"), "{md}");
     assert!(md.contains("$$\\delta = \\frac{P L^3}{3 E I}"), "{md}");
-    assert!(md.contains("with P = 1 kN, L = 1000 mm, b = 100 mm, h = 100 mm, E = 210000 MPa."), "{md}");
+    assert!(md.contains("with end load = total [0, 0, -1] kN, L = 1000 mm, b = 100 mm, h = 100 mm, E = 210000 MPa. F/P is the magnitude of the end load's sole nonzero component."), "{md}");
     assert!(md.contains("| Hand calculation | 0.19048 mm |"), "{md}");
     assert!(md.contains("| This analysis | 0.19012 mm |"), "{md}");
     // the Journal appendix: the entries as JSON and the same Journal as a script
@@ -7060,7 +7060,7 @@ fn the_hand_calculation_covers_the_one_case_it_claims() {
     let md = report(&mut e, None, None).markdown;
     assert!(md.contains("is a prismatic bar in uniaxial bar theory"), "{md}");
     assert!(md.contains("$$\\delta = \\frac{F L}{E A}$$"), "{md}");
-    assert!(md.contains("with F = 100 kN, L = 1000 mm, A = 10000 mm^2, E = 210000 MPa."), "{md}");
+    assert!(md.contains("with end load = total [100, 0, 0] kN, L = 1000 mm, A = 10000 mm^2, E = 210000 MPa. F/P is the magnitude of the end load's sole nonzero component."), "{md}");
     // δ = FL/EA = 100e3 · 1 / (210e9 · 0.01) = 47.62 µm
     assert!(md.contains("| Hand calculation | 0.047619 mm |"), "{md}");
     // a load that carries no total force is not a case the hook knows

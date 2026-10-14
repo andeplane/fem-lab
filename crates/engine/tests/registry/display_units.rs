@@ -521,3 +521,77 @@ fn checked_display_admitted_thermal_coefficients_and_sources_keep_their_fixed_si
     }
     assert_eq!(e.export_file(), file);
 }
+
+#[test]
+fn checked_display_imported_body_and_active_set_measures_use_their_physical_dimensions() {
+    for (units, queries) in [
+        ("nm^35/m^34", vec![json!({"query":"query.model"})]),
+        ("nm^12/m^11", vec![json!({"query":"query.model"}), json!({"query":"query.set","name":"part.elset_ALL"})]),
+        ("nm^19/m^18", vec![json!({"query":"query.set","name":"part.surface_BASE"})]),
+    ] {
+        let mut e = fresh();
+        command(&mut e, serde_json::from_str(IMPORTED_TET).unwrap());
+        let model = read(&mut e, json!({"query":"query.model"}));
+        // Unit coordinate simplex: det(I)/6 and its right-triangle base area 1/2.
+        assert_eq!(model["bodies"][0]["bbox"][3], json!({"value":1.0,"unit":"m"}));
+        assert_eq!(model["bodies"][0]["measure"]["unit"], "m^3");
+        assert!((model["bodies"][0]["measure"]["value"].as_f64().unwrap() - 1.0 / 6.0).abs() < 1e-15);
+        let element = read(&mut e, json!({"query":"query.set","name":"part.elset_ALL"}));
+        assert!((element["measure"]["value"].as_f64().unwrap() - 1.0 / 6.0).abs() < 1e-15);
+        let face = read(&mut e, json!({"query":"query.set","name":"part.surface_BASE"}));
+        assert_eq!(face["measure"], json!({"value":0.5,"unit":"m^2"}));
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"length":units}}));
+        for query in queries {
+            rejected_read(&mut e, query);
+        }
+    }
+}
+
+#[test]
+fn checked_display_pressure_area_is_checked_after_readable_geometric_face_length() {
+    let mut e = fresh();
+    for value in [
+        json!({"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1e100 m"}}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"mapped","body":"square","blocks":[{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1],"tags":["bottom","right","top","left"]}]}}),
+    ] {
+        command(&mut e, value);
+    }
+    let set = read(&mut e, json!({"query":"query.set","name":"square.bottom"}));
+    assert_eq!(set["measure"], json!({"value":1.0,"unit":"m"}));
+    assert_eq!(set["pressureArea"]["unit"], "m^2");
+    // Loaded face area is edge length times authored thickness, 1*1e100 m².
+    assert!((set["pressureArea"]["value"].as_f64().unwrap() / 1e100 - 1.0).abs() < 1e-14);
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"length":"nm^12/m^11"}}));
+    // Bbox, 2D Body area, thickness and geometric face length remain representable.
+    assert_eq!(
+        read(&mut e, json!({"query":"query.model"}))["bodies"][0]["measure"]["unit"],
+        "(nm^12/m^11)*(nm^12/m^11)"
+    );
+    rejected_read(&mut e, json!({"query":"query.set","name":"square.bottom"}));
+}
+
+#[test]
+fn checked_display_mesh_edge_extremes_reject_only_after_readable_bounds() {
+    for (points, min, max) in [
+        ([[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], std::f64::consts::SQRT_2, 2.0),
+        ([[1.0, 1.0, 1.0], [-1.0, -1.0, 1.0], [-1.0, 1.0, -1.0], [1.0, -1.0, -1.0]], 8.0_f64.sqrt(), 8.0_f64.sqrt()),
+    ] {
+        let mut e = fresh();
+        let nodes: Vec<Value> = points
+            .iter()
+            .enumerate()
+            .map(|(i, point)| json!({"label":i+1,"at":point.map(|value| format!("{value} m"))}))
+            .collect();
+        command(
+            &mut e,
+            json!({"cmd":"mesh.set","mesher":{"kind":"imported","body":"part","nodes":nodes,"elements":[{"label":10,"kind":"tet4","nodes":[1,2,3,4]}]}}),
+        );
+        let mesh = read(&mut e, json!({"query":"query.mesh"}));
+        assert_eq!(mesh["minEdge"], json!({"value":min,"unit":"m"}));
+        assert_eq!(mesh["maxEdge"], json!({"value":max,"unit":"m"}));
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"length":"nm^34*mm*in/(m^33*cm*ft)"}}));
+        // Each coordinate |x|<=1 converts below MAX at factor 8.333e-309. The
+        // longest edge 2, or every regular-Tet edge sqrt(8), exceeds that limit.
+        rejected_read(&mut e, json!({"query":"query.mesh"}));
+    }
+}

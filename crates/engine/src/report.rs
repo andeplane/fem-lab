@@ -507,7 +507,7 @@ fn moment_balance_line(balance: f64) -> String {
 /// That is the shape of the first model anyone builds, and quoting the
 /// beam-theory number next to the FEM one is the habit J1.5 asks for. Anything richer is a
 /// Benchmark, not a hook.
-fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<String>, Error> {
+fn hand_calc(model: &crate::model::Model, r: &ResultSummary, shown: &ModelSummary) -> Result<Option<String>, Error> {
     let Some(MeshSettings { mesher: MesherSettings::Lattice { .. }, .. }) = &model.mesh else { return Ok(None) };
     if model.idealisation != Idealisation::Solid3d {
         return Ok(None);
@@ -553,6 +553,13 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<St
         return Ok(None);
     }
     let Some(e) = mat.e else { return Ok(None) };
+    // report() builds this checked summary before calling the hand-calculation hook.
+    // Applicability above fixes one uncut origin Box and one isotropic material: its
+    // high bbox components are exactly the authored sizes, and E is that material's E.
+    // Reuse checked display cells instead of repeating their identical conversions.
+    let shown_size = &shown.bodies[0].bbox[3..];
+    let shown_e = shown.materials[0].e.as_ref().expect("checked isotropic MaterialRow");
+    let shown_load = &shown.loads.iter().find(|row| row.name == *load_name).expect("checked authored LoadRow").summary;
     let l = size[axis];
     let axial = total[axis].abs() >= total[bend].abs();
     let (component, delta, formula, given) = if axial {
@@ -562,9 +569,9 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<St
             total[axis].abs() * l / (e * area),
             "$$\\delta = \\frac{F L}{E A}$$",
             format!(
-                "F = {}, L = {}, A = {}",
-                q(&display(model, total[axis].abs(), Force::DIM)?),
-                q(&display(model, l, Length::DIM)?),
+                "end load = {}, L = {}, A = {}",
+                shown_load,
+                q(&shown_size[axis]),
                 q(&display(model, area, crate::units::Dimension([2, 0, 0, 0]))?)
             ),
         )
@@ -575,11 +582,11 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<St
             total[bend].abs() * l.powi(3) / (3.0 * e * i),
             "$$\\delta = \\frac{P L^3}{3 E I}, \\qquad I = \\frac{b h^3}{12}$$",
             format!(
-                "P = {}, L = {}, b = {}, h = {}",
-                q(&display(model, total[bend].abs(), Force::DIM)?),
-                q(&display(model, l, Length::DIM)?),
-                q(&display(model, size[other], Length::DIM)?),
-                q(&display(model, size[bend], Length::DIM)?)
+                "end load = {}, L = {}, b = {}, h = {}",
+                shown_load,
+                q(&shown_size[axis]),
+                q(&shown_size[other]),
+                q(&shown_size[bend])
             ),
         )
     };
@@ -594,7 +601,7 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<St
         "### Hand calculation for step `{}`\n\n\
          One box Body under one end force, verified fully clamped at the opposite end, is a prismatic bar in {} theory:\n\n\
          {}\n\n\
-         with {}, E = {}.\n\n\
+         with {}, E = {}. F/P is the magnitude of the end load's sole nonzero component.\n\n\
          | Source | Deflection |\n| --- | --- |\n| Hand calculation | {} {} |\n| This analysis | {} {} |\n\
          | Difference | {} % |\n\n\
          The two agree only as far as the idealisation does: beam theory ignores shear \
@@ -603,7 +610,7 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<St
         if axial { "uniaxial bar" } else { "Euler–Bernoulli beam" },
         formula,
         given,
-        q(&display(model, e, crate::units::Stress::DIM)?),
+        q(shown_e),
         fmt_sig(hand.value, 5),
         unit,
         fmt_sig(fem, 5),
@@ -615,6 +622,7 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Result<Option<St
 fn verification(
     model: &crate::model::Model,
     results: &[(ResultSummary, Option<StudyReport>)],
+    shown: &ModelSummary,
 ) -> Result<String, Error> {
     let mut s = String::from("## Verification\n\n");
     if results.is_empty() {
@@ -634,7 +642,7 @@ fn verification(
     }
     s += "\n";
     for (r, _) in results {
-        if let Some(text) = hand_calc(model, r)? {
+        if let Some(text) = hand_calc(model, r, shown)? {
             s += &text;
         } else {
             s += &format!("No applicable automatic hand-calculation reference for step `{}`: the verified end-loaded, fully clamped box assumptions are not satisfied.\n\n", r.step);
@@ -715,7 +723,7 @@ impl Engine {
                     }
                     text
                 }
-                ReportSection::Verification => verification(&self.model, &results)?,
+                ReportSection::Verification => verification(&self.model, &results, &summary)?,
                 ReportSection::Journal => journal(&self.journal),
             };
             sections.push(s.name());
@@ -743,6 +751,18 @@ mod tests {
             "loads":[{"name":"tip","kind":"traction","on":"beam.xmax","total":[0.0,0.0,-1000.0]}],
             "steps":[{"name":"static","procedure":"static","constraints":["root"],"loads":["tip"],"output":["displacement"]}],
             "mesh":{"mesher":{"kind":"lattice","counts":[10,2,2]},"order":1,"formulation":"full"}
+        })).unwrap();
+        // Truthful checked cells for this origin Box and exact authored end force.
+        // The pure applicability cases below stand down before consuming these cells.
+        let shown: ModelSummary = serde_json::from_value(serde_json::json!({
+            "name":"beam", "revision":1, "hash":"pure applicability fixture", "units":{"length":"mm"},
+            "idealisation":"solid3d", "bodies":[{"name":"beam", "material":"steel",
+                "bbox":[{"value":0,"unit":"mm"},{"value":0,"unit":"mm"},{"value":0,"unit":"mm"},
+                        {"value":1000,"unit":"mm"},{"value":100,"unit":"mm"},{"value":100,"unit":"mm"}],
+                "measure":{"value":1e7,"unit":"mm^3"}, "faces":[]}],
+            "materials":[{"name":"steel", "E":{"value":210e9,"unit":"Pa"}, "nu":0.3, "plasticity":false,"assignedTo":["beam"]}],
+            "loads":[{"name":"tip","kind":"traction","on":"beam.xmax","summary":"total [0, 0, -1000] N"}],
+            "sets":[],"constraints":[],"connections":[],"steps":[],"warnings":[]
         })).unwrap();
         let zero = Valued { value: 0.0, unit: "mm".into() };
         let result = ResultSummary {
@@ -778,19 +798,29 @@ mod tests {
             contacts: vec![],
             warnings: vec![],
         };
-        assert!(hand_calc(&model, &result).unwrap().unwrap().contains("| Hand calculation | 0.19048 mm |"));
+        assert!(hand_calc(&model, &result, &shown).unwrap().unwrap().contains("| Hand calculation | 0.19048 mm |"));
         let mut reversed = model.clone();
         reversed.constraints[0].on = "beam.xmax".into();
         reversed.loads[0].kind = LoadKind::Force { on: "beam.xmin".into(), total: [0.0, 0.0, -1000.0] };
-        assert!(hand_calc(&reversed, &result).unwrap().unwrap().contains("| Hand calculation | 0.19048 mm |"));
+        let mut reversed_shown = shown.clone();
+        reversed_shown.loads[0].on = Some("beam.xmin".into());
+        assert!(hand_calc(&reversed, &result, &reversed_shown)
+            .unwrap()
+            .unwrap()
+            .contains("| Hand calculation | 0.19048 mm |"));
         let mut axial = model.clone();
         axial.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [100000.0, 0.0, 0.0] };
         let mut axial_result = result.clone();
         axial_result.extremes[0].component = 0;
-        assert!(hand_calc(&axial, &axial_result).unwrap().unwrap().contains("| Hand calculation | 0.047619 mm |"));
+        let mut axial_shown = shown.clone();
+        axial_shown.loads[0].summary = "total [100000, 0, 0] N".into();
+        assert!(hand_calc(&axial, &axial_result, &axial_shown)
+            .unwrap()
+            .unwrap()
+            .contains("| Hand calculation | 0.047619 mm |"));
         let mut unused = model.clone();
         unused.loads.push(Load { name: "unused".into(), kind: LoadKind::Gravity { g: [0.0, 0.0, -9.81] } });
-        assert_eq!(hand_calc(&unused, &result), hand_calc(&model, &result));
+        assert_eq!(hand_calc(&unused, &result, &shown), hand_calc(&model, &result, &shown));
         type Change = fn(&mut Model, &mut ResultSummary);
         let inapplicable: &[(&str, Change)] = &[
             ("no mesh", |m, _| m.mesh = None),
@@ -836,7 +866,7 @@ mod tests {
         for (reason, change) in inapplicable {
             let (mut m, mut r) = (model.clone(), result.clone());
             change(&mut m, &mut r);
-            assert_eq!(hand_calc(&m, &r).unwrap(), None, "{reason}");
+            assert_eq!(hand_calc(&m, &r, &shown).unwrap(), None, "{reason}");
         }
     }
 
