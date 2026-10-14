@@ -138,7 +138,7 @@ export class Viewer {
   private deformation: Float32Array | null = null;
   private deformScale = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly onBounds?: () => void) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio ?? 1, 2));
     this.renderer.localClippingEnabled = true;
@@ -262,6 +262,7 @@ export class Viewer {
     this.paint();
     this.setChrome();
     this.drawDeformed(this.deformation, this.deformScale);
+    if (keep.length > 0 || this.line.length > 0) this.onBounds?.();
   }
 
   /** The engine supplies the actual Sheet boundaries, including hole edges and their names. */

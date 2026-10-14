@@ -28,6 +28,8 @@ import type { TransientInput } from './transient';
 export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
+  /** A nonempty surface has installed its actual bounds in this session's viewer. */
+  onBounds?: () => void;
   /** A scrub preview; only the final gesture is dispatched as a host Command. */
   previewTransient?: (input: TransientInput) => Promise<void>;
 }
@@ -530,7 +532,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'file.openExample',
       execution: 'replacement',
-      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, and establish the saved baseline only after a complete open.",
+      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, fit the viewer after the real bounds arrive, and establish the saved baseline only after a complete open. A camera pose adjustment made while loading is preserved.",
       schema: z.object({ name: z.string() }),
       tool: true,
       run: async (input, ctx) => {

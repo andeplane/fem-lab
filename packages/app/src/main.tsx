@@ -15,6 +15,7 @@ import { benchmarkProvenance } from './benchmark';
 import { ProjectRepository, indexedDbAtomicProjects, memoryAtomicProjects, type ProjectBinding, type SaveJob } from './project-repository';
 import type { Projects } from './projects';
 import { ResultsView } from './results';
+import type { CameraState } from './viewer/viewer';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
 import { Store } from './store';
@@ -57,11 +58,24 @@ class Bundle {
   private refreshing: Promise<void> = Promise.resolve();
   private autosave = localStorage.getItem('femlab.autosave') !== 'off';
   private version: string | null = null;
+  private fitAfterOpen = false;
+  private initialCamera: CameraState | undefined;
   disposed = false;
   constructor(readonly transport: SessionTransport) {
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
     this.results = new ResultsView(this.store, transport, this.viewer, { now: () => performance.now(), schedule: (cb, ms) => setTimeout(cb, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) });
-    this.viewer.onReady = () => { void this.refresh().catch(error => this.fail(error)); };
+    this.viewer.onReady = () => {
+      if (this.fitAfterOpen) this.initialCamera = this.viewer.current?.getCamera();
+      void this.refresh().catch(error => this.fail(error));
+    };
+    this.viewer.onBounds = () => {
+      const dispatch = this.store.dispatch;
+      if (!this.fitAfterOpen || this.disposed || !this.viewer.current || !dispatch) return;
+      this.fitAfterOpen = false;
+      // A person can move the camera while the first surface is loading. Their view wins.
+      if (this.initialCamera && JSON.stringify(this.viewer.current.getCamera()) !== JSON.stringify(this.initialCamera)) return;
+      void dispatch({ cmd: 'view.fit' }).catch(error => this.fail(error));
+    };
   }
   async initialize(snapshot: DocumentSnapshot, source?: ReplacementSource): Promise<void> {
     this.uiTransport = await this.transport.fork();
@@ -69,6 +83,7 @@ class Bundle {
     const capabilities = await this.transport.query({ query: 'query.capabilities' }) as Capabilities;
     this.store.set({ hostCaps: host, engineCaps: capabilities, ready: true, notes: capabilityNotes(host, capabilities) });
     this.publishSnapshot(snapshot);
+    this.fitAfterOpen = Boolean(source && snapshot.model.bodies.length > 0);
     if (snapshot.results.records.length) this.store.set({ viewMode: 'results', tab: 'results' });
     if (source) {
       const target = source.project ?? { meta: nextMeta(snapshot.model.name), expected: null };
