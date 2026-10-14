@@ -32,6 +32,14 @@ it('requires source units and mode independently of display units, and routes ea
   edit('One source force unit', '1 N'); draw(store, dispatch);
   click('Choose .inp and import');
   expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'file.importAbaqus', name: 'new', body: 'bar', picker: true, mode: 'static', unitLength: '1 mm', unitForce: '1 N' });
+  click('Mesh and Sets'); draw(store, dispatch);
+  expect(store.state.form!.values).not.toHaveProperty('unitForce');
+  expect(input('One source force unit')).toBeNull();
+  click('Choose .inp and import');
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'file.importAbaqus', name: 'new', body: 'bar', picker: true, mode: 'mesh', unitLength: '1 mm' });
+  click('Linear static analysis'); draw(store, dispatch);
+  expect(input('One source force unit').value).toBe('');
+  expect(button('Choose .inp and import').disabled).toBe(true);
 });
 
 it('changes source without retaining a hidden second input and dispatches the exact inline deck', () => {
