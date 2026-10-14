@@ -8,6 +8,10 @@ date: 2026-09-06
 Resolves the browser hardening review in #28. Extends ADR 0004 and ADR 0006 using the
 portable QuickJS bridge from ADR 0015; the engine/host boundary remains ADR 0011.
 
+Production hosted-AI credentials/account identity follow [ADR 0028](0028-hosted-ai-account-and-service-boundary.md).
+The direct-provider key rules below describe the current development adapter until #554 migrates production.
+Script isolation, file validation and the engine/host boundary remain unchanged.
+
 ## Trust boundaries and decisions
 
 The static app, its bundled dependencies and origin are trusted. Pasted/generated scripts,

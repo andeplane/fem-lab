@@ -207,6 +207,9 @@ jobs:
       - run: npm run codegen:check
       - run: npm run typecheck
       - run: npm run test -w packages/registry
+      - run: npm run test -w packages/ai
+      - run: npm run test -w packages/service
+      - run: npm run build -w packages/service
       # The MCP server runs the Node wasm build from the `wasm` job's artifact.
       - run: npm run test -w packages/mcp
       - run: npm run build -w packages/mcp
