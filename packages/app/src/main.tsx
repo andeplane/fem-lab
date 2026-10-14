@@ -19,7 +19,7 @@ import { ResultsView } from './results';
 import type { CameraState } from './viewer/viewer';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
-import { Store } from './store';
+import { Store, unsaved } from './store';
 import { AnimationCapture, browserAnimationCaptureEnvironment } from './animation-capture';
 import { App } from './ui/App';
 import { SessionWorkspace } from './session-workspace';
@@ -136,6 +136,18 @@ class Bundle {
     if (!this.binding) this.binding = await repository.claim(nextMeta(snapshot.model.name), snapshot, null);
     this.latest = this.binding.capture(snapshot, Date.now());
     await this.save();
+  }
+  async prepareAccountReturn(): Promise<string | null> {
+    await this.refreshing;
+    const snapshot = await this.transport.snapshot();
+    if (!snapshot.file.journal.entries.length) return null;
+    if (this.projectDeleted) {
+      if (unsaved(this.store.state)) throw new FemError('unsupported', 'Save a model file before leaving this deleted browser project.', 'account', 'file.save');
+      return null;
+    }
+    if (!this.autosave && this.savedMeta?.hash !== snapshot.model.hash) throw new FemError('unsupported', 'Save this project or enable browser autosave before leaving for login or payment.', 'account', 'project.save');
+    await this.prepareToLeave();
+    return this.savedMeta?.id ?? null;
   }
   async recoverySource(source: ReplacementSource): Promise<ReplacementSource> {
     if (this.projectDeleted || !this.binding) return source;
@@ -319,7 +331,12 @@ class Producer {
 }
 
 let displayed: Bundle | undefined;
-accountLeaveHook(async () => { await displayed?.prepareToLeave(); });
+export async function prepareAccountNavigation(): Promise<void> {
+  const id = await displayed?.prepareAccountReturn();
+  if (id) sessionStorage.setItem('femlab.accountReturnProject', id);
+  else sessionStorage.removeItem('femlab.accountReturnProject');
+}
+accountLeaveHook(prepareAccountNavigation);
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,
@@ -375,6 +392,12 @@ async function boot(): Promise<void> {
   bootStage('Loading the simulation engine…', 60);
   const active = await workspace.start();
   await active.resources.refresh();
+  const accountReturn = sessionStorage.getItem('femlab.accountReturnProject');
+  if (accountReturn) {
+    sessionStorage.removeItem('femlab.accountReturnProject');
+    try { await window.fem.dispatch({ cmd: 'project.open', id: accountReturn }); return; }
+    catch (error) { workspace.active.resources.fail(error); }
+  }
   const example = new URLSearchParams(location.search).get('example');
   if (example) await window.fem.dispatch({ cmd: 'file.openExample', name: example });
   const commands = await readShareFragment(location.hash);
