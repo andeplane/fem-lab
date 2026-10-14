@@ -82,9 +82,34 @@ test('@cpu Result and Mesh chips send accurate retained context after re-solve a
   await page.locator('.tree button[data-cmd="chat.insertMention"][title="Reference mode 1 in chat"]').click();
   const modalRef = `result:id:${modal.resultId}`;
   await expect(drawer.locator('.token')).toHaveAttribute('data-ref', modalRef);
+  await page.screenshot({ path: testInfo.outputPath('result-reference-chip.png') });
   const modeContext = await contextSent(page, 'Explain the first mode.');
   expect(modeContext[modalRef]).toEqual(modal);
   expect(modal.frequencies).toHaveLength(2);
+
+  // Opaque IDs can be reused by a different engine. Never carry an unsent chip into its registry.
+  await page.evaluate(ref => window.fem.dispatch({ cmd: 'chat.insertMention', ref }), ref);
+  await expect(drawer.locator('.token')).toHaveAttribute('data-ref', ref);
+  await drawer.locator('textarea').fill(`Inspect @${ref}`);
+  const replacement = await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'project.new', name: 'different engine owner' });
+    for (const command of [
+      { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '100 mm', '100 mm'] },
+      { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, rho: '7850 kg/m^3' },
+      { cmd: 'material.assign', material: 'steel', bodies: ['beam'] },
+      { cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 4, ny: 1, nz: 1 } }, order: 1 },
+      { cmd: 'constraint.fix', name: 'root', on: 'beam.xmin' },
+      { cmd: 'load.traction', name: 'tip', on: 'beam.xmax', total: ['0 N', '0 N', '-9 kN'] },
+      { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['root'], loads: ['tip'] },
+      { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' },
+    ]) await window.fem.dispatch(command);
+    return await window.fem.query.result() as ResultSummary;
+  });
+  expect(replacement.resultId).toBe(original.resultId);
+  expect(replacement.extremes).not.toEqual(original.extremes);
+  await expect(drawer.locator('.token')).toHaveCount(0);
+  await expect(drawer.locator('textarea')).toHaveValue('');
+  expect(await contextSent(page, 'Inspect the current project')).toEqual({});
 
   // A reset clears retained solves; the old target must be unresolved, never rebound.
   await page.evaluate(() => window.fem.model.new({ name: 'cleared' }));

@@ -13,9 +13,44 @@ import { treeGroups } from '../src/ui/Tree';
 
 const require = createRequire(import.meta.url);
 const { batchModule } = require('../../../tools/checked-batch.mjs');
-const { Engine, schema: engineSchema } = batchModule(require('../../../tools/wasm-node/femlab_engine_wasm.js'));
+const wasm = require('../../../tools/wasm-node/femlab_engine_wasm.js');
+const { Engine, schema: engineSchema } = batchModule(wasm);
 
 describe('actual engine reference targets', () => {
+  it('clears Results without recycling their IDs when model.new runs in the same engine owner', async () => {
+    const owner = new wasm.SessionEngine(1, 'reference-sequence');
+    let stamp = JSON.parse(owner.stamp());
+    const lease = JSON.parse(owner.begin_run(JSON.stringify(stamp.session)));
+    let operation = 0;
+    const context = () => ({ session: stamp.session, runId: lease.runId, operationId: String(++operation) });
+    const dispatch = async (command: Record<string, unknown>) => {
+      const reply = JSON.parse(await owner.dispatch(JSON.stringify({ context: context(), expectedVersion: stamp.stateVersion, command })));
+      stamp = reply.stamp;
+    };
+    const query = (input: Record<string, unknown>) => JSON.parse(owner.query(JSON.stringify({ context: context(), query: input }))).value;
+    const solve = async () => {
+      for (const command of [
+        { cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '1 m', '1 m'] },
+        { cmd: 'material.add', name: 'conductor', k: '45 W/(m K)' },
+        { cmd: 'material.assign', material: 'conductor', bodies: ['bar'] },
+        { cmd: 'mesh.set', mesher: { kind: 'lattice', size: { nx: 1, ny: 1, nz: 1 } }, order: 1 },
+        { cmd: 'constraint.temperature', name: 'cold', on: 'bar.xmin', value: '0 K' },
+        { cmd: 'constraint.temperature', name: 'hot', on: 'bar.xmax', value: '1 K' },
+        { cmd: 'step.add', name: 'heat', procedure: 'heat-steady', constraints: ['cold', 'hot'], loads: [] },
+        { cmd: 'solve.run', step: 'heat', solver: 'cpu-direct' },
+      ]) await dispatch(command);
+      return query({ query: 'query.result' }).resultId;
+    };
+    try {
+      const first = await solve();
+      await dispatch({ cmd: 'model.new', name: 'same engine cleared' });
+      expect(query({ query: 'query.results' }).records).toEqual([]);
+      expect(() => query({ query: 'query.result', resultId: first })).toThrow();
+      const second = await solve();
+      expect(first).toBe('result-1');
+      expect(second).toBe('result-2');
+    } finally { owner.free(); }
+  });
   it('resolves ordinary and mode rows to their producing solve, preserves stale solves and refuses evicted IDs', async () => {
     expect(JSON.parse(engineSchema())).toEqual(schema);
     const engine = new Engine(1);

@@ -59,6 +59,8 @@ An evicted or cleared Result reports an unresolved reference rather than substit
 solve. Do not carry an ID into a different engine session. For names or file paths containing
 spaces, quotes or separators, use JSON quotes, for example `@file:"reports/beam checks.md"`.
 Chips display the decoded names while preserving their full targets.
+Changing projects clears unsent chips and drafts containing immutable Result references so
+an ID cannot bind to the replacement engine. Ordinary draft text stays editable.
 
 ## Commands, units and history
 

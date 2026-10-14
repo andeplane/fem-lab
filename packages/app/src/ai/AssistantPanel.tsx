@@ -249,8 +249,17 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [index, setIndex] = useState<IndexEntry[]>([]);
   const indexOwner = useRef({ registry, request: 0 });
   useLayoutEffect(() => {
+    if (indexOwner.current.registry !== registry) {
+      chatBridge.pendingMentions = [];
+      // Typed immutable targets have the same owner as chips; prose remains an editable draft.
+      const hasRetainedTarget = (text: string) => parseMentions(text).chips.some(chip => chip.kind === 'result' && chip.name.startsWith('id:'));
+      if (hasRetainedTarget(draft)) setDraft('');
+      if (chatBridge.pendingDraft !== null && hasRetainedTarget(chatBridge.pendingDraft)) chatBridge.pendingDraft = null;
+    }
     indexOwner.current = { registry, request: 0 };
     setIndex([]);
+    // Targets belong to this engine session; a replacement may reuse an opaque Result ID.
+    setTokens([]);
   }, [registry]);
   const { folder, skills } = ui;
   /** The folder a previous session remembered, by name only: reading its handle is a click (#247). */
