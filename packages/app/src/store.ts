@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import { parseRef, refOf } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
@@ -154,6 +154,8 @@ export interface UiState {
   result: ResultSummary | null;
   /** Metadata for the bundled example that produced this Model, retained while edits stale it. */
   benchmark: ActiveBenchmark | null;
+  /** Informational import receipt, scoped to this live project; portable provenance is in its source. */
+  abaqusReport: AbaqusConversionReport | null;
   /** The Step a solve is running for, `null` when none is. */
   solving: string | null;
   /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
@@ -290,6 +292,7 @@ export const initialState: UiState = {
   theme: 'dark',
   result: null,
   benchmark: null,
+  abaqusReport: null,
   solving: null,
   fieldKey: 'vonMises',
   legend: null,

@@ -273,6 +273,9 @@ export class Viewer {
     if (outlineBox && this.line.length > 0) {
       this.box = keep.length > 0 ? this.box.union(outlineBox) : outlineBox.clone();
     }
+    // Camera Commands can precede this asynchronous publication. Refresh the projection from
+    // the arriving bounds while retaining the person's position, target, up and zoom.
+    this.frameOrtho();
     this.applyLayerVisibility();
     this.paint();
     this.setChrome();

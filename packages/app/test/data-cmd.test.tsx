@@ -749,6 +749,7 @@ describe('the shell', () => {
       'project.new',
       'project.new',
       'file.open',
+      'form.open',
       'panel.toggle',
       'panel.toggle',
     ]);
