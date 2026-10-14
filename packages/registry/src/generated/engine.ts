@@ -2560,6 +2560,10 @@ export type QueryResult =
   | Capabilities
   | ReportText;
 /**
+ * One isotropic property or its three material-axis values, each with an explicit unit.
+ */
+export type AxialRow = Valued | [Valued, Valued, Valued];
+/**
  * Mesher settings, SI.
  */
 export type MesherSettings =
@@ -6567,7 +6571,7 @@ export interface ImportedPatchRow {
 export interface MaterialRow {
   name: string;
   /**
-   * Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.
+   * Young's modulus for isotropic stiffness; absent for orthotropic or thermal-only materials.
    */
   E?: Valued | null;
   nu?: number | null;
@@ -6581,6 +6585,18 @@ export interface MaterialRow {
   orientation?: OrientationRow | null;
   rho?: Valued | null;
   /**
+   * Thermal expansion in 1/K, as one isotropic value or three values in material-axis order.
+   */
+  alpha?: AxialRow | null;
+  /**
+   * Conductivity in W/(m K), as one isotropic value or three values in material-axis order.
+   */
+  k?: AxialRow | null;
+  /**
+   * Specific heat in J/(kg K), when specified.
+   */
+  cp?: Valued | null;
+  /**
    * Current yield strength in the Model's display stress unit, when specified.
    */
   yield?: Valued | null;
@@ -6588,6 +6604,10 @@ export interface MaterialRow {
    * Whether the Material carries a plasticity block (J2, isotropic hardening).
    */
   plasticity?: boolean;
+  /**
+   * The material definition's property source or citation, when supplied.
+   */
+  source?: string | null;
   assignedTo: string[];
 }
 /**
@@ -6666,6 +6686,10 @@ export interface StepRow {
   procedure: string;
   constraints: string[];
   loads: string[];
+  /**
+   * Earlier Step whose Result this Step continues, including heat-to-stress coupling.
+   */
+  after?: string | null;
   solved: boolean;
 }
 /**

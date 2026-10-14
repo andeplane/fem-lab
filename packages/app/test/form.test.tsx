@@ -110,6 +110,15 @@ describe('SchemaForm', () => {
     expect(root.querySelector('.surface.error')!.textContent).toContain('dampingRatio must be non-negative');
   });
 
+  it('describes conductivity in the material picker when stiffness is absent', () => {
+    const { root, store, sent } = mount('material.assign');
+    store.set({ model: { ...model(), materials: [{ name: 'thermal', k: { value: 50, unit: 'W/(m K)' }, cp: { value: 440, unit: 'J/(kg K)' }, assignedTo: [] }] } });
+    const candidate = field(root, 'material').querySelector<HTMLButtonElement>('.chip-cand')!;
+    expect(candidate.title).toBe('k 50 W/(m K)');
+    candidate.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'material.assign', args: { material: 'thermal', bodies: [] }, keepInitial: true });
+  });
+
   it.each([
     ['body', 'geometry.addBox'], ['material', 'material.add'], ['set', 'geometry.nameFace'],
     ['constraint', 'constraint.fix'], ['load', 'load.pressure'], ['step', 'step.add'],

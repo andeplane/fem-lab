@@ -154,6 +154,65 @@ fn builds_a_cantilever_and_reports_it() {
 }
 
 #[test]
+fn model_query_reports_thermal_material_properties_with_units_and_axis_order() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"thermal properties"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","temperature":"degC"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"thermal","E":"200 GPa","nu":0.3,"rho":"7.2 g/cm^3","k":"50 W/(m K)","cp":"0.44 kJ/(kg K)","alpha":"1.2e-5 1/K","source":"measured at 20 degC"}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"axes","orthotropic":{"E1":"100 GPa","E2":"10 GPa","E3":"10 GPa","G12":"5 GPa","G13":"5 GPa","G23":"5 GPa","nu12":0.2,"nu13":0.2,"nu23":0.2,"alpha":["1e-5 1/K","2e-5 1/K","3e-5 1/K"],"k":["1 W/(m K)","2 W/(m K)","3 W/(m K)"]},"orientation":{"axis":[0,0,1],"angle":"30 deg"}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"mechanical","E":"200 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"thermal-only","k":"35 W/(m K)","rho":"7200 kg/m^3","cp":"440.5 J/(kg K)","alpha":"1e-5 1/K"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":[],"loads":[]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"stress","procedure":"static","constraints":[],"loads":[],"after":"heat"}"#);
+    let row = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    let thermal = &row["materials"][0];
+    assert_eq!(thermal["k"], serde_json::json!({"value":50.0,"unit":"W/(m K)"}));
+    assert_eq!(thermal["cp"], serde_json::json!({"value":440.0,"unit":"J/(kg K)"}));
+    assert_eq!(thermal["alpha"], serde_json::json!({"value":1.2e-5,"unit":"1/K"}));
+    assert!((thermal["rho"]["value"].as_f64().unwrap() - 7200.0).abs() < 1e-9);
+    assert_eq!(thermal["rho"]["unit"], "kg/m^3");
+    assert_eq!(thermal["source"], "measured at 20 degC");
+    assert_eq!(thermal["E"], serde_json::json!({"value":200000.0,"unit":"MPa"}));
+    let axes = &row["materials"][1];
+    assert_eq!(
+        axes["k"],
+        serde_json::json!([
+            {"value":1.0,"unit":"W/(m K)"}, {"value":2.0,"unit":"W/(m K)"}, {"value":3.0,"unit":"W/(m K)"}
+        ])
+    );
+    assert_eq!(
+        axes["alpha"],
+        serde_json::json!([
+            {"value":1e-5,"unit":"1/K"}, {"value":2e-5,"unit":"1/K"}, {"value":3e-5,"unit":"1/K"}
+        ])
+    );
+    assert!(axes.get("cp").is_none());
+    assert!(axes.get("source").is_none());
+    let mechanical = &row["materials"][2];
+    for property in ["alpha", "k", "cp", "source"] {
+        assert!(mechanical.get(property).is_none());
+    }
+    let thermal_only = &row["materials"][3];
+    assert!(thermal_only.get("E").is_none());
+    assert!(thermal_only.get("nu").is_none());
+    assert_eq!(thermal_only["k"], serde_json::json!({"value":35.0,"unit":"W/(m K)"}));
+    assert_eq!(thermal_only["cp"], serde_json::json!({"value":440.5,"unit":"J/(kg K)"}));
+    assert!(row["steps"][0].get("after").is_none());
+    assert_eq!(row["steps"][1]["after"], "heat");
+    let restored: QueryResult = serde_json::from_value(row).unwrap();
+    assert_eq!(restored, e.query(Query::Model {}).unwrap());
+}
+
+#[test]
 fn transactional_dispatch_and_structured_errors() {
     let mut e = engine();
     cantilever(&mut e);

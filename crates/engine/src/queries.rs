@@ -5,7 +5,7 @@ use femlab_geometry::{face_centroid_normal, Face, Mesh};
 use crate::command::{CoupleKind, Field, ObjectKind};
 use crate::engine::{display, Engine};
 use crate::error::{Error, ErrorCode};
-use crate::model::{ConstraintKind, Idealisation, LoadKind, SetSource};
+use crate::model::{Axial, ConstraintKind, Idealisation, LoadKind, SetSource};
 use crate::post::FieldData;
 use crate::query::*;
 use crate::units::{
@@ -31,6 +31,13 @@ fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> [Valued; 6]
         display(model, hi[1], d),
         display(model, hi[2], d),
     ]
+}
+
+fn axial_row(value: Axial, unit: &str) -> AxialRow {
+    match value {
+        Axial::Isotropic(value) => AxialRow::Isotropic(Valued { value, unit: unit.into() }),
+        Axial::Axes(values) => AxialRow::Axes(values.map(|value| Valued { value, unit: unit.into() })),
+    }
 }
 
 impl Engine {
@@ -261,8 +268,12 @@ impl Engine {
                     degrees: o.angle * 180.0 / std::f64::consts::PI,
                 }),
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
+                alpha: mat.alpha.map(|value| axial_row(value, "1/K")),
+                k: mat.k.map(|value| axial_row(value, "W/(m K)")),
+                cp: mat.cp.map(|value| Valued { value, unit: "J/(kg K)".into() }),
                 yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
                 plasticity: mat.plasticity.is_some(),
+                source: mat.source.clone(),
                 assigned_to: m
                     .bodies
                     .iter()
@@ -464,6 +475,7 @@ impl Engine {
                 procedure: crate::solve_run::procedure_name(s.procedure),
                 constraints: s.constraints.clone(),
                 loads: s.loads.clone(),
+                after: s.after.clone(),
                 solved: self.results.contains_key(&s.name),
             })
             .collect();
