@@ -120,17 +120,18 @@ impl Candidate {
         encoder: &mut dyn ModelFileEncoder,
         max_file_bytes: usize,
     ) -> Result<PreparedCandidate, Error> {
-        let snapshot = document_snapshot(&mut self.engine, self.ticket.target.clone())?;
-        let file_text = encoder.encode(&snapshot.file)?;
-        if file_text.len() > max_file_bytes {
-            return Err(Error::schema(format!(
-                "prepared Model file is {} UTF-8 bytes, exceeding the {max_file_bytes}-byte host limit",
-                file_text.len()
-            ))
-            .at("file")
-            .suggest("reduce the Model or Journal before publication or file.save"));
-        }
-        Ok(PreparedCandidate { engine: self.engine, ticket: self.ticket, snapshot, file_text })
+        document_snapshot(&mut self.engine, self.ticket.target.clone()).and_then(|snapshot| {
+            let file_text = encoder.encode(&snapshot.file)?;
+            if file_text.len() > max_file_bytes {
+                return Err(Error::schema(format!(
+                    "prepared Model file is {} UTF-8 bytes, exceeding the {max_file_bytes}-byte host limit",
+                    file_text.len()
+                ))
+                .at("file")
+                .suggest("reduce the Model or Journal before publication or file.save"));
+            }
+            Ok(PreparedCandidate { engine: self.engine, ticket: self.ticket, snapshot, file_text })
+        })
     }
 }
 
