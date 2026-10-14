@@ -48,11 +48,11 @@ export function serviceServer(deps: HttpDependencies) {
       res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
     }
     if (req.method === 'OPTIONS') { res.statusCode = origin && deps.origins?.includes(origin) ? 204 : 403; res.end(); return; }
-    if (req.method === 'GET' && req.url === '/healthz') {
+    if (req.method === 'GET' && ['/health','/healthz'].includes(req.url??'')) {
       res.end(JSON.stringify({ status: 'ok', protocol: 1 }));
       return;
     }
-    if (req.method === 'GET' && req.url === '/readyz') {
+    if (req.method === 'GET' && ['/ready','/readyz'].includes(req.url??'')) {
       let ready = false;
       try { ready = await deps.ready(); } catch { /* dependency failure is not readiness */ }
       res.statusCode = ready ? 200 : 503;

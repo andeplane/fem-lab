@@ -28,9 +28,13 @@ host dependencies. Authentication and account-owned admission are independent of
 the engine; the service never executes tool calls or creates an engine Session.
 
 `npm run build -w packages/service`, then `PORT=8087 npm start -w packages/service`.
-`GET /healthz` proves the process is live; `/readyz` is 503 until identity, database
+`GET /health` proves the process is live; `/ready` is 503 until identity, database
 migrations and provider configuration are available. Unknown routes return a
 structured error and never echo request bodies or credentials.
+
+Cloud Run reserves some paths ending in `z`; public probes use `/health` and
+`/ready`. The old `/healthz`/`/readyz` aliases remain available to local/container
+checks, but must not be used to verify public routing (issue #570).
 
 `POST /v1/ai/completions` (alias `/chat/completions`) accepts the strict normalized
 `CompletionInput` protocol, a Firebase bearer ID token and an `Idempotency-Key`.
