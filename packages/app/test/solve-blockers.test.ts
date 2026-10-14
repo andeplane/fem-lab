@@ -28,7 +28,7 @@ describe('solve input blockers', () => {
       { code: 'model.no-material', text: 'unassigned Body', where: "body 'unassigned'" },
     ]);
     expect(solveBlockers(m, 'bend').map(w => w.code)).toEqual(['W-1101']);
-    expect(solveBlockers(m, 'warm').map(w => w.code)).toEqual(['material.missing-property', 'W-1101']);
+    expect(solveBlockers(m, 'warm').map(w => w.code)).toEqual(['W-1101', 'W-1103']);
   });
 
   it('keeps all required predecessor inputs and ignores an unrelated Step', () => {
@@ -44,7 +44,7 @@ describe('solve input blockers', () => {
     ]);
     const required = solveBlockers(m, 'response');
     expect(required).toHaveLength(2);
-    expect(required.find(w => w.code === 'material.missing-property')?.text).toBe('modal needs rho');
+    expect(required.find(w => w.code === 'W-1103')?.text).toBe('modal needs rho');
     expect(required.find(w => w.code === 'W-1300')?.where).toBe("step 'prestress'");
     expect(solveBlockers(m, 'prestress').map(w => w.code)).toEqual(['W-1300']);
   });
@@ -55,7 +55,7 @@ describe('solve input blockers', () => {
       { code: 'model.unconstrained', text: `warning about ${requested}`, where: `step '${requested}'`, step: 'later' },
       { code: 'material.missing-property', text: 'warning about later', where: 'material display location', step: requested },
     ]);
-    expect(solveBlockers(m, requested).map(w => w.code)).toEqual(['material.missing-property']);
+    expect(solveBlockers(m, requested).map(w => w.code)).toEqual(['W-1103']);
   });
 
   it('fails closed for unscoped warnings and unknown Step identities', () => {

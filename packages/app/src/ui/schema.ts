@@ -400,13 +400,13 @@ const WCODES: Record<string, { code: string; text: string; fix: string }> = {
 };
 const MESH: Blocker = { code: 'W-1200', text: 'No mesh. Pick a size and element; counts and cost show before you solve.', fixLabel: 'mesh.set', fixCmd: 'mesh.set', where: null };
 
+type ModelWarning = ModelSummary['warnings'][number];
+type SolveStep = Pick<ModelSummary['steps'][number], 'name' | 'procedure' | 'after'>;
+
 /**
  * Engine warnings → the design's blockers, in W-code order so the banner always names the next
  * missing thing. An engine warning with no mapping keeps its own code rather than disappearing.
  */
-type ModelWarning = ModelSummary['warnings'][number] & { step?: string | null };
-type SolveStep = Pick<ModelSummary['steps'][number], 'name' | 'procedure'> & { after?: string | null };
-
 export function blockers(warnings: readonly ModelWarning[], hasMesh: boolean, hasBodies: boolean, steps: readonly SolveStep[] = []): Blocker[] {
   const mapped = warnings.map((w) => {
     const m = WCODES[w.code];

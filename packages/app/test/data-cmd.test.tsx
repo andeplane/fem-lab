@@ -422,7 +422,7 @@ describe('the shell', () => {
     // An unmapped warning still blocks; it cannot accidentally fall through to an enabled solve.
     const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]');
     expect(fallback?.disabled ?? true).toBe(true);
-    if (fallback) expect(fallback.title).toContain('material.missing-property');
+    if (fallback) expect(fallback.title).toContain('W-1103');
   });
 
   it('scopes stale Result re-solve to that Result Step rather than the first Step', async () => {
