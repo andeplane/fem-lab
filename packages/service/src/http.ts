@@ -4,6 +4,7 @@ import { ServiceFailure } from './errors';
 import type { AccountResponse } from './accounts';
 import type { Completions } from './completions';
 import type { BillingLifecycle } from './billing';
+import type {CheckoutService} from './checkout';
 
 export interface HttpDependencies {
   now(): Date;
@@ -14,6 +15,7 @@ export interface HttpDependencies {
   completions?: Completions;
   heartbeat?(callback:()=>void):()=>void;
   billing?:BillingLifecycle;
+  payments?:CheckoutService;
 }
 
 async function readBytes(req:IncomingMessage,limit:number):Promise<Buffer> {
@@ -71,6 +73,14 @@ export function serviceServer(deps: HttpDependencies) {
         const signature=req.headers['stripe-signature'];
         res.end(JSON.stringify(await deps.billing.receive(await readBytes(req,1024*1024),typeof signature==='string'?signature:undefined)));
       } catch(error) {failure(res,error,requestId);}return;
+    }
+    if(req.method==='POST'&&['/v1/billing/checkout','/v1/billing/portal','/v1/billing/plan'].includes(req.url??'')) {
+      try {
+        if(!deps.payments)throw new ServiceFailure(503,'billing-unavailable','Paid plans are not available yet.','billing');
+        const result=req.url==='/v1/billing/portal'?await deps.payments.portal(req.headers.authorization,await readJson(req)):
+          req.url==='/v1/billing/plan'?await deps.payments.change(req.headers.authorization,await readJson(req)):await deps.payments.checkout(req.headers.authorization,await readJson(req));
+        res.end(JSON.stringify(result));
+      }catch(error){failure(res,error,requestId);}return;
     }
     if (req.method === 'GET' && req.url === '/v1/account' && deps.account) {
       try { res.end(JSON.stringify(await deps.account(req.headers.authorization))); }
