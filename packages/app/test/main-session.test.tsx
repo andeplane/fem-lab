@@ -56,7 +56,7 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const drawings: ReturnType<typeof drawing>[] = [];
   mounted.makeViewer = props => { const next = drawing(() => props.viewer.onBounds?.()); drawings.push(next); return next as unknown as Viewer; };
   vi.stubGlobal('Worker', LocalWorker);
-  await import('../src/main');
+  const appHost = await import('../src/main');
   await vi.waitFor(() => expect(mounted.props?.store.state.ready).toBe(true));
   const initial = window.fem;
   const originalUi = mounted.props!;
@@ -65,8 +65,14 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const first = await initial.dispatch({ cmd: 'project.new', name: 'first' }) as { id: string };
   await initial.dispatch({ cmd: 'geometry.addBox', name: 'body', size: ['1 m', '1 m', '1 m'] });
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
+  await expect(appHost.prepareAccountNavigation()).rejects.toMatchObject({ code: 'unsupported', suggestion: 'project.save' });
   const saved = await initial.dispatch({ cmd: 'project.save' }) as { commands: number };
   expect(saved.commands).toBe(2);
+  const beforeLogin = await window.fem.query.journal();
+  await appHost.prepareAccountNavigation();
+  expect(sessionStorage.getItem('femlab.accountReturnProject')).toBe(first.id);
+  expect((await window.fem.query.journal()).hash).toBe(beforeLogin.hash);
+  sessionStorage.removeItem('femlab.accountReturnProject');
   await initial.dispatch({ cmd: 'project.rename', id: first.id, name: 'renamed' });
   expect(mounted.props!.store.state.project?.name).toBe('renamed');
   await expect(originalUi.query!({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.expired' });
