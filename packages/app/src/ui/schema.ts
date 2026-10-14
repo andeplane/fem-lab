@@ -74,6 +74,7 @@ function denull(node: JsonSchema, defs: Defs): JsonSchema {
     const keep = {
       ...(node['description'] === undefined ? {} : { description: node['description'] }),
       ...(node['x-dimension'] === undefined ? {} : { 'x-dimension': node['x-dimension'] }),
+      ...(node['x-physics'] === undefined ? {} : { 'x-physics': node['x-physics'] }),
     };
     if (live[0]) return resolve({ ...live[0], ...keep }, defs);
   }
@@ -81,6 +82,9 @@ function denull(node: JsonSchema, defs: Defs): JsonSchema {
   if (Array.isArray(type)) return { ...node, type: type.filter((t) => t !== 'null')[0] };
   return node;
 }
+
+export const MATERIAL_PHYSICS = ['stiffness', 'mass', 'thermal', 'expansion', 'plasticity', 'anisotropy'] as const;
+export type MaterialPhysics = typeof MATERIAL_PHYSICS[number];
 
 export interface FieldBase {
   /** Where the value lives in the Command object, e.g. `['mesher', 'size']`. */
@@ -90,6 +94,8 @@ export interface FieldBase {
   required: boolean;
   /** The right-aligned tag the design puts opposite the label. */
   tag: string;
+  /** Physics presentation group from the engine schema; common fields stay visible. */
+  physics?: MaterialPhysics | 'common';
 }
 export type Field = FieldBase &
   (
@@ -156,7 +162,7 @@ function field(name: string, raw: JsonSchema, defs: Defs, required: boolean, pat
     return { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: 'sketch', kind: 'sketch' };
   }
   const node = denull(resolve(raw, defs), defs);
-  const base: FieldBase = { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: '' };
+  const base: FieldBase = { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: '', ...(node['x-physics'] === undefined ? {} : { physics: node['x-physics'] as FieldBase['physics'] }) };
   const dimension = node['x-dimension'] as string | undefined;
   if (dimension) return { ...base, tag: dimensionTag(dimension), kind: 'quantity', dimension, parts: 1 };
 

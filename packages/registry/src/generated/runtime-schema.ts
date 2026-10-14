@@ -495,9 +495,12 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "description": "Unique Material name; reusing a name replaces its full definition.",
+          "type": "string",
+          "x-physics": "common"
         },
         "E": {
+          "description": "Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -505,16 +508,20 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "stiffness"
         },
         "nu": {
+          "description": "Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "orthotropic": {
+          "description": "Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orthotropic"
@@ -522,9 +529,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "orientation": {
+          "description": "Rotation of the Material axes from global axes; omitted means the global axes.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orientation"
@@ -532,9 +541,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "rho": {
+          "description": "Mass density for gravity, inertia and transient heat capacity.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_density"
@@ -542,9 +553,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "mass"
         },
         "alpha": {
+          "description": "Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_thermal_expansion"
@@ -552,9 +565,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "expansion"
         },
         "k": {
+          "description": "Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_conductivity"
@@ -562,9 +577,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "cp": {
+          "description": "Specific heat per unit mass for transient heat conduction; used with rho.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_specific_heat"
@@ -572,9 +589,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "yield": {
+          "description": "Initial yield stress for plasticity and the reported safety factor.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -582,9 +601,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "plasticity": {
+          "description": "J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.",
           "anyOf": [
             {
               "$ref": "#/$defs/Plasticity"
@@ -592,13 +613,16 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "source": {
+          "description": "Source or reference for these property values, retained with the Material.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-physics": "common"
         },
         "cmd": {
           "type": "string",
@@ -2961,34 +2985,43 @@ const commands = {
       "type": "object",
       "properties": {
         "E1": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "E2": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "E3": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "G12": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "G13": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "G23": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "nu12": {
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "nu13": {
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "nu23": {
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "alpha": {
           "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -3000,7 +3033,8 @@ const commands = {
             "$ref": "#/$defs/Q_thermal_expansion"
           },
           "minItems": 3,
-          "maxItems": 3
+          "maxItems": 3,
+          "x-physics": "expansion"
         },
         "k": {
           "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -3012,7 +3046,8 @@ const commands = {
             "$ref": "#/$defs/Q_conductivity"
           },
           "minItems": 3,
-          "maxItems": 3
+          "maxItems": 3,
+          "x-physics": "thermal"
         }
       },
       "additionalProperties": false,
@@ -4127,6 +4162,9 @@ const commands = {
             "u",
             "stress",
             "reactions"
+          ],
+          "x-material-physics": [
+            "stiffness"
           ]
         },
         {
@@ -4148,6 +4186,10 @@ const commands = {
             "u",
             "Cauchy stress",
             "reactions"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "plasticity"
           ]
         },
         {
@@ -4167,6 +4209,10 @@ const commands = {
           "x-results": [
             "natural frequencies",
             "mode shapes"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4185,6 +4231,9 @@ const commands = {
           "x-results": [
             "load factors",
             "mode shapes"
+          ],
+          "x-material-physics": [
+            "stiffness"
           ]
         },
         {
@@ -4201,6 +4250,10 @@ const commands = {
           "x-results": [
             "T",
             "reaction power"
+          ],
+          "x-material-physics": [
+            "thermal",
+            "mass"
           ]
         },
         {
@@ -4222,6 +4275,10 @@ const commands = {
             "T",
             "reaction power",
             "stored-energy rate"
+          ],
+          "x-material-physics": [
+            "thermal",
+            "mass"
           ]
         },
         {
@@ -4244,6 +4301,10 @@ const commands = {
             "stress",
             "reactions",
             "time history"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4266,6 +4327,10 @@ const commands = {
             "stress",
             "reactions",
             "time history"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4286,6 +4351,10 @@ const commands = {
             "amplitude",
             "phase",
             "frequency response"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4305,6 +4374,10 @@ const commands = {
           "x-results": [
             "1σ displacement",
             "1σ stress"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         }
       ]

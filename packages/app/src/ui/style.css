@@ -1250,6 +1250,14 @@ textarea:focus {
   font-size: 10.5px;
   color: var(--text-low);
 }
+.material-physics .chip-cand[aria-pressed="true"] {
+  border-color: var(--cyan-border);
+  color: var(--cyan-text);
+  background: var(--cyan-bg);
+}
+.material-physics {
+  margin-bottom: 16px;
+}
 .chip-cand:hover {
   border-color: var(--cyan-border);
   color: var(--cyan-text);

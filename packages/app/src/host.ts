@@ -20,6 +20,7 @@ import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
+import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -526,12 +527,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.open',
       execution: 'sessionView',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
-      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
       tool: true,
       run: (input) => {
-        const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
-        store.openForm(command, args ?? {}, keepInitial === true);
+        const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
+        store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);
       },
     },
     {

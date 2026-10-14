@@ -302,7 +302,13 @@ export type Command =
       cmd: "geometry.addMass";
     }
   | {
+      /**
+       * Unique Material name; reusing a name replaces its full definition.
+       */
       name: string;
+      /**
+       * Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.
+       */
       E?:
         | (
             | string
@@ -312,9 +318,21 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.
+       */
       nu?: number | null;
+      /**
+       * Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.
+       */
       orthotropic?: Orthotropic | null;
+      /**
+       * Rotation of the Material axes from global axes; omitted means the global axes.
+       */
       orientation?: Orientation | null;
+      /**
+       * Mass density for gravity, inertia and transient heat capacity.
+       */
       rho?:
         | (
             | string
@@ -324,6 +342,9 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.
+       */
       alpha?:
         | (
             | string
@@ -333,6 +354,9 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.
+       */
       k?:
         | (
             | string
@@ -342,6 +366,9 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Specific heat per unit mass for transient heat conduction; used with rho.
+       */
       cp?:
         | (
             | string
@@ -351,6 +378,9 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Initial yield stress for plasticity and the reported safety factor.
+       */
       yield?:
         | (
             | string
@@ -360,7 +390,13 @@ export type Command =
               }
           )
         | null;
+      /**
+       * J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.
+       */
       plasticity?: Plasticity | null;
+      /**
+       * Source or reference for these property values, retained with the Material.
+       */
       source?: string | null;
       cmd: "material.add";
     }
@@ -3446,7 +3482,13 @@ export type ModelFile_Command =
       cmd: "geometry.addMass";
     }
   | {
+      /**
+       * Unique Material name; reusing a name replaces its full definition.
+       */
       name: string;
+      /**
+       * Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.
+       */
       E?:
         | (
             | string
@@ -3456,9 +3498,21 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.
+       */
       nu?: number | null;
+      /**
+       * Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.
+       */
       orthotropic?: Orthotropic2 | null;
+      /**
+       * Rotation of the Material axes from global axes; omitted means the global axes.
+       */
       orientation?: Orientation2 | null;
+      /**
+       * Mass density for gravity, inertia and transient heat capacity.
+       */
       rho?:
         | (
             | string
@@ -3468,6 +3522,9 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.
+       */
       alpha?:
         | (
             | string
@@ -3477,6 +3534,9 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.
+       */
       k?:
         | (
             | string
@@ -3486,6 +3546,9 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Specific heat per unit mass for transient heat conduction; used with rho.
+       */
       cp?:
         | (
             | string
@@ -3495,6 +3558,9 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Initial yield stress for plasticity and the reported safety factor.
+       */
       yield?:
         | (
             | string
@@ -3504,7 +3570,13 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.
+       */
       plasticity?: Plasticity | null;
+      /**
+       * Source or reference for these property values, retained with the Material.
+       */
       source?: string | null;
       cmd: "material.add";
     }
@@ -4820,7 +4892,13 @@ export type DocumentSnapshot_Command =
       cmd: "geometry.addMass";
     }
   | {
+      /**
+       * Unique Material name; reusing a name replaces its full definition.
+       */
       name: string;
+      /**
+       * Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.
+       */
       E?:
         | (
             | string
@@ -4830,9 +4908,21 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.
+       */
       nu?: number | null;
+      /**
+       * Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.
+       */
       orthotropic?: Orthotropic2 | null;
+      /**
+       * Rotation of the Material axes from global axes; omitted means the global axes.
+       */
       orientation?: Orientation2 | null;
+      /**
+       * Mass density for gravity, inertia and transient heat capacity.
+       */
       rho?:
         | (
             | string
@@ -4842,6 +4932,9 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.
+       */
       alpha?:
         | (
             | string
@@ -4851,6 +4944,9 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.
+       */
       k?:
         | (
             | string
@@ -4860,6 +4956,9 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Specific heat per unit mass for transient heat conduction; used with rho.
+       */
       cp?:
         | (
             | string
@@ -4869,6 +4968,9 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Initial yield stress for plasticity and the reported safety factor.
+       */
       yield?:
         | (
             | string
@@ -4878,7 +4980,13 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.
+       */
       plasticity?: Plasticity | null;
+      /**
+       * Source or reference for these property values, retained with the Material.
+       */
       source?: string | null;
       cmd: "material.add";
     }

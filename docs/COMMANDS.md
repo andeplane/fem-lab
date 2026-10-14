@@ -702,18 +702,18 @@ with an existing name edits the material in place, so an omitted `orientation` o
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
-| nu | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}]}</code> |  |
-| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}]}</code> |  |
-| rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}]}</code> |  |
-| alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}]}</code> |  |
-| k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}]}</code> |  |
-| cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}]}</code> |  |
-| yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
-| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}]}</code> |  |
-| source | no | <code>{"type":["string","null"]}</code> |  |
+| name | yes | <code>{"type":"string","x-physics":"common"}</code> | Unique Material name; reusing a name replaces its full definition. |
+| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}],"x-physics":"stiffness"}</code> | Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness. |
+| nu | no | <code>{"type":["number","null"],"format":"double","x-physics":"stiffness"}</code> | Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness. |
+| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}],"x-physics":"anisotropy"}</code> | Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition. |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}],"x-physics":"anisotropy"}</code> | Rotation of the Material axes from global axes; omitted means the global axes. |
+| rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}],"x-physics":"mass"}</code> | Mass density for gravity, inertia and transient heat capacity. |
+| alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}],"x-physics":"expansion"}</code> | Isotropic thermal expansion per temperature change; use this or orthotropic.alpha. |
+| k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}],"x-physics":"thermal"}</code> | Isotropic thermal conductivity for heat conduction; use this or orthotropic.k. |
+| cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}],"x-physics":"thermal"}</code> | Specific heat per unit mass for transient heat conduction; used with rho. |
+| yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}],"x-physics":"plasticity"}</code> | Initial yield stress for plasticity and the reported safety factor. |
+| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}],"x-physics":"plasticity"}</code> | J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu. |
+| source | no | <code>{"type":["string","null"],"x-physics":"common"}</code> | Source or reference for these property values, retained with the Material. |
 | cmd | yes | <code>{"type":"string","const":"material.add"}</code> |  |
 
 <a id="commands-material-assign"></a>
@@ -2163,34 +2163,43 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "type": "object",
   "properties": {
     "E1": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E2": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E3": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G12": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G13": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G23": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "nu12": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu13": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu23": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "alpha": {
       "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -2202,7 +2211,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_thermal_expansion"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "expansion"
     },
     "k": {
       "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -2214,7 +2224,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_conductivity"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "thermal"
     }
   },
   "additionalProperties": false,
@@ -2419,6 +2430,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "stress",
         "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness"
       ]
     },
     {
@@ -2440,6 +2454,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "Cauchy stress",
         "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "plasticity"
       ]
     },
     {
@@ -2459,6 +2477,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "natural frequencies",
         "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -2477,6 +2499,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "load factors",
         "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness"
       ]
     },
     {
@@ -2493,6 +2518,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "T",
         "reaction power"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
       ]
     },
     {
@@ -2514,6 +2543,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "T",
         "reaction power",
         "stored-energy rate"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
       ]
     },
     {
@@ -2536,6 +2569,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -2558,6 +2595,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -2578,6 +2619,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "amplitude",
         "phase",
         "frequency response"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -2597,6 +2642,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "1σ displacement",
         "1σ stress"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     }
   ]
@@ -5180,9 +5229,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "description": "Unique Material name; reusing a name replaces its full definition.",
+          "type": "string",
+          "x-physics": "common"
         },
         "E": {
+          "description": "Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -5190,16 +5242,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "stiffness"
         },
         "nu": {
+          "description": "Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "orthotropic": {
+          "description": "Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orthotropic"
@@ -5207,9 +5263,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "orientation": {
+          "description": "Rotation of the Material axes from global axes; omitted means the global axes.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orientation"
@@ -5217,9 +5275,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "rho": {
+          "description": "Mass density for gravity, inertia and transient heat capacity.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_density"
@@ -5227,9 +5287,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "mass"
         },
         "alpha": {
+          "description": "Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_thermal_expansion"
@@ -5237,9 +5299,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "expansion"
         },
         "k": {
+          "description": "Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_conductivity"
@@ -5247,9 +5311,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "cp": {
+          "description": "Specific heat per unit mass for transient heat conduction; used with rho.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_specific_heat"
@@ -5257,9 +5323,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "yield": {
+          "description": "Initial yield stress for plasticity and the reported safety factor.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -5267,9 +5335,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "plasticity": {
+          "description": "J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.",
           "anyOf": [
             {
               "$ref": "#/$defs/Plasticity"
@@ -5277,13 +5347,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "source": {
+          "description": "Source or reference for these property values, retained with the Material.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-physics": "common"
         },
         "cmd": {
           "type": "string",
@@ -7882,34 +7955,43 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "type": "object",
   "properties": {
     "E1": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E2": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E3": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G12": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G13": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G23": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "nu12": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu13": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu23": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "alpha": {
       "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -7921,7 +8003,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_thermal_expansion"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "expansion"
     },
     "k": {
       "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -7933,7 +8016,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_conductivity"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "thermal"
     }
   },
   "additionalProperties": false,
@@ -8138,6 +8222,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "stress",
         "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness"
       ]
     },
     {
@@ -8159,6 +8246,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "Cauchy stress",
         "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "plasticity"
       ]
     },
     {
@@ -8178,6 +8269,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "natural frequencies",
         "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -8196,6 +8291,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "load factors",
         "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness"
       ]
     },
     {
@@ -8212,6 +8310,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "T",
         "reaction power"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
       ]
     },
     {
@@ -8233,6 +8335,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "T",
         "reaction power",
         "stored-energy rate"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
       ]
     },
     {
@@ -8255,6 +8361,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -8277,6 +8387,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -8297,6 +8411,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "amplitude",
         "phase",
         "frequency response"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     },
     {
@@ -8316,6 +8434,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "1σ displacement",
         "1σ stress"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
       ]
     }
   ]
