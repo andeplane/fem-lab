@@ -122,7 +122,7 @@ export class ScriptHost {
           return;
         }
         const name=String(message.value[message.kind==='dispatch'?'cmd':'query']);
-        if(name.startsWith('account.')||name.startsWith('billing.')||name==='query.account'||name==='ai.setKey') {
+        if(name.startsWith('account.')||name.startsWith('billing.')||name==='query.account'||name==='ai.setKey'||name==='ai.acceptDisclosure') {
           post({id:message.id,error:'Account, billing and credential actions require an explicit user action outside generated scripts'});
           return;
         }

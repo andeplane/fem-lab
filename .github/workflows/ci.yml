@@ -258,6 +258,8 @@ jobs:
     name: browser smoke (cpu, sw, gpu)
     runs-on: ubuntu-latest
     needs: web
+    env:
+      FEMLAB_AI_MODE: development
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -283,6 +285,13 @@ jobs:
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.v }}
       - run: npx playwright install --with-deps chromium
         working-directory: packages/app
+      - name: chromium, hosted anonymous account boundary
+        env:
+          FEMLAB_AI_MODE: hosted
+        run: xvfb-run -a npx playwright test e2e/hosted-account.spec.ts --project=cpu
+        working-directory: packages/app
+      # Existing supplier wire fixtures use the explicit local development host.
+      - run: npm run build -w packages/app
       - name: chromium, cpu path
         run: xvfb-run -a npx playwright test --project=cpu
         working-directory: packages/app

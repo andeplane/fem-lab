@@ -9,6 +9,8 @@ const headers = {
 const BASE = process.env['FEMLAB_BASE_PATH'] ?? '/fem-lab/';
 const firebaseConfig = process.env['FEMLAB_FIREBASE_CONFIG'] ?? 'null';
 const apiOrigin = process.env['FEMLAB_AI_API_ORIGIN'] ?? null;
+const developmentAi = process.env['FEMLAB_AI_MODE'] === 'development';
+if (developmentAi && apiOrigin) throw new Error('Development AI builds cannot target a hosted API.');
 
 /** Chunks the start screen needs next but does not import: warm them from `<head>`. */
 const PRELOAD = /^assets\/(viewer|three)-/;
@@ -70,12 +72,12 @@ export default defineConfig(({ command }) => ({
     __FIREBASE_CONFIG__: firebaseConfig,
     __AI_API_ORIGIN__: JSON.stringify(apiOrigin),
     __GOOGLE_SIGN_IN__: process.env['FEMLAB_GOOGLE_SIGN_IN'] === 'true' ? 'true' : 'false',
-    __HOSTED_AI__: command === 'build' || apiOrigin !== null ? 'true' : 'false',
+    __HOSTED_AI__: !developmentAi && (command === 'build' || apiOrigin !== null) ? 'true' : 'false',
     // Dev convenience only: the AI panel can pick a key up from the shell environment while
     // `vite dev` runs. A production build defines `null`, so no key can reach `dist/`
     // (`test/no-secrets.test.ts` checks the built files).
     __DEV_API_KEYS__:
-      command === 'serve'
+      command === 'serve' && !apiOrigin
         ? JSON.stringify({
             anthropic: process.env['ANTHROPIC_API_KEY'] ?? null,
             openai: process.env['OPENAI_API_KEY'] ?? null,
