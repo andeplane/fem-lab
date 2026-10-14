@@ -6,10 +6,28 @@ Implementation: [#501](https://github.com/andeplane/fem-lab/issues/501),
 [#503](https://github.com/andeplane/fem-lab/issues/503),
 [#504](https://github.com/andeplane/fem-lab/issues/504).
 
-Status, 2026-10-14: proposed implementation plan, **no Abaqus reader shipped**.
-The endpoint names below are proposals until their implementation issues land.
-This plan covers text `.inp` mesh/model conversion. Binary `.odb` Results and `.cae`
-model databases are separate formats and are outside this slice.
+Status, 2026-10-14: the first strict flat-input slice is implemented by #502–504, with
+persistent imported sources, explicit source units and checked atomic host publication.
+The supported input is one connected C3D4/C3D8 Body: mesh mode imports exact labelled Mesh
+and Sets; static mode additionally imports one homogeneous isotropic elastic Material,
+translational Constraints, CLOAD and one small-displacement STATIC Step. Import never solves.
+PART/ASSEMBLY/INSTANCE, OUTPUT, other element/procedure families, binary `.odb` Results and
+`.cae` model databases are rejected. This is a limited text `.inp` reader, not general
+Abaqus/CAE model or result loading.
+
+In Chromium, choose **Import Abaqus .inp**, choose mesh/static mode and enter one source
+Length Quantity, such as `1 mm`. Static also requires a Force Quantity, such as `1 N`.
+Pick a file or paste its text; source quantities are independent of the display units.
+The callable host Command is `file.importAbaqus` with exactly one `text`, `picker` or scoped
+`path` source. The native CLI is `femlab import-inp bar.inp --out bar.femlab.json --name bar
+--body bar --mode static --unit-length "1 mm" --unit-force "1 N" --cpu`; use the existing
+Solve action or `femlab run bar.femlab.json --cpu` explicitly afterward. Saved normal Model
+files replay without the original deck. [README usage](../../README.md) describes the same
+supported boundary.
+
+Issue #501 remains the acceptance umbrella: retain every release gate below, and close it
+only after the complete composed implementation passes its actual full integration matrix.
+An individual parser, source, host or focused numerical proof does not replace that matrix.
 
 Export label correctness is tracked separately in [#518](https://github.com/andeplane/fem-lab/issues/518).
 That fix preserves qualified/case-sensitive names with Abaqus quotes and rejects unsupported
@@ -17,9 +35,10 @@ labels. The first reader subset below still rejects quoted labels: ordinary qual
 exports are outside its round-trip subset. A supported bare-uppercase fixture round-trip is an
 additional test, not evidence that arbitrary exported decks can be loaded.
 
-## What exists
+## Baseline before the imported-source implementation
 
-Checked against `origin/main` at `4e364b60`:
+The following historical comparison was checked against `origin/main` at `4e364b60` before
+this slice; it explains why a persistent source and a separate strict reader were needed:
 
 | Capability | Evidence | Current boundary |
 |---|---|---|
@@ -30,8 +49,8 @@ Checked against `origin/main` at `4e364b60`:
 | Transactional replacement | [`replacement.rs`](../../crates/engine/src/replacement.rs), [session host contract](../session-host-contract.md) | `Candidate::commands` builds privately; `finish` validates the first snapshot; checked replacement publishes once. |
 
 The master [PLAN §3.8](../PLAN.md) describes a larger mesh I/O ambition, including a full
-analysis writer and Gmsh read path. It is roadmap text, not evidence of current Abaqus
-loading. This plan does not enlarge the existing writer's claims.
+analysis writer and Gmsh read path. Those ambitions remain roadmap text. The implemented
+strict reader does not enlarge the existing writer's claims or promise arbitrary round trips.
 
 ## Why a parser alone is insufficient
 
