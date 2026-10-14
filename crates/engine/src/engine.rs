@@ -2671,3 +2671,17 @@ pub fn display(model: &Model, value_si: f64, dim: Dimension) -> Result<crate::qu
     })?;
     Ok(crate::query::Valued { value: v, unit: u })
 }
+
+/// Fixed-size vectors and bounds share one checked conversion loop. Every component is
+/// converted before an array can escape; an error leaves the caller's Model untouched.
+pub(crate) fn display_values<const N: usize>(
+    model: &Model,
+    values: [f64; N],
+    dim: Dimension,
+) -> Result<[crate::query::Valued; N], Error> {
+    let mut shown = values.map(|value| crate::query::Valued { value, unit: String::new() });
+    for value in &mut shown {
+        *value = display(model, value.value, dim)?;
+    }
+    Ok(shown)
+}

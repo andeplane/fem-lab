@@ -2467,3 +2467,24 @@ factor is `1e45`, so `1 N m` must display approximately `1e-45` in the grouped u
 Unparenthesized concatenation overflows an intermediate multiplication before cancellation.
 The relative tolerance `1e-8` admits the factor's unavoidable subnormal decimal rounding
 from `nm^35`; parsing back must recover `1 N m` to `1e-14`.
+
+Public coordinate cases independently place each lower/upper bound and each point-vector
+component on a known metre coordinate. A selected length factor `1e-315` cannot display
+that metre as a finite f64; every component must reject, preserving the actual native
+file, Journal, hash, revision and Result catalogue. The same checked array loop handles
+vectors and bounds, with no unchecked component or partial array publication.
+
+Six orthotropic moduli, density, yield and point mass are tested independently with finite
+authored SI values and mathematically overflowing configured display magnitudes. Positive
+point masses, elastic material definitions and a real mapped axisymmetric shaft satisfy
+their normal Command admission rules. Authored load, prescribed constraint, connection
+tolerance and thickness cases exercise their real public display dimensions.
+
+A square line loop has perimeter 4 m with each coordinate at most 1 m. A finite length factor
+`1e-308` leaves each coordinate readable near `1e308` while the perimeter requires `4e308`
+and must reject. A unit cube independently checks derived volume and density-times-volume
+mass conversions. Two individually readable `1e308 N` forces have an unrepresentable
+`2e308 N` report sum. A genuine line mesh with an outside named Set has no boundary face,
+so its ordinary `set.empty` diagnostic remains available. Two unused imported labels at
+the same `1e308 m` coordinate retain that exact centroid and a literal zero node measure;
+the separate three-MAX centroid arithmetic defect is tracked by #593.

@@ -14192,6 +14192,9 @@ fn original_bilinear_query_areas_converge_and_replay_independently_of_owner_and_
 #[path = "registry/quadratic_measures.rs"]
 mod quadratic_measures;
 
+#[path = "registry/display_units.rs"]
+mod display_units;
+
 /// #580: a Model read cannot silently label SI as the selected smaller stress unit.
 #[test]
 fn display_unit_overflow_rejects_model_and_report_without_mutating_the_journal() {

@@ -8,7 +8,7 @@
 use femlab_geometry::Mesh;
 
 use crate::command::{Field, ObjectKind, Procedure, QuantityOfInterest, Solver};
-use crate::engine::{display, Engine, OnProgress};
+use crate::engine::{display, display_values, Engine, OnProgress};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
@@ -1568,7 +1568,7 @@ fn ledger_vec3(values: &[Valued], offset: usize) -> [Valued; 3] {
 }
 
 fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> Result<[Valued; 3], Error> {
-    Ok([display(model, v[0], dim)?, display(model, v[1], dim)?, display(model, v[2], dim)?])
+    display_values(model, v, dim)
 }
 
 fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Result<Extreme, Error> {

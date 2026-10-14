@@ -3,7 +3,7 @@
 use femlab_geometry::{Face, Mesh};
 
 use crate::command::{CoupleKind, Field, ObjectKind};
-use crate::engine::{display, Engine};
+use crate::engine::{display, display_values, Engine};
 use crate::error::{Error, ErrorCode};
 use crate::model::{Axial, ConstraintKind, Idealisation, LoadKind, SetSource};
 use crate::post::FieldData;
@@ -22,19 +22,11 @@ pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
 }
 
 fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> Result<[Valued; 6], Error> {
-    let d = Length::DIM;
-    Ok([
-        display(model, lo[0], d)?,
-        display(model, lo[1], d)?,
-        display(model, lo[2], d)?,
-        display(model, hi[0], d)?,
-        display(model, hi[1], d)?,
-        display(model, hi[2], d)?,
-    ])
+    display_values(model, [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]], Length::DIM)
 }
 
 fn displayed3(model: &crate::model::Model, values: [f64; 3], dim: Dimension) -> Result<[Valued; 3], Error> {
-    Ok([display(model, values[0], dim)?, display(model, values[1], dim)?, display(model, values[2], dim)?])
+    display_values(model, values, dim)
 }
 
 fn axial_row(value: Axial, unit: &str) -> AxialRow {
@@ -674,7 +666,7 @@ impl Engine {
                     name: name.into(),
                     kind: "node".into(),
                     bbox: bbox6(&self.model, lo, hi)?,
-                    measure: display(&self.model, 0.0, Dimension([0, 0, 0, 0]))?,
+                    measure: Valued { value: 0.0, unit: "SI".into() },
                     pressure_area: None,
                     centroid: displayed3(&self.model, centroid, Length::DIM)?,
                 });
@@ -728,11 +720,7 @@ impl Engine {
             } else {
                 None
             },
-            centroid: [
-                display(m, centroid[0], Length::DIM)?,
-                display(m, centroid[1], Length::DIM)?,
-                display(m, centroid[2], Length::DIM)?,
-            ],
+            centroid: displayed3(m, centroid, Length::DIM)?,
         })
     }
 
