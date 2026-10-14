@@ -180,6 +180,34 @@ describe('the shell', () => {
     for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
   });
 
+  it('inserts the advertised object from every reference control in the rendered shell', async () => {
+    const referenced = new Set<string>();
+    const current = model();
+    current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
+    current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
+    for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
+      await cleanupShells();
+      const { root, store, commands } = mount({ tab, model: current, panels: { palette: true, examples: true } });
+      store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' }, false, { kind: 'load', name: 'p' });
+      await afterEffects();
+      // Discover controls by the wording a person sees, independently of data-cmd. A copy
+      // handler retaining the right label or metadata must fail this behavioral check.
+      const controls = [...root.querySelectorAll<HTMLButtonElement>('button')]
+        .filter((button) => /^(?:@(?:\s|$)|reference\b)/i.test(button.textContent?.trim() ?? ''));
+      expect(controls.length, tab).toBeGreaterThan(0);
+      expect(controls.some((button) => button.closest('.props')), tab).toBe(true);
+      for (const control of controls) {
+        const ref = control.closest('.props') ? 'load:p' : control.title.match(/reference @(.+) in chat/)?.[1];
+        expect(ref, `${tab}: ${control.outerHTML}`).toBeDefined();
+        commands.length = 0;
+        await act(async () => control.click());
+        expect(commands, `${tab}: ${control.outerHTML}`).toEqual([{ cmd: 'chat.insertMention', ref }]);
+        referenced.add(ref!);
+      }
+    }
+    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'load:p', 'material:steel', 'mesh:mesh', 'set:tip', 'step:static']);
+  });
+
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
     const { root, registry } = mount();
     const known = new Set(registry.list().commands.map((d) => d.name));
