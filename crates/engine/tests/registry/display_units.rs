@@ -595,3 +595,71 @@ fn checked_display_mesh_edge_extremes_reject_only_after_readable_bounds() {
         rejected_read(&mut e, json!({"query":"query.mesh"}));
     }
 }
+
+fn interference_rings(radial_cells: u32) -> Engine {
+    let mut e = fresh();
+    for value in [
+        json!({"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric"}}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"mapped","body":"rings","blocks":[
+            {"corners":[["1 m","0 m"],["2 m","0 m"],["2 m","1 m"],["1 m","1 m"]],"n":[radial_cells,1],"tags":["bottom1","slave","top1","held"]},
+            {"corners":[["1.99 m","0 m"],["3 m","0 m"],["3 m","1 m"],["1.99 m","1 m"]],"n":[radial_cells,1],"tags":["bottom2","held","top2","master"]}
+        ]}}),
+        json!({"cmd":"material.add","name":"elastic","E":"40 Pa","nu":0}),
+        json!({"cmd":"material.assign","material":"elastic","bodies":["rings"]}),
+        json!({"cmd":"constraint.fix","name":"anchor","on":"rings.held"}),
+        json!({"cmd":"contact.add","name":"interface","kind":"frictionless","master":"rings.master","slave":"rings.slave","tol":"0.1 m"}),
+        json!({"cmd":"step.add","name":"contact","procedure":"static","constraints":["anchor","interface"],"loads":[]}),
+        json!({"cmd":"solve.run","step":"contact","solver":"cpu-direct"}),
+    ] {
+        command(&mut e, value);
+    }
+    e
+}
+
+#[test]
+fn axisymmetric_interference_contact_converges_to_force_conservative_lame_compliance() {
+    let (a, r, s, b) = (1.0_f64, 2.0_f64, 1.99_f64, 3.0_f64);
+    // u=Ar+B/r, nu=0 and fixed u(a)=u(b)=0. Equal/opposite transmitted force
+    // gives different pressures F/(2*pi*r*h) and F/(2*pi*s*h), not equal pressure.
+    let compliance = (r * r - a * a) / (r * r + a * a) + (b * b - s * s) / (b * b + s * s);
+    let exact = 2.0 * std::f64::consts::PI * 40.0 * (r - s) / compliance;
+    let mut errors = Vec::new();
+    for (n, tolerance) in [(2, 0.006), (4, 0.002), (8, 0.0005)] {
+        let mut e = interference_rings(n);
+        let result = read(&mut e, json!({"query":"query.result"}));
+        let contact = &result["contacts"][0];
+        assert_eq!(contact["active"], 2);
+        assert_eq!(contact["paired"], 2);
+        assert_eq!(contact["force"][0]["unit"], "N");
+        let error = (contact["force"][0]["value"].as_f64().unwrap() + exact).abs() / exact;
+        assert!(error < tolerance, "{n} radial cells, relative error {error}");
+        errors.push(error);
+    }
+    for pair in errors.windows(2) {
+        let rate = (pair[0] / pair[1]).log2();
+        assert!((1.8..2.2).contains(&rate), "quadratic radial convergence, observed {rate}");
+    }
+}
+
+#[test]
+fn checked_display_contact_total_remains_checked_after_finite_reaction_components() {
+    let mut e = interference_rings(4);
+    let result = read(&mut e, json!({"query":"query.result"}));
+    let id = result["resultId"].as_str().unwrap();
+    let contact = result["contacts"][0].clone();
+    // This validated unit has factor8.333e-309: its finite force limit is about1.498N.
+    // Every earlier displayed reaction extreme and aggregate stays below1.4N, while
+    // the independent Lamé force above exceeds2.5N. Axisymmetric has no Cartesian ledger.
+    assert!(result["staticEquilibrium"].is_null());
+    for extreme in result["extremes"].as_array().unwrap().iter().filter(|row| row["field"] == "reaction") {
+        for bound in ["min", "max"] {
+            assert!(extreme[bound]["value"].as_f64().unwrap().abs() < 1.4);
+        }
+    }
+    assert!(result["reactions"][0]["total"][0]["value"].as_f64().unwrap().abs() < 1.4);
+    assert!(contact["force"][0]["value"].as_f64().unwrap().abs() > 2.5);
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"nN^34*mm*in/(N^33*cm*ft)"}}));
+    read(&mut e, json!({"query":"query.model"}));
+    rejected_read(&mut e, json!({"query":"query.result"}));
+    assert_eq!(read(&mut e, json!({"query":"query.result","resultId":id}))["contacts"][0], contact);
+}

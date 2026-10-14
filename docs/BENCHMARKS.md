@@ -2535,3 +2535,20 @@ exact authored LoadRow text from the Model summary. Its formula keeps the author
 F/P denotes the magnitude of that vector's sole nonzero component. Computed cross-sectional
 area and analytical deflection retain checked conversions. Reusing assembled nodal force as
 the independent reference would admit quadrature rounding into the oracle and is avoided.
+
+The contact-specific display fixture is a supported axisymmetric interference fit with
+nu=0, E=40Pa, height h=1m and annular radii [a,r]=[1,2]m and [s,b]=[1.99,3]m.
+The shared anchor fixes both inner and outer radial boundaries. Lamé displacement
+`u=Ar+B/r` with zero endpoint displacement gives the force-conservative compatibility
+
+`F = 2π h E (r-s) / [(r²-a²)/(r²+a²) + (b²-s²)/(b²+s²)] = 2.5415407008 N`.
+
+The master/slave reference radii differ, so their equal/opposite transmitted force uses
+pressures `F/(2πrh)` and `F/(2πsh)` respectively. Equal pressure at both radii would be a
+wrong reference. With 2/4/8 radial cells the public contact force converges quadratically
+(relative gates 0.006/0.002/0.0005, observed rate in [1.8,2.2]). At four cells, every
+reaction component and the combined anchor reaction remains below1.4N while contact
+force exceeds2.5N. A valid force unit with factor8.333e-309 has finite limit≈1.498N,
+so the current Result rejects specifically at checked contact output. The Model remains
+readable, failed reads preserve the full native state, and retained-ID contact output
+keeps its original N units. The formatter test and independent convergence test are separate.
