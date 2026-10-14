@@ -2115,3 +2115,42 @@ solution, ensuring spatial iterations restart rather than accumulate physical ti
 native execution at one/four threads and WASM, with exact per-entry hashes and
 surface topology and 1e-9 agreement of temperature/error fields. Both hosts also
 verify the same Model hashes when replay skips the solves.
+
+### Original imported-cell geometry certificates (#517)
+
+Geometry's `certificate_*` tests independently cover transformed/scaled warped faces,
+labelled face/edge/vertex contacts, crossing/contained/partial-face/T-junction rejection,
+nonzero interface remainders despite zero corners, and curved separators requiring
+Bernstein subdivision. Two original Hex8 maps share the bilinear face x = 1 + yz/4;
+their determinants are 1 + yz/4 and 1 - yz/4, so both are injective with disjoint
+interiors. Rigid transforms and scales retain that oracle. Tet4 pairs use independently
+known convex containment/intersection cases and exact contact entities.
+
+Negative-pocket maps F = (s, (s-a)t + br, bt + (s-a)r) have determinant
+(s-a)^2 - b^2. The cases (a,b) = (1/2,1/8) and (3/8,1/32) show that corner/Gauss
+sampling, and even additional half-grid samples, cannot prove injectivity. Both fail
+closed. A valid large-shear map F = (s + 10tr,t,r), det = 1, is inconclusive under the
+sufficient certificate, rather than falsely classified as invalid. Pure arithmetic
+tests check exact closed-form polynomials, de Casteljau coefficients and depth/work
+limits including an interior zero at 1/3. Proof budgets are deterministic; exhaustion
+is explicitly inconclusive, never accepted.
+
+`certificate_separates_rotated_affine_cells_with_overlapping_boxes` has one unit
+cube with `x+y<=2` and an affine cell `(5/4+(s-t)/2,7/8+(s+t)/2,r)` with
+`x+y>=17/8` and determinant `1/2`. All three AABB ranges overlap; an independent
+strict plane gap of `1/8` proves separation in both source record orders. Negative-z
+broad-phase separation also preserves the existing positive/negative axis cases.
+
+Mixed Tet/Hex guards have explicit original-geometry witnesses. For
+`q=x-1-y*z/4`, one positive-Jacobian Tet has strictly positive corner values yet
+an edge midpoint at `q=-1/32`; another Tet uses the four noncoplanar quadric
+corners (all `q=0`) yet its diagonal edge midpoint has `q=-1/16`. Both overlap
+the Hex interior and fail closed. The injective Hex map
+`(1+5*s*t/4+r,s,t)`, determinant `1`, has `q=s*t+r` and an L-shaped zero
+corner set, so its undeclared ruling-edge contact is rejected.
+
+The bijective map `(1+s/4+(t+r-t*r)/16,t,r)`, determinant `1/4`, only touches
+the unit cube at one labelled vertex. Its exact normalized Sylvester minors
+are `1/4,255/4096,127/8192`, but one face-separator quotient is `(1-r)/16`.
+This nonstrict quotient demonstrates a reachable conservative proof failure:
+the valid pair is explicitly inconclusive, never silently accepted or called invalid.
