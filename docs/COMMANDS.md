@@ -340,8 +340,9 @@ else. It contributes to the mass matrix (so it changes modal frequencies) and to
 (m·g at that point), and has no stiffness whatever, so it must be attached to the model
 with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
 The point is also a node Set of the same name, so constraint.couple, constraint.fix,
-load.force and query.set target it by name. Re-issuing with an existing name replaces
-it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
+load.force and query.set target it by name. Re-issuing an existing point-mass name
+replaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes
+it. It carries no rotary inertia — a node has no rotations —
 so it models a compact mass, not a flywheel.
 
 | Argument | Required | Schema | Description |
@@ -391,6 +392,7 @@ of those) so constraints and loads can target it. Rules are re-evaluated after e
 remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
 implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
 Body's actual mesh boundary. Prefer the auto face names when one fits.
+Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -407,6 +409,7 @@ Name a node/element Set by a region rule (a box or a whole Body), for point-like
 constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
 use a box slightly larger than the points you mean. A whole-Body rule also accepts
 the implicit Body defined by a mapped or swept mapped mesher.
+Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -418,7 +421,8 @@ the implicit Body defined by a mapped or swept mapped mesher.
 
 ### geometry.remove
 
-Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
+Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.
+Fails with in-use listing the constraints, loads
 (including temperature and volumetric heat sources), named selectors or free-mesher
 geometry references that still use a Body; remove or retarget those first. Removing
 a mapped or swept mapped Body clears its mesher and material association, preserving
@@ -768,8 +772,9 @@ returns `export.unavailable`. It writes no Materials, Constraints, Loads or Step
 Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
 `formulation: full` is the textbook linear element that locks in bending: keep the
-default incompatible modes or use order 2 when bending matters. Mapped geometry owns
-a Body name distinct from explicit geometry. Keeping that name preserves its material;
+default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
+owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
+Keeping that name preserves its material;
 changing/removing it requires no remaining Body references and clears its material.
 Use model.rename to change an implicit Body name while preserving its references.
 `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
@@ -797,6 +802,7 @@ copy references the same Constraints and Loads. Useful for "the same load case b
 twice the pressure": duplicate, then re-issue the create Command with the new value.
 A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
 slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
+A Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -825,7 +831,9 @@ at the start, never to "reset" mid-way (use journal.undo for that).
 
 Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
 rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+already exists in that kind. Bodies and Sets also share the geometry namespace with
+cuts and point masses, so their new name cannot shadow any geometry owner.
+Mapped and swept mapped Bodies also rename their mesher
 geometry, named Face/Body-region selectors and material association.
 
 | Argument | Required | Schema | Description |
@@ -4818,7 +4826,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Bodies and Sets also share the geometry namespace with\ncuts and point masses, so their new name cannot shadow any geometry owner.\nMapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
       "type": "object",
       "properties": {
         "kind": {
@@ -4844,7 +4852,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
+      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.\nA Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.",
       "type": "object",
       "properties": {
         "kind": {
@@ -5128,7 +5136,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
+      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
       "type": "object",
       "properties": {
         "name": {
@@ -5154,7 +5162,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
+      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
       "type": "object",
       "properties": {
         "name": {
@@ -5176,7 +5184,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
+      "description": "Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.\nFails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
       "type": "object",
       "properties": {
         "name": {
@@ -5194,7 +5202,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing an existing point-mass name\nreplaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes\nit. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
       "type": "object",
       "properties": {
         "name": {
@@ -5488,7 +5496,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
       "type": "object",
       "properties": {
         "mesher": {

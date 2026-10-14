@@ -49,6 +49,8 @@ _Avoid_: CAD, part file, solid model
 One connected region of the geometry, carrying a material and a name. Explicit Bodies own
 Shapes; mapped, swept mapped and shell surface meshers own an implicit Body with the same rename and
 guarded-removal lifecycle (ADR 0016). A free mesher references an explicit Body.
+Bodies, cuts, named Sets and point masses share a geometry namespace: a name has one owner,
+so removal is unambiguous. Reissuing a definition replaces only the same kind of owner.
 _Avoid_: part, instance, solid, volume
 
 **Face**:

@@ -31,7 +31,9 @@ export interface Fem {
     /**
      * Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
      * rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-     * already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+     * already exists in that kind. Bodies and Sets also share the geometry namespace with
+     * cuts and point masses, so their new name cannot shadow any geometry owner.
+     * Mapped and swept mapped Bodies also rename their mesher
      * geometry, named Face/Body-region selectors and material association.
      */
     rename(args: Omit<Extract<Command, { cmd: 'model.rename' }>, 'cmd'>): Promise<Ack>;
@@ -41,6 +43,7 @@ export interface Fem {
      * twice the pressure": duplicate, then re-issue the create Command with the new value.
      * A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
      * slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
+     * A Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.
      */
     duplicate(args: Omit<Extract<Command, { cmd: 'model.duplicate' }>, 'cmd'>): Promise<Ack>;
   };
@@ -115,6 +118,7 @@ export interface Fem {
      * remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
      * implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
      * Body's actual mesh boundary. Prefer the auto face names when one fits.
+     * Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
      */
     nameFace(args: Omit<Extract<Command, { cmd: 'geometry.nameFace' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -122,10 +126,12 @@ export interface Fem {
      * constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
      * use a box slightly larger than the points you mean. A whole-Body rule also accepts
      * the implicit Body defined by a mapped or swept mapped mesher.
+     * Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
      */
     nameRegion(args: Omit<Extract<Command, { cmd: 'geometry.nameRegion' }>, 'cmd'>): Promise<Ack>;
     /**
-     * Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
+     * Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.
+     * Fails with in-use listing the constraints, loads
      * (including temperature and volumetric heat sources), named selectors or free-mesher
      * geometry references that still use a Body; remove or retarget those first. Removing
      * a mapped or swept mapped Body clears its mesher and material association, preserving
@@ -138,8 +144,9 @@ export interface Fem {
      * (m·g at that point), and has no stiffness whatever, so it must be attached to the model
      * with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
      * The point is also a node Set of the same name, so constraint.couple, constraint.fix,
-     * load.force and query.set target it by name. Re-issuing with an existing name replaces
-     * it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
+     * load.force and query.set target it by name. Re-issuing an existing point-mass name
+     * replaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes
+     * it. It carries no rotary inertia — a node has no rotations —
      * so it models a compact mass, not a flywheel.
      */
     addMass(args: Omit<Extract<Command, { cmd: 'geometry.addMass' }>, 'cmd'>): Promise<Ack>;
@@ -210,8 +217,9 @@ export interface Fem {
      * Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
      * 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
      * `formulation: full` is the textbook linear element that locks in bending: keep the
-     * default incompatible modes or use order 2 when bending matters. Mapped geometry owns
-     * a Body name distinct from explicit geometry. Keeping that name preserves its material;
+     * default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
+     * owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
+     * Keeping that name preserves its material;
      * changing/removing it requires no remaining Body references and clears its material.
      * Use model.rename to change an implicit Body name while preserving its references.
      * `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
