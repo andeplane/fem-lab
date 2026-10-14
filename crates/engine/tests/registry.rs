@@ -1609,6 +1609,150 @@ fn pressure_area_uses_the_loaded_boundary_measure_without_changing_the_journal()
 }
 
 #[test]
+fn shell_pressure_area_is_a_material_free_surface_measure_in_every_orientation() {
+    // Three orthonormal unit-square bases, with independent cross-product normals.
+    let patches = [
+        ([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]], [0.0, 0.0, 1.0]),
+        ([[2.0, 0.0, 0.0], [2.0, 1.0, 0.0], [2.0, 1.0, 1.0], [2.0, 0.0, 1.0]], [1.0, 0.0, 0.0]),
+        ([[2.0, 3.0, 4.0], [2.6, 3.8, 4.0], [2.12, 4.16, 4.8], [1.52, 3.36, 4.8]], [0.64, -0.48, 0.6]),
+    ];
+    for (corners, normal) in patches {
+        for n in [1, 2, 4] {
+            let mut e = engine();
+            ok(&mut e, r#"{"cmd":"model.new","name":"shell-pressure-area"}"#);
+            ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","force":"N"}}"#);
+            let corners = corners.map(|point| point.map(|v| format!("{v} m")));
+            let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin",
+                "patches":[{"corners":corners,"n":[n,n],"tags":[null,null,null,"root"]}]}});
+            ok(&mut e, &command.to_string());
+            let before = e.export_file();
+            for face in ["top", "bottom"] {
+                let area = set_info(&mut e, &format!("skin.{face}")).pressure_area.unwrap();
+                assert_eq!(area.unit, "m^2");
+                assert!((area.value - 1.0).abs() < 2e-14, "{face}, n={n}: {area:?}");
+            }
+            // Queries must not require a Material/Section or alter the saved Model/Journal.
+            assert_eq!(e.export_file(), before);
+            ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+            ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["skin"]}"#);
+            ok(&mut e, r#"{"cmd":"section.add","name":"shell","shape":{"kind":"shell","thickness":"100 mm"}}"#);
+            ok(&mut e, r#"{"cmd":"section.assign","section":"shell","bodies":["skin"]}"#);
+            ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+            for (face, sign) in [("top", -1.0), ("bottom", 1.0)] {
+                ok(&mut e, &format!(r#"{{"cmd":"load.pressure","name":"p","on":"skin.{face}","value":"100 Pa"}}"#));
+                ok(
+                    &mut e,
+                    r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["p"]}"#,
+                );
+                ok(&mut e, r#"{"cmd":"solve.run","step":"s","solver":"cpu-direct"}"#);
+                let summary = result_of(&mut e, Some("s"));
+                for (axis, component) in normal.into_iter().enumerate() {
+                    let exact = sign * 100.0 * component;
+                    assert!((summary.applied_total[axis].value - exact).abs() < 1e-10);
+                    let reaction: f64 = summary.reactions.iter().map(|r| r.total[axis].value).sum();
+                    assert!((reaction + exact).abs() < 1e-7);
+                }
+                assert!((set_info(&mut e, &format!("skin.{face}")).pressure_area.unwrap().value - 1.0).abs() < 2e-14);
+            }
+        }
+    }
+}
+
+#[test]
+fn shell_pressure_area_converges_on_the_original_bilinear_surface_and_replays() {
+    // Independent analytic integral of sqrt(1+a²(y²+z²)) over the unit square.
+    let a = 0.25;
+    let r = libm::sqrt(1.0 + 2.0 * a * a);
+    let exact =
+        (r + (a * a + 3.0) / a * libm::asinh(a / libm::sqrt(1.0 + a * a)) - libm::atan(a * a / r) / (a * a)) / 3.0;
+    assert!((exact - 1.0205395019733228).abs() < 1e-15);
+    let mut thread_values = Vec::new();
+    for threads in [1, 4] {
+        let mut values = Vec::new();
+        let mut previous_error = None;
+        for n in [1, 2, 4, 8] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            ok(&mut e, r#"{"cmd":"model.new","name":"bilinear-shell-pressure-area"}"#);
+            ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+            let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","body":"warped",
+                "patches":[{"corners":[["1 m","0 m","0 m"],["1 m","1 m","0 m"],
+                    ["1.25 m","1 m","1 m"],["1 m","0 m","1 m"]],"n":[n,n]}]}});
+            ok(&mut e, &command.to_string());
+            let before = e.export_file();
+            let top = set_info(&mut e, "warped.top").pressure_area.unwrap();
+            let bottom = set_info(&mut e, "warped.bottom").pressure_area.unwrap();
+            assert_eq!(top.unit, "m^2");
+            assert!((top.value - bottom.value).abs() < 2e-14);
+            let error = (top.value - exact).abs();
+            assert!(error < 5e-6);
+            if let Some(previous) = previous_error {
+                let order = libm::log(previous / error) / libm::log(2.0);
+                assert!((3.8..4.2).contains(&order), "observed loaded area order {order}");
+            }
+            previous_error = Some(error);
+            assert_eq!(e.export_file(), before);
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&before.journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), e.model_hash());
+            assert_eq!(set_info(&mut replayed, "warped.top").pressure_area.unwrap(), top);
+            assert_eq!(set_info(&mut replayed, "warped.bottom").pressure_area.unwrap(), bottom);
+            values.push(top.value);
+        }
+        thread_values.push(values);
+    }
+    assert_eq!(thread_values[0], thread_values[1]);
+}
+
+#[test]
+fn shell_pressure_area_keeps_curved_physical_offset_loads_and_projected_force() {
+    // Unit-radius cylinder, unit axial length, angle atan(3/4). A uniform inward
+    // pressure integrates to -p R_face [sin(angle), 1-cos(angle), 0], independent
+    // of how its arc is subdivided. Its norm is not p times the scalar area.
+    let angle = libm::atan(0.75);
+    let mut previous_error = None;
+    for n in [1, 2, 4, 8] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"curved-shell-pressure-area"}"#);
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","force":"N"}}"#);
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin",
+            "patches":[{"corners":[["1 m","0 m","0 m"],["0.8 m","0.6 m","0 m"],
+                ["0.8 m","0.6 m","1 m"],["1 m","0 m","1 m"]],"n":[n,1],
+                "projection":{"kind":"cylinder","center":["0 m","0 m","0 m"],"axis":[0,0,1],"radius":"1 m"},
+                "tags":[null,null,null,"root"]}]}});
+        ok(&mut e, &command.to_string());
+        let top = set_info(&mut e, "skin.top").pressure_area.unwrap();
+        let bottom = set_info(&mut e, "skin.bottom").pressure_area.unwrap();
+        assert!((top.value - bottom.value).abs() < 2e-14);
+        let error = angle - top.value;
+        assert!(error > 0.0);
+        if let Some(previous) = previous_error {
+            let order = libm::log(previous / error) / libm::log(2.0);
+            assert!((1.9..2.1).contains(&order), "observed cylinder area order {order}");
+        }
+        previous_error = Some(error);
+        ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["skin"]}"#);
+        ok(&mut e, r#"{"cmd":"section.add","name":"shell","shape":{"kind":"shell","thickness":"100 mm"}}"#);
+        ok(&mut e, r#"{"cmd":"section.assign","section":"shell","bodies":["skin"]}"#);
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+        for (face, coefficient) in [("top", -100.0 * 1.05), ("bottom", 100.0 * 0.95)] {
+            ok(&mut e, &format!(r#"{{"cmd":"load.pressure","name":"p","on":"skin.{face}","value":"100 Pa"}}"#));
+            ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["p"]}"#);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"s","solver":"cpu-direct"}"#);
+            let summary = result_of(&mut e, Some("s"));
+            for (axis, component) in [0.6, 0.2, 0.0].into_iter().enumerate() {
+                let exact = coefficient * component;
+                assert!((summary.applied_total[axis].value - exact).abs() < 1e-10);
+                let reaction: f64 = summary.reactions.iter().map(|r| r.total[axis].value).sum();
+                assert!((reaction + exact).abs() < 1e-7);
+            }
+            assert_eq!(set_info(&mut e, "skin.top").pressure_area.unwrap(), top);
+            assert_eq!(set_info(&mut e, "skin.bottom").pressure_area.unwrap(), bottom);
+        }
+    }
+}
+
+#[test]
 fn the_cantilever_meshes_and_every_auto_face_resolves() {
     let mut e = engine();
     cantilever(&mut e);
@@ -11146,6 +11290,12 @@ mod selected_body_warnings;
 
 #[path = "registry/geometry_namespace.rs"]
 mod geometry_namespace;
+
+#[path = "registry/abaqus.rs"]
+mod abaqus;
+
+#[path = "registry/abaqus_static.rs"]
+mod abaqus_static;
 /// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
 ///
 /// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at

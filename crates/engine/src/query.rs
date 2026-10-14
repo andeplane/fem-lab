@@ -3,12 +3,13 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::command::{Command, Field, ObjectKind};
 use crate::error::Warning;
 use crate::units::{
-    Conductivity, Density, Dimensionless, Length, Quantity, SpecificHeat, Stress, Temperature, ThermalExpansion, Time,
-    Q,
+    Conductivity, Density, Dimensionless, Force, Length, Quantity, SpecificHeat, Stress, Temperature, ThermalExpansion,
+    Time, Q,
 };
 
 /// A value with its display unit.
@@ -57,7 +58,9 @@ pub enum Query {
     /// Quadratic-element measures still use corner geometry pending #524.
     /// Face Sets also report pressureArea from the load boundary quadrature,
     /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
-    /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+    /// times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+    /// the original midsurface area without requiring Material/Section; curved physical shell
+    /// loads use the Section's top/bottom offsets. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]
@@ -252,6 +255,49 @@ pub enum Query {
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
+
+    /// Check a bounded Abaqus text deck using an explicit positive length Quantity per
+    /// source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
+    /// portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
+    /// (standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
+    /// SURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming
+    /// Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized
+    /// uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
+    /// keyword spellings, 256-character physical lines and comma keyword continuation.
+    /// Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
+    /// keyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.
+    /// Static mode additionally requires a positive force Quantity per source force and
+    /// supports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one
+    /// SOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct
+    /// displacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements
+    /// scale by L, forces by F and modulus by F/L²; no units are inferred. Model-data
+    /// BOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;
+    /// numeric targets get explicit singleton Sets. Conflicting prescribed values and
+    /// overlapping CLOAD updates fail. Static accepts absent/default increment fields
+    /// only (zero also denotes the default in its first three fields), imports final
+    /// linear equilibrium without increment history, and never solves.
+    /// Density/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT
+    /// requests remain unsupported. Bounds: 250000 nodes,
+    /// 250000 elements and 1000000 expanded membership declarations before deduplication.
+    /// No paths, includes, file I/O or active Model mutation. Input and serialized response
+    /// are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
+    /// checked conversion, not publication approval:
+    /// hosts must prepare the Commands through Candidate, enforce the exact serialized
+    /// Model-file limit and publish atomically before replacing the active document.
+    #[serde(rename = "query.convertAbaqus", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "AbaqusConversion"))]
+    ConvertAbaqus {
+        text: String,
+        name: String,
+        body: String,
+        mode: AbaqusImportMode,
+        unit_length: Q<Length>,
+        /// Mandatory in static mode; absent in mesh mode. Positive force per source force.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit_force: Option<Q<Force>>,
+        sha256: String,
+    },
 
     /// Primary-source material data with dimensions, grade, condition, temperature and a source
     /// for every reported property. With no `name`, lists the stable catalogue. With a canonical
@@ -983,6 +1029,85 @@ pub struct Converted {
     pub unit: String,
 }
 
+/// The chosen strict subset; unsupported physics is rejected rather than discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AbaqusImportMode {
+    Mesh,
+    Static,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AbaqusSetKind {
+    Node,
+    Element,
+    Face,
+}
+
+/// One authored Abaqus Set or numeric node target and its exact qualified FEM Lab name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusSetMapping {
+    pub kind: AbaqusSetKind,
+    pub source: String,
+    pub target: String,
+    pub count: u32,
+}
+
+/// Retained homogeneous static objects. Only the final linear equilibrium is configured;
+/// there is no Abaqus increment history and conversion never produces a solved Result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusStaticAnalysis {
+    pub material: String,
+    pub section_elset: String,
+    pub step: String,
+    pub constraints: Vec<String>,
+    pub loads: Vec<String>,
+    pub final_equilibrium_only: bool,
+}
+
+/// Source metadata and physical bounds; unused nodes remain authored source data but do not
+/// contribute to these bounds or receive fabricated finite-element DOFs/Result values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusConversionReport {
+    pub mode: AbaqusImportMode,
+    pub sha256: String,
+    pub conversion_version: String,
+    pub input_bytes: u32,
+    pub body: String,
+    /// Metres per source coordinate, as an explicit SI Quantity.
+    pub unit_length: Q<Length>,
+    /// Newtons per source force, present only for static analysis conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_force: Option<Q<Force>>,
+    pub source_nodes: u32,
+    pub active_nodes: u32,
+    pub source_elements: u32,
+    pub element_kind: crate::command::ImportedElementKind,
+    /// Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.
+    pub analysis_configured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AbaqusStaticAnalysis>,
+    /// Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.
+    pub bbox: [Q<Length>; 6],
+    pub source_labels: crate::imported::SourceLabels,
+    pub sets: Vec<AbaqusSetMapping>,
+    pub headings: Vec<String>,
+    /// All authored ECHO/MODEL/HISTORY/CONTACT YES/NO flags, without implied execution.
+    pub preprint: Vec<BTreeMap<String, bool>>,
+}
+
+/// Checked portable conversion. Publication requires the host's exact Candidate preparation
+/// and serialized Model-file limit; receiving this response never changes the active Model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AbaqusConversion {
+    pub report: AbaqusConversionReport,
+    pub commands: Vec<Command>,
+}
+
 /// One `@`-mentionable object.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1043,6 +1168,7 @@ pub enum QueryResult {
     JournalDiff(JournalDiff),
     Script(ScriptText),
     Converted(Converted),
+    AbaqusConversion(AbaqusConversion),
     MaterialLibrary(MaterialLibrary),
     Objects(ObjectList),
     Capabilities(Capabilities),

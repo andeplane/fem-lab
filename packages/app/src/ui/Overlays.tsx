@@ -415,6 +415,11 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
           <span>A femlab/1 file saved from here or from the CLI; it becomes a project when you edit it.</span>
           <i class="mono cue-cyan">file.open(picker)</i>
         </Cmd>
+        <Cmd dispatch={dispatch} cmd="form.open" class="card" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp">
+          <b>Import Abaqus .inp</b>
+          <span>Flat C3D4/C3D8 mesh or supported linear static model. Choose source Length and Force units explicitly.</span>
+          <i class="mono cue-cyan">file.importAbaqus</i>
+        </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'examples' }}>
           <b>Examples</b>
           <span>Worked benchmarks with reference values, each opened as its own Journal.</span>

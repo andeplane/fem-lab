@@ -2532,6 +2532,35 @@ export type Query =
       query: "query.convert";
     }
   | {
+      text: string;
+      name: string;
+      body: string;
+      mode: AbaqusImportMode;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      unitLength:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * Mandatory in static mode; absent in mesh mode. Positive force per source force.
+       */
+      unitForce?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      sha256: string;
+      query: "query.convertAbaqus";
+    }
+  | {
       name?: string | null;
       query: "query.materialLibrary";
     }
@@ -2589,6 +2618,10 @@ export type Quantity =
       unit: string;
     };
 /**
+ * The chosen strict subset; unsupported physics is rejected rather than discarded.
+ */
+export type AbaqusImportMode = "mesh" | "static";
+/**
  * One section of the Markdown report. `query.report` writes the ones asked for in this order.
  */
 export type ReportSection =
@@ -2615,6 +2648,7 @@ export type QueryResult =
   | JournalDiff
   | ScriptText
   | Converted
+  | AbaqusConversion
   | MaterialLibrary
   | ObjectList
   | Capabilities
@@ -2758,6 +2792,7 @@ export type Sweep =
  * rewrite the assumption under an already-computed answer.
  */
 export type AssumedMaterialProperty = "rho" | "alpha";
+export type AbaqusSetKind = "node" | "element" | "face";
 /**
  * What a Command produced beyond changing the Model.
  */
@@ -7675,6 +7710,137 @@ export interface ScriptText {
 export interface Converted {
   value: number;
   unit: string;
+}
+/**
+ * Checked portable conversion. Publication requires the host's exact Candidate preparation
+ * and serialized Model-file limit; receiving this response never changes the active Model.
+ */
+export interface AbaqusConversion {
+  report: AbaqusConversionReport;
+  commands: Command[];
+}
+/**
+ * Source metadata and physical bounds; unused nodes remain authored source data but do not
+ * contribute to these bounds or receive fabricated finite-element DOFs/Result values.
+ */
+export interface AbaqusConversionReport {
+  mode: AbaqusImportMode;
+  sha256: string;
+  conversionVersion: string;
+  inputBytes: number;
+  body: string;
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  unitLength:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * Newtons per source force, present only for static analysis conversion.
+   */
+  unitForce?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+  sourceNodes: number;
+  activeNodes: number;
+  sourceElements: number;
+  elementKind: ImportedElementKind;
+  /**
+   * Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.
+   */
+  analysisConfigured: boolean;
+  analysis?: AbaqusStaticAnalysis | null;
+  /**
+   * Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.
+   *
+   * @minItems 6
+   * @maxItems 6
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  bbox: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  sourceLabels: SourceLabels;
+  sets: AbaqusSetMapping[];
+  headings: string[];
+  /**
+   * All authored ECHO/MODEL/HISTORY/CONTACT YES/NO flags, without implied execution.
+   */
+  preprint: {
+    [k: string]: boolean | undefined;
+  }[];
+}
+/**
+ * Retained homogeneous static objects. Only the final linear equilibrium is configured;
+ * there is no Abaqus increment history and conversion never produces a solved Result.
+ */
+export interface AbaqusStaticAnalysis {
+  material: string;
+  sectionElset: string;
+  step: string;
+  constraints: string[];
+  loads: string[];
+  finalEquilibriumOnly: boolean;
+}
+/**
+ * One authored Abaqus Set or numeric node target and its exact qualified FEM Lab name.
+ */
+export interface AbaqusSetMapping {
+  kind: AbaqusSetKind;
+  source: string;
+  target: string;
+  count: number;
 }
 /**
  * `query.materialLibrary` response.
