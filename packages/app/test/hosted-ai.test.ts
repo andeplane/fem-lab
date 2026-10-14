@@ -18,6 +18,6 @@ it('keeps engineering capabilities available through scripts without paying for 
   const {default:schema}=await import('../../registry/src/generated/runtime-schema');
   const registry=new Registry({schema:schema as never,host:{} as never});const tools=hostedTools(registry),names=tools.map(t=>t.name);
   expect(names).toContain('run_script');expect(names).toContain('validate_script');expect(names).toContain('query_model');
-  expect(names).not.toContain('geometry_addBox');expect(names).not.toContain('account_checkout');expect(names).not.toContain('query_account');
-  for(const tool of toToolDefinitions(registry).filter(t=>t.name.startsWith('query_')))expect(names).toContain(tool.name);
+  expect(names).not.toContain('query_journalDiff');expect(names).not.toContain('geometry_addBox');expect(names).not.toContain('account_checkout');expect(names).not.toContain('query_account');
+  for(const tool of toToolDefinitions(registry).filter(t=>t.name.startsWith('query_')&&t.name!=='query_journalDiff'))expect(names).toContain(tool.name);
 });
