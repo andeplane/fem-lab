@@ -4540,7 +4540,7 @@ Returns: `Converted`.
 
 ### query.convertAbaqus
 
-Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per
+Check a bounded Abaqus text deck using an explicit positive length Quantity per
 source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
 portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
 (standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
@@ -4549,7 +4549,19 @@ Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, norm
 uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
 keyword spellings, 256-character physical lines and comma keyword continuation.
 Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
-keyword/parameter, including analysis and material intent. Bounds: 250000 nodes,
+keyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.
+Static mode additionally requires a positive force Quantity per source force and
+supports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one
+SOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct
+displacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements
+scale by L, forces by F and modulus by F/L²; no units are inferred. Model-data
+BOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;
+numeric targets get explicit singleton Sets. Conflicting prescribed values and
+overlapping CLOAD updates fail. Static accepts absent/default increment fields
+only (zero also denotes the default in its first three fields), imports final
+linear equilibrium without increment history, and never solves.
+Density/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT
+requests remain unsupported. Bounds: 250000 nodes,
 250000 elements and 1000000 expanded membership declarations before deduplication.
 No paths, includes, file I/O or active Model mutation. Input and serialized response
 are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
@@ -4566,6 +4578,7 @@ Returns: `AbaqusConversion`.
 | body | yes | <code>{"type":"string"}</code> |  |
 | mode | yes | <code>{"$ref":"#/$defs/AbaqusImportMode"}</code> |  |
 | unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> |  |
+| unitForce | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_force"},{"type":"null"}]}</code> | Mandatory in static mode; absent in mesh mode. Positive force per source force. |
 | sha256 | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.convertAbaqus"}</code> |  |
 
@@ -4929,10 +4942,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "The strict mesh converter never discards physics from a model deck.",
+  "description": "The chosen strict subset; unsupported physics is rejected rather than discarded.",
   "type": "string",
   "enum": [
-    "mesh"
+    "mesh",
+    "static"
   ]
 }
 ```

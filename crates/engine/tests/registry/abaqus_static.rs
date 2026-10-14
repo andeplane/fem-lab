@@ -151,38 +151,49 @@ fn abaqus_static_authored_si_and_mm_fixtures_solve_the_same_physical_bar() {
 
 #[test]
 fn abaqus_static_defaults_direct_targets_and_nonunit_force_scale_preserve_physics() {
-    let text = HEX
-        .replace("ROOT,1,3", "ROOT,1\nROOT,2,,0\nROOT,3,3,0")
-        .replace("*STEP,NAME=AXIAL,NLGEOM=NO", "*step,NLGEOM=no")
-        .replace("1,1,1e-5", ",,,")
-        .replace("TIP,1,250", "+205,1,250\n218,1,250\n231,1,250\n244,1,250");
-    let mut e = engine();
-    let conversion = convert(&mut e, &text, "1 mm", "2 N").unwrap();
-    assert_eq!(conversion.report.analysis.as_ref().unwrap().step, "STATIC");
-    let source = serde_json::to_value(&conversion.commands[2]).unwrap();
-    assert_eq!(source["mesher"]["nodeTargets"], json!([205, 218, 231, 244]));
-    let material = serde_json::to_value(&conversion.commands[3]).unwrap();
-    assert_eq!(material["E"]["value"], 400e9);
-    install(&mut e, &conversion);
-    ok(&mut e, r#"{"cmd":"solve.run","step":"STATIC","solver":"cpu-direct"}"#);
-    let mesh = e.mesh().unwrap().clone();
-    for &id in &mesh.sets["bar.nset_TIP"].nodes {
-        assert!((e.field(Some("STATIC"), Field::Displacement).unwrap().data[id as usize * 3] - 5e-7).abs() < 1e-16);
+    for increments in ["", ",,,", "0", "0,0,0", "1,0,0", "0,1,1e-5"] {
+        let text = HEX
+            .replace("ROOT,1,3", "ROOT,1\nROOT,2,,0\nROOT,3,3,0")
+            .replace("*STEP,NAME=AXIAL,NLGEOM=NO", "*step,NLGEOM=no")
+            .replace("1,1,1e-5", increments)
+            .replace("TIP,1,250", "+205,1,250\n218,1,250\n231,1,250\n244,1,250");
+        let mut e = engine();
+        let conversion = convert(&mut e, &text, "1 mm", "2 N").unwrap();
+        assert_eq!(conversion.report.analysis.as_ref().unwrap().step, "STATIC");
+        let source = serde_json::to_value(&conversion.commands[2]).unwrap();
+        assert_eq!(source["mesher"]["nodeTargets"], json!([205, 218, 231, 244]));
+        let material = serde_json::to_value(&conversion.commands[3]).unwrap();
+        assert_eq!(material["E"]["value"], 400e9);
+        install(&mut e, &conversion);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"STATIC","solver":"cpu-direct"}"#);
+        let mesh = e.mesh().unwrap().clone();
+        for &id in &mesh.sets["bar.nset_TIP"].nodes {
+            assert!((e.field(Some("STATIC"), Field::Displacement).unwrap().data[id as usize * 3] - 5e-7).abs() < 1e-16);
+        }
+        for stress in e.field(Some("STATIC"), Field::Stress).unwrap().data.chunks_exact(6) {
+            assert!((stress[0] - 2e5).abs() < 1e-6);
+        }
+        let reaction: f64 = e.field(Some("STATIC"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+        assert!((reaction + 2000.0).abs() < 1e-8);
     }
-    for stress in e.field(Some("STATIC"), Field::Stress).unwrap().data.chunks_exact(6) {
-        assert!((stress[0] - 2e5).abs() < 1e-6);
-    }
-    let reaction: f64 = e.field(Some("STATIC"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
-    assert!((reaction + 2000.0).abs() < 1e-8);
 }
 
 #[test]
 fn abaqus_static_semantic_zero_is_portable_through_browser_json_and_native_replay() {
-    let text = HEX.replace("200000,0\n", "200000,-0\n").replace("101,0,0,0", "101,-0,-0,-0");
+    let text = HEX
+        .replace("200000,0\n", "200000,-0\n")
+        .replace("101,0,0,0", "101,-0,-0,-0")
+        .replace("ROOT,1,3\n", "ROOT,1,3,-0\n")
+        .replace("TIP,1,250", "TIP,1,250\nTIP,2,-0\nTIP,3,-0");
     let mut e = engine();
     let conversion = convert(&mut e, &text, "1 mm", "1 N").unwrap();
+    assert_eq!(conversion.report.sha256, sha256_hex(text.as_bytes()));
     let wire = serde_json::to_string(&conversion.commands).unwrap();
     assert!(!wire.contains("-0.0"));
+    assert_eq!(
+        serde_json::to_value(&conversion.commands[2]).unwrap()["mesher"]["provenance"]["sha256"],
+        conversion.report.sha256
+    );
     let mut browser = engine();
     install(&mut e, &conversion);
     for command in serde_json::from_str::<Vec<femlab_engine::Command>>(&wire).unwrap() {
@@ -465,6 +476,9 @@ fn abaqus_static_rejects_unsupported_keywords_parameters_and_conflicts_without_m
 fn abaqus_static_requires_explicit_finite_scales_and_full_material_section_step_coverage() {
     let mut e = engine();
     for (length, force, code, path) in [
+        ("0 m", "1 N", ErrorCode::Schema, "unitLength"),
+        ("-1 m", "1 N", ErrorCode::Schema, "unitLength"),
+        ("1 N", "1 N", ErrorCode::UnitDimension, "unitLength"),
         ("1 mm", "1 m", ErrorCode::UnitDimension, "unitForce"),
         ("1 mm", "0 N", ErrorCode::Schema, "unitForce"),
         ("1 mm", "-1 N", ErrorCode::Schema, "unitForce"),
@@ -508,6 +522,17 @@ fn abaqus_static_requires_explicit_finite_scales_and_full_material_section_step_
 fn abaqus_static_rejects_malformed_history_records_and_requires_the_static_force_scale() {
     let mut e = engine();
     let before = e.export_file();
+    for text in ["", "** comments do not define a model\n", "*HEADING\nNo mesh\n"] {
+        let error = convert(&mut e, text, "1 mm", "1 N").unwrap_err();
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert_eq!(error.where_.as_deref(), Some("line 1 *INPUT mesh"));
+        assert_eq!(e.export_file(), before);
+    }
+    let text = format!("{}*MATERIAL,NAME=STEEL\n*ELASTIC\n", HEX.split("*MATERIAL").next().unwrap());
+    let error = convert(&mut e, &text, "1 mm", "1 N").unwrap_err();
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.where_.as_deref().unwrap().contains("*ELASTIC data"));
+    assert_eq!(e.export_file(), before);
     for (from, to) in [
         ("*HEADING", "1,0,0,0\n*HEADING"),
         ("*NODE\n101,0,0,0", "*NODE\n*NODE\n101,0,0,0"),
@@ -552,6 +577,11 @@ fn abaqus_static_rejects_malformed_history_records_and_requires_the_static_force
     let error = e.query(serde_json::from_value(mesh_mode).unwrap()).unwrap_err();
     assert_eq!(error.code, ErrorCode::Schema);
     assert_eq!(error.where_.as_deref(), Some("unitForce"));
+    let mut unnamed = serde_json::to_value(request(HEX, "1 mm", "1 N")).unwrap();
+    unnamed["name"] = json!(" ");
+    let error = e.query(serde_json::from_value(unnamed).unwrap()).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert_eq!(error.where_.as_deref(), Some("name"));
     assert_eq!(e.export_file(), before);
 }
 

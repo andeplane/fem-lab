@@ -40,7 +40,11 @@ try {
   for (const fixture of ['bar-hex-si.inp', 'bar-hex-mm-n.inp', 'bar-tet-si.inp', 'bar-tet-mm-n.inp']) {
     const original = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus-static', fixture), 'utf8');
     for (const signedZero of [false, true]) {
-    const text = signedZero ? original.replace(',0\n*SOLID SECTION', ',-0\n*SOLID SECTION').replace('101,0,0,0', '101,-0,-0,-0') : original;
+    const text = signedZero ? original
+      .replace(',0\n*SOLID SECTION', ',-0\n*SOLID SECTION')
+      .replace('101,0,0,0', '101,-0,-0,-0')
+      .replace('ROOT,1,3\n', 'ROOT,1,3,-0\n')
+      .replace('*END STEP', 'TIP,2,-0\nTIP,3,-0\n*END STEP') : original;
     if (signedZero) assert.notEqual(text, original);
     const conversionQuery = request(text, fixture.includes('mm-n') ? '1 mm' : '1 m');
     const engine = new Engine(1);
@@ -48,6 +52,8 @@ try {
       const before = engine.export_file();
       const conversion = query(engine, conversionQuery);
       assert.equal(engine.export_file(), before, 'conversion cannot mutate the active document');
+      assert.equal(conversion.report.sha256, conversionQuery.sha256);
+      assert.equal(conversion.commands[2].mesher.provenance.sha256, conversionQuery.sha256);
       assert.equal(conversion.report.analysisConfigured, true);
       assert.equal(conversion.report.unitForce.value, 1);
       assert.equal(conversion.report.unitForce.unit, 'N');
