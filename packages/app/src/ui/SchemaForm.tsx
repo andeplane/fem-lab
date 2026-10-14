@@ -363,9 +363,12 @@ export function SchemaForm(props: FormProps) {
       <form class="props-body" onSubmit={(e) => (e.preventDefault(), apply())}>
         <div class="prop-name">
           <span class="mono">{name}</span>
-          <Cmd dispatch={dispatch} cmd="clipboard.copy" class="link" args={{ what: { kind: 'mention', ref: `${form.cmd.split('.')[0]}:${name}` } }}>
+          {form.target ? <Cmd dispatch={dispatch} cmd="chat.insertMention" class="link" onRun={() => {
+            const ref = `${form.target!.kind}:${form.target!.name}`;
+            return dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }));
+          }}>
             @ reference in chat
-          </Cmd>
+          </Cmd> : null}
         </div>
         <div class="prop-hint">{String(variant['description'] ?? '').split('\n').join(' ')}</div>
         {fields.map((f) => (
@@ -395,7 +398,7 @@ export function SchemaForm(props: FormProps) {
             >
               {label}
             </Cmd>
-            <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: form.cmd, args: form.initial }} title="Revert to the values this form opened with">
+            <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: form.cmd, args: form.initial, keepInitial: true }} title="Revert to the values this form opened with">
               Revert
             </Cmd>
           </div>

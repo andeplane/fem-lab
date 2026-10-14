@@ -419,7 +419,7 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
   const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
   if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
   const { cmd, ...args } = command;
-  store.openForm(cmd, args);
+  store.openForm(cmd, args, false, target);
 }
 
 /**
@@ -471,7 +471,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.edit',
       execution: 'sessionView',
-      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
       run: (input) => editDefinition(store, transport, input as DefinitionTarget),
@@ -503,7 +503,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.open',
       execution: 'sessionView',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
       schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
       tool: true,
       run: (input) => {
