@@ -971,9 +971,7 @@ impl Engine {
             }
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        // A successful solve reply must format its new ledger before publishing the record.
-        checked_static_equilibrium(&self.model, result.static_equilibrium.as_ref())?;
-        self.retain_result(step.name.clone(), result);
+        self.retain_result(step.name.clone(), result)?;
         Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)?) })
     }
 
@@ -1075,7 +1073,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            self.retain_result(step.name, last.expect("at least two sizes ran"));
+            self.retain_result(step.name, last.expect("at least two sizes ran"))?;
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -1173,7 +1171,7 @@ impl Engine {
                 None => relative <= target || iteration + 1 == iterations as usize,
             };
             if done {
-                self.retain_result(step.name.clone(), result);
+                self.retain_result(step.name.clone(), result)?;
                 let result_id = self.result_record(Some(step_name), None)?.id.clone();
                 let report = crate::query::AdaptReport {
                     rows,
@@ -1487,7 +1485,7 @@ fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Vec<SweepRow> {
 
 /// Convert only the new wrench ledger with checked Quantity semantics. Legacy display()
 /// retains its current contract; a preferred-unit overflow must never relabel SI as that unit.
-fn checked_static_equilibrium(
+pub(crate) fn checked_static_equilibrium(
     model: &Model,
     source: Option<&crate::post::equilibrium::StaticEquilibrium>,
 ) -> Result<Option<Box<StaticEquilibrium>>, Error> {

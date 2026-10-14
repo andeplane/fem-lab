@@ -55,8 +55,10 @@ fn field_location(per: crate::post::Per) -> &'static str {
 }
 
 impl Engine {
-    /// Only called after a successful solve, with its exact Mesh still installed.
-    pub(crate) fn retain_result(&mut self, step: String, mut result: StepResult) {
+    /// Publish a successful solve on its exact Mesh only after its new wrench ledger
+    /// can be displayed in the retained Model units. Studies share this boundary.
+    pub(crate) fn retain_result(&mut self, step: String, mut result: StepResult) -> Result<(), Error> {
+        crate::solve_run::checked_static_equilibrium(&self.model, result.static_equilibrium.as_ref())?;
         for warning in &mut result.warnings {
             warning.step = Some(step.clone());
         }
@@ -80,6 +82,7 @@ impl Engine {
                 self.results.remove(&old.step);
             }
         }
+        Ok(())
     }
 
     pub(crate) fn resident_result_bytes(&self) -> u64 {
@@ -582,7 +585,7 @@ mod tests {
             crate::command::Field::Temperature,
             crate::post::FieldData::new(crate::post::Per::Node, 1, vec![value; nodes]),
         );
-        engine.retain_result(step.into(), result);
+        engine.retain_result(step.into(), result).unwrap();
     }
 
     #[test]

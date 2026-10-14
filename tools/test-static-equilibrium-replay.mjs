@@ -232,9 +232,47 @@ async function heldPair(engine, magnitude) {
     const before = snapshot(engine);
     assert.equal(before.selected.resultId, initial.resultId);
     assert.equal(before.selected.stale, true);
-    await assert.rejects(engine.dispatch(JSON.stringify({ cmd: 'solve.run', step: 'static', solver: 'cpu-direct' })), error => boundaryError(error, 'schema', true));
+    for (const command of [
+      { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' },
+      { cmd: 'study.converge', step: 'static', sizes: ['1 m', '0.5 m'], quantity: { kind: 'max', field: 'displacement' }, restore: false },
+    ]) {
+      await assert.rejects(engine.dispatch(JSON.stringify(command)), error => boundaryError(error, 'schema', true));
+      unchanged(engine, before);
+    }
+    await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'N', length: 'm' } });
+    await dispatch(engine, { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' });
+    assert.equal(selected(engine).resultId, 'result-2', 'neither rejected publisher advanced the Result sequence');
+    console.log('WASM: finite-SI but unrepresentable-display solves and retaining convergence studies preserve the prior Result, catalogue and sequence.');
+  } finally { engine.free(); }
+}
+
+{
+  const engine = new Engine(1);
+  try {
+    for (const command of [
+      { cmd: 'model.new', name: 'held adaptive cube' },
+      { cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '1 m', '1 m'] },
+      { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3, rho: '7850 kg/m^3' },
+      { cmd: 'material.assign', material: 'steel', bodies: ['bar'] },
+      { cmd: 'mesh.set', mesher: { kind: 'tet', size: '1 m' }, order: 1 },
+      { cmd: 'geometry.nameRegion', name: 'ALL', where: { kind: 'body', name: 'bar' } },
+      { cmd: 'constraint.fix', name: 'all', on: 'ALL' },
+      { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['all'], loads: [] },
+      { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' },
+      { cmd: 'load.force', name: 'positive', on: 'bar.xmin', total: ['1e307 N', '0 N', '0 N'] },
+      { cmd: 'load.force', name: 'negative', on: 'bar.xmax', total: ['-1e307 N', '0 N', '0 N'] },
+      { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['all'], loads: ['positive', 'negative'] },
+      { cmd: 'model.setUnits', units: { force: 'mN', length: 'mm' } },
+    ]) await dispatch(engine, command);
+    // Every tet4 DOF is held: motion and the ZZ estimate are zero. Only the
+    // preferred-unit conversion of finite opposing forces is unrepresentable.
+    const before = snapshot(engine);
+    await assert.rejects(engine.dispatch(JSON.stringify({ cmd: 'study.adapt', step: 'static', targetError: 0.01, maxIterations: 1 })), error => boundaryError(error, 'schema', true));
     unchanged(engine, before);
-    console.log('WASM: a new finite-SI but unrepresentable-display solve cannot replace the prior readable Result or mutate its authored state.');
+    await dispatch(engine, { cmd: 'model.setUnits', units: { force: 'N', length: 'm' } });
+    await dispatch(engine, { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' });
+    assert.equal(selected(engine).resultId, 'result-2', 'rejected adaptation did not advance the Result sequence');
+    console.log('WASM: an unrepresentable adaptive study preserves the prior Result, catalogue and sequence before a valid next solve.');
   } finally { engine.free(); }
 }
 

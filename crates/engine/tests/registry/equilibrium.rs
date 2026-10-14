@@ -162,6 +162,81 @@ fn a_solve_with_unrepresentable_display_units_cannot_replace_a_readable_prior_re
 }
 
 #[test]
+fn a_retained_convergence_study_checks_its_ledger_before_replacing_the_prior_result() {
+    let mut e = engine();
+    let initial = held_moment_pair(&mut e, 1000.0);
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"mN","length":"mm"}}));
+    moment(&mut e, "positive", "shaft.p0", [0.0, 1e307, 0.0]);
+    moment(&mut e, "negative", "shaft.p1", [0.0, -1e307, 0.0]);
+    assert_rejected_study_preserves_record(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"displacement"},"restore":false}"#,
+    );
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"N","length":"m"}}));
+    command(&mut e, json!({"cmd":"solve.run","step":"static","solver":"cpu-direct"}));
+    let accepted = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(initial["resultId"], "result-1");
+    assert_eq!(accepted["resultId"], "result-2", "the rejected study did not advance the Result sequence");
+    balanced(&accepted);
+}
+
+#[test]
+fn an_adaptive_study_checks_its_ledger_before_replacing_the_prior_result() {
+    let mut e = engine();
+    command(&mut e, json!({"cmd":"model.new","name":"fully held adaptive cube"}));
+    command(&mut e, json!({"cmd":"geometry.addBox","name":"bar","size":["1 m","1 m","1 m"]}));
+    command(&mut e, json!({"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3,"rho":"7850 kg/m^3"}));
+    command(&mut e, json!({"cmd":"material.assign","material":"steel","bodies":["bar"]}));
+    command(&mut e, json!({"cmd":"mesh.set","mesher":{"kind":"tet","size":"1 m"},"order":1}));
+    command(&mut e, json!({"cmd":"geometry.nameRegion","name":"ALL","where":{"kind":"body","name":"bar"}}));
+    command(&mut e, json!({"cmd":"constraint.fix","name":"all","on":"ALL"}));
+    for (magnitude, run) in [(1000.0, true), (1e307, false)] {
+        command(
+            &mut e,
+            json!({"cmd":"load.force","name":"positive","on":"bar.xmin","total":[format!("{magnitude} N"),"0 N","0 N"]}),
+        );
+        command(
+            &mut e,
+            json!({"cmd":"load.force","name":"negative","on":"bar.xmax","total":[format!("{} N", -magnitude),"0 N","0 N"]}),
+        );
+        if run {
+            let initial = solve(&mut e, &["all"], &["positive", "negative"]);
+            assert_eq!(initial["resultId"], "result-1");
+            balanced(&initial);
+        }
+    }
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"mN","length":"mm"}}));
+    // All DOFs are held: u=0 and the ZZ estimate is zero. The failure is display
+    // representability of actual finite force actions, not solver convergence.
+    assert_rejected_study_preserves_record(
+        &mut e,
+        r#"{"cmd":"study.adapt","step":"static","targetError":0.01,"maxIterations":1}"#,
+    );
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"N","length":"m"}}));
+    command(&mut e, json!({"cmd":"solve.run","step":"static","solver":"cpu-direct"}));
+    let accepted = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(accepted["resultId"], "result-2", "the rejected adaptation did not advance the Result sequence");
+    balanced(&accepted);
+}
+
+fn assert_rejected_study_preserves_record(e: &mut Engine, study: &str) {
+    let selected = serde_json::to_value(result_of(e, Some("static"))).unwrap();
+    let catalogue = serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap();
+    let file = e.export_file();
+    let revision = e.revision();
+    let hash = e.model_hash();
+    let rejected = err(e, study);
+    assert_eq!(rejected.code, ErrorCode::Schema);
+    assert_eq!(rejected.where_.as_deref(), Some("staticEquilibrium.forceScale"));
+    assert!(rejected.suggestion.as_deref().unwrap().contains("model.setUnits"));
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(serde_json::to_value(result_of(e, Some("static"))).unwrap(), selected);
+    assert_eq!(serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap(), catalogue);
+}
+
+#[test]
 fn an_overflowing_force_lever_arm_rejects_before_publishing_a_result() {
     let mut e = engine();
     shaft(&mut e, 2, [0.0; 3], [1.0, 0.0, 0.0], 100.0);

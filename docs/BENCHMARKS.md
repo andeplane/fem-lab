@@ -2426,6 +2426,10 @@ Changing the finite large Result's display units to mN/mm also fails clearly for
 selected result/report Queries, because the requested scale conversion overflows.
 Its retained-id Query remains exact in its original N/m context. A solve authored
 with those unrepresentable preferred units preserves its prior readable Result.
+The same publication check is shared by a convergence study with `restore:false`
+and an adaptive study. Independent fully held beam/tet4 cases have zero motion
+and finite opposing actions; unrepresentable preferred units reject before
+replacing the selected Result, changing its catalogue or advancing its sequence.
 Buckling skips this static-only recovery in the shared postprocessor and retains
 its existing preload/force/buckling-factor contract. Legacy formatting behavior
 outside the new ledger is tracked separately by #580.
