@@ -1,3 +1,5 @@
+import { AccountController } from './account/controller';
+import { firebaseAuth } from './account/firebase';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
@@ -18,7 +20,7 @@ import { ResultsView } from './results';
 import type { CameraState } from './viewer/viewer';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
-import { Store } from './store';
+import { Store, unsaved } from './store';
 import { AnimationCapture, browserAnimationCaptureEnvironment } from './animation-capture';
 import { App } from './ui/App';
 import { SessionWorkspace } from './session-workspace';
@@ -34,6 +36,7 @@ const root = document.getElementById('app')!;
 const host = readHostCaps();
 const engineOptions = { gpu: false, threads: host.threads };
 const repository = new ProjectRepository(typeof indexedDB === 'undefined' ? memoryAtomicProjects() : indexedDbAtomicProjects(indexedDB), () => crypto.randomUUID());
+export const accounts = new AccountController(__FIREBASE_CONFIG__ && __AI_API_ORIGIN__ ? { auth: firebaseAuth(__FIREBASE_CONFIG__, location, sessionStorage, () => history.replaceState(null, '', location.pathname + location.hash)), fetch: (...args) => fetch(...args), origin: __AI_API_ORIGIN__, googleEnabled: __GOOGLE_SIGN_IN__, beforeLeave: prepareAccountNavigation, navigate: url => { location.assign(url); } } : null);
 const bundles = new WeakMap<object, Bundle>();
 const scriptJobs = new Set<{ runner: ScriptHost; producer: Producer }>();
 const nextMeta = (name: string): ProjectMeta => ({ id: crypto.randomUUID(), name, at: Date.now(), createdAt: Date.now(), commands: 0, hash: null, thumbnail: null });
@@ -60,8 +63,10 @@ class Bundle {
   private version: string | null = null;
   private fitAfterOpen = false;
   private initialCamera: CameraState | undefined;
+  private detachAccount = () => {};
   disposed = false;
   constructor(readonly transport: SessionTransport) {
+    this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
     this.results = new ResultsView(this.store, transport, this.viewer, { now: () => performance.now(), schedule: (cb, ms) => setTimeout(cb, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) });
     this.viewer.onReady = () => {
@@ -133,6 +138,18 @@ class Bundle {
     this.latest = this.binding.capture(snapshot, Date.now());
     await this.save();
   }
+  async prepareAccountReturn(): Promise<string | null> {
+    await this.refreshing;
+    const snapshot = await this.transport.snapshot();
+    if (!snapshot.file.journal.entries.length) return null;
+    if (this.projectDeleted) {
+      if (unsaved(this.store.state)) throw new FemError('unsupported', 'Save a model file before leaving this deleted browser project.', 'account', 'file.save');
+      return null;
+    }
+    if (!this.autosave && this.savedMeta?.hash !== snapshot.model.hash) throw new FemError('unsupported', 'Save this project or enable browser autosave before leaving for login or payment.', 'account', 'project.save');
+    await this.prepareToLeave();
+    return this.savedMeta?.id ?? null;
+  }
   async recoverySource(source: ReplacementSource): Promise<ReplacementSource> {
     if (this.projectDeleted || !this.binding) return source;
     if (this.autosave) await this.save();
@@ -195,6 +212,7 @@ class Bundle {
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
+    this.detachAccount();
     this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.results.invalidateTransient();
@@ -251,7 +269,7 @@ class Producer {
           replace: async (commands, abaqusReport) => { await transport.replaceWith({ kind: 'commands', commands, abaqusReport }, admitted); },
         };
       },
-    }, bundle.capture);
+    }, bundle.capture, undefined, accounts.services);
     ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());
       try {
@@ -314,6 +332,11 @@ class Producer {
 }
 
 let displayed: Bundle | undefined;
+export async function prepareAccountNavigation(): Promise<void> {
+  const id = await displayed?.prepareAccountReturn();
+  if (id) sessionStorage.setItem('femlab.accountReturnProject', id);
+  else sessionStorage.removeItem('femlab.accountReturnProject');
+}
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,
@@ -369,6 +392,12 @@ async function boot(): Promise<void> {
   bootStage('Loading the simulation engine…', 60);
   const active = await workspace.start();
   await active.resources.refresh();
+  const accountReturn = sessionStorage.getItem('femlab.accountReturnProject');
+  if (accountReturn) {
+    sessionStorage.removeItem('femlab.accountReturnProject');
+    try { await window.fem.dispatch({ cmd: 'project.open', id: accountReturn }); return; }
+    catch (error) { workspace.active.resources.fail(error); }
+  }
   const example = new URLSearchParams(location.search).get('example');
   if (example) await window.fem.dispatch({ cmd: 'file.openExample', name: example });
   const commands = await readShareFragment(location.hash);
@@ -380,6 +409,7 @@ function bootStage(message: string, progress: number): void {
   if (status) status.textContent = message;
   if (bar) bar.style.width = `${progress}%`;
 }
+void accounts.initialize();
 void boot().catch(error => {
   const message = error instanceof Error ? error.message : String(error);
   if (root.querySelector('.boot')) {

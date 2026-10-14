@@ -1,3 +1,4 @@
+import type { AccountServices } from '@femlab/registry';
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
@@ -133,6 +134,7 @@ export function makeHostContext(
   session: SessionHostServices = unboundSession,
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
   abaqusIo?: AbaqusIo,
+  account?: AccountServices,
 ): HostContext {
   const own = session.projects;
   const v = (): Viewer => {
@@ -140,6 +142,7 @@ export function makeHostContext(
     return viewer.current;
   };
   return {
+    account,
     transport,
     abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {

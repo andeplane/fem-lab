@@ -81,3 +81,11 @@ bounded at 16 MiB. At most two PNG/JPEG/WebP images are accepted, each at most
 Deploy long SSE directly to Cloud Run/the API load balancer. Firebase Hosting
 rewrites time out at 60 seconds. Run `node dist/main.mjs --recover` as a scheduled,
 authenticated Cloud Run Job, not as post-response work in the HTTP process.
+
+The optional browser account build accepts public configuration through
+`FEMLAB_FIREBASE_CONFIG` (Firebase web app JSON), `FEMLAB_AI_API_ORIGIN` (HTTPS API origin)
+and `FEMLAB_BASE_PATH=/` for Firebase Hosting. These are not service credentials.
+`FEMLAB_GOOGLE_SIGN_IN=true` displays Google redirect login only after the Google provider
+and same-domain auth helper have been configured. Email links use session persistence,
+retain the pending email in this tab only, and remove the callback code after completing
+sign-in. No ID token is exposed by a host Command/Query or stored in the Journal.

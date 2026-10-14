@@ -2,7 +2,7 @@
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
 import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
-import { parseRef, refOf } from '@femlab/registry';
+import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
@@ -84,6 +84,7 @@ export function verificationState(record: AssistantVerification, state: UiState)
 }
 
 export interface UiState {
+  account: AccountState;
   assistantVerifications: AssistantVerification[];
 
   autosave: AutosaveState['saved'];
@@ -230,6 +231,7 @@ export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], ref
 export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] };
 
 export const initialState: UiState = {
+  account: structuredClone(EMPTY_ACCOUNT),
   assistantVerifications: [],
 
   autosave: null,
