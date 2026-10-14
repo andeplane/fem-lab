@@ -1958,6 +1958,21 @@ button.solve.stale {
   font-size: 11.5px;
   line-height: 1.55;
 }
+.theory-copy > p {
+  margin: 0 0 10px;
+}
+.theory-copy > :last-child {
+  margin-bottom: 0;
+}
+.theory-copy > ul {
+  margin: 0 0 10px;
+  padding-left: 18px;
+}
+.theory-copy .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .theory-copy .katex {
   color: var(--text-high);
   font-size: 1.02em;

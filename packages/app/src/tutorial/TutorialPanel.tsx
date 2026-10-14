@@ -1,5 +1,6 @@
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
 import { useStore } from '../ui/cmd';
+import { TheoryText } from '../ui/TheoryText';
 // The compact side card of DESIGN-BRIEF §5.8b: step n of m, the explanation, "do it for me",
 // Skip, Next. Not part of the `[data-cmd]`-enforced App shell (ADR 0003) — it is a self
 // contained panel the coordinator mounts once `<TutorialPanel registry={registry} store={store}
@@ -220,7 +221,7 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
             ))}
           </dl>
         ) : null}
-        {step.theory ? <pre class="tutorial-theory mono">{step.theory}</pre> : null}
+        {step.theory ? <div class="tutorial-theory"><TheoryText text={step.theory} /></div> : null}
         <div class="tutorial-actions">
           {step.doIt ? (
             <button type="button" class="tutorial-btn primary" disabled={busy} onClick={() => void doIt()}>

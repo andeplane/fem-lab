@@ -74,7 +74,6 @@
 }
 
 .tutorial-theory {
-  white-space: pre-wrap;
   background: var(--bg-well);
   border: 1px solid var(--cyan-border);
   color: var(--cyan-text);
@@ -83,6 +82,12 @@
   font-size: 11px;
   line-height: 1.6;
   margin: 0 0 10px;
+}
+
+.tutorial-theory .theory-copy {
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
 }
 
 .tutorial-actions {

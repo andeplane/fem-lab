@@ -12,6 +12,7 @@ import { bindRegistryProducer } from '../src/producer-registry';
 import { afterEffects, waitFor, waitForGone, waitForText } from './wait-for';
 import { Tour } from '../src/tutorial/Tour';
 import { TutorialPanel } from '../src/tutorial/TutorialPanel';
+import { tutorialById } from '../src/tutorial/tutorials';
 
 const click = async (el: Element | null): Promise<void> => {
   el!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -297,6 +298,28 @@ describe('TutorialPanel', () => {
     expect(document.activeElement).toBe(typing); // the person was mid-edit: leave them alone
     props.remove();
     target.remove();
+  });
+
+  it('renders the concrete slab closing theory as paragraphs, maths, bold, code and bullets', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Concrete floor slab')), 'the concrete slab tutorial'));
+    const tutorial = tutorialById('concrete-floor-slab')!;
+    for (let i = 0; i < tutorial.steps.length - 1; i++) {
+      await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    }
+    const theory = await waitFor(() => root.querySelector('.tutorial-theory'), 'the closing theory');
+    expect(theory.querySelectorAll('.katex').length).toBeGreaterThan(10);
+    expect(theory.querySelector('.katex-display')).not.toBeNull();
+    expect(theory.querySelector('strong')?.textContent).toBe('The load.');
+    expect(theory.querySelector('code')?.textContent).toBe('bearing-a');
+    expect(theory.querySelectorAll('li')).toHaveLength(3);
+    expect(theory.querySelectorAll('.theory-copy > p').length).toBeGreaterThan(5);
+    expect(theory.textContent).not.toContain('$');
+    expect(theory.textContent).not.toContain('**');
+    expect(theory.tagName).not.toBe('PRE');
   });
 
   it('Skip moves past a step without the Command ever appearing', async () => {

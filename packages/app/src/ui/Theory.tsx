@@ -1,5 +1,4 @@
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
+import { TheoryText } from './TheoryText';
 import { useEffect, useState } from 'preact/hooks';
 import { BENCHMARK_UNMAPPED_REASONS, benchmarkChanged, readBenchmark, type ActiveBenchmark, type BenchmarkProvenance, type BenchmarkReading } from '../benchmark';
 import { formatNumber } from '../fields';
@@ -10,17 +9,6 @@ type ReadingState =
   | { kind: 'loading'; benchmark: string; result: ResultSummary; study: StudyReport | null; stale: boolean }
   | { kind: 'ready'; benchmark: string; result: ResultSummary; study: StudyReport | null; stale: boolean; reading: BenchmarkReading }
   | { kind: 'error'; benchmark: string; result: ResultSummary; study: StudyReport | null; stale: boolean; message: string };
-
-/** Render only the inline TeX delimited by `$`; every other metadata byte stays text. */
-export function TheoryText({ text }: { text: string }) {
-  return (
-    <p class="theory-copy">
-      {text.split(/(\$[^$\n]+\$)/g).map((part, i) =>
-        part.startsWith('$') && part.endsWith('$') ? <span key={i} dangerouslySetInnerHTML={{ __html: katex.renderToString(part.slice(1, -1), { throwOnError: false }) }} /> : part,
-      )}
-    </p>
-  );
-}
 
 const values = (row: number[], unit: string): string => `${row.map(formatNumber).join(' · ')} ${unit}`;
 
