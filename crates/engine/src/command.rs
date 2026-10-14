@@ -230,7 +230,7 @@ impl ObjectKind {
 #[serde(rename_all = "kebab-case")]
 pub enum Procedure {
     /// Linear static equilibrium.
-    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic"]))]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
     #[schemars(extend("x-results" = ["u", "stress", "reactions"]))]
     Static,
@@ -243,7 +243,7 @@ pub enum Procedure {
     /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
     /// follow the deformation (a pressure keeps its reference direction and area) and a
     /// temperature field is applied in full rather than ramped with the load factor.
-    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "yield", "plasticity"]))]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "yield", "plasticity", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
     #[schemars(extend("x-results" = ["u", "Cauchy stress", "reactions"]))]
     StaticNonlinear,
@@ -282,7 +282,7 @@ pub enum Procedure {
     /// perfectly elastic structure would reach. Not available for the axisymmetric idealisation,
     /// and it needs the direct solver: the iteration back-substitutes hundreds of times through
     /// one factorisation, which `cpu-pcg` and `gpu-pcg` do not build.
-    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic"]))]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness"]))]
     #[schemars(extend("x-results" = ["load factors", "mode shapes"]))]
     Buckling,
@@ -297,14 +297,14 @@ pub enum Procedure {
     #[schemars(extend("x-results" = ["T", "reaction power", "stored-energy rate"]))]
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
-    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
     Explicit,
     /// Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on
     /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
     /// `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.
-    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho", "alpha"]))]
     #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
     #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
     Implicit,

@@ -4117,7 +4117,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -4137,7 +4138,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -4174,7 +4176,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -4229,7 +4232,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -4250,7 +4254,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -9524,7 +9529,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -9544,7 +9550,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -9581,7 +9588,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -9636,7 +9644,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -9657,7 +9666,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -15398,7 +15408,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -15418,7 +15429,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -15455,7 +15467,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -15510,7 +15523,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -15531,7 +15545,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -20987,7 +21002,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -21007,7 +21023,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -21044,7 +21061,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -21099,7 +21117,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -21120,7 +21139,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -30430,7 +30450,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -30450,7 +30471,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -30487,7 +30509,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -30542,7 +30565,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -30563,7 +30587,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -35899,7 +35924,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -35919,7 +35945,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -35956,7 +35983,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -36011,7 +36039,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -36032,7 +36061,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -42830,7 +42860,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -42850,7 +42881,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -42887,7 +42919,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -42942,7 +42975,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -42963,7 +42997,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -49042,7 +49077,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -49062,7 +49098,8 @@
               "nu",
               "orthotropic",
               "yield",
-              "plasticity"
+              "plasticity",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness (E, ν or orthotropic)"
@@ -49099,7 +49136,8 @@
             "x-material-properties": [
               "E",
               "nu",
-              "orthotropic"
+              "orthotropic",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness"
@@ -49154,7 +49192,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",
@@ -49175,7 +49214,8 @@
               "E",
               "nu",
               "orthotropic",
-              "rho"
+              "rho",
+              "alpha"
             ],
             "x-material-needs": [
               "elastic stiffness",

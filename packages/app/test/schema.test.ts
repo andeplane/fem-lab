@@ -74,6 +74,15 @@ describe('procedure contracts', () => {
     expect(procedureSummary('heat-transient')).toBe('heat-transient · needs k, ρ, cp · gives T, reaction power, stored-energy rate');
     expect(procedureSummary('static')).toContain('E, ν or orthotropic');
   });
+
+  it('declares optional thermal expansion only for procedures that consume thermal strain', () => {
+    for (const name of ['static', 'static-nonlinear', 'buckling', 'explicit', 'implicit']) {
+      expect(procedureInfo(name).materialProperties, name).toContain('alpha');
+    }
+    for (const name of ['modal', 'heat-steady', 'heat-transient', 'harmonic', 'randomVibration']) {
+      expect(procedureInfo(name).materialProperties, name).not.toContain('alpha');
+    }
+  });
 });
 
 describe('fieldsOf', () => {

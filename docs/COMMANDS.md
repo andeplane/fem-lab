@@ -2395,7 +2395,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-material-properties": [
         "E",
         "nu",
-        "orthotropic"
+        "orthotropic",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness (E, ν or orthotropic)"
@@ -2415,7 +2416,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "nu",
         "orthotropic",
         "yield",
-        "plasticity"
+        "plasticity",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness (E, ν or orthotropic)"
@@ -2452,7 +2454,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-material-properties": [
         "E",
         "nu",
-        "orthotropic"
+        "orthotropic",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness"
@@ -2507,7 +2510,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "E",
         "nu",
         "orthotropic",
-        "rho"
+        "rho",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness",
@@ -2528,7 +2532,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "E",
         "nu",
         "orthotropic",
-        "rho"
+        "rho",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness",
@@ -8106,7 +8111,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-material-properties": [
         "E",
         "nu",
-        "orthotropic"
+        "orthotropic",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness (E, ν or orthotropic)"
@@ -8126,7 +8132,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "nu",
         "orthotropic",
         "yield",
-        "plasticity"
+        "plasticity",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness (E, ν or orthotropic)"
@@ -8163,7 +8170,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-material-properties": [
         "E",
         "nu",
-        "orthotropic"
+        "orthotropic",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness"
@@ -8218,7 +8226,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "E",
         "nu",
         "orthotropic",
-        "rho"
+        "rho",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness",
@@ -8239,7 +8248,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "E",
         "nu",
         "orthotropic",
-        "rho"
+        "rho",
+        "alpha"
       ],
       "x-material-needs": [
         "elastic stiffness",

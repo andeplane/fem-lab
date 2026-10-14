@@ -4117,7 +4117,8 @@ const commands = {
           "x-material-properties": [
             "E",
             "nu",
-            "orthotropic"
+            "orthotropic",
+            "alpha"
           ],
           "x-material-needs": [
             "elastic stiffness (E, ν or orthotropic)"
@@ -4137,7 +4138,8 @@ const commands = {
             "nu",
             "orthotropic",
             "yield",
-            "plasticity"
+            "plasticity",
+            "alpha"
           ],
           "x-material-needs": [
             "elastic stiffness (E, ν or orthotropic)"
@@ -4174,7 +4176,8 @@ const commands = {
           "x-material-properties": [
             "E",
             "nu",
-            "orthotropic"
+            "orthotropic",
+            "alpha"
           ],
           "x-material-needs": [
             "elastic stiffness"
@@ -4229,7 +4232,8 @@ const commands = {
             "E",
             "nu",
             "orthotropic",
-            "rho"
+            "rho",
+            "alpha"
           ],
           "x-material-needs": [
             "elastic stiffness",
@@ -4250,7 +4254,8 @@ const commands = {
             "E",
             "nu",
             "orthotropic",
-            "rho"
+            "rho",
+            "alpha"
           ],
           "x-material-needs": [
             "elastic stiffness",

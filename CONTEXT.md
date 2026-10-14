@@ -117,6 +117,15 @@ _Avoid_: internal force, stress resultant, BMD/SFD
 A named constitutive description with SI properties (density, Young's modulus, ...).
 _Avoid_: mat, property card
 
+**Physics group**:
+A schema-declared group of Material properties shown together in Properties: stiffness,
+mass, thermal, expansion, plasticity or anisotropy. Common identity and provenance fields
+always show. A group changes the form's presentation, while its complete Material definition
+remains one Command and one Journal entry. Procedure metadata names the groups and properties
+an analysis can consume, including optional laws and alternative stiffness descriptions.
+See [ADR 0025](docs/adr/0025-schema-conditional-forms.md).
+_Avoid_: material type, separate thermal material
+
 **Constraint**:
 A prescribed kinematic condition on a Set: fixed, roller, prescribed displacement, tie. On a
 beam joint a *clamp* (`constraint.fix` with no rotation named) holds all six DOFs and a *pin*
