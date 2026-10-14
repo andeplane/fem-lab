@@ -4,6 +4,11 @@ import type { UiState } from '../store';
 import { useRef } from 'preact/hooks';
 import { Cmd, type Dispatch } from './cmd';
 import { useDialogFocus } from './Dialog';
+import type { Quantity } from '@femlab/registry';
+
+const quantityText = (value: Quantity) => typeof value === 'string' ? value : `${value.value} ${value.unit}`;
+const draftText = (value: unknown): string => value && typeof value === 'object' && 'value' in value && 'unit' in value
+  ? `${value.value} ${value.unit}` : String(value ?? '');
 
 export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const open = s.panels['abaqus'] === true && s.form?.cmd === 'file.importAbaqus';
@@ -30,7 +35,7 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
   const textField = (key: string, label: string, placeholder?: string) => (
     <label class="field">
       <span class="field-label">{label}</span>
-      <input class="mono input" aria-label={label} data-cmd="form.open" value={String(values[key] ?? '')} placeholder={placeholder}
+      <input class="mono input" aria-label={label} data-cmd="form.open" value={draftText(values[key])} placeholder={placeholder}
         onInput={e => draft({ [key]: (e.target as HTMLInputElement).value })} />
     </label>
   );
@@ -40,7 +45,7 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
         <span class="gallery-title">Import Abaqus .inp</span>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'abaqus', open: false }} title="Close Abaqus import">×</Cmd>
       </div>
-      <div class="props-body">
+      <div class="props-body abaqus-import">
         <p>Import a flat deck with one Body of C3D4 tetrahedra or full-integration C3D8 hexahedra and named Sets. Maximum input: 16 MiB.</p>
         <p>PART, ASSEMBLY, INSTANCE, transforms, INCLUDE, OUTPUT blocks, other element types, and binary .odb or .cae databases are unsupported.</p>
         {textField('name', 'Project name')}
@@ -71,6 +76,51 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
         <Cmd dispatch={dispatch} cmd="file.importAbaqus" class="apply" args={values} disabled={incomplete}>
           {source === 'picker' ? 'Choose .inp and import' : 'Import deck'}
         </Cmd>
+      </div>
+    </div>
+  </div>;
+}
+
+/** Exact converter receipt, published with its project. Ordinary Model files retain source provenance. */
+export function AbaqusImportReport({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const open = s.panels['abaqusReport'] === true && s.abaqusReport !== null;
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialog);
+  if (!open || !s.abaqusReport) return null;
+  const report = s.abaqusReport;
+  const unused = report.sourceLabels.unusedNodes ?? [];
+  const close = () => void dispatch({ cmd: 'panel.toggle', panel: 'abaqusReport', open: false }).catch(() => undefined);
+  return <div class="overlay wide" onClick={close}>
+    <div ref={dialog} class="gallery" role="dialog" aria-modal="true" aria-label="Abaqus import report" tabIndex={-1} onClick={e => e.stopPropagation()}>
+      <div class="gallery-head">
+        <span class="gallery-title">Abaqus import complete</span>
+        <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'abaqusReport', open: false }} title="Close Abaqus import report">×</Cmd>
+      </div>
+      <div class="props-body abaqus-import">
+        <p>Body <b class="mono">{report.body}</b> · {report.elementKind} · {report.mode === 'static' ? 'Linear static analysis configured; not solved' : 'Mesh and Sets imported'}</p>
+        <table class="mono"><tbody>
+          <tr><th>Source nodes</th><td>{report.sourceNodes}</td><th>Active nodes</th><td>{report.activeNodes}</td></tr>
+          <tr><th>Source elements</th><td>{report.sourceElements}</td><th>Input bytes</th><td>{report.inputBytes}</td></tr>
+          <tr><th>One source length unit</th><td>{quantityText(report.unitLength)}</td><th>One source force unit</th><td>{report.unitForce == null ? 'Not used' : quantityText(report.unitForce)}</td></tr>
+        </tbody></table>
+        <p>SI bounds of active nodes at import:</p>
+        <table class="mono"><thead><tr><th>Axis</th><th>Minimum</th><th>Maximum</th></tr></thead><tbody>
+          {['x', 'y', 'z'].map((axis, i) => <tr key={axis}><th>{axis}</th><td>{quantityText(report.bbox[i]!)}</td><td>{quantityText(report.bbox[i + 3]!)}</td></tr>)}
+        </tbody></table>
+        {report.analysis ? <>
+          <p>Material <b class="mono">{report.analysis.material}</b> · Section Set <b class="mono">{report.analysis.sectionElset}</b> · Step <b class="mono">{report.analysis.step}</b></p>
+          <p>Constraints: <span class="mono">{report.analysis.constraints.join(', ')}</span>. Loads: <span class="mono">{report.analysis.loads.join(', ')}</span>.</p>
+          {report.analysis.finalEquilibriumOnly ? <p>The imported Step represents final equilibrium. Abaqus increment history is not reproduced. Use Solve to compute its Result.</p> : null}
+        </> : null}
+        <p>Named Set mappings:</p>
+        <table class="mono"><thead><tr><th>Kind</th><th>Source name</th><th>Imported name</th><th>Members</th></tr></thead><tbody>
+          {report.sets.map(set => <tr key={`${set.kind}:${set.source}`}><td>{set.kind}</td><td>{set.source}</td><td>{set.target}</td><td>{set.count}</td></tr>)}
+        </tbody></table>
+        {unused.length ? <p>Unused authored node labels: <span class="mono">{unused.join(', ')}</span>. These nodes are physically unanalysed and excluded from active mesh bounds.</p> : <p>All authored nodes participate in the active mesh.</p>}
+        {report.headings.length ? <p>Source heading: {report.headings.join(' · ')}</p> : null}
+        {report.preprint.length ? <p>Authored PREPRINT flags: <span class="mono">{report.preprint.map(flags => Object.entries(flags).map(([name, value]) => `${name}=${value ? 'YES' : 'NO'}`).join(', ')).join(' · ')}</span></p> : null}
+        <p class="mono">Source SHA-256: {report.sha256}<br />Conversion: {report.conversionVersion}</p>
+        <p>This receipt describes the original import. Its measurements stay fixed when the Model is edited. Save this project as a normal Model file to reopen it without the original .inp; saved files retain the imported source and Journal.</p>
       </div>
     </div>
   </div>;

@@ -6,7 +6,8 @@
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
-import type { ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
+import type { AbaqusConversion, AbaqusConversionReport, ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, Query, ResultSummary } from './generated/engine';
+import { AbaqusImport, readAbaqus, type AbaqusIo } from './abaqus-import';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
@@ -141,6 +142,12 @@ export interface AutosaveVersion {
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
+  /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
+  abaqus: { capture(): {
+    io: AbaqusIo;
+    convert(query: Extract<Query, { query: 'query.convertAbaqus' }>): Promise<AbaqusConversion>;
+    replace(commands: Command[], report: AbaqusConversionReport): Promise<void>;
+  } };
   view: {
     fit(): void;
     setCamera(c: z.output<typeof CameraState>): void;
@@ -455,6 +462,15 @@ export const HOST_COMMANDS: HostDef[] = [
     if ('json' in how) return importText(ctx, how.json);
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
+  }),
+  def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck (at most 16 MiB) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity; static additionally requires unitForce, while mesh refuses it. Source units are independent of display units. The supported slice is one flat C3D4/C3D8 Body with named Sets; static adds one isotropic elastic Material, translational constraints, CLOAD and one linear STATIC Step. PART/ASSEMBLY/INSTANCE, INCLUDE, OUTPUT, .odb and .cae are unsupported. Unsupported static content is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence; failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
+    const captured = ctx.abaqus.capture();
+    const source = await readAbaqus(how, captured.io);
+    if (source === null) return { cancelled: true };
+    const { name, body, mode, unitLength, unitForce } = how;
+    const conversion = await captured.convert({ query: 'query.convertAbaqus', ...source, name, body, mode, unitLength, ...(unitForce === undefined ? {} : { unitForce }) });
+    await captured.replace(conversion.commands, conversion.report);
+    return { report: conversion.report };
   }),
   def('geometry.importFile', 'modelWrite', 'Import a geometry file from disk as a Body: with the file picker, or from a `path` relative to the open project folder. The file is read here and handed to the engine\'s geometry.import, which carries it inline, so the Journal replays on any host without the file. STL only for now, ASCII or binary, up to 32 MiB. `unitLength` says what one unit in the file means and defaults to `1 mm`, which is what most CAD tools export; check the reported bounding box if you are not sure. `featureAngle` (degrees) and `simplifyBelow` (a length) are passed straight through. Name the faces you will reuse with geometry.nameFace predicates rather than the auto `face0` numbers, which move when the file does.', z.object({
     name: z.string(),

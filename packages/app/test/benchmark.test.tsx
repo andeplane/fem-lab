@@ -169,7 +169,7 @@ describe('example preparation', () => {
       ? Response.json({ examples: [example()] }) : Response.json(journal)));
     let finish!: () => void;
     const replay = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
-    const pending = openExample('cantilever', { replay, active: async () => undefined, projects: {} as never });
+    const pending = openExample('cantilever', { replay, importAbaqus: vi.fn(async () => undefined), active: async () => undefined, projects: {} as never });
     await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
     expect(replay.mock.calls[0]).toEqual([journal.map(entry => entry.cmd), attachComparison(example())]);
     finish();

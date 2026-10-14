@@ -4,6 +4,7 @@ import { MAX_MODEL_FILE_BYTES, RUN_SCRIPT, modelFileText, toolNameFor, type Mode
 import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { missingEngine, wasmCandidates, WASM_ENTRY, loadEngine, type EngineHandle, type EngineProvider } from '../src/engine';
 import { projectFrom, start } from '../src/cli';
@@ -20,6 +21,7 @@ import {
   toolList,
   type ServerDeps,
 } from '../src/server';
+import { ABAQUS_CONVERSION } from '../../registry/test/fakes';
 
 const MODEL = { name: 'beam', revision: 1, hash: 'abc', bodies: [], warnings: [] };
 
@@ -31,6 +33,7 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
     acquire: async function () { return this; },
     release: async () => undefined,
     replaceCommands: async commands => { seen.push(...commands); },
+    captureImport: function () { return { query: query => this.query(query), replaceCommands: commands => this.replaceCommands(commands) }; },
     dispatch: (cmd) => {
       seen.push(cmd);
       if (cmd['cmd'] === 'material.add' && (cmd['nu'] === undefined || Number(cmd['nu']) < 0)) {
@@ -42,6 +45,7 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
       seen.push(q);
       if (q['query'] === 'query.script') return Promise.resolve({ text: 'await fem.model.new({ name: "beam" });\n' });
       if (q['query'] === 'query.journal') return Promise.resolve({ entries: [], revision: 0 });
+      if (q['query'] === 'query.convertAbaqus') return Promise.resolve(ABAQUS_CONVERSION);
       return Promise.resolve(MODEL);
     },
     modelFile: () => ({ format: 'femlab/1', model: MODEL }),
@@ -58,6 +62,7 @@ describe('the tool list', () => {
     expect(names).toContain(toolNameFor('query.report'));
     expect(names).toContain(toolNameFor('solve.run'));
     expect(names).toContain('export_file');
+    expect(names).toContain(toolNameFor('file.importAbaqus'));
     expect(names).toContain(RUN_SCRIPT);
     // no view, no selection, no panels: this host has no screen to move
     expect(names.filter((n) => n.startsWith('view_') || n.startsWith('selection_'))).toEqual([]);
@@ -77,6 +82,26 @@ describe('the tool list', () => {
     expect(diff.inputSchema.properties).toHaveProperty('base');
     expect(JSON.stringify(diff.inputSchema)).toContain('"cmd"');
   });
+});
+
+it('offers one scoped Abaqus import tool and the same inline script Command; picker and database rejection never reach conversion', async () => {
+  const project = await scratch();
+  const text = '\ufeff*NODE\r\n';
+  await writeFile(path.join(project, 'source.inp'), text);
+  await writeFile(path.join(project, 'results.odb'), Buffer.from([0xff, 0]));
+  const engine = fakeEngine();
+  const registry = createRegistry({ engine, project });
+  const args = { name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 cm' };
+  expect(await callTool(registry, toolNameFor('file.importAbaqus'), { ...args, path: './source.inp' })).toEqual({ report: ABAQUS_CONVERSION.report });
+  expect(engine.seen).toEqual([{ query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+  engine.seen.length = 0;
+  await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, picker: true })).rejects.toMatchObject({ code: 'unsupported' });
+  await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, path: 'results.odb' })).rejects.toMatchObject({ code: 'unsupported' });
+  expect(engine.seen).toEqual([]);
+  const scripted = await registry.dispatch({ cmd: 'script.run', code: `return await fem.file.importAbaqus(${JSON.stringify({ ...args, text })});` }) as { result: unknown; error?: string };
+  expect(scripted.error).toBeUndefined();
+  expect(scripted.result).toEqual({ report: ABAQUS_CONVERSION.report });
+  expect(engine.seen).toEqual([{ query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
 });
 
 describe('calling a tool', () => {
