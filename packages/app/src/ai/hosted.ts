@@ -1,3 +1,4 @@
+import {toToolDefinitions,type Registry,type ToolDefinition} from '@femlab/registry';
 import type {ChatEvent,Provider} from '@femlab/ai';
 export interface HostedReceipt {requestId:string;outcome:string;chargedCredits:number;tariffVersion:string}
 export interface HostedEnvironment {
@@ -38,3 +39,10 @@ export function hostedProvider(env:HostedEnvironment):Provider {
     }finally{req.signal?.removeEventListener('abort',abort);await reader.cancel().catch(()=>undefined);reader.releaseLock()}
   }};
 }
+
+/** Engineering Commands remain callable through the typed registry Script host. Sending their
+ * expanded schemas as 134 direct functions consumes over 95k input tokens before a user prompt. */
+export function hostedTools(registry:Registry):ToolDefinition[]{
+  return toToolDefinitions(registry).filter(tool=>tool.name.startsWith('query_')||['run_script','validate_script','skill_invoke','file_read','file_write'].includes(tool.name));
+}
+export const HOSTED_COMMAND_INSTRUCTIONS='This host uses a compact tool catalogue. Every Command in the API index is available inside run_script as await fem.namespace.method({ ...args }). Execute engineering and view Commands through run_script; do not call an undeclared direct function. Use validate_script to check exact argument types before running an unfamiliar operation. The exposed Query tools can be called directly. Account, billing, credential and consent actions require the person and are forbidden in scripts.';

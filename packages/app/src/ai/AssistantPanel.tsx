@@ -1,5 +1,5 @@
 import { accounts } from '../account/browser';
-import { hostedProvider } from './hosted';
+import { hostedProvider, hostedTools, HOSTED_COMMAND_INSTRUCTIONS } from './hosted';
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
 import { useStore } from '../ui/cmd';
 // The assistant drawer of docs/design/README.md. It owns the conversation (never persisted, never
@@ -414,8 +414,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         for (const bad of built.unresolved) add({ kind: 'bad', text: `${bad.ref}: ${bad.cause}` });
         messages.current.push(built.message);
 
-        const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal, ...(__HOSTED_AI__ ? {maxTokens:accounts.state.profile?.usage?.maxOutput ?? 4096,timeoutMs:900_000} : {}) })) {
+        const baseSystem = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
+        const system = __HOSTED_AI__ ? baseSystem + '\n\n' + HOSTED_COMMAND_INSTRUCTIONS : baseSystem;
+        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: __HOSTED_AI__ ? hostedTools(registry) : toToolDefinitions(registry), messages: messages.current, signal, ...(__HOSTED_AI__ ? {maxTokens:accounts.state.profile?.usage?.maxOutput ?? 4096,timeoutMs:900_000} : {}) })) {
           if (!sameAccount()) break;
           if (event.type === 'text') {
             if (!proseContext) {
