@@ -106,6 +106,33 @@ describe('TutorialRunner.advanceIfMatched', () => {
     expect(runner.step).toBe(1);
   });
 
+  it('reads model.new at index zero after a 16-entry Journal is replaced', () => {
+    const before = Array.from({ length: 16 }, (_, i) => entry(i, i === 0 ? 'model.new' : 'model.setUnits'));
+    const runner = new TutorialRunner(tutorial, { dispatch: vi.fn() }, 0, before.length);
+    expect(runner.advanceIfMatched(before)).toBe(false);
+    expect(runner.advanceIfMatched([entry(0, 'model.new', { name: 'demo' })])).toBe(true);
+    expect(runner.step).toBe(1);
+  });
+
+  it('recognises a successful model.new replacing an identical one-entry Journal', async () => {
+    const before = [entry(0, 'model.new', { name: 'demo' })];
+    const dispatch = vi.fn(async () => undefined);
+    const runner = new TutorialRunner(tutorial, { dispatch }, 0, 1);
+    expect(runner.advanceIfMatched(before)).toBe(false);
+    await runner.doIt();
+    expect(runner.advanceIfMatched(before)).toBe(true);
+    expect(runner.step).toBe(1);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ cmd: 'model.new', name: 'demo' });
+  });
+
+  it('retains its watermark when model.new fails', async () => {
+    const before = [entry(0, 'model.new')];
+    const runner = new TutorialRunner(tutorial, { dispatch: vi.fn(async () => { throw new Error('replacement failed'); }) }, 0, 1);
+    await expect(runner.doIt()).rejects.toThrow('replacement failed');
+    expect(runner.advanceIfMatched(before)).toBe(false);
+    expect(runner.step).toBe(0);
+  });
+
   it('recognises a step whose Command is already journaled instead of needing it re-issued', async () => {
     const dispatch = vi.fn(async () => undefined);
     const runner = new TutorialRunner(tutorial, { dispatch });

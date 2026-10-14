@@ -120,9 +120,22 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
 
   const doIt = async (): Promise<void> => {
     if (!runner || busy) return;
+    const active = runner;
+    const producer = owner.current;
+    const replacesModel = active.currentStep?.doIt?.cmd === 'model.new';
     setBusy(true);
     try {
-      await runner.doIt();
+      await active.doIt();
+      // The app may publish the replacement Journal before doIt resets its watermark.
+      // Observe it again through the producer that performed the replacement, so even an
+      // equal-length Journal advances and no later tutorial or session receives its result.
+      if (replacesModel && producer && owner.current === producer) {
+        const lease = await producer;
+        if (!lease.signal.aborted) {
+          const journal = await lease.registry.query({ query: 'query.journal' }) as JournalDump;
+          if (owner.current === producer && !lease.signal.aborted) active.advanceIfMatched(journal.entries);
+        }
+      }
       if (!store.dispatch) {
         const [model, journal] = await Promise.all([
           registry.query({ query: 'query.model' }) as Promise<ModelSummary>,

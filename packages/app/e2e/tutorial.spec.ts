@@ -103,6 +103,39 @@ test.describe('@cpu the guided tutorial', () => {
     await expect(page.locator('.jrow').last()).toContainText('geometry.addLine');
   });
 
+  for (const commands of [1, 10]) {
+    test(`starts another tutorial after ${commands === 1 ? 'abandoning' : 'completing'} the cantilever`, async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+      await page.goto('./');
+      await ready(page);
+      await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
+      await page.locator('.tutorial-pick', { hasText: 'Cantilever beam' }).click();
+      for (let step = 1; step <= commands; step++) {
+        await expect(page.locator('.tutorial-progress')).toHaveText(`step ${step} of 11`);
+        await page.locator('.tutorial-btn.primary', { hasText: 'Do it for me' }).click();
+      }
+      if (commands === 10) {
+        await expect(page.locator('.tutorial-progress')).toHaveText('step 11 of 11');
+        await page.locator('.tutorial-btn.primary', { hasText: 'Next' }).click();
+        await page.locator('.tutorial-btn', { hasText: 'Choose another tutorial' }).click();
+      } else {
+        await expect(page.locator('.tutorial-progress')).toHaveText('step 2 of 11');
+        await page.locator('.tutorial-close').click();
+        await page.locator('button[title="Guided tutorials"]').click();
+      }
+      await page.locator('.tutorial-pick', { hasText: 'Column buckling' }).click();
+      await expect(page.locator('.tutorial-step-title')).toHaveText('Start a Model');
+      await page.locator('.tutorial-btn.primary', { hasText: 'Do it for me' }).click();
+      await expect(page.locator('.tutorial-step-title')).toHaveText('Units');
+      const journal = await page.evaluate(() => window.fem.query.journal());
+      expect(journal.entries).toHaveLength(1);
+      expect(journal.entries[0]?.cmd).toEqual({ cmd: 'model.new', name: 'column-buckling' });
+      await page.locator('.tutorial-btn.primary', { hasText: 'Do it for me' }).click();
+      await expect(page.locator('.tutorial-step-title')).toHaveText('Half a column');
+      expect((await page.evaluate(() => window.fem.query.journal())).entries).toHaveLength(2);
+    });
+  }
+
   test('a stale saved position with no Model starts the tutorial over', async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem('femlab.tour.dismissed', '1');

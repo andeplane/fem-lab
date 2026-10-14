@@ -24,6 +24,7 @@ function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query:
   const journal: JournalDump = { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false };
   const model: ModelSummary = { name: 'm', revision: 0 } as unknown as ModelSummary;
   const dispatch = vi.fn(async (cmd: { cmd: string } & Record<string, unknown>) => {
+    if (cmd.cmd === 'model.new') journal.entries = [];
     journal.entries = [...journal.entries, { seq: journal.entries.length, cmd, hashAfter: `h${journal.entries.length}` } as never];
     journal.revision = journal.entries.length;
     return { seq: journal.entries.length - 1 };
@@ -120,6 +121,23 @@ describe('TutorialPanel', () => {
     expect(registry.dispatch).toHaveBeenCalledOnce();
     expect(registry.query).toHaveBeenCalledWith({ query: 'query.journal' });
     expect(store.state.journal?.entries.length).toBe(1);
+  });
+
+  it.each([1, 16])('starts a second tutorial over a %i-entry Model and advances after one replacement', async (count) => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    journalOf(store, Array.from({ length: count }, (_, i) => i === 0 ? { cmd: 'model.new', name: 'previous' } : { cmd: 'model.setUnits' }));
+    const registry = fakeRegistry();
+    render(<TutorialPanel registry={registry} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Column buckling')), 'the column tutorial'));
+    await waitForText(progress, 'step 1 of');
+    expect(registry.dispatch).not.toHaveBeenCalled();
+    await click(root.querySelector('.tutorial-btn.primary'));
+    await waitForText(progress, 'step 2 of');
+    expect(registry.dispatch).toHaveBeenCalledExactlyOnceWith({ cmd: 'model.new', name: 'column-buckling' });
+    expect(store.state.journal?.entries).toHaveLength(1);
+    expect(store.state.journal?.entries[0]?.cmd).toEqual({ cmd: 'model.new', name: 'column-buckling' });
   });
 
   it('highlights the control the step names, via data-tutorial-target', async () => {
