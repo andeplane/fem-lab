@@ -311,7 +311,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         name: x.name,
         summary: `${x.summary}${x.on ? ` on ${x.on}` : ''}`,
         // Body/global loads need their exact saved definition, absent from ModelSummary.
-        select: x.on ? { sets: [x.on] } : { refs: [`load:${x.name}`] },
+        select: x.on ? { sets: [x.on] } : { refs: [refOf('load', x.name)], load: x.name },
         remove: 'load.remove',
       })),
     ),

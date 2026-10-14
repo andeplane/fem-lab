@@ -220,6 +220,8 @@ describe('Registry', () => {
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'selection.set', refs: ['load:p'] });
     expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
+    await registry.dispatch({ cmd: 'selection.set', load: 'p', refs: ['load:p'] });
+    expect(host.selection.set).toHaveBeenCalledWith({ load: 'p', refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
     await registry.dispatch({ cmd: 'script.setEditing', editing: true });

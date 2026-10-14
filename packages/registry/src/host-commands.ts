@@ -43,13 +43,14 @@ export const TransientPlayback = z.object({
   ]).optional(),
 });
 export const SelectionInput = z.object({
+  load: z.string().min(1).optional(),
   refs: z.array(z.string()).optional(),
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
   sets: z.array(z.string()).optional(),
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
-export const HighlightInput = SelectionInput.omit({ refs: true, mode: true });
+export const HighlightInput = SelectionInput.omit({ load: true, refs: true, mode: true });
 export const HoverInput = HighlightInput.extend({ load: z.string().min(1).optional() });
 export const PickTarget = z.enum(['face', 'body', 'off']);
 /** Resizable shell panels. Their sizes are view state and never enter the Journal. */
@@ -417,7 +418,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setTheme', 'workspace', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
   def('view.animate', 'sessionView', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
   def('view.playTransient', 'sessionView', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
-  def('selection.set', 'sessionView', 'Select Model objects by stable `kind:name` refs, or select drawable bodies, faces and Sets by name. `mode` is replace (default), add or remove. The selection drives Properties, `view.fit` and `@selection` in chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
+  def('selection.set', 'sessionView', 'Select Model objects by stable `kind:name` refs, or select drawable bodies, faces and Sets by name. To include a saved Load\'s drawable targets, explicitly name it with load; body loads use their current definition and global gravity covers all Bodies. Plain refs retain object selection without expanding targets. `mode` is replace (default), add or remove. The selection drives Properties, `view.fit` and `@selection` in chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'sessionView', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'sessionView', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'sessionView', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),

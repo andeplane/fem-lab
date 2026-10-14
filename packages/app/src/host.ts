@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
 
 import { z } from 'zod';
 import type { Command } from '@femlab/registry';
@@ -222,12 +222,13 @@ export function makeHostContext(
     selection: {
       set: async (s) => {
         invalidateDefinition(store);
-        store.select(s);
-        const ref = s.refs?.[0];
+        const { load, ...targets } = s;
+        store.select(targets);
+        const ref = load ? refOf('load', load) : s.refs?.[0];
         const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
         if (item?.cmd === 'form.edit') {
           const definition = await editDefinition(store, transport, item.args as DefinitionTarget);
-          if (definition && item.kind === 'load') store.select({ ...s, ...loadTargets(definition, store) });
+          if (definition && load) store.select({ ...targets, ...loadTargets(definition, store) });
         }
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },

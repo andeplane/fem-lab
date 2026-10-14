@@ -70,6 +70,18 @@ async function mount() {
 }
 
 describe('Constraint and Load targets in the Model tree', () => {
+  it.each(['driven', 'heater'])('keeps plain %s object references semantic until target resolution is explicitly requested', async name => {
+    const app = await mount();
+    const before = app.store.state.journal;
+    await app.registry.dispatch({ cmd: 'selection.set', refs: [`load:${name}`] });
+    expect(app.store.state.selection).toEqual({ refs: [`load:${name}`], bodies: [], faces: [], sets: [] });
+    expect(app.store.state.form?.target).toEqual({ kind: 'load', name });
+    await app.registry.dispatch({ cmd: 'selection.set', load: name, refs: [`load:${name}`] });
+    expect(app.store.state.selection).toEqual({ refs: [`load:${name}`, name === 'heater' ? 'body:right' : 'set:right.xmax'], bodies: name === 'heater' ? ['right'] : [], faces: [], sets: name === 'driven' ? ['right.xmax'] : [] });
+    expect(app.store.state.journal).toBe(before);
+    expect(app.transport.dispatch).not.toHaveBeenCalled();
+  });
+
   it.each([['cold', 'constraint', 'left.xmin'], ['driven', 'load', 'right.xmax']])('selects %s targets and opens its exact edit form without journalling', async (name, kind, target) => {
     const app = await mount();
     const before = app.store.state.journal;
