@@ -131,8 +131,33 @@ Production build passed. Screenshots, the exact local QA script, logs and runtim
 archived independently in `/private/tmp/fem-lab-473-evidence`; this pass did not repeat the old
 1024 px or software-adapter cases, or audit unrelated Assistant/export/report UI.
 
-Current limit: [#573](https://github.com/andeplane/fem-lab/issues/573) tracks generic deformation
+Limit observed in this dated pass: [#573](https://github.com/andeplane/fem-lab/issues/573) tracks generic deformation
 chrome still shown for steady scalar temperature (`exaggeration`, `steady · true scale`) and
 drawing-scale copy in thermal Results headers. Temperature is drawn on the undeformed mesh;
 these captions do not establish a displacement Result. The transient temperature frame controls
 already show real retained time. The issue owns the UI fix; this pass only records it.
+
+### Scalar Result controls resolved — #573 (2026-10-14)
+
+The follow-up uses the selected retained Result's displacement or mode-shape capability. A
+temperature-only steady Result now shows `steady` in the legend, without a deformation bar,
+displacement tooltip or drawing-scale clause in the Results header. Transient temperature keeps
+the retained-frame slider, displayed physical time, playback and speed controls; its legend shows
+the Step and current time without deformation wording. Mechanical Results keep exaggeration and
+true scale, including a temperature contour when that retained solve also contains displacement.
+
+The three focused production Chromium cases passed with one worker and no retries. The steady
+bar's independent mid-length probe remained 50 K for prescribed 0/100 K ends; transient Home/End
+selected the first/last retained engine frames; the mechanical true-scale button produced native
+slider value 1 with matching legend/header and unchanged Result. All three kept the Journal
+unchanged under view controls. Six UI cases additionally cover coupled temperature/displacement,
+retained modes and switching from a mechanical to a temperature-only solve; 139 focused UI tests,
+app typecheck and production build passed.
+
+This verification used main `9614fcf1` plus the #573 UI patch and the separately owned
+[#578](https://github.com/andeplane/fem-lab/issues/578) native range-granularity fix. The complete
+optimized CPU WASM bindings came from source `1d3952f6`, CI `38621438961`, artifact `11922835852`
+(WASM SHA-256 `a00271bffa1da852ba46951c8e6390a2ab65f63648e2d5da5dfece0ba2e21144`); all
+222 recorded engine/build/generated input hashes matched. Logs, screenshots and provenance are
+preserved in `/private/tmp/fem-lab-573-evidence`. This is focused Chromium evidence; the dated
+observations above remain the historical baseline.
