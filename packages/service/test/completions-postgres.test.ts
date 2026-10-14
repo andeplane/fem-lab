@@ -40,7 +40,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
   const body={protocol:1,turnId:'turn-one',round:0,model:'gpt-5.4-mini',maxTokens:1000,system:'project context',messages:[{role:'user',content:[{type:'text',text:'inspect'}]}],tools:[]};
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
+    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
     const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}
     server.listen(0,'127.0.0.1');await once(server,'listening');url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });

@@ -26,7 +26,9 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
       g.amount + COALESCE((SELECT sum(e.amount) FROM credit_entries e WHERE e.grant_id=g.id),0)
       - COALESCE((SELECT sum(h.amount) FROM credit_holds h JOIN ai_requests r ON r.id=h.request_id
         WHERE h.grant_id=g.id AND r.state=ANY($3)),0) AS remaining
-      FROM credit_grants g WHERE g.account_id=$1 AND g.starts_at <= $2 AND g.expires_at > $2 ORDER BY g.expires_at, g.id`, [accountId, clock, ['reserved','dispatched','pending_reconciliation']])).rows;
+      FROM credit_grants g LEFT JOIN billing_accounts b ON b.account_id=g.account_id
+      WHERE g.account_id=$1 AND g.starts_at <= $2 AND g.expires_at > $2 AND (g.plan='free' OR NOT COALESCE(b.blocked,false))
+      ORDER BY g.expires_at, g.id`, [accountId, clock, ['reserved','dispatched','pending_reconciliation']])).rows;
     const activePaid = rows.filter(row => row.plan !== 'free').sort((a, b) => PLANS[b.plan as PlanId].credits - PLANS[a.plan as PlanId].credits)[0];
     // Paid grants replace the free allowance for their period; a dormant free row is not extra spend.
     const eligible = rows.filter(row => activePaid ? row.plan !== 'free' : row.plan === 'free');

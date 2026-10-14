@@ -16,6 +16,7 @@
     "image-size": "^2.0.4",
     "openai": "^7.33.0",
     "pg": "^8.23.1",
+    "stripe": "^23.0.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
