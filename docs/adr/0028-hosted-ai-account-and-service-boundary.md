@@ -26,6 +26,12 @@ tools through its registry and SessionOwner gate; the service never executes scr
 or changes an engine Model. Host account/billing actions are callable Commands, but
 never Journal entries or Assistant tools carrying credentials/purchase authority.
 
+Assistant tool dispatch checks both the supplied turn allowlist and the registry's
+tool flag. Proposed arguments cannot replace a trusted `cmd`/`query` discriminator.
+Browser script RPC rejects `account.*`, `billing.*`, `query.account` and credential
+changes before they reach the host. These remain callable through explicit user
+UI/console Commands, without granting a generated program account authority (#571).
+
 Every provider round is authenticated, admitted against an atomic maximum-cost
 reservation and settled from provider usage. Client balances/tiers are untrusted.
 Canceled or interrupted streams without confirmed usage remain recoverable pending

@@ -39,24 +39,22 @@ function parseArgs(raw: string): unknown {
   }
 }
 
+/** One payload builder for generation and authoritative preflight counting. */
+export function responseParameters(req: ChatRequest): OpenAI.Responses.ResponseCreateParamsStreaming {
+  return {
+    model: req.model, max_output_tokens: req.maxTokens, stream: true, store: false,
+    service_tier: 'default', include: ['reasoning.encrypted_content'], instructions: req.system,
+    input: toResponseInput(req.messages),
+    tools: req.tools.map(t => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema, strict: false })),
+  };
+}
 export function responsesProvider(client: OpenAILike, models: string[] = OPENAI_MODELS): Provider {
   return {
     id: 'openai',
     models,
     async *chat(req: ChatRequest): AsyncIterable<ChatEvent> {
       try {
-        const stream = await client.responses.create({
-          model: req.model,
-          max_output_tokens: req.maxTokens,
-          stream: true,
-          store: false,
-          service_tier: 'default',
-          include: ['reasoning.encrypted_content'],
-          instructions: req.system,
-          input: toResponseInput(req.messages),
-          // Registry schemas intentionally have optional fields; strict mode would rewrite them.
-          tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema, strict: false })),
-        }, { signal: req.signal });
+        const stream = await client.responses.create(responseParameters(req), { signal: req.signal });
         const preparing = new Map<number, { id: string; name: string; arguments: string }>();
         let terminal = false;
         for await (const event of stream) {

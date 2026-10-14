@@ -20,12 +20,12 @@ use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
-    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary,
-    StudyReport, StudyRow, SweepRow, Valued,
+    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, MomentReactionRow, Output, ReactionRow, ResultAssumption,
+    ResultSummary, StaticEquilibrium, StudyReport, StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
 use crate::units::{
-    Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
+    convert, Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
 };
 
 /// The three built-in laws a Model material resolves to; plugins add their own later.
@@ -971,8 +971,8 @@ impl Engine {
             }
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        self.retain_result(step.name.clone(), result);
-        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
+        let summary = self.retain_result(step.name.clone(), result)?;
+        Ok(Output::Solve { summary: Box::new(summary) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -1073,7 +1073,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            self.retain_result(step.name, last.expect("at least two sizes ran"));
+            self.retain_result(step.name, last.expect("at least two sizes ran"))?;
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -1171,8 +1171,8 @@ impl Engine {
                 None => relative <= target || iteration + 1 == iterations as usize,
             };
             if done {
-                self.retain_result(step.name.clone(), result);
-                let result_id = self.result_summary(step_name).result_id;
+                let summary = self.retain_result(step.name.clone(), result)?;
+                let result_id = summary.result_id;
                 let report = crate::query::AdaptReport {
                     rows,
                     converged: relative <= target,
@@ -1355,14 +1355,25 @@ impl Engine {
 
     /// `query.result`: what the Step produced, in the Model's display units. The Step must
     /// have a Result: every caller has just stored one or resolved it through [`Engine::stored`].
-    pub(crate) fn result_summary(&self, step: &str) -> ResultSummary {
-        self.selected_summary(Some(step), None).expect("the caller resolved this Step")
+    pub(crate) fn result_summary(&self, step: &str) -> Result<ResultSummary, Error> {
+        self.selected_summary(Some(step), None)
     }
 
     pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
         let record = self.result_record(step, id)?;
+        let model = if id.is_some() { &record.model } else { &self.model };
+        self.summarize_record(record, model)
+    }
+
+    /// The same checked display boundary runs on private candidate records before retention.
+    pub(crate) fn summarize_record(
+        &self,
+        record: &crate::retained::ResultRecord,
+        m: &Model,
+    ) -> Result<ResultSummary, Error> {
         let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
-        let m = if id.is_some() { &record.model } else { &self.model };
+        // Preserve #445's scoped ledger diagnostics before the broader display boundary.
+        let static_equilibrium = checked_static_equilibrium(m, res.static_equilibrium.as_ref())?;
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
         for (_, r) in &res.reactions {
@@ -1382,6 +1393,10 @@ impl Engine {
             let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
             residual = (applied[0] - removed - storage).abs();
             biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
+        }
+        if let Some(ledger) = &res.static_equilibrium {
+            residual = crate::post::equilibrium::norm(ledger.force_residual);
+            biggest = ledger.force_scale;
         }
         Ok(ResultSummary {
             result_id: record.id.clone(),
@@ -1418,6 +1433,7 @@ impl Engine {
                 })
                 .collect(),
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
+            static_equilibrium,
             assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             prestress_from: res.prestress_from.clone(),
@@ -1437,7 +1453,7 @@ impl Engine {
                 })
                 .collect(),
             sweep: res.sweep.iter().flat_map(|s| sweep_rows(m, s)).collect(),
-            balance: residual / biggest,
+            balance: if biggest == 0.0 { 0.0 } else { residual / biggest },
             contacts: res
                 .contacts
                 .iter()
@@ -1476,6 +1492,64 @@ fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Vec<SweepRow> {
         });
     }
     rows
+}
+
+/// Convert only the new wrench ledger with checked Quantity semantics. Legacy display()
+/// retains its current contract; a preferred-unit overflow must never relabel SI as that unit.
+pub(crate) fn checked_static_equilibrium(
+    model: &Model,
+    source: Option<&crate::post::equilibrium::StaticEquilibrium>,
+) -> Result<Option<Box<StaticEquilibrium>>, Error> {
+    let Some(ledger) = source else { return Ok(None) };
+    let units = model.units.resolve();
+    // This fixed prefix contains 15 quantities; each Constraint adds three torque values.
+    // Convert in one fallible pass so every reported field has the same boundary policy.
+    let fields = [
+        ("reference", ledger.reference.as_slice(), Length::DIM),
+        ("characteristicLength", std::slice::from_ref(&ledger.characteristic_length), Length::DIM),
+        ("forceResidual", ledger.force_residual.as_slice(), Force::DIM),
+        ("forceScale", std::slice::from_ref(&ledger.force_scale), Force::DIM),
+        ("appliedMoment", ledger.applied_moment.as_slice(), Torque::DIM),
+        ("momentResidual", ledger.moment_residual.as_slice(), Torque::DIM),
+        ("momentScale", std::slice::from_ref(&ledger.moment_scale), Torque::DIM),
+    ];
+    let values: Vec<Valued> = fields
+        .into_iter()
+        .chain(ledger.reaction_moments.iter().map(|(_, values)| ("reactionMoments", values.as_slice(), Torque::DIM)))
+        .flat_map(|(field, values, dimension)| values.iter().map(move |value| (field, *value, dimension)))
+        .map(|(field, value, dimension)| {
+            let (_, unit) = units.fmt(0.0, dimension);
+            convert(value, &unit, Some(dimension)).map(|value| Valued { value, unit: unit.clone() }).map_err(|_| {
+                Error::schema(format!("static equilibrium cannot be represented in display unit '{unit}'"))
+                    .at(format!("staticEquilibrium.{field}"))
+                    .suggest("model.setUnits with force 'N' and length 'm'")
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Some(Box::new(StaticEquilibrium {
+        reference: ledger_vec3(&values, 0),
+        characteristic_length: values[3].clone(),
+        force_residual: ledger_vec3(&values, 4),
+        force_scale: values[7].clone(),
+        applied_moment: ledger_vec3(&values, 8),
+        reaction_moments: ledger
+            .reaction_moments
+            .iter()
+            .enumerate()
+            .map(|(row, (name, _))| MomentReactionRow {
+                constraint: name.clone(),
+                total: ledger_vec3(&values, 15 + 3 * row),
+            })
+            .collect(),
+        moment_residual: ledger_vec3(&values, 11),
+        moment_scale: values[14].clone(),
+        moment_balance: crate::post::equilibrium::relative(ledger.moment_residual, ledger.moment_scale),
+    })))
+}
+
+/// Offsets refer to the fixed checked prefix/Constraint triples constructed above.
+fn ledger_vec3(values: &[Valued], offset: usize) -> [Valued; 3] {
+    std::array::from_fn(|c| values[offset + c].clone())
 }
 
 fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {

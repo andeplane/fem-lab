@@ -178,6 +178,12 @@ The fields (displacement, stress, temperature, mode shapes) a Step produced, tie
 Mesh it ran on and to the Model revision it came from.
 _Avoid_: output, odb, solution
 
+**Static equilibrium ledger**:
+Retained SI force and moment accounting for a linear Cartesian static Result.
+All moments include force lever arms and rotational couples about the first
+retained Mesh node. Force and moment residuals have separate dimensioned scales
+and report verdicts; a force pass alone does not prove angular equilibrium.
+
 **Frame**:
 One retained primary nodal field at a physical time in a transient Result. Frame indices count
 retained output from zero (the initial state), independently of integration-step numbers.

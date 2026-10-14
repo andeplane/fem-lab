@@ -26,42 +26,60 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         if (revoked) throw new FemError('cancelled', 'this request has ended');
         return { session: lease.stamp.session, runId: lease.runId, operationId: String(++operation) };
       };
+      const replaceCommands = async (commands: Record<string, unknown>[], expectedVersion = lease.stamp.stateVersion): Promise<DocumentSnapshot> => {
+        const ticket = owner.begin_replacement(JSON.stringify(context()), expectedVersion);
+        let candidate: PreparedEngine | undefined;
+        let consumed = false;
+        try {
+          candidate = await wasm.PreparedEngine.create(ticket, { threads, gpu: false });
+          await candidate.commands(JSON.stringify(commands));
+          candidate.finish(modelFileEncoder(true), MAX_MODEL_FILE_BYTES);
+          context(); // cancellation during candidate preparation cannot publish it
+          consumed = true;
+          const snapshot = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
+          current = snapshot.stamp;
+          lease = { ...lease, stamp: snapshot.stamp };
+          return snapshot;
+        } finally {
+          if (!consumed) { candidate?.free(); owner.abandon_replacement(ticket); }
+        }
+      };
+      const checkedReplace = (input: Record<string, unknown>[], captured?: () => void, expectedVersion?: Stamp['stateVersion']): Promise<void> => {
+        const commands = structuredClone(input);
+        return ordered(async () => { captured?.(); await replaceCommands(commands, expectedVersion); });
+      };
+      const checkedQuery = (input: Record<string, unknown>, captured?: () => void): Promise<unknown> => {
+        const query = structuredClone(input);
+        return ordered(() => {
+          captured?.();
+          const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as { stamp: Stamp; value: unknown };
+          lease = { ...lease, stamp: reply.stamp };
+          return reply.value;
+        });
+      };
       const handle: EngineHandle = {
         dispatch: input => {
           const cmd = structuredClone(input);
           return ordered(async () => {
-            const captured = context();
             if (cmd['cmd'] === 'model.new') {
-              const ticket = owner.begin_replacement(JSON.stringify(captured), lease.stamp.stateVersion);
-              let candidate: PreparedEngine | undefined;
-              let consumed = false;
-              try {
-                candidate = await wasm.PreparedEngine.create(ticket, { threads, gpu: false });
-                await candidate.commands(JSON.stringify([cmd]));
-                candidate.finish(modelFileEncoder(true), MAX_MODEL_FILE_BYTES);
-                context(); // cancellation during candidate preparation cannot publish it
-                consumed = true;
-                const snapshot = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
-                current = snapshot.stamp;
-                lease = { ...lease, stamp: snapshot.stamp };
-                return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash, warnings: [], output: { type: 'none' } };
-              } finally {
-                if (!consumed) { candidate?.free(); owner.abandon_replacement(ticket); }
-              }
+              const snapshot = await replaceCommands([cmd]);
+              return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash, warnings: [], output: { type: 'none' } };
             }
-            const reply = JSON.parse(await owner.dispatch(JSON.stringify({ context: captured, expectedVersion: lease.stamp.stateVersion, command: cmd }))) as WriteReply;
+            const reply = JSON.parse(await owner.dispatch(JSON.stringify({ context: context(), expectedVersion: lease.stamp.stateVersion, command: cmd }))) as WriteReply;
             current = reply.stamp;
             lease = { ...lease, stamp: reply.stamp };
             return reply.ack;
           });
         },
-        query: input => {
-          const query = structuredClone(input);
-          return ordered(() => {
-            const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as { stamp: Stamp; value: unknown };
-            lease = { ...lease, stamp: reply.stamp };
-            return reply.value;
-          });
+        replaceCommands: input => checkedReplace(input),
+        query: input => checkedQuery(input),
+        captureImport: () => {
+          context(); // reject an already revoked producer before admitting I/O
+          const admitted = structuredClone(lease.stamp);
+          const active = () => { if (JSON.stringify(lease.stamp.session) !== JSON.stringify(admitted.session)) throw new FemError('session.expired', 'this import belongs to a previous project'); };
+          // Conversion reads may refresh the lease, but never upgrade the replacement's
+          // original authority. The checked owner compares this version at reservation.
+          return { query: input => checkedQuery(input, active), replaceCommands: input => checkedReplace(input, active, admitted.stateVersion) };
         },
         modelFile: () => ordered(() => {
           const snapshot = JSON.parse(owner.snapshot(JSON.stringify(context()))) as DocumentSnapshot;

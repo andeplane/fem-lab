@@ -122,6 +122,12 @@ export function modeCount(result: ModeSpectrum | null | undefined): number {
   return result?.frequencies?.length || result?.bucklingFactors?.length || 0;
 }
 
+/** Contours move only when this retained solve has displacement or the selected mode shape. */
+export function hasDeformation(result: ResultSummary | null, fieldKey: string): boolean {
+  const mode = choiceOf(fieldKey).mode;
+  return result !== null && (result.extremes.some((e) => e.field === 'displacement') || (mode !== undefined && mode <= modeCount(result)));
+}
+
 /** The k-th mode shape, contoured by its magnitude and swept by the deformation bar. */
 export function modeChoice(k: number, result?: ModeSpectrum | null): FieldChoice {
   const factor = result?.frequencies?.length ? undefined : result?.bucklingFactors?.[k - 1];

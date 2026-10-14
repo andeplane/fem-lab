@@ -29,6 +29,38 @@ Without a browser, `cargo run -p femlab --` replays a Journal (`run`), runs the 
 serves the whole registry to an editor over MCP (`mcp --project <dir>`; see
 [`packages/mcp/README.md`](packages/mcp/README.md) for the `mcpServers` snippet).
 
+## Import an Abaqus input deck
+
+Choose **Import .inp** in the browser, select **Mesh and Sets** or **Linear static analysis**,
+and supply the source units explicitly. A source length unit of `1 mm` and force unit of
+`1 N` describe an mm–N deck; the toolbar's display units do not select import units.
+The report lists participating and authored node counts, SI bounds, exact Set mappings and
+configured analysis names. Import does not solve; use **Solve** after a static import.
+
+The first slice accepts one flat Body of C3D4 tetrahedra or full-integration C3D8 hexahedra
+with named Sets. Static mode adds one homogeneous isotropic elastic Material, translational
+constraints, CLOAD and one linear STATIC Step representing final equilibrium. PART,
+ASSEMBLY, INSTANCE, INCLUDE, OUTPUT blocks, other element types, `.odb` and `.cae` are
+rejected. Unsupported static content does not fall back to mesh mode. Input and the saved
+Model file each have a 16 MiB UTF-8 limit; a failed import keeps the current project. An edit
+or project switch during a pending browser/MCP import rejects that import and preserves the
+newer state. View-only actions remain usable while input is read.
+
+The CLI writes an unsolved normal Model file:
+
+```sh
+cargo run -p femlab -- import-inp bar.inp --out bar.femlab.json \
+  --name "Imported bar" --body bar --mode static --unit-length "1 mm" --unit-force "1 N" --cpu
+cargo run -p femlab -- run bar.femlab.json --cpu
+```
+
+Mesh mode requires `--unit-length` and omits `--unit-force`. Scripts and MCP use the same
+`file.importAbaqus` Command with `text`, `picker: true` (browser), or a `path` inside the open
+project folder. The checked Journal carries the imported source, source digest and conversion
+version; saved files reopen without the original `.inp`. The displayed receipt is local to
+the current import and is not reopened with a saved Model file. See the
+[supported slice and import plan](docs/plans/500-abaqus-import.md).
+
 Tests: `npm test` (vitest), `npm run typecheck`, and in `packages/app`,
 `npx playwright install chromium && npx playwright test` for the browser smokes.
 

@@ -10,37 +10,113 @@
  */
 export type Command =
   | {
+      /**
+       * Display name of the new empty Model.
+       */
       name: string;
+      /**
+       * Optional Model description or modelling assumptions retained with the Model.
+       */
       description?: string | null;
+      /**
+       * Registered Command identifier; use `model.new` to select this operation.
+       */
       cmd: "model.new";
     }
   | {
       units: UnitSet;
+      /**
+       * Registered Command identifier; use `model.setUnits` to select this operation.
+       */
       cmd: "model.setUnits";
     }
   | {
+      /**
+       * New nonblank display name; preserves geometry and current Results.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `model.setName` to select this operation.
+       */
       cmd: "model.setName";
     }
   | {
-      idealisation: IdealisationSpec;
+      /**
+       * Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible
+       * with the Bodies.
+       */
+      idealisation:
+        | {
+            kind: "solid3d";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "planeStress";
+          }
+        | {
+            kind: "planeStrain";
+          }
+        | {
+            twist?: boolean;
+            kind: "axisymmetric";
+          };
+      /**
+       * Registered Command identifier; use `model.setIdealisation` to select this operation.
+       */
       cmd: "model.setIdealisation";
     }
   | {
-      kind: ObjectKind;
+      /**
+       * Kind of existing object to rename, such as Body, Material, Constraint, Load or Step.
+       */
+      kind: "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
+      /**
+       * Current name of the object of this kind.
+       */
       name: string;
+      /**
+       * Unused new name; references to the object are updated together.
+       */
       to: string;
+      /**
+       * Registered Command identifier; use `model.rename` to select this operation.
+       */
       cmd: "model.rename";
     }
   | {
-      kind: ObjectKind;
+      /**
+       * Kind of existing object to copy.
+       */
+      kind: "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
+      /**
+       * Existing object to copy, identified within its kind.
+       */
       name: string;
+      /**
+       * Unused name for the copy; a copied Step keeps references to the original Constraints and Loads.
+       */
       as: string;
+      /**
+       * Registered Command identifier; use `model.duplicate` to select this operation.
+       */
       cmd: "model.duplicate";
     }
   | {
+      /**
+       * Body name; reusing it replaces the box while preserving compatible assignments and cuts.
+       */
       name: string;
       /**
+       * Positive x/y/z side lengths, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -70,6 +146,8 @@ export type Command =
         )
       ];
       /**
+       * Global x/y/z coordinates of the minimum corner; omitted means the origin.
+       *
        * @minItems 3
        * @maxItems 3
        */
@@ -98,12 +176,23 @@ export type Command =
             )
           ]
         | null;
+      /**
+       * Registered Command identifier; use `geometry.addBox` to select this operation.
+       */
       cmd: "geometry.addBox";
     }
   | {
+      /**
+       * Cut name, also the prefix of the resulting hole face Sets.
+       */
       name: string;
+      /**
+       * Existing solid Body from which the box is removed.
+       */
       from: string;
       /**
+       * Positive x/y/z lengths of the cutting box, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -133,6 +222,8 @@ export type Command =
         )
       ];
       /**
+       * Global x/y/z coordinates of the cutting box minimum corner.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -161,15 +252,228 @@ export type Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `geometry.subtractBox` to select this operation.
+       */
       cmd: "geometry.subtractBox";
     }
   | {
+      /**
+       * Body name; reusing it replaces the shape while preserving compatible assignments and cuts.
+       */
       name: string;
-      shape: ShapeSpec;
+      /**
+       * Unit-bearing shape definition in global coordinates, compatible with the Model idealisation.
+       */
+      shape:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            kind: "box";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "cylinder";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "sphere";
+          }
+        | {
+            sketch: SketchSpec;
+            kind: "sheet";
+          }
+        | {
+            sketch: SketchSpec;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "extrude";
+          }
+        | {
+            sketch: SketchSpec;
+            angle: number;
+            segments?: number | null;
+            kind: "revolve";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "union";
+          }
+        | {
+            from: ShapeSpec;
+            cut: ShapeSpec[];
+            kind: "subtract";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "intersect";
+          }
+        | {
+            shape: ShapeSpec;
+            at: Placement;
+            kind: "transform";
+          };
+      /**
+       * Registered Command identifier; use `geometry.add` to select this operation.
+       */
       cmd: "geometry.add";
     }
   | {
+      /**
+       * Line Body name; joint node Sets are named <name>.p0, <name>.p1 and so on.
+       */
       name: string;
+      /**
+       * Ordered global x/y/z joint coordinates, each component with length units.
+       */
       points: [
         (
           | string
@@ -193,25 +497,253 @@ export type Command =
             }
         )
       ][];
+      /**
+       * Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on.
+       */
       members?: [number, number][] | null;
+      /**
+       * Number of equal finite elements per member; omitted means one.
+       */
       divisions?: number | null;
+      /**
+       * Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss.
+       */
       kind?: LineKind | null;
+      /**
+       * Registered Command identifier; use `geometry.addLine` to select this operation.
+       */
       cmd: "geometry.addLine";
     }
   | {
+      /**
+       * Cut name, also the prefix of its generated face Sets.
+       */
       name: string;
+      /**
+       * Existing solid Body from which the shape is removed.
+       */
       from: string;
-      shape: ShapeSpec;
+      /**
+       * A shape with unit strings; the geometry crate's `Shape` is its SI form.
+       */
+      shape:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            kind: "box";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "cylinder";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "sphere";
+          }
+        | {
+            sketch: SketchSpec;
+            kind: "sheet";
+          }
+        | {
+            sketch: SketchSpec;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "extrude";
+          }
+        | {
+            sketch: SketchSpec;
+            angle: number;
+            segments?: number | null;
+            kind: "revolve";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "union";
+          }
+        | {
+            from: ShapeSpec;
+            cut: ShapeSpec[];
+            kind: "subtract";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "intersect";
+          }
+        | {
+            shape: ShapeSpec;
+            at: Placement;
+            kind: "transform";
+          };
+      /**
+       * Registered Command identifier; use `geometry.subtract` to select this operation.
+       */
       cmd: "geometry.subtract";
     }
   | {
+      /**
+       * Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts.
+       */
       name: string;
-      format: MeshFormat;
+      /**
+       * Geometry file format of data; the supported format is STL.
+       */
+      format: "stl";
       /**
        * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
        * what a binary STL needs.
        */
       data: string;
+      /**
+       * How data encodes the file; omitted means text, while binary STL requires base64.
+       */
       encoding?: DataEncoding | null;
       /**
        * Hex sha256 of the decoded file, checked before it is read.
@@ -242,26 +774,282 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `geometry.import` to select this operation.
+       */
       cmd: "geometry.import";
     }
   | {
+      /**
+       * Named face Set to create or replace, for use by Constraints and Loads.
+       */
       name: string;
+      /**
+       * Body whose actual mesh boundary is selected, including an implicit mapped or swept Body.
+       */
       of: string;
-      where: FacePredicate;
+      /**
+       * Geometric predicate selecting boundary faces; re-evaluated on each remesh.
+       */
+      where:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            normal: [number, number, number];
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            offset:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            tol?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "plane";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            normal: [number, number, number];
+            max_angle_deg?: number | null;
+            kind: "normal";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            min: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            max: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "bbox";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            point: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            axis: [number, number, number];
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            tol?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "cylinder";
+          }
+        | {
+            of: FacePredicate[];
+            kind: "any";
+          };
+      /**
+       * Registered Command identifier; use `geometry.nameFace` to select this operation.
+       */
       cmd: "geometry.nameFace";
     }
   | {
+      /**
+       * Named region Set to create or replace, for Constraints, nodal Loads and probes.
+       */
       name: string;
-      where: RegionPredicate;
+      /**
+       * Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds.
+       */
+      where:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            min: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            max: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "bbox";
+          }
+        | {
+            name: string;
+            kind: "body";
+          };
+      /**
+       * Registered Command identifier; use `geometry.nameRegion` to select this operation.
+       */
       cmd: "geometry.nameRegion";
     }
   | {
+      /**
+       * Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted
+       * first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `geometry.remove` to select this operation.
+       */
       cmd: "geometry.remove";
     }
   | {
+      /**
+       * Point-mass name and node Set name; reusing it replaces that point mass.
+       */
       name: string;
       /**
+       * Global x/y/z coordinates of the mass node, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -291,7 +1079,7 @@ export type Command =
         )
       ];
       /**
-       * A mass with unit, e.g. "2 kg". Any unit of the right dimension is accepted.
+       * Positive lumped mass with mass units; attach the node with constraint.couple before solving.
        */
       mass:
         | string
@@ -299,6 +1087,9 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `geometry.addMass` to select this operation.
+       */
       cmd: "geometry.addMass";
     }
   | {
@@ -398,64 +1189,465 @@ export type Command =
        * Source or reference for these property values, retained with the Material.
        */
       source?: string | null;
+      /**
+       * Registered Command identifier; use `material.add` to select this operation.
+       */
       cmd: "material.add";
     }
   | {
+      /**
+       * Existing Material name whose properties the target Bodies will use.
+       */
       material: string;
+      /**
+       * Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher.
+       */
       bodies: string[];
+      /**
+       * Registered Command identifier; use `material.assign` to select this operation.
+       */
       cmd: "material.assign";
     }
   | {
+      /**
+       * Existing unassigned Material to remove; retarget its Bodies first if it is in use.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `material.remove` to select this operation.
+       */
       cmd: "material.remove";
     }
   | {
+      /**
+       * Section name; reusing it replaces the cross-section or shell definition.
+       */
       name: string;
-      shape: SectionSpec;
+      /**
+       * Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies.
+       */
+      shape:
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "shell";
+          }
+        | {
+            plies: ShellPlySpec[];
+            kind: "laminate";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "rectangle";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "circle";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "tube";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            webThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            flangeThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "i";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            webThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            flangeThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "channel";
+          }
+        | {
+            /**
+             * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
+             */
+            a:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            iY:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            iZ:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            j:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kY?: number | null;
+            kZ?: number | null;
+            cY?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            cZ?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "generic";
+          };
+      /**
+       * Registered Command identifier; use `section.add` to select this operation.
+       */
       cmd: "section.add";
     }
   | {
+      /**
+       * Existing Section name to assign.
+       */
       section: string;
+      /**
+       * Line or shell Body names that will use this Section.
+       */
       bodies: string[];
+      /**
+       * Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the
+       * documented geometry-based convention.
+       */
       orientation?: Axis | null;
+      /**
+       * Registered Command identifier; use `section.assign` to select this operation.
+       */
       cmd: "section.assign";
     }
   | {
+      /**
+       * Existing unassigned Section to remove; retarget its Bodies first if it is in use.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `section.remove` to select this operation.
+       */
       cmd: "section.remove";
     }
   | {
-      mesher: MesherSpec;
+      /**
+       * Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and
+       * Sets.
+       */
+      mesher:
+        | {
+            size: LatticeSize;
+            /**
+             * Optional positive element lengths keyed by existing Body name. Each entry overrides
+             * `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+             * size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+             * and cannot have size overrides. Names follow model.rename; remove an override before
+             * removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+             * them with the global size, preserving the refinement ratio.
+             */
+            sizes?: {
+              /**
+               * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+               */
+              [k: string]:
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+                | undefined;
+            };
+            kind: "lattice";
+          }
+        | {
+            body?: string | null;
+            blocks: QuadBlockSpec[];
+            kind: "mapped";
+          }
+        | {
+            of: string;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            refine?: RefineBoxSpec[] | null;
+            kind: "free";
+          }
+        | {
+            base: MesherSpec;
+            sweep: SweepSpec;
+            kind: "sweep";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            maxElements?: number | null;
+            kind: "tet";
+          }
+        | {
+            body?: string | null;
+            patches: SurfacePatchSpec[];
+            kind: "surface";
+          }
+        | {
+            body: string;
+            nodes: ImportedNodeSpec[];
+            elements: ImportedElement[];
+            nodeSets?: {
+              [k: string]: number[] | undefined;
+            };
+            elementSets?: {
+              [k: string]: number[] | undefined;
+            };
+            surfaces?: {
+              [k: string]: ImportedFace[] | undefined;
+            };
+            /**
+             * Allocate <body>.node_<label> targets only for requested numeric node references.
+             */
+            nodeTargets?: number[];
+            provenance?: ImportedProvenance | null;
+            kind: "imported";
+          };
+      /**
+       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
+       * 1.
+       */
       order?: number | null;
+      /**
+       * Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for
+       * imported sources. Simplex elements ignore this setting.
+       */
       formulation?: Formulation | null;
+      /**
+       * Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and
+       * imported sources require false.
+       */
       simplices?: boolean | null;
       /**
        * Optional local size field on the resulting linear simplex mesh. A new
        * mesh.set replaces this field; omit it to return to the base mesh.
        */
       refinement?: LocalRefinementSpec | null;
+      /**
+       * Registered Command identifier; use `mesh.set` to select this operation.
+       */
       cmd: "mesh.set";
     }
   | {
-      format: ExportFormat;
+      /**
+       * Output format for the host to save, such as vtu, msh, inp, stl or report.
+       */
+      format: "vtu" | "msh" | "inp" | "stl" | "report";
+      /**
+       * Step whose current Result fields are included for vtu or whose calculation note is exported for report;
+       * mesh-only formats ignore it.
+       */
       step?: string | null;
+      /**
+       * Registered Command identifier; use `mesh.export` to select this operation.
+       */
       cmd: "mesh.export";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set whose degrees of freedom are restrained.
+       */
       on: string;
+      /**
+       * Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components
+       * for a roller or partial restraint.
+       */
       dofs?: Dof[] | null;
+      /**
+       * Registered Command identifier; use `constraint.fix` to select this operation.
+       */
       cmd: "constraint.fix";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set whose translations are fixed while beam-joint rotations remain free.
+       */
       on: string;
+      /**
+       * Registered Command identifier; use `constraint.pin` to select this operation.
+       */
       cmd: "constraint.pin";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set receiving the prescribed displacement.
+       */
       on: string;
-      dof: Dof;
+      /**
+       * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
+       * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
+       * on every other node they are inert, so holding them there changes nothing.
+       */
+      dof: "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
@@ -465,19 +1657,40 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `constraint.prescribe` to select this operation.
+       */
       cmd: "constraint.prescribe";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set lying on the modelled symmetry plane.
+       */
       on: string;
-      normal: Axis;
+      /**
+       * A coordinate axis.
+       */
+      normal: "x" | "y" | "z";
+      /**
+       * Registered Command identifier; use `constraint.symmetry` to select this operation.
+       */
       cmd: "constraint.symmetry";
     }
   | {
+      /**
+       * Temperature Constraint name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Named Set held at the prescribed temperature.
+       */
       on: string;
       /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       * Boundary temperature with temperature units; a transient Step scales it by its amplitude.
        */
       value:
         | string
@@ -485,13 +1698,32 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `constraint.temperature` to select this operation.
+       */
       cmd: "constraint.temperature";
     }
   | {
+      /**
+       * Contact Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Master face Set onto which slave nodes are projected; normally choose the coarser side.
+       */
       master: string;
+      /**
+       * Slave face Set whose nodes are paired to the master; normally choose the finer side.
+       */
       slave: string;
-      kind: ContactKind;
+      /**
+       * Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide.
+       */
+      kind: "bonded" | "frictionless";
+      /**
+       * Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units;
+       * omitted means 1e-4 of the Mesh diagonal.
+       */
       tol?:
         | (
             | string
@@ -501,15 +1733,35 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `contact.add` to select this operation.
+       */
       cmd: "contact.add";
     }
   | {
+      /**
+       * Cyclic Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Source sector-face node Set; must match the rotated target mesh.
+       */
       from: string;
+      /**
+       * Target sector-face node Set reached by the specified rotation.
+       */
       to: string;
-      axis: Axis;
+      /**
+       * A coordinate axis.
+       */
+      axis: "x" | "y" | "z";
+      /**
+       * Signed right-handed rotation from the source to the target face, in degrees.
+       */
       angleDeg: number;
       /**
+       * Global x/y/z point on the rotation axis, with length units; omitted means the origin.
+       *
        * @minItems 3
        * @maxItems 3
        */
@@ -538,6 +1790,9 @@ export type Command =
             )
           ]
         | null;
+      /**
+       * Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal.
+       */
       tol?:
         | (
             | string
@@ -547,21 +1802,52 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `constraint.cyclic` to select this operation.
+       */
       cmd: "constraint.cyclic";
     }
   | {
+      /**
+       * Coupling Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Existing point-mass node Set created with geometry.addMass.
+       */
       point: string;
+      /**
+       * Face Set coupled to the point displacement.
+       */
       on: string;
-      kind: CoupleKind;
+      /**
+       * Distributed for the face weighted mean displacement or rigid for equal point and face translations; neither
+       * transmits a moment.
+       */
+      kind: "distributed" | "rigid";
+      /**
+       * Registered Command identifier; use `constraint.couple` to select this operation.
+       */
       cmd: "constraint.couple";
     }
   | {
+      /**
+       * Existing Constraint to remove; Steps must stop referencing it first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `constraint.remove` to select this operation.
+       */
       cmd: "constraint.remove";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Face Set receiving the pressure.
+       */
       on: string;
       /**
        * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
@@ -572,12 +1858,23 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.pressure` to select this operation.
+       */
       cmd: "load.pressure";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Face Set over which the resultant is distributed by area.
+       */
       on: string;
       /**
+       * Total global x/y/z force on the entire Set, each component with force units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -606,12 +1903,23 @@ export type Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.traction` to select this operation.
+       */
       cmd: "load.traction";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Node Set over which the force is split equally.
+       */
       on: string;
       /**
+       * Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -640,12 +1948,23 @@ export type Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.force` to select this operation.
+       */
       cmd: "load.force";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Node Set of beam joints carrying rotational degrees of freedom.
+       */
       on: string;
       /**
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -674,11 +1993,20 @@ export type Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.moment` to select this operation.
+       */
       cmd: "load.moment";
     }
   | {
+      /**
+       * Acceleration Load name to create or replace, for listing in a Step.
+       */
       name: string;
       /**
+       * Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires
+       * Material density.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -707,13 +2035,23 @@ export type Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.gravity` to select this operation.
+       */
       cmd: "load.gravity";
     }
   | {
+      /**
+       * Thermal-strain Load name to create or replace, for listing in a structural Step.
+       */
       name: string;
+      /**
+       * Body names receiving the temperature/reference assignment, including implicit mesher Bodies.
+       */
       bodies: string[];
       /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       * Uniform temperature with temperature units; inherited heat Results replace this value when the Step
+       * continues a heat Step.
        */
       value:
         | string
@@ -721,6 +2059,9 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Stress-free reference temperature with temperature units; omitted means 293.15 K.
+       */
       reference?:
         | (
             | string
@@ -730,13 +2071,22 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `load.temperature` to select this operation.
+       */
       cmd: "load.temperature";
     }
   | {
+      /**
+       * Convection Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set exchanging heat with its surroundings.
+       */
       on: string;
       /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       * Positive heat-transfer coefficient with units such as W/(m^2 K).
        */
       h:
         | string
@@ -753,13 +2103,22 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.convection` to select this operation.
+       */
       cmd: "load.convection";
     }
   | {
+      /**
+       * Heat-flux Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set receiving the prescribed heat flux.
+       */
       on: string;
       /**
-       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+       * Heat input per unit area with units such as W/m^2; negative removes heat.
        */
       q:
         | string
@@ -767,11 +2126,23 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.heatFlux` to select this operation.
+       */
       cmd: "load.heatFlux";
     }
   | {
+      /**
+       * Radiation Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set radiating to the specified surroundings.
+       */
       on: string;
+      /**
+       * Dimensionless surface emissivity in (0, 1]; 1 is a black body.
+       */
       emissivity: number;
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -782,13 +2153,22 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.radiation` to select this operation.
+       */
       cmd: "load.radiation";
     }
   | {
+      /**
+       * Heat-source Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Body names receiving the volumetric source, including implicit mesher Bodies.
+       */
       bodies: string[];
       /**
-       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+       * Heat input per unit volume with units such as W/m^3; total power is this density times Body volume.
        */
       q:
         | string
@@ -796,10 +2176,19 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.heatSource` to select this operation.
+       */
       cmd: "load.heatSource";
     }
   | {
+      /**
+       * Torque Load name to create or replace, for listing in an axisymmetric Step with twist.
+       */
       name: string;
+      /**
+       * Face Set receiving the circumferential traction.
+       */
       on: string;
       /**
        * A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
@@ -810,13 +2199,22 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.torque` to select this operation.
+       */
       cmd: "load.torque";
     }
   | {
+      /**
+       * Thermal contact Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance.
+       */
       of: string;
       /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       * Positive interface heat-transfer coefficient with units such as W/(m^2 K).
        */
       conductance:
         | string
@@ -824,19 +2222,29 @@ export type Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `contact.thermal` to select this operation.
+       */
       cmd: "contact.thermal";
     }
   | {
+      /**
+       * Existing Load to remove; Steps must stop referencing it first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `load.remove` to select this operation.
+       */
       cmd: "load.remove";
     }
   | {
+      /**
+       * Analysis Step name; reusing it replaces the Step definition.
+       */
       name: string;
       /**
-       * Analysis procedures. The schema declares each procedure's consumed Material properties,
-       * required property groups and produced results for every host. `x-material-needs` names
-       * alternative stiffness laws as one requirement; `x-material-properties` includes optional
-       * laws the procedure can read, rather than claiming all of them are mandatory.
+       * Analysis procedure to execute; its schema metadata identifies supported settings, required material physics
+       * and result fields.
        */
       procedure:
         | "static"
@@ -849,11 +2257,31 @@ export type Command =
         | "implicit"
         | "harmonic"
         | "randomVibration";
+      /**
+       * Names of Constraints and mechanical Contacts active in this Step; an empty list activates none.
+       */
       constraints: string[];
+      /**
+       * Names of Loads active in this Step; an empty list activates none.
+       */
       loads: string[];
+      /**
+       * Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and
+       * reactions for static analysis.
+       */
       output?: Field[] | null;
+      /**
+       * Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a
+       * modal basis.
+       */
       after?: string | null;
+      /**
+       * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
+       */
       nModes?: number | null;
+      /**
+       * Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift.
+       */
       shift?: number | null;
       /**
        * Maximum time increment of a heat-transient Step, or of a static Step with an
@@ -869,6 +2297,10 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and
+       * static-nonlinear nominal time defaults to 1 s.
+       */
       tEnd?:
         | (
             | string
@@ -878,14 +2310,28 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward
+       * Euler.
+       */
       theta?: number | null;
+      /**
+       * Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is
+       * retained.
+       */
       outputEvery?: number | null;
       /**
        * Maximum fraction of the explicit critical time step (usually 0.9). The increment
        * may be reduced uniformly to finish exactly at tEnd.
        */
       dtFactor?: number | null;
+      /**
+       * Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values.
+       */
       amplitude?: AmplitudeSpec | null;
+      /**
+       * Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K.
+       */
       initial?:
         | (
             | string
@@ -935,8 +2381,6 @@ export type Command =
        */
       initialVelocity?: InitialVelocitySpec[] | null;
       /**
-       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
-       * the solution between two passes. Default 1e-6.
        * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
        * (default 10). More increments cost proportionally more but start each Newton solve
        * closer to equilibrium, which is what makes a stiffening or buckling model converge.
@@ -1016,26 +2460,64 @@ export type Command =
        * Outputs are componentwise standard deviations, never a signed equilibrium state.
        */
       psd?: PsdPoint[] | null;
+      /**
+       * Registered Command identifier; use `step.add` to select this operation.
+       */
       cmd: "step.add";
     }
   | {
+      /**
+       * Existing Step to remove; dependent Steps must stop referencing it in after first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `step.remove` to select this operation.
+       */
       cmd: "step.remove";
     }
   | {
+      /**
+       * Every Step name exactly once in execution order, keeping each Step after its named prerequisite.
+       */
       order: string[];
+      /**
+       * Registered Command identifier; use `step.reorder` to select this operation.
+       */
       cmd: "step.reorder";
     }
   | {
+      /**
+       * Existing Step to solve; its procedure, active Constraints and Loads define the problem.
+       */
       step: string;
+      /**
+       * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       */
       solver?: Solver | null;
+      /**
+       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
+       * settings control nonlinear convergence.
+       */
       tolerance?: number | null;
+      /**
+       * Linear iterative solver iteration budget; omitted means 5000.
+       */
       maxIterations?: number | null;
+      /**
+       * Registered Command identifier; use `solve.run` to select this operation.
+       */
       cmd: "solve.run";
     }
   | {
+      /**
+       * Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency
+       * solves instead.
+       */
       step: string;
       /**
+       * Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and
+       * convergence rate.
+       *
        * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
       sizes: (
@@ -1045,14 +2527,84 @@ export type Command =
             unit: string;
           }
       )[];
-      quantity: QuantityOfInterest;
+      /**
+       * Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe
+       * location.
+       */
+      quantity:
+        | {
+            field: Field;
+            component?: number | null;
+            kind: "max";
+          }
+        | {
+            field: Field;
+            component?: number | null;
+            kind: "min";
+          }
+        | {
+            field: Field;
+            component?: number | null;
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            at: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "probe";
+          };
+      /**
+       * Whether to restore the original mesh settings after the study; omitted means true, while false retains the
+       * final solved mesh and Result.
+       */
       restore?: boolean | null;
+      /**
+       * Registered Command identifier; use `study.converge` to select this operation.
+       */
       cmd: "study.converge";
     }
   | {
+      /**
+       * Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after
+       * dependency.
+       */
       step: string;
+      /**
+       * Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a
+       * certified bound.
+       */
       targetError: number;
+      /**
+       * Maximum adaptive solve passes in 1..=100; omitted means 8.
+       */
       maxIterations?: number | null;
+      /**
+       * Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the
+       * Command.
+       */
       maxElements?: number | null;
       /**
        * Fraction of squared error selected by bulk marking; default 0.5.
@@ -1064,55 +2616,152 @@ export type Command =
        * opening with skipped solves applies the same regions without solving.
        */
       refinements?: SizeBoxSpec[][] | null;
+      /**
+       * Registered Command identifier; use `study.adapt` to select this operation.
+       */
       cmd: "study.adapt";
     }
   | {
+      /**
+       * Number of latest Commands to undo; omitted means 1.
+       */
       steps?: number | null;
+      /**
+       * Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches
+       * it.
+       */
       expectedJournal?: string | null;
+      /**
+       * Registered Command identifier; use `journal.undo` to select this operation.
+       */
       cmd: "journal.undo";
     }
   | {
+      /**
+       * Number of undone Commands to reapply; omitted means 1.
+       */
       steps?: number | null;
+      /**
+       * Registered Command identifier; use `journal.redo` to select this operation.
+       */
       cmd: "journal.redo";
     }
   | {
+      /**
+       * Plugin name under which the extension is registered.
+       */
       name: string;
-      kind: PluginKind;
-      language: PluginLanguage;
-      source: PluginSource;
-      manifest?: unknown;
+      /**
+       * Extension Point implemented by this Plugin, such as a Material law, Element or Mesher.
+       */
+      kind: "materialLaw" | "element" | "load" | "postQuantity" | "mesher" | "procedure";
+      /**
+       * Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm.
+       */
+      language: "ts" | "wgsl" | "wasm";
+      /**
+       * Inline Plugin code or a URL plus the required content hash, retained for reproducible loading.
+       */
+      source:
+        | {
+            inline: string;
+          }
+        | {
+            url: string;
+            sha256: string;
+          };
+      /**
+       * Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported
+       * stub.
+       */
+      manifest?: {
+        [k: string]: unknown | undefined;
+      };
+      /**
+       * Registered Command identifier; use `plugin.load` to select this operation.
+       */
       cmd: "plugin.load";
     };
 /**
- * How a 3D world is reduced, if at all.
+ * One edge of a sketch loop, with unit strings. Segment k runs from the previous segment's
+ * `to` (segment 0 from the last one's) to its own `to`.
  */
-export type IdealisationSpec =
+export type SegmentSpec =
   | {
-      kind: "solid3d";
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      to: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      tag?: string | null;
+      kind: "line";
     }
   | {
       /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      thickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "planeStress";
-    }
-  | {
-      kind: "planeStrain";
-    }
-  | {
-      twist?: boolean;
-      kind: "axisymmetric";
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      to: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      ccw: boolean;
+      tag?: string | null;
+      kind: "arc";
     };
-/**
- * Kinds of nameable objects in a Model.
- */
-export type ObjectKind = "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
 /**
  * A shape with unit strings; the geometry crate's `Shape` is its SI form.
  */
@@ -1313,93 +2962,9 @@ export type ShapeSpec =
       kind: "transform";
     };
 /**
- * One edge of a sketch loop, with unit strings. Segment k runs from the previous segment's
- * `to` (segment 0 from the last one's) to its own `to`.
- */
-export type SegmentSpec =
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      to: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      tag?: string | null;
-      kind: "line";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      center: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      /**
-       * @minItems 2
-       * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      to: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      ccw: boolean;
-      tag?: string | null;
-      kind: "arc";
-    };
-/**
  * What the members of a line Body are.
  */
 export type LineKind = "truss" | "beam";
-/**
- * The geometry file formats geometry.import reads.
- */
-export type MeshFormat = "stl";
 /**
  * How a Command's inline file payload is encoded.
  */
@@ -1564,390 +3129,9 @@ export type FacePredicate =
       kind: "any";
     };
 /**
- * A region predicate with unit strings.
- */
-export type RegionPredicate =
-  | {
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      min: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      max: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      kind: "bbox";
-    }
-  | {
-      name: string;
-      kind: "body";
-    };
-/**
- * A cross-section for line members (trusses and frames). The library turns the shape into the
- * area, the two second moments, the St Venant torsion constant, the shear correction factors
- * and the extreme-fibre distances a line element integrates with.
- *
- * Local axes: `y` is the section's width direction and `z` its height, both through the
- * centroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and
- * `iZ` about local z. The shear centre and warping torsion are not modelled, so an open
- * section (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the
- * torsional stiffness of a channel and ignores the twist a load through the centroid causes.
- * `kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for
- * a circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's
- * nu-dependent values, which at nu = 0.3 are 0.850 and 0.886.
- */
-export type SectionSpec =
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      thickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "shell";
-    }
-  | {
-      plies: ShellPlySpec[];
-      kind: "laminate";
-    }
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      width:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "rectangle";
-    }
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "circle";
-    }
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      thickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "tube";
-    }
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      width:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      webThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      flangeThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "i";
-    }
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      width:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      webThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      flangeThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kind: "channel";
-    }
-  | {
-      /**
-       * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
-       */
-      a:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
-       */
-      iY:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
-       */
-      iZ:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
-       */
-      j:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      kY?: number | null;
-      kZ?: number | null;
-      cY?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      cZ?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      kind: "generic";
-    };
-/**
  * A coordinate axis.
  */
 export type Axis = "x" | "y" | "z";
-/**
- * The mesher and its settings.
- */
-export type MesherSpec =
-  | {
-      size: LatticeSize;
-      /**
-       * Optional positive element lengths keyed by existing Body name. Each entry overrides
-       * `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
-       * size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
-       * and cannot have size overrides. Names follow model.rename; remove an override before
-       * removing its Body. A new mesh.set replaces all overrides; convergence studies scale
-       * them with the global size, preserving the refinement ratio.
-       */
-      sizes?: {
-        /**
-         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-         */
-        [k: string]:
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-          | undefined;
-      };
-      kind: "lattice";
-    }
-  | {
-      body?: string | null;
-      blocks: QuadBlockSpec[];
-      kind: "mapped";
-    }
-  | {
-      of: string;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      size:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      refine?: RefineBoxSpec[] | null;
-      kind: "free";
-    }
-  | {
-      base: MesherSpec;
-      sweep: SweepSpec;
-      kind: "sweep";
-    }
-  | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      size:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      maxElements?: number | null;
-      kind: "tet";
-    }
-  | {
-      body?: string | null;
-      patches: SurfacePatchSpec[];
-      kind: "surface";
-    }
-  | {
-      body: string;
-      nodes: ImportedNodeSpec[];
-      elements: ImportedElement[];
-      nodeSets?: {
-        [k: string]: number[] | undefined;
-      };
-      elementSets?: {
-        [k: string]: number[] | undefined;
-      };
-      surfaces?: {
-        [k: string]: ImportedFace[] | undefined;
-      };
-      /**
-       * Allocate <body>.node_<label> targets only for requested numeric node references.
-       */
-      nodeTargets?: number[];
-      provenance?: ImportedProvenance | null;
-      kind: "imported";
-    };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
  */
@@ -2045,26 +3229,94 @@ export type CurveSpec =
       kind: "ellipse";
     };
 /**
- * How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
+ * The mesher and its settings.
  */
-export type SweepSpec =
+export type MesherSpec =
   | {
-      layers: number;
+      size: LatticeSize;
+      /**
+       * Optional positive element lengths keyed by existing Body name. Each entry overrides
+       * `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+       * size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+       * and cannot have size overrides. Names follow model.rename; remove an override before
+       * removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+       * them with the global size, preserving the refinement ratio.
+       */
+      sizes?: {
+        /**
+         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        [k: string]:
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+          | undefined;
+      };
+      kind: "lattice";
+    }
+  | {
+      body?: string | null;
+      blocks: QuadBlockSpec[];
+      kind: "mapped";
+    }
+  | {
+      of: string;
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      height:
+      size:
         | string
         | {
             value: number;
             unit: string;
           };
-      kind: "extrude";
+      refine?: RefineBoxSpec[] | null;
+      kind: "free";
     }
   | {
-      segments: number;
-      angleDeg: number;
-      kind: "revolve";
+      base: MesherSpec;
+      sweep: SweepSpec;
+      kind: "sweep";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      size:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      maxElements?: number | null;
+      kind: "tet";
+    }
+  | {
+      body?: string | null;
+      patches: SurfacePatchSpec[];
+      kind: "surface";
+    }
+  | {
+      body: string;
+      nodes: ImportedNodeSpec[];
+      elements: ImportedElement[];
+      nodeSets?: {
+        [k: string]: number[] | undefined;
+      };
+      elementSets?: {
+        [k: string]: number[] | undefined;
+      };
+      surfaces?: {
+        [k: string]: ImportedFace[] | undefined;
+      };
+      /**
+       * Allocate <body>.node_<label> targets only for requested numeric node references.
+       */
+      nodeTargets?: number[];
+      provenance?: ImportedProvenance | null;
+      kind: "imported";
     };
 /**
  * Radial projection of a bilinear shell patch. Geometry and derivatives are projected
@@ -2163,28 +3415,37 @@ export type SurfaceProjectionSpec =
  */
 export type ImportedElementKind = "tet4" | "hex8";
 /**
+ * How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
+ */
+export type SweepSpec =
+  | {
+      layers: number;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      height:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angleDeg: number;
+      kind: "revolve";
+    };
+/**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
 export type Formulation = "incompatible-modes" | "full";
-/**
- * A file format `mesh.export` writes.
- */
-export type ExportFormat = "vtu" | "msh" | "inp" | "stl" | "report";
 /**
  * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
  * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
  * on every other node they are inert, so holding them there changes nothing.
  */
 export type Dof = "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
-/**
- * How two faces interact where they meet.
- */
-export type ContactKind = "bonded" | "frictionless";
-/**
- * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
- * transmits a moment.
- */
-export type CoupleKind = "distributed" | "rigid";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -2268,73 +3529,6 @@ export type SweepSpacing = "linear" | "log";
  * `solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.
  */
 export type Solver = "auto" | "cpu-direct" | "cpu-pcg" | "gpu-pcg";
-/**
- * A quantity of interest for convergence studies.
- */
-export type QuantityOfInterest =
-  | {
-      field: Field;
-      component?: number | null;
-      kind: "max";
-    }
-  | {
-      field: Field;
-      component?: number | null;
-      kind: "min";
-    }
-  | {
-      field: Field;
-      component?: number | null;
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      at: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      kind: "probe";
-    };
-/**
- * Plugin extension points (phase P).
- */
-export type PluginKind = "materialLaw" | "element" | "load" | "postQuantity" | "mesher" | "procedure";
-/**
- * Plugin languages (phase P).
- */
-export type PluginLanguage = "ts" | "wgsl" | "wasm";
-/**
- * Where plugin code comes from.
- */
-export type PluginSource =
-  | {
-      inline: string;
-    }
-  | {
-      url: string;
-      sha256: string;
-    };
 /**
  * Every Query. Serialised with a `query` tag: `{ "query": "query.model" }`.
  */
@@ -2576,6 +3770,10 @@ export type Query =
   | {
       query: "query.capabilities";
     };
+/**
+ * Kinds of nameable objects in a Model.
+ */
+export type ObjectKind = "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
 /**
  * The retained Result whose Mesh receives the difference values.
  */
@@ -2832,6 +4030,10 @@ export type Output =
       steps: number;
       type: "redo";
     };
+/**
+ * A file format `mesh.export` writes.
+ */
+export type ExportFormat = "vtu" | "msh" | "inp" | "stl" | "report";
 /**
  * Idealisation in SI.
  */
@@ -3141,6 +4343,11 @@ export type Constraint1 =
       kind: "couple";
     };
 /**
+ * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
+ * transmits a moment.
+ */
+export type CoupleKind = "distributed" | "rigid";
+/**
  * A Load.
  */
 export type Load = {
@@ -3266,37 +4473,113 @@ export type Amplitude =
  */
 export type ModelFile_Command =
   | {
+      /**
+       * Display name of the new empty Model.
+       */
       name: string;
+      /**
+       * Optional Model description or modelling assumptions retained with the Model.
+       */
       description?: string | null;
+      /**
+       * Registered Command identifier; use `model.new` to select this operation.
+       */
       cmd: "model.new";
     }
   | {
-      units: UnitSet;
+      units: UnitSet3;
+      /**
+       * Registered Command identifier; use `model.setUnits` to select this operation.
+       */
       cmd: "model.setUnits";
     }
   | {
+      /**
+       * New nonblank display name; preserves geometry and current Results.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `model.setName` to select this operation.
+       */
       cmd: "model.setName";
     }
   | {
-      idealisation: IdealisationSpec;
+      /**
+       * Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible
+       * with the Bodies.
+       */
+      idealisation:
+        | {
+            kind: "solid3d";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "planeStress";
+          }
+        | {
+            kind: "planeStrain";
+          }
+        | {
+            twist?: boolean;
+            kind: "axisymmetric";
+          };
+      /**
+       * Registered Command identifier; use `model.setIdealisation` to select this operation.
+       */
       cmd: "model.setIdealisation";
     }
   | {
-      kind: ObjectKind;
+      /**
+       * Kinds of nameable objects in a Model.
+       */
+      kind: "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
+      /**
+       * Current name of the object of this kind.
+       */
       name: string;
+      /**
+       * Unused new name; references to the object are updated together.
+       */
       to: string;
+      /**
+       * Registered Command identifier; use `model.rename` to select this operation.
+       */
       cmd: "model.rename";
     }
   | {
-      kind: ObjectKind;
+      /**
+       * Kinds of nameable objects in a Model.
+       */
+      kind: "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
+      /**
+       * Existing object to copy, identified within its kind.
+       */
       name: string;
+      /**
+       * Unused name for the copy; a copied Step keeps references to the original Constraints and Loads.
+       */
       as: string;
+      /**
+       * Registered Command identifier; use `model.duplicate` to select this operation.
+       */
       cmd: "model.duplicate";
     }
   | {
+      /**
+       * Body name; reusing it replaces the box while preserving compatible assignments and cuts.
+       */
       name: string;
       /**
+       * Positive x/y/z side lengths, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3326,6 +4609,8 @@ export type ModelFile_Command =
         )
       ];
       /**
+       * Global x/y/z coordinates of the minimum corner; omitted means the origin.
+       *
        * @minItems 3
        * @maxItems 3
        */
@@ -3354,12 +4639,23 @@ export type ModelFile_Command =
             )
           ]
         | null;
+      /**
+       * Registered Command identifier; use `geometry.addBox` to select this operation.
+       */
       cmd: "geometry.addBox";
     }
   | {
+      /**
+       * Cut name, also the prefix of the resulting hole face Sets.
+       */
       name: string;
+      /**
+       * Existing solid Body from which the box is removed.
+       */
       from: string;
       /**
+       * Positive x/y/z lengths of the cutting box, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3389,6 +4685,8 @@ export type ModelFile_Command =
         )
       ];
       /**
+       * Global x/y/z coordinates of the cutting box minimum corner.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3417,15 +4715,228 @@ export type ModelFile_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `geometry.subtractBox` to select this operation.
+       */
       cmd: "geometry.subtractBox";
     }
   | {
+      /**
+       * Body name; reusing it replaces the shape while preserving compatible assignments and cuts.
+       */
       name: string;
-      shape: ShapeSpec;
+      /**
+       * A shape with unit strings; the geometry crate's `Shape` is its SI form.
+       */
+      shape:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            kind: "box";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "cylinder";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "sphere";
+          }
+        | {
+            sketch: SketchSpec;
+            kind: "sheet";
+          }
+        | {
+            sketch: SketchSpec;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "extrude";
+          }
+        | {
+            sketch: SketchSpec;
+            angle: number;
+            segments?: number | null;
+            kind: "revolve";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "union";
+          }
+        | {
+            from: ShapeSpec;
+            cut: ShapeSpec[];
+            kind: "subtract";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "intersect";
+          }
+        | {
+            shape: ShapeSpec;
+            at: Placement;
+            kind: "transform";
+          };
+      /**
+       * Registered Command identifier; use `geometry.add` to select this operation.
+       */
       cmd: "geometry.add";
     }
   | {
+      /**
+       * Line Body name; joint node Sets are named <name>.p0, <name>.p1 and so on.
+       */
       name: string;
+      /**
+       * Ordered global x/y/z joint coordinates, each component with length units.
+       */
       points: [
         (
           | string
@@ -3449,25 +4960,253 @@ export type ModelFile_Command =
             }
         )
       ][];
+      /**
+       * Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on.
+       */
       members?: [number, number][] | null;
+      /**
+       * Number of equal finite elements per member; omitted means one.
+       */
       divisions?: number | null;
+      /**
+       * Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss.
+       */
       kind?: LineKind | null;
+      /**
+       * Registered Command identifier; use `geometry.addLine` to select this operation.
+       */
       cmd: "geometry.addLine";
     }
   | {
+      /**
+       * Cut name, also the prefix of its generated face Sets.
+       */
       name: string;
+      /**
+       * Existing solid Body from which the shape is removed.
+       */
       from: string;
-      shape: ShapeSpec;
+      /**
+       * A shape with unit strings; the geometry crate's `Shape` is its SI form.
+       */
+      shape:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            kind: "box";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "cylinder";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "sphere";
+          }
+        | {
+            sketch: SketchSpec;
+            kind: "sheet";
+          }
+        | {
+            sketch: SketchSpec;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "extrude";
+          }
+        | {
+            sketch: SketchSpec;
+            angle: number;
+            segments?: number | null;
+            kind: "revolve";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "union";
+          }
+        | {
+            from: ShapeSpec;
+            cut: ShapeSpec[];
+            kind: "subtract";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "intersect";
+          }
+        | {
+            shape: ShapeSpec;
+            at: Placement;
+            kind: "transform";
+          };
+      /**
+       * Registered Command identifier; use `geometry.subtract` to select this operation.
+       */
       cmd: "geometry.subtract";
     }
   | {
+      /**
+       * Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts.
+       */
       name: string;
-      format: MeshFormat;
+      /**
+       * Geometry file format of data; the supported format is STL.
+       */
+      format: "stl";
       /**
        * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
        * what a binary STL needs.
        */
       data: string;
+      /**
+       * How data encodes the file; omitted means text, while binary STL requires base64.
+       */
       encoding?: DataEncoding | null;
       /**
        * Hex sha256 of the decoded file, checked before it is read.
@@ -3498,26 +5237,282 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `geometry.import` to select this operation.
+       */
       cmd: "geometry.import";
     }
   | {
+      /**
+       * Named face Set to create or replace, for use by Constraints and Loads.
+       */
       name: string;
+      /**
+       * Body whose actual mesh boundary is selected, including an implicit mapped or swept Body.
+       */
       of: string;
-      where: FacePredicate2;
+      /**
+       * Geometric predicate selecting boundary faces; re-evaluated on each remesh.
+       */
+      where:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            normal: [number, number, number];
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            offset:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            tol?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "plane";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            normal: [number, number, number];
+            max_angle_deg?: number | null;
+            kind: "normal";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            min: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            max: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "bbox";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            point: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            axis: [number, number, number];
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            tol?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "cylinder";
+          }
+        | {
+            of: FacePredicate2[];
+            kind: "any";
+          };
+      /**
+       * Registered Command identifier; use `geometry.nameFace` to select this operation.
+       */
       cmd: "geometry.nameFace";
     }
   | {
+      /**
+       * Named region Set to create or replace, for Constraints, nodal Loads and probes.
+       */
       name: string;
-      where: RegionPredicate2;
+      /**
+       * Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds.
+       */
+      where:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            min: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            max: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "bbox";
+          }
+        | {
+            name: string;
+            kind: "body";
+          };
+      /**
+       * Registered Command identifier; use `geometry.nameRegion` to select this operation.
+       */
       cmd: "geometry.nameRegion";
     }
   | {
+      /**
+       * Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted
+       * first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `geometry.remove` to select this operation.
+       */
       cmd: "geometry.remove";
     }
   | {
+      /**
+       * Point-mass name and node Set name; reusing it replaces that point mass.
+       */
       name: string;
       /**
+       * Global x/y/z coordinates of the mass node, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3547,7 +5542,7 @@ export type ModelFile_Command =
         )
       ];
       /**
-       * A mass with unit, e.g. "2 kg". Any unit of the right dimension is accepted.
+       * Positive lumped mass with mass units; attach the node with constraint.couple before solving.
        */
       mass:
         | string
@@ -3555,6 +5550,9 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `geometry.addMass` to select this operation.
+       */
       cmd: "geometry.addMass";
     }
   | {
@@ -3654,64 +5652,465 @@ export type ModelFile_Command =
        * Source or reference for these property values, retained with the Material.
        */
       source?: string | null;
+      /**
+       * Registered Command identifier; use `material.add` to select this operation.
+       */
       cmd: "material.add";
     }
   | {
+      /**
+       * Existing Material name whose properties the target Bodies will use.
+       */
       material: string;
+      /**
+       * Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher.
+       */
       bodies: string[];
+      /**
+       * Registered Command identifier; use `material.assign` to select this operation.
+       */
       cmd: "material.assign";
     }
   | {
+      /**
+       * Existing unassigned Material to remove; retarget its Bodies first if it is in use.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `material.remove` to select this operation.
+       */
       cmd: "material.remove";
     }
   | {
+      /**
+       * Section name; reusing it replaces the cross-section or shell definition.
+       */
       name: string;
-      shape: SectionSpec;
+      /**
+       * Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies.
+       */
+      shape:
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "shell";
+          }
+        | {
+            plies: ShellPlySpec[];
+            kind: "laminate";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "rectangle";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "circle";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "tube";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            webThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            flangeThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "i";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            webThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            flangeThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "channel";
+          }
+        | {
+            /**
+             * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
+             */
+            a:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            iY:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            iZ:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            j:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kY?: number | null;
+            kZ?: number | null;
+            cY?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            cZ?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "generic";
+          };
+      /**
+       * Registered Command identifier; use `section.add` to select this operation.
+       */
       cmd: "section.add";
     }
   | {
+      /**
+       * Existing Section name to assign.
+       */
       section: string;
+      /**
+       * Line or shell Body names that will use this Section.
+       */
       bodies: string[];
+      /**
+       * Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the
+       * documented geometry-based convention.
+       */
       orientation?: Axis | null;
+      /**
+       * Registered Command identifier; use `section.assign` to select this operation.
+       */
       cmd: "section.assign";
     }
   | {
+      /**
+       * Existing unassigned Section to remove; retarget its Bodies first if it is in use.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `section.remove` to select this operation.
+       */
       cmd: "section.remove";
     }
   | {
-      mesher: MesherSpec;
+      /**
+       * Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and
+       * Sets.
+       */
+      mesher:
+        | {
+            size: LatticeSize;
+            /**
+             * Optional positive element lengths keyed by existing Body name. Each entry overrides
+             * `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+             * size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+             * and cannot have size overrides. Names follow model.rename; remove an override before
+             * removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+             * them with the global size, preserving the refinement ratio.
+             */
+            sizes?: {
+              /**
+               * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+               */
+              [k: string]:
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+                | undefined;
+            };
+            kind: "lattice";
+          }
+        | {
+            body?: string | null;
+            blocks: QuadBlockSpec[];
+            kind: "mapped";
+          }
+        | {
+            of: string;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            refine?: RefineBoxSpec[] | null;
+            kind: "free";
+          }
+        | {
+            base: MesherSpec;
+            sweep: SweepSpec;
+            kind: "sweep";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            maxElements?: number | null;
+            kind: "tet";
+          }
+        | {
+            body?: string | null;
+            patches: SurfacePatchSpec[];
+            kind: "surface";
+          }
+        | {
+            body: string;
+            nodes: ImportedNodeSpec[];
+            elements: ImportedElement[];
+            nodeSets?: {
+              [k: string]: number[] | undefined;
+            };
+            elementSets?: {
+              [k: string]: number[] | undefined;
+            };
+            surfaces?: {
+              [k: string]: ImportedFace[] | undefined;
+            };
+            /**
+             * Allocate <body>.node_<label> targets only for requested numeric node references.
+             */
+            nodeTargets?: number[];
+            provenance?: ImportedProvenance | null;
+            kind: "imported";
+          };
+      /**
+       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
+       * 1.
+       */
       order?: number | null;
+      /**
+       * Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for
+       * imported sources. Simplex elements ignore this setting.
+       */
       formulation?: Formulation | null;
+      /**
+       * Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and
+       * imported sources require false.
+       */
       simplices?: boolean | null;
       /**
        * Optional local size field on the resulting linear simplex mesh. A new
        * mesh.set replaces this field; omit it to return to the base mesh.
        */
       refinement?: LocalRefinementSpec | null;
+      /**
+       * Registered Command identifier; use `mesh.set` to select this operation.
+       */
       cmd: "mesh.set";
     }
   | {
-      format: ExportFormat;
+      /**
+       * A file format `mesh.export` writes.
+       */
+      format: "vtu" | "msh" | "inp" | "stl" | "report";
+      /**
+       * Step whose current Result fields are included for vtu or whose calculation note is exported for report;
+       * mesh-only formats ignore it.
+       */
       step?: string | null;
+      /**
+       * Registered Command identifier; use `mesh.export` to select this operation.
+       */
       cmd: "mesh.export";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set whose degrees of freedom are restrained.
+       */
       on: string;
+      /**
+       * Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components
+       * for a roller or partial restraint.
+       */
       dofs?: Dof[] | null;
+      /**
+       * Registered Command identifier; use `constraint.fix` to select this operation.
+       */
       cmd: "constraint.fix";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set whose translations are fixed while beam-joint rotations remain free.
+       */
       on: string;
+      /**
+       * Registered Command identifier; use `constraint.pin` to select this operation.
+       */
       cmd: "constraint.pin";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set receiving the prescribed displacement.
+       */
       on: string;
-      dof: Dof;
+      /**
+       * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
+       * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
+       * on every other node they are inert, so holding them there changes nothing.
+       */
+      dof: "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
@@ -3721,16 +6120,37 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `constraint.prescribe` to select this operation.
+       */
       cmd: "constraint.prescribe";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set lying on the modelled symmetry plane.
+       */
       on: string;
-      normal: Axis;
+      /**
+       * A coordinate axis.
+       */
+      normal: "x" | "y" | "z";
+      /**
+       * Registered Command identifier; use `constraint.symmetry` to select this operation.
+       */
       cmd: "constraint.symmetry";
     }
   | {
+      /**
+       * Temperature Constraint name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Named Set held at the prescribed temperature.
+       */
       on: string;
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -3741,13 +6161,32 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `constraint.temperature` to select this operation.
+       */
       cmd: "constraint.temperature";
     }
   | {
+      /**
+       * Contact Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Master face Set onto which slave nodes are projected; normally choose the coarser side.
+       */
       master: string;
+      /**
+       * Slave face Set whose nodes are paired to the master; normally choose the finer side.
+       */
       slave: string;
-      kind: ContactKind;
+      /**
+       * Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide.
+       */
+      kind: "bonded" | "frictionless";
+      /**
+       * Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units;
+       * omitted means 1e-4 of the Mesh diagonal.
+       */
       tol?:
         | (
             | string
@@ -3757,15 +6196,35 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `contact.add` to select this operation.
+       */
       cmd: "contact.add";
     }
   | {
+      /**
+       * Cyclic Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Source sector-face node Set; must match the rotated target mesh.
+       */
       from: string;
+      /**
+       * Target sector-face node Set reached by the specified rotation.
+       */
       to: string;
-      axis: Axis;
+      /**
+       * A coordinate axis.
+       */
+      axis: "x" | "y" | "z";
+      /**
+       * Signed right-handed rotation from the source to the target face, in degrees.
+       */
       angleDeg: number;
       /**
+       * Global x/y/z point on the rotation axis, with length units; omitted means the origin.
+       *
        * @minItems 3
        * @maxItems 3
        */
@@ -3794,6 +6253,9 @@ export type ModelFile_Command =
             )
           ]
         | null;
+      /**
+       * Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal.
+       */
       tol?:
         | (
             | string
@@ -3803,21 +6265,52 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `constraint.cyclic` to select this operation.
+       */
       cmd: "constraint.cyclic";
     }
   | {
+      /**
+       * Coupling Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Existing point-mass node Set created with geometry.addMass.
+       */
       point: string;
+      /**
+       * Face Set coupled to the point displacement.
+       */
       on: string;
-      kind: CoupleKind;
+      /**
+       * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
+       * transmits a moment.
+       */
+      kind: "distributed" | "rigid";
+      /**
+       * Registered Command identifier; use `constraint.couple` to select this operation.
+       */
       cmd: "constraint.couple";
     }
   | {
+      /**
+       * Existing Constraint to remove; Steps must stop referencing it first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `constraint.remove` to select this operation.
+       */
       cmd: "constraint.remove";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Face Set receiving the pressure.
+       */
       on: string;
       /**
        * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
@@ -3828,12 +6321,23 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.pressure` to select this operation.
+       */
       cmd: "load.pressure";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Face Set over which the resultant is distributed by area.
+       */
       on: string;
       /**
+       * Total global x/y/z force on the entire Set, each component with force units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3862,12 +6366,23 @@ export type ModelFile_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.traction` to select this operation.
+       */
       cmd: "load.traction";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Node Set over which the force is split equally.
+       */
       on: string;
       /**
+       * Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3896,12 +6411,23 @@ export type ModelFile_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.force` to select this operation.
+       */
       cmd: "load.force";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Node Set of beam joints carrying rotational degrees of freedom.
+       */
       on: string;
       /**
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3930,11 +6456,20 @@ export type ModelFile_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.moment` to select this operation.
+       */
       cmd: "load.moment";
     }
   | {
+      /**
+       * Acceleration Load name to create or replace, for listing in a Step.
+       */
       name: string;
       /**
+       * Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires
+       * Material density.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -3963,10 +6498,19 @@ export type ModelFile_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.gravity` to select this operation.
+       */
       cmd: "load.gravity";
     }
   | {
+      /**
+       * Thermal-strain Load name to create or replace, for listing in a structural Step.
+       */
       name: string;
+      /**
+       * Body names receiving the temperature/reference assignment, including implicit mesher Bodies.
+       */
       bodies: string[];
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -3977,6 +6521,9 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Stress-free reference temperature with temperature units; omitted means 293.15 K.
+       */
       reference?:
         | (
             | string
@@ -3986,13 +6533,22 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `load.temperature` to select this operation.
+       */
       cmd: "load.temperature";
     }
   | {
+      /**
+       * Convection Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set exchanging heat with its surroundings.
+       */
       on: string;
       /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       * Positive heat-transfer coefficient with units such as W/(m^2 K).
        */
       h:
         | string
@@ -4009,13 +6565,22 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.convection` to select this operation.
+       */
       cmd: "load.convection";
     }
   | {
+      /**
+       * Heat-flux Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set receiving the prescribed heat flux.
+       */
       on: string;
       /**
-       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+       * Heat input per unit area with units such as W/m^2; negative removes heat.
        */
       q:
         | string
@@ -4023,11 +6588,23 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.heatFlux` to select this operation.
+       */
       cmd: "load.heatFlux";
     }
   | {
+      /**
+       * Radiation Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set radiating to the specified surroundings.
+       */
       on: string;
+      /**
+       * Dimensionless surface emissivity in (0, 1]; 1 is a black body.
+       */
       emissivity: number;
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -4038,13 +6615,22 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.radiation` to select this operation.
+       */
       cmd: "load.radiation";
     }
   | {
+      /**
+       * Heat-source Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Body names receiving the volumetric source, including implicit mesher Bodies.
+       */
       bodies: string[];
       /**
-       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+       * Heat input per unit volume with units such as W/m^3; total power is this density times Body volume.
        */
       q:
         | string
@@ -4052,10 +6638,19 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.heatSource` to select this operation.
+       */
       cmd: "load.heatSource";
     }
   | {
+      /**
+       * Torque Load name to create or replace, for listing in an axisymmetric Step with twist.
+       */
       name: string;
+      /**
+       * Face Set receiving the circumferential traction.
+       */
       on: string;
       /**
        * A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
@@ -4066,13 +6661,22 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.torque` to select this operation.
+       */
       cmd: "load.torque";
     }
   | {
+      /**
+       * Thermal contact Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance.
+       */
       of: string;
       /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       * Positive interface heat-transfer coefficient with units such as W/(m^2 K).
        */
       conductance:
         | string
@@ -4080,13 +6684,25 @@ export type ModelFile_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `contact.thermal` to select this operation.
+       */
       cmd: "contact.thermal";
     }
   | {
+      /**
+       * Existing Load to remove; Steps must stop referencing it first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `load.remove` to select this operation.
+       */
       cmd: "load.remove";
     }
   | {
+      /**
+       * Analysis Step name; reusing it replaces the Step definition.
+       */
       name: string;
       /**
        * Analysis procedures. The schema declares each procedure's consumed Material properties,
@@ -4105,11 +6721,31 @@ export type ModelFile_Command =
         | "implicit"
         | "harmonic"
         | "randomVibration";
+      /**
+       * Names of Constraints and mechanical Contacts active in this Step; an empty list activates none.
+       */
       constraints: string[];
+      /**
+       * Names of Loads active in this Step; an empty list activates none.
+       */
       loads: string[];
+      /**
+       * Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and
+       * reactions for static analysis.
+       */
       output?: Field[] | null;
+      /**
+       * Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a
+       * modal basis.
+       */
       after?: string | null;
+      /**
+       * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
+       */
       nModes?: number | null;
+      /**
+       * Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift.
+       */
       shift?: number | null;
       /**
        * Maximum time increment of a heat-transient Step, or of a static Step with an
@@ -4125,6 +6761,10 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and
+       * static-nonlinear nominal time defaults to 1 s.
+       */
       tEnd?:
         | (
             | string
@@ -4134,14 +6774,28 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward
+       * Euler.
+       */
       theta?: number | null;
+      /**
+       * Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is
+       * retained.
+       */
       outputEvery?: number | null;
       /**
        * Maximum fraction of the explicit critical time step (usually 0.9). The increment
        * may be reduced uniformly to finish exactly at tEnd.
        */
       dtFactor?: number | null;
+      /**
+       * Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values.
+       */
       amplitude?: AmplitudeSpec | null;
+      /**
+       * Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K.
+       */
       initial?:
         | (
             | string
@@ -4191,8 +6845,6 @@ export type ModelFile_Command =
        */
       initialVelocity?: InitialVelocitySpec[] | null;
       /**
-       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
-       * the solution between two passes. Default 1e-6.
        * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
        * (default 10). More increments cost proportionally more but start each Newton solve
        * closer to equilibrium, which is what makes a stiffening or buckling model converge.
@@ -4272,26 +6924,64 @@ export type ModelFile_Command =
        * Outputs are componentwise standard deviations, never a signed equilibrium state.
        */
       psd?: PsdPoint[] | null;
+      /**
+       * Registered Command identifier; use `step.add` to select this operation.
+       */
       cmd: "step.add";
     }
   | {
+      /**
+       * Existing Step to remove; dependent Steps must stop referencing it in after first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `step.remove` to select this operation.
+       */
       cmd: "step.remove";
     }
   | {
+      /**
+       * Every Step name exactly once in execution order, keeping each Step after its named prerequisite.
+       */
       order: string[];
+      /**
+       * Registered Command identifier; use `step.reorder` to select this operation.
+       */
       cmd: "step.reorder";
     }
   | {
+      /**
+       * Existing Step to solve; its procedure, active Constraints and Loads define the problem.
+       */
       step: string;
+      /**
+       * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       */
       solver?: Solver | null;
+      /**
+       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
+       * settings control nonlinear convergence.
+       */
       tolerance?: number | null;
+      /**
+       * Linear iterative solver iteration budget; omitted means 5000.
+       */
       maxIterations?: number | null;
+      /**
+       * Registered Command identifier; use `solve.run` to select this operation.
+       */
       cmd: "solve.run";
     }
   | {
+      /**
+       * Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency
+       * solves instead.
+       */
       step: string;
       /**
+       * Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and
+       * convergence rate.
+       *
        * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
       sizes: (
@@ -4301,14 +6991,84 @@ export type ModelFile_Command =
             unit: string;
           }
       )[];
-      quantity: QuantityOfInterest;
+      /**
+       * Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe
+       * location.
+       */
+      quantity:
+        | {
+            field: Field;
+            component?: number | null;
+            kind: "max";
+          }
+        | {
+            field: Field;
+            component?: number | null;
+            kind: "min";
+          }
+        | {
+            field: Field;
+            component?: number | null;
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            at: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "probe";
+          };
+      /**
+       * Whether to restore the original mesh settings after the study; omitted means true, while false retains the
+       * final solved mesh and Result.
+       */
       restore?: boolean | null;
+      /**
+       * Registered Command identifier; use `study.converge` to select this operation.
+       */
       cmd: "study.converge";
     }
   | {
+      /**
+       * Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after
+       * dependency.
+       */
       step: string;
+      /**
+       * Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a
+       * certified bound.
+       */
       targetError: number;
+      /**
+       * Maximum adaptive solve passes in 1..=100; omitted means 8.
+       */
       maxIterations?: number | null;
+      /**
+       * Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the
+       * Command.
+       */
       maxElements?: number | null;
       /**
        * Fraction of squared error selected by bulk marking; default 0.5.
@@ -4320,23 +7080,70 @@ export type ModelFile_Command =
        * opening with skipped solves applies the same regions without solving.
        */
       refinements?: SizeBoxSpec[][] | null;
+      /**
+       * Registered Command identifier; use `study.adapt` to select this operation.
+       */
       cmd: "study.adapt";
     }
   | {
+      /**
+       * Number of latest Commands to undo; omitted means 1.
+       */
       steps?: number | null;
+      /**
+       * Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches
+       * it.
+       */
       expectedJournal?: string | null;
+      /**
+       * Registered Command identifier; use `journal.undo` to select this operation.
+       */
       cmd: "journal.undo";
     }
   | {
+      /**
+       * Number of undone Commands to reapply; omitted means 1.
+       */
       steps?: number | null;
+      /**
+       * Registered Command identifier; use `journal.redo` to select this operation.
+       */
       cmd: "journal.redo";
     }
   | {
+      /**
+       * Plugin name under which the extension is registered.
+       */
       name: string;
-      kind: PluginKind;
-      language: PluginLanguage;
-      source: PluginSource;
-      manifest?: unknown;
+      /**
+       * Extension Point implemented by this Plugin, such as a Material law, Element or Mesher.
+       */
+      kind: "materialLaw" | "element" | "load" | "postQuantity" | "mesher" | "procedure";
+      /**
+       * Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm.
+       */
+      language: "ts" | "wgsl" | "wasm";
+      /**
+       * Inline Plugin code or a URL plus the required content hash, retained for reproducible loading.
+       */
+      source:
+        | {
+            inline: string;
+          }
+        | {
+            url: string;
+            sha256: string;
+          };
+      /**
+       * Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported
+       * stub.
+       */
+      manifest?: {
+        [k: string]: unknown | undefined;
+      };
+      /**
+       * Registered Command identifier; use `plugin.load` to select this operation.
+       */
       cmd: "plugin.load";
     };
 /**
@@ -4499,75 +7306,6 @@ export type FacePredicate2 =
       kind: "any";
     };
 /**
- * A region predicate with unit strings.
- */
-export type RegionPredicate2 =
-  | {
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      min: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      /**
-       * @minItems 3
-       * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      max: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
-      kind: "bbox";
-    }
-  | {
-      name: string;
-      kind: "body";
-    };
-/**
  * Monotonic committed state counter, encoded as a decimal string for lossless JS transport.
  * It is neither Journal length nor a content hash; undo and repeated solves advance it.
  */
@@ -4676,37 +7414,113 @@ export type DocumentSnapshot_RegionPredicate =
  */
 export type DocumentSnapshot_Command =
   | {
+      /**
+       * Display name of the new empty Model.
+       */
       name: string;
+      /**
+       * Optional Model description or modelling assumptions retained with the Model.
+       */
       description?: string | null;
+      /**
+       * Registered Command identifier; use `model.new` to select this operation.
+       */
       cmd: "model.new";
     }
   | {
-      units: UnitSet;
+      units: UnitSet5;
+      /**
+       * Registered Command identifier; use `model.setUnits` to select this operation.
+       */
       cmd: "model.setUnits";
     }
   | {
+      /**
+       * New nonblank display name; preserves geometry and current Results.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `model.setName` to select this operation.
+       */
       cmd: "model.setName";
     }
   | {
-      idealisation: IdealisationSpec;
+      /**
+       * Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible
+       * with the Bodies.
+       */
+      idealisation:
+        | {
+            kind: "solid3d";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "planeStress";
+          }
+        | {
+            kind: "planeStrain";
+          }
+        | {
+            twist?: boolean;
+            kind: "axisymmetric";
+          };
+      /**
+       * Registered Command identifier; use `model.setIdealisation` to select this operation.
+       */
       cmd: "model.setIdealisation";
     }
   | {
-      kind: ObjectKind;
+      /**
+       * Kinds of nameable objects in a Model.
+       */
+      kind: "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
+      /**
+       * Current name of the object of this kind.
+       */
       name: string;
+      /**
+       * Unused new name; references to the object are updated together.
+       */
       to: string;
+      /**
+       * Registered Command identifier; use `model.rename` to select this operation.
+       */
       cmd: "model.rename";
     }
   | {
-      kind: ObjectKind;
+      /**
+       * Kinds of nameable objects in a Model.
+       */
+      kind: "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
+      /**
+       * Existing object to copy, identified within its kind.
+       */
       name: string;
+      /**
+       * Unused name for the copy; a copied Step keeps references to the original Constraints and Loads.
+       */
       as: string;
+      /**
+       * Registered Command identifier; use `model.duplicate` to select this operation.
+       */
       cmd: "model.duplicate";
     }
   | {
+      /**
+       * Body name; reusing it replaces the box while preserving compatible assignments and cuts.
+       */
       name: string;
       /**
+       * Positive x/y/z side lengths, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -4736,6 +7550,8 @@ export type DocumentSnapshot_Command =
         )
       ];
       /**
+       * Global x/y/z coordinates of the minimum corner; omitted means the origin.
+       *
        * @minItems 3
        * @maxItems 3
        */
@@ -4764,12 +7580,23 @@ export type DocumentSnapshot_Command =
             )
           ]
         | null;
+      /**
+       * Registered Command identifier; use `geometry.addBox` to select this operation.
+       */
       cmd: "geometry.addBox";
     }
   | {
+      /**
+       * Cut name, also the prefix of the resulting hole face Sets.
+       */
       name: string;
+      /**
+       * Existing solid Body from which the box is removed.
+       */
       from: string;
       /**
+       * Positive x/y/z lengths of the cutting box, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -4799,6 +7626,8 @@ export type DocumentSnapshot_Command =
         )
       ];
       /**
+       * Global x/y/z coordinates of the cutting box minimum corner.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -4827,15 +7656,228 @@ export type DocumentSnapshot_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `geometry.subtractBox` to select this operation.
+       */
       cmd: "geometry.subtractBox";
     }
   | {
+      /**
+       * Body name; reusing it replaces the shape while preserving compatible assignments and cuts.
+       */
       name: string;
-      shape: ShapeSpec;
+      /**
+       * A shape with unit strings; the geometry crate's `Shape` is its SI form.
+       */
+      shape:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            kind: "box";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "cylinder";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "sphere";
+          }
+        | {
+            sketch: SketchSpec;
+            kind: "sheet";
+          }
+        | {
+            sketch: SketchSpec;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "extrude";
+          }
+        | {
+            sketch: SketchSpec;
+            angle: number;
+            segments?: number | null;
+            kind: "revolve";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "union";
+          }
+        | {
+            from: ShapeSpec;
+            cut: ShapeSpec[];
+            kind: "subtract";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "intersect";
+          }
+        | {
+            shape: ShapeSpec;
+            at: Placement;
+            kind: "transform";
+          };
+      /**
+       * Registered Command identifier; use `geometry.add` to select this operation.
+       */
       cmd: "geometry.add";
     }
   | {
+      /**
+       * Line Body name; joint node Sets are named <name>.p0, <name>.p1 and so on.
+       */
       name: string;
+      /**
+       * Ordered global x/y/z joint coordinates, each component with length units.
+       */
       points: [
         (
           | string
@@ -4859,25 +7901,253 @@ export type DocumentSnapshot_Command =
             }
         )
       ][];
+      /**
+       * Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on.
+       */
       members?: [number, number][] | null;
+      /**
+       * Number of equal finite elements per member; omitted means one.
+       */
       divisions?: number | null;
+      /**
+       * Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss.
+       */
       kind?: LineKind | null;
+      /**
+       * Registered Command identifier; use `geometry.addLine` to select this operation.
+       */
       cmd: "geometry.addLine";
     }
   | {
+      /**
+       * Cut name, also the prefix of its generated face Sets.
+       */
       name: string;
+      /**
+       * Existing solid Body from which the shape is removed.
+       */
       from: string;
-      shape: ShapeSpec;
+      /**
+       * A shape with unit strings; the geometry crate's `Shape` is its SI form.
+       */
+      shape:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            kind: "box";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "cylinder";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            at?:
+              | [
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  ),
+                  (
+                    | string
+                    | {
+                        value: number;
+                        unit: string;
+                      }
+                  )
+                ]
+              | null;
+            segments?: number | null;
+            kind: "sphere";
+          }
+        | {
+            sketch: SketchSpec;
+            kind: "sheet";
+          }
+        | {
+            sketch: SketchSpec;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "extrude";
+          }
+        | {
+            sketch: SketchSpec;
+            angle: number;
+            segments?: number | null;
+            kind: "revolve";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "union";
+          }
+        | {
+            from: ShapeSpec;
+            cut: ShapeSpec[];
+            kind: "subtract";
+          }
+        | {
+            shapes: ShapeSpec[];
+            kind: "intersect";
+          }
+        | {
+            shape: ShapeSpec;
+            at: Placement;
+            kind: "transform";
+          };
+      /**
+       * Registered Command identifier; use `geometry.subtract` to select this operation.
+       */
       cmd: "geometry.subtract";
     }
   | {
+      /**
+       * Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts.
+       */
       name: string;
-      format: MeshFormat;
+      /**
+       * Geometry file format of data; the supported format is STL.
+       */
+      format: "stl";
       /**
        * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
        * what a binary STL needs.
        */
       data: string;
+      /**
+       * How data encodes the file; omitted means text, while binary STL requires base64.
+       */
       encoding?: DataEncoding | null;
       /**
        * Hex sha256 of the decoded file, checked before it is read.
@@ -4908,26 +8178,282 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `geometry.import` to select this operation.
+       */
       cmd: "geometry.import";
     }
   | {
+      /**
+       * Named face Set to create or replace, for use by Constraints and Loads.
+       */
       name: string;
+      /**
+       * Body whose actual mesh boundary is selected, including an implicit mapped or swept Body.
+       */
       of: string;
-      where: FacePredicate;
+      /**
+       * Geometric predicate selecting boundary faces; re-evaluated on each remesh.
+       */
+      where:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            normal: [number, number, number];
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            offset:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            tol?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "plane";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            normal: [number, number, number];
+            max_angle_deg?: number | null;
+            kind: "normal";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            min: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            max: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "bbox";
+          }
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            point: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             */
+            axis: [number, number, number];
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            tol?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "cylinder";
+          }
+        | {
+            of: FacePredicate[];
+            kind: "any";
+          };
+      /**
+       * Registered Command identifier; use `geometry.nameFace` to select this operation.
+       */
       cmd: "geometry.nameFace";
     }
   | {
+      /**
+       * Named region Set to create or replace, for Constraints, nodal Loads and probes.
+       */
       name: string;
-      where: RegionPredicate2;
+      /**
+       * Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds.
+       */
+      where:
+        | {
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            min: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            max: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "bbox";
+          }
+        | {
+            name: string;
+            kind: "body";
+          };
+      /**
+       * Registered Command identifier; use `geometry.nameRegion` to select this operation.
+       */
       cmd: "geometry.nameRegion";
     }
   | {
+      /**
+       * Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted
+       * first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `geometry.remove` to select this operation.
+       */
       cmd: "geometry.remove";
     }
   | {
+      /**
+       * Point-mass name and node Set name; reusing it replaces that point mass.
+       */
       name: string;
       /**
+       * Global x/y/z coordinates of the mass node, each with length units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -4957,7 +8483,7 @@ export type DocumentSnapshot_Command =
         )
       ];
       /**
-       * A mass with unit, e.g. "2 kg". Any unit of the right dimension is accepted.
+       * Positive lumped mass with mass units; attach the node with constraint.couple before solving.
        */
       mass:
         | string
@@ -4965,6 +8491,9 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `geometry.addMass` to select this operation.
+       */
       cmd: "geometry.addMass";
     }
   | {
@@ -5064,64 +8593,465 @@ export type DocumentSnapshot_Command =
        * Source or reference for these property values, retained with the Material.
        */
       source?: string | null;
+      /**
+       * Registered Command identifier; use `material.add` to select this operation.
+       */
       cmd: "material.add";
     }
   | {
+      /**
+       * Existing Material name whose properties the target Bodies will use.
+       */
       material: string;
+      /**
+       * Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher.
+       */
       bodies: string[];
+      /**
+       * Registered Command identifier; use `material.assign` to select this operation.
+       */
       cmd: "material.assign";
     }
   | {
+      /**
+       * Existing unassigned Material to remove; retarget its Bodies first if it is in use.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `material.remove` to select this operation.
+       */
       cmd: "material.remove";
     }
   | {
+      /**
+       * Section name; reusing it replaces the cross-section or shell definition.
+       */
       name: string;
-      shape: SectionSpec;
+      /**
+       * Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies.
+       */
+      shape:
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "shell";
+          }
+        | {
+            plies: ShellPlySpec[];
+            kind: "laminate";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "rectangle";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "circle";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            radius:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            thickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "tube";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            webThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            flangeThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "i";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            height:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            width:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            webThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            flangeThickness:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kind: "channel";
+          }
+        | {
+            /**
+             * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
+             */
+            a:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            iY:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            iZ:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            /**
+             * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+             */
+            j:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            kY?: number | null;
+            kZ?: number | null;
+            cY?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            cZ?:
+              | (
+                  | string
+                  | {
+                      value: number;
+                      unit: string;
+                    }
+                )
+              | null;
+            kind: "generic";
+          };
+      /**
+       * Registered Command identifier; use `section.add` to select this operation.
+       */
       cmd: "section.add";
     }
   | {
+      /**
+       * Existing Section name to assign.
+       */
       section: string;
+      /**
+       * Line or shell Body names that will use this Section.
+       */
       bodies: string[];
+      /**
+       * Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the
+       * documented geometry-based convention.
+       */
       orientation?: Axis | null;
+      /**
+       * Registered Command identifier; use `section.assign` to select this operation.
+       */
       cmd: "section.assign";
     }
   | {
+      /**
+       * Existing unassigned Section to remove; retarget its Bodies first if it is in use.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `section.remove` to select this operation.
+       */
       cmd: "section.remove";
     }
   | {
-      mesher: MesherSpec;
+      /**
+       * Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and
+       * Sets.
+       */
+      mesher:
+        | {
+            size: LatticeSize;
+            /**
+             * Optional positive element lengths keyed by existing Body name. Each entry overrides
+             * `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+             * size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+             * and cannot have size overrides. Names follow model.rename; remove an override before
+             * removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+             * them with the global size, preserving the refinement ratio.
+             */
+            sizes?: {
+              /**
+               * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+               */
+              [k: string]:
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+                | undefined;
+            };
+            kind: "lattice";
+          }
+        | {
+            body?: string | null;
+            blocks: QuadBlockSpec[];
+            kind: "mapped";
+          }
+        | {
+            of: string;
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            refine?: RefineBoxSpec[] | null;
+            kind: "free";
+          }
+        | {
+            base: MesherSpec;
+            sweep: SweepSpec;
+            kind: "sweep";
+          }
+        | {
+            /**
+             * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            size:
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                };
+            maxElements?: number | null;
+            kind: "tet";
+          }
+        | {
+            body?: string | null;
+            patches: SurfacePatchSpec[];
+            kind: "surface";
+          }
+        | {
+            body: string;
+            nodes: ImportedNodeSpec[];
+            elements: ImportedElement[];
+            nodeSets?: {
+              [k: string]: number[] | undefined;
+            };
+            elementSets?: {
+              [k: string]: number[] | undefined;
+            };
+            surfaces?: {
+              [k: string]: ImportedFace[] | undefined;
+            };
+            /**
+             * Allocate <body>.node_<label> targets only for requested numeric node references.
+             */
+            nodeTargets?: number[];
+            provenance?: ImportedProvenance | null;
+            kind: "imported";
+          };
+      /**
+       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
+       * 1.
+       */
       order?: number | null;
+      /**
+       * Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for
+       * imported sources. Simplex elements ignore this setting.
+       */
       formulation?: Formulation | null;
+      /**
+       * Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and
+       * imported sources require false.
+       */
       simplices?: boolean | null;
       /**
        * Optional local size field on the resulting linear simplex mesh. A new
        * mesh.set replaces this field; omit it to return to the base mesh.
        */
       refinement?: LocalRefinementSpec | null;
+      /**
+       * Registered Command identifier; use `mesh.set` to select this operation.
+       */
       cmd: "mesh.set";
     }
   | {
-      format: ExportFormat;
+      /**
+       * A file format `mesh.export` writes.
+       */
+      format: "vtu" | "msh" | "inp" | "stl" | "report";
+      /**
+       * Step whose current Result fields are included for vtu or whose calculation note is exported for report;
+       * mesh-only formats ignore it.
+       */
       step?: string | null;
+      /**
+       * Registered Command identifier; use `mesh.export` to select this operation.
+       */
       cmd: "mesh.export";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set whose degrees of freedom are restrained.
+       */
       on: string;
+      /**
+       * Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components
+       * for a roller or partial restraint.
+       */
       dofs?: Dof[] | null;
+      /**
+       * Registered Command identifier; use `constraint.fix` to select this operation.
+       */
       cmd: "constraint.fix";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set whose translations are fixed while beam-joint rotations remain free.
+       */
       on: string;
+      /**
+       * Registered Command identifier; use `constraint.pin` to select this operation.
+       */
       cmd: "constraint.pin";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set receiving the prescribed displacement.
+       */
       on: string;
-      dof: Dof;
+      /**
+       * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
+       * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
+       * on every other node they are inert, so holding them there changes nothing.
+       */
+      dof: "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
       /**
        * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
@@ -5131,16 +9061,37 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `constraint.prescribe` to select this operation.
+       */
       cmd: "constraint.prescribe";
     }
   | {
+      /**
+       * Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Named Set lying on the modelled symmetry plane.
+       */
       on: string;
-      normal: Axis;
+      /**
+       * A coordinate axis.
+       */
+      normal: "x" | "y" | "z";
+      /**
+       * Registered Command identifier; use `constraint.symmetry` to select this operation.
+       */
       cmd: "constraint.symmetry";
     }
   | {
+      /**
+       * Temperature Constraint name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Named Set held at the prescribed temperature.
+       */
       on: string;
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -5151,13 +9102,32 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `constraint.temperature` to select this operation.
+       */
       cmd: "constraint.temperature";
     }
   | {
+      /**
+       * Contact Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Master face Set onto which slave nodes are projected; normally choose the coarser side.
+       */
       master: string;
+      /**
+       * Slave face Set whose nodes are paired to the master; normally choose the finer side.
+       */
       slave: string;
-      kind: ContactKind;
+      /**
+       * Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide.
+       */
+      kind: "bonded" | "frictionless";
+      /**
+       * Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units;
+       * omitted means 1e-4 of the Mesh diagonal.
+       */
       tol?:
         | (
             | string
@@ -5167,15 +9137,35 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `contact.add` to select this operation.
+       */
       cmd: "contact.add";
     }
   | {
+      /**
+       * Cyclic Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Source sector-face node Set; must match the rotated target mesh.
+       */
       from: string;
+      /**
+       * Target sector-face node Set reached by the specified rotation.
+       */
       to: string;
-      axis: Axis;
+      /**
+       * A coordinate axis.
+       */
+      axis: "x" | "y" | "z";
+      /**
+       * Signed right-handed rotation from the source to the target face, in degrees.
+       */
       angleDeg: number;
       /**
+       * Global x/y/z point on the rotation axis, with length units; omitted means the origin.
+       *
        * @minItems 3
        * @maxItems 3
        */
@@ -5204,6 +9194,9 @@ export type DocumentSnapshot_Command =
             )
           ]
         | null;
+      /**
+       * Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal.
+       */
       tol?:
         | (
             | string
@@ -5213,21 +9206,52 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `constraint.cyclic` to select this operation.
+       */
       cmd: "constraint.cyclic";
     }
   | {
+      /**
+       * Coupling Constraint name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Existing point-mass node Set created with geometry.addMass.
+       */
       point: string;
+      /**
+       * Face Set coupled to the point displacement.
+       */
       on: string;
-      kind: CoupleKind;
+      /**
+       * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
+       * transmits a moment.
+       */
+      kind: "distributed" | "rigid";
+      /**
+       * Registered Command identifier; use `constraint.couple` to select this operation.
+       */
       cmd: "constraint.couple";
     }
   | {
+      /**
+       * Existing Constraint to remove; Steps must stop referencing it first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `constraint.remove` to select this operation.
+       */
       cmd: "constraint.remove";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Face Set receiving the pressure.
+       */
       on: string;
       /**
        * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
@@ -5238,12 +9262,23 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.pressure` to select this operation.
+       */
       cmd: "load.pressure";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Face Set over which the resultant is distributed by area.
+       */
       on: string;
       /**
+       * Total global x/y/z force on the entire Set, each component with force units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -5272,12 +9307,23 @@ export type DocumentSnapshot_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.traction` to select this operation.
+       */
       cmd: "load.traction";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Node Set over which the force is split equally.
+       */
       on: string;
       /**
+       * Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -5306,12 +9352,23 @@ export type DocumentSnapshot_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.force` to select this operation.
+       */
       cmd: "load.force";
     }
   | {
+      /**
+       * Load name to create or replace, for listing in a Step.
+       */
       name: string;
+      /**
+       * Node Set of beam joints carrying rotational degrees of freedom.
+       */
       on: string;
       /**
+       * Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -5340,11 +9397,20 @@ export type DocumentSnapshot_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.moment` to select this operation.
+       */
       cmd: "load.moment";
     }
   | {
+      /**
+       * Acceleration Load name to create or replace, for listing in a Step.
+       */
       name: string;
       /**
+       * Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires
+       * Material density.
+       *
        * @minItems 3
        * @maxItems 3
        *
@@ -5373,10 +9439,19 @@ export type DocumentSnapshot_Command =
             }
         )
       ];
+      /**
+       * Registered Command identifier; use `load.gravity` to select this operation.
+       */
       cmd: "load.gravity";
     }
   | {
+      /**
+       * Thermal-strain Load name to create or replace, for listing in a structural Step.
+       */
       name: string;
+      /**
+       * Body names receiving the temperature/reference assignment, including implicit mesher Bodies.
+       */
       bodies: string[];
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -5387,6 +9462,9 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Stress-free reference temperature with temperature units; omitted means 293.15 K.
+       */
       reference?:
         | (
             | string
@@ -5396,13 +9474,22 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Registered Command identifier; use `load.temperature` to select this operation.
+       */
       cmd: "load.temperature";
     }
   | {
+      /**
+       * Convection Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set exchanging heat with its surroundings.
+       */
       on: string;
       /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       * Positive heat-transfer coefficient with units such as W/(m^2 K).
        */
       h:
         | string
@@ -5419,13 +9506,22 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.convection` to select this operation.
+       */
       cmd: "load.convection";
     }
   | {
+      /**
+       * Heat-flux Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set receiving the prescribed heat flux.
+       */
       on: string;
       /**
-       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+       * Heat input per unit area with units such as W/m^2; negative removes heat.
        */
       q:
         | string
@@ -5433,11 +9529,23 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.heatFlux` to select this operation.
+       */
       cmd: "load.heatFlux";
     }
   | {
+      /**
+       * Radiation Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Face Set radiating to the specified surroundings.
+       */
       on: string;
+      /**
+       * Dimensionless surface emissivity in (0, 1]; 1 is a black body.
+       */
       emissivity: number;
       /**
        * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
@@ -5448,13 +9556,22 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.radiation` to select this operation.
+       */
       cmd: "load.radiation";
     }
   | {
+      /**
+       * Heat-source Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Body names receiving the volumetric source, including implicit mesher Bodies.
+       */
       bodies: string[];
       /**
-       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+       * Heat input per unit volume with units such as W/m^3; total power is this density times Body volume.
        */
       q:
         | string
@@ -5462,10 +9579,19 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.heatSource` to select this operation.
+       */
       cmd: "load.heatSource";
     }
   | {
+      /**
+       * Torque Load name to create or replace, for listing in an axisymmetric Step with twist.
+       */
       name: string;
+      /**
+       * Face Set receiving the circumferential traction.
+       */
       on: string;
       /**
        * A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
@@ -5476,13 +9602,22 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `load.torque` to select this operation.
+       */
       cmd: "load.torque";
     }
   | {
+      /**
+       * Thermal contact Load name to create or replace, for listing in a heat Step.
+       */
       name: string;
+      /**
+       * Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance.
+       */
       of: string;
       /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       * Positive interface heat-transfer coefficient with units such as W/(m^2 K).
        */
       conductance:
         | string
@@ -5490,13 +9625,25 @@ export type DocumentSnapshot_Command =
             value: number;
             unit: string;
           };
+      /**
+       * Registered Command identifier; use `contact.thermal` to select this operation.
+       */
       cmd: "contact.thermal";
     }
   | {
+      /**
+       * Existing Load to remove; Steps must stop referencing it first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `load.remove` to select this operation.
+       */
       cmd: "load.remove";
     }
   | {
+      /**
+       * Analysis Step name; reusing it replaces the Step definition.
+       */
       name: string;
       /**
        * Analysis procedures. The schema declares each procedure's consumed Material properties,
@@ -5515,11 +9662,31 @@ export type DocumentSnapshot_Command =
         | "implicit"
         | "harmonic"
         | "randomVibration";
+      /**
+       * Names of Constraints and mechanical Contacts active in this Step; an empty list activates none.
+       */
       constraints: string[];
+      /**
+       * Names of Loads active in this Step; an empty list activates none.
+       */
       loads: string[];
+      /**
+       * Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and
+       * reactions for static analysis.
+       */
       output?: Field[] | null;
+      /**
+       * Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a
+       * modal basis.
+       */
       after?: string | null;
+      /**
+       * Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
+       */
       nModes?: number | null;
+      /**
+       * Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift.
+       */
       shift?: number | null;
       /**
        * Maximum time increment of a heat-transient Step, or of a static Step with an
@@ -5535,6 +9702,10 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and
+       * static-nonlinear nominal time defaults to 1 s.
+       */
       tEnd?:
         | (
             | string
@@ -5544,14 +9715,28 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      /**
+       * Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward
+       * Euler.
+       */
       theta?: number | null;
+      /**
+       * Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is
+       * retained.
+       */
       outputEvery?: number | null;
       /**
        * Maximum fraction of the explicit critical time step (usually 0.9). The increment
        * may be reduced uniformly to finish exactly at tEnd.
        */
       dtFactor?: number | null;
+      /**
+       * Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values.
+       */
       amplitude?: AmplitudeSpec | null;
+      /**
+       * Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K.
+       */
       initial?:
         | (
             | string
@@ -5601,8 +9786,6 @@ export type DocumentSnapshot_Command =
        */
       initialVelocity?: InitialVelocitySpec[] | null;
       /**
-       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
-       * the solution between two passes. Default 1e-6.
        * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
        * (default 10). More increments cost proportionally more but start each Newton solve
        * closer to equilibrium, which is what makes a stiffening or buckling model converge.
@@ -5682,26 +9865,64 @@ export type DocumentSnapshot_Command =
        * Outputs are componentwise standard deviations, never a signed equilibrium state.
        */
       psd?: PsdPoint[] | null;
+      /**
+       * Registered Command identifier; use `step.add` to select this operation.
+       */
       cmd: "step.add";
     }
   | {
+      /**
+       * Existing Step to remove; dependent Steps must stop referencing it in after first.
+       */
       name: string;
+      /**
+       * Registered Command identifier; use `step.remove` to select this operation.
+       */
       cmd: "step.remove";
     }
   | {
+      /**
+       * Every Step name exactly once in execution order, keeping each Step after its named prerequisite.
+       */
       order: string[];
+      /**
+       * Registered Command identifier; use `step.reorder` to select this operation.
+       */
       cmd: "step.reorder";
     }
   | {
+      /**
+       * Existing Step to solve; its procedure, active Constraints and Loads define the problem.
+       */
       step: string;
+      /**
+       * Linear solver implementation; omitted means auto, which selects an available compatible backend.
+       */
       solver?: Solver | null;
+      /**
+       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
+       * settings control nonlinear convergence.
+       */
       tolerance?: number | null;
+      /**
+       * Linear iterative solver iteration budget; omitted means 5000.
+       */
       maxIterations?: number | null;
+      /**
+       * Registered Command identifier; use `solve.run` to select this operation.
+       */
       cmd: "solve.run";
     }
   | {
+      /**
+       * Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency
+       * solves instead.
+       */
       step: string;
       /**
+       * Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and
+       * convergence rate.
+       *
        * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
       sizes: (
@@ -5711,14 +9932,84 @@ export type DocumentSnapshot_Command =
             unit: string;
           }
       )[];
-      quantity: QuantityOfInterest;
+      /**
+       * Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe
+       * location.
+       */
+      quantity:
+        | {
+            field: Field;
+            component?: number | null;
+            kind: "max";
+          }
+        | {
+            field: Field;
+            component?: number | null;
+            kind: "min";
+          }
+        | {
+            field: Field;
+            component?: number | null;
+            /**
+             * @minItems 3
+             * @maxItems 3
+             *
+             * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+             */
+            at: [
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              ),
+              (
+                | string
+                | {
+                    value: number;
+                    unit: string;
+                  }
+              )
+            ];
+            kind: "probe";
+          };
+      /**
+       * Whether to restore the original mesh settings after the study; omitted means true, while false retains the
+       * final solved mesh and Result.
+       */
       restore?: boolean | null;
+      /**
+       * Registered Command identifier; use `study.converge` to select this operation.
+       */
       cmd: "study.converge";
     }
   | {
+      /**
+       * Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after
+       * dependency.
+       */
       step: string;
+      /**
+       * Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a
+       * certified bound.
+       */
       targetError: number;
+      /**
+       * Maximum adaptive solve passes in 1..=100; omitted means 8.
+       */
       maxIterations?: number | null;
+      /**
+       * Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the
+       * Command.
+       */
       maxElements?: number | null;
       /**
        * Fraction of squared error selected by bulk marking; default 0.5.
@@ -5730,23 +10021,70 @@ export type DocumentSnapshot_Command =
        * opening with skipped solves applies the same regions without solving.
        */
       refinements?: SizeBoxSpec[][] | null;
+      /**
+       * Registered Command identifier; use `study.adapt` to select this operation.
+       */
       cmd: "study.adapt";
     }
   | {
+      /**
+       * Number of latest Commands to undo; omitted means 1.
+       */
       steps?: number | null;
+      /**
+       * Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches
+       * it.
+       */
       expectedJournal?: string | null;
+      /**
+       * Registered Command identifier; use `journal.undo` to select this operation.
+       */
       cmd: "journal.undo";
     }
   | {
+      /**
+       * Number of undone Commands to reapply; omitted means 1.
+       */
       steps?: number | null;
+      /**
+       * Registered Command identifier; use `journal.redo` to select this operation.
+       */
       cmd: "journal.redo";
     }
   | {
+      /**
+       * Plugin name under which the extension is registered.
+       */
       name: string;
-      kind: PluginKind;
-      language: PluginLanguage;
-      source: PluginSource;
-      manifest?: unknown;
+      /**
+       * Extension Point implemented by this Plugin, such as a Material law, Element or Mesher.
+       */
+      kind: "materialLaw" | "element" | "load" | "postQuantity" | "mesher" | "procedure";
+      /**
+       * Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm.
+       */
+      language: "ts" | "wgsl" | "wasm";
+      /**
+       * Inline Plugin code or a URL plus the required content hash, retained for reproducible loading.
+       */
+      source:
+        | {
+            inline: string;
+          }
+        | {
+            url: string;
+            sha256: string;
+          };
+      /**
+       * Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported
+       * stub.
+       */
+      manifest?: {
+        [k: string]: unknown | undefined;
+      };
+      /**
+       * Registered Command identifier; use `plugin.load` to select this operation.
+       */
       cmd: "plugin.load";
     };
 
@@ -5771,7 +10109,7 @@ export interface Engine {
   replacementTicket: ReplacementTicket;
 }
 /**
- * Display units, all optional; SI defaults.
+ * Display units used by Queries and the UI; physical inputs still carry their own units and storage stays SI.
  */
 export interface UnitSet {
   length?: string | null;
@@ -6586,7 +10924,7 @@ export interface ModelSummary {
   name: string;
   revision: number;
   hash: string;
-  units: UnitSet;
+  units: UnitSet1;
   idealisation: string;
   bodies: BodyRow[];
   materials: MaterialRow[];
@@ -6601,6 +10939,23 @@ export interface ModelSummary {
   steps: StepRow[];
   meshSettings?: MeshSettings | null;
   warnings: Warning[];
+}
+/**
+ * Display units, all optional; SI defaults.
+ */
+export interface UnitSet1 {
+  length?: string | null;
+  force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
+  stress?: string | null;
+  mass?: string | null;
+  density?: string | null;
+  time?: string | null;
+  temperature?: string | null;
+  acceleration?: string | null;
 }
 export interface BodyRow {
   name: string;
@@ -7221,6 +11576,15 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Retained force and moment accounting for linear Cartesian static Results only.
+   * Absent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A
+   * nonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining
+   * study before Result publication. If later display units cannot represent the
+   * retained values, this Query returns a structured error; model.setUnits with
+   * force N and length m restores readable SI quantities.
+   */
+  staticEquilibrium?: StaticEquilibrium | null;
+  /**
    * Thermal stored-energy rate in power display units (zero for steady heat). Transient
    * power totals/reactions use the last θ-method integration stage; the temperature field
    * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
@@ -7268,7 +11632,11 @@ export interface ResultSummary {
    */
   sweep?: SweepRow[];
   /**
-   * Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+   * Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear
+   * Cartesian static uses retained unaggregated nodal force/moment actions, with M/L
+   * converting moments to force. Actual residuals and scales are in staticEquilibrium;
+   * no residual is snapped to zero. Other structural procedures retain their existing
+   * largest-force scale. Thermal
    * conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
    * Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
    * Zero is perfect balance; values above 1e-9 fail the report's conservation check.
@@ -7314,6 +11682,88 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * Linear Cartesian static equilibrium, retained with the solved state in SI and displayed
+ * in the requested unit set. Moments use reference-configuration node coordinates.
+ * A passing force check alone is not moment conservation: translation-only bonded ties
+ * across a gap can transfer a force without its offset couple, leaving a real angular
+ * residual. This diagnostic exposes that model behavior without changing tie mechanics.
+ */
+export interface StaticEquilibrium {
+  /**
+   * First retained Mesh node: the origin used by all applied/support moments.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  reference: [Valued, Valued, Valued];
+  characteristicLength: Valued2;
+  /**
+   * Actual vector Σ applied forces + Σ support forces, never rounded away.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  forceResidual: [Valued, Valued, Valued];
+  forceScale: Valued3;
+  /**
+   * Σ((x-reference)×F_applied + applied rotational couple).
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  appliedMoment: [Valued, Valued, Valued];
+  /**
+   * Each Constraint's support moment, including force lever arms and raw rotational
+   * reactions; DOFs shared by Constraints belong to the first owner, as for reactions.
+   */
+  reactionMoments: MomentReactionRow[];
+  /**
+   * Actual vector Σ applied moments + Σ support moments about reference.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  momentResidual: [Valued, Valued, Valued];
+  momentScale: Valued4;
+  /**
+   * |momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.
+   * The report checks this separately from force balance at its conservation tolerance.
+   */
+  momentBalance: number;
+}
+/**
+ * A value with its display unit.
+ */
+export interface Valued2 {
+  value: number;
+  unit: string;
+}
+/**
+ * A value with its display unit.
+ */
+export interface Valued3 {
+  value: number;
+  unit: string;
+}
+/**
+ * One Constraint's support moment about the static equilibrium reference, in torque units.
+ */
+export interface MomentReactionRow {
+  constraint: string;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  total: [Valued, Valued, Valued];
+}
+/**
+ * A value with its display unit.
+ */
+export interface Valued4 {
+  value: number;
+  unit: string;
 }
 /**
  * One solver-used material assumption captured at solve time.
@@ -8173,7 +12623,7 @@ export interface ModelFile {
 export interface Model {
   name: string;
   description?: string | null;
-  units?: UnitSet1;
+  units?: UnitSet2;
   idealisation: Idealisation;
   bodies?: Body[];
   cuts?: Cut[];
@@ -8212,7 +12662,7 @@ export interface Model {
 /**
  * Display units, all optional; SI defaults.
  */
-export interface UnitSet1 {
+export interface UnitSet2 {
   length?: string | null;
   force?: string | null;
   /**
@@ -8487,6 +12937,23 @@ export interface ModelFile_JournalEntry {
   hashAfter: string;
 }
 /**
+ * Display units, all optional; SI defaults.
+ */
+export interface UnitSet3 {
+  length?: string | null;
+  force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
+  stress?: string | null;
+  mass?: string | null;
+  density?: string | null;
+  time?: string | null;
+  temperature?: string | null;
+  acceleration?: string | null;
+}
+/**
  * Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
  * three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
  * contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
@@ -8725,7 +13192,7 @@ export interface DocumentSnapshot_ModelFile {
 export interface DocumentSnapshot_Model {
   name: string;
   description?: string | null;
-  units?: UnitSet2;
+  units?: UnitSet4;
   idealisation: Idealisation;
   bodies?: Body[];
   cuts?: Cut[];
@@ -8764,7 +13231,7 @@ export interface DocumentSnapshot_Model {
 /**
  * Display units, all optional; SI defaults.
  */
-export interface UnitSet2 {
+export interface UnitSet4 {
   length?: string | null;
   force?: string | null;
   /**
@@ -8858,6 +13325,23 @@ export interface DocumentSnapshot_JournalEntry {
   seq: number;
   cmd: DocumentSnapshot_Command;
   hashAfter: string;
+}
+/**
+ * Display units, all optional; SI defaults.
+ */
+export interface UnitSet5 {
+  length?: string | null;
+  force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
+  stress?: string | null;
+  mass?: string | null;
+  density?: string | null;
+  time?: string | null;
+  temperature?: string | null;
+  acceleration?: string | null;
 }
 /**
  * `query.journal` response.

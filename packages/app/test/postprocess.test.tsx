@@ -284,6 +284,10 @@ describe('the Results group of the tree', () => {
 });
 
 describe('the deformation bar', () => {
+  const displacementResult: ResultSummary = { ...RESULT, extremes: [...RESULT.extremes, {
+    field: 'displacement', component: 0, min: v(0, 'mm'), minAt: [v(0, 'mm'), v(0, 'mm'), v(0, 'mm')],
+    max: v(0.2, 'mm'), maxAt: [v(1, 'mm'), v(2, 'mm'), v(3, 'mm')],
+  }] };
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -298,7 +302,7 @@ describe('the deformation bar', () => {
   };
 
   it('offers play, and no scrub, for a plain static Result', () => {
-    const { root } = mount({ result: RESULT });
+    const { root } = mount({ result: displacementResult });
     const bar = root.querySelector('.deform-bar')!;
     expect(bar.querySelector('[data-cmd="view.animate"]')!.textContent).toBe('▶');
     expect(bar.querySelector('input.phase')).toBeNull();

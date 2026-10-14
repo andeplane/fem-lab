@@ -68,12 +68,14 @@ const SKILL_TOOL = 'skill_invoke';
 const errorJson = (e: unknown): string =>
   JSON.stringify(e instanceof FemError ? e.toJSON() : { code: 'internal', cause: e instanceof Error ? e.message : String(e), where: null, suggestion: null });
 
-async function callTool(registry: Registry, tool: string, input: unknown): Promise<unknown> {
+async function callTool(registry: Registry, tool: string, input: unknown, allowed: Set<string>): Promise<unknown> {
+  if (!allowed.has(tool)) throw new FemError('unsupported', 'This tool is not permitted in this turn', tool, 'use a tool from this turn\'s API reference');
   const args = (input ?? {}) as Record<string, unknown>;
-  if (tool === RUN_SCRIPT) return registry.dispatch({ cmd: 'script.run', ...args });
+  if (tool === RUN_SCRIPT) return registry.dispatch({ ...args, cmd: 'script.run' });
   const command = commandNameFor(tool, registry);
   if (!command) throw new FemError('not-found', `there is no tool called '${tool}'`, tool, 'call describe or use one of the names in the API reference');
-  return command.startsWith('query.') ? registry.query({ query: command, ...args }) : registry.dispatch({ cmd: command, ...args });
+  if (!registry.describe(command).tool) throw new FemError('unsupported', 'This Command requires an explicit user action', command, 'use the corresponding application control');
+  return command.startsWith('query.') ? registry.query({ ...args, query: command }) : registry.dispatch({ ...args, cmd: command });
 }
 
 async function journal(registry: Registry): Promise<JournalDump> {
@@ -92,6 +94,7 @@ async function journal(registry: Registry): Promise<JournalDump> {
  */
 export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, TurnResult> {
   const { provider, registry, model, system, tools, messages, signal, maxTokens = 16000, maxRounds = 12, timeoutMs = 180_000, now = Date.now } = opts;
+  const allowedTools = new Set(tools.map(tool => tool.name));
   const started = now();
   const before = await journal(registry);
   const owned: JournalEntry[] = [];
@@ -161,13 +164,13 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
       const at = now();
       try {
         if (signal?.aborted) throw new FemError('cancelled', 'Interrupted before this tool started', p.name);
-        const value = await callTool(registry, p.name, p.input);
+        const value = await callTool(registry, p.name, p.input, allowedTools);
         call.result = JSON.stringify(value ?? null);
         call.status = p.name === RUN_SCRIPT && typeof (value as ScriptResult)?.error === 'string' ? 'failed' : 'succeeded';
         if (p.name === RUN_SCRIPT) owned.push(...((value as ScriptResult)?.journalEntries ?? []));
         else if ('journaled' in registry.describe(call.command) && (registry.describe(call.command) as { journaled: boolean }).journaled) {
           const ack = value as Ack;
-          owned.push({ seq: ack.seq, hashAfter: ack.hash, cmd: { cmd: call.command, ...(p.input as Record<string, unknown>) } as Command });
+          owned.push({ seq: ack.seq, hashAfter: ack.hash, cmd: { ...(p.input as Record<string, unknown>), cmd: call.command } as Command });
         }
         if (p.name === SKILL_TOOL) skills.push(String((p.input as { name?: string })?.name ?? ''));
       } catch (e) {

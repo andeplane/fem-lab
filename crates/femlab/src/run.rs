@@ -95,19 +95,29 @@ impl BatchEngine {
         let context = self.context();
         self.owner.snapshot(&context)
     }
+    /// Converted Commands build a private candidate; no partial import touches the owner.
+    pub async fn replace_commands(
+        &mut self,
+        commands: Vec<Command>,
+    ) -> Result<(DocumentSnapshot, Vec<u8>), femlab_engine::Error> {
+        let (candidate, ticket) = self.candidate()?;
+        let mut progress = |_: Progress| true;
+        let prepared = match candidate.commands(commands, &mut progress).await.and_then(finish_candidate) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.owner.abandon_replacement(&ticket)?;
+                return Err(error);
+            }
+        };
+        let file_bytes = prepared.file_bytes().to_vec();
+        let snapshot = self.owner.commit_replacement(prepared)?;
+        self.lease.stamp = snapshot.stamp.clone();
+        Ok((snapshot, file_bytes))
+    }
     async fn dispatch(&mut self, cmd: Command) -> Result<femlab_engine::Ack, femlab_engine::Error> {
         let mut progress = |_: Progress| true;
         if matches!(cmd, Command::ModelNew { .. }) {
-            let (candidate, ticket) = self.candidate()?;
-            let prepared = match candidate.commands(vec![cmd], &mut progress).await.and_then(finish_candidate) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    self.owner.abandon_replacement(&ticket)?;
-                    return Err(error);
-                }
-            };
-            let snapshot = self.owner.commit_replacement(prepared)?;
-            self.lease.stamp = snapshot.stamp;
+            let (snapshot, _) = self.replace_commands(vec![cmd]).await?;
             return Ok(femlab_engine::Ack {
                 seq: 0,
                 revision: snapshot.model.revision,

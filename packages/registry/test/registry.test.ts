@@ -49,6 +49,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'skill.invoke': { name: 'beam-theory-check', args: 'beam' },
   'clipboard.copy': { what: { kind: 'text', text: 'plain' } },
   'file.open': { json: JSON.stringify(MODEL_FILE) },
+  'file.importAbaqus': { text: '*NODE', name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 mm' },
   'geometry.importFile': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
@@ -69,6 +70,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'example.open': { name: 'cantilever' },
   'solve.cancel': {},
   'ai.setKey': { key: null },
+  'account.open':{}, 'account.signIn':{method:'email',email:'me@example.com'},'account.signOut':{},'account.refresh':{},'account.checkout':{plan:'plus'},'account.portal':{},'account.changePlan':{plan:'pro'},'account.export':{},'account.delete':{confirm:'DELETE'},'ai.acceptDisclosure':{},
   'ai.setModel': { model: 'claude-opus-5' },
 };
 
@@ -562,3 +564,5 @@ it('requires an explicit valid execution policy for every engine and host defini
     expect(() => new Registry({ schema: brokenQuery, host: fakeHost() })).toThrow('execution policy');
   }
 });
+
+it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});

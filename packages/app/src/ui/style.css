@@ -292,6 +292,10 @@ textarea:focus {
   border-color: var(--warn-border);
   color: var(--accent-bright);
 }
+.file-action-icon {
+  display: none;
+  font-size: 16px;
+}
 .solve {
   height: 28px;
   padding: 0 14px;
@@ -339,8 +343,8 @@ textarea:focus {
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
    text labels while giving the flexible model and command fields the remaining room.
-   Keep the wide settings above 1700 px so Compare fits beside the document actions. */
-@media (min-width: 1180px) and (max-width: 1699px) {
+   Keep the wide settings from 1900 px so the import receipt fits beside document actions. */
+@media (min-width: 1180px) and (max-width: 1899px) {
   .topbar {
     gap: 4px;
     padding-inline: 8px;
@@ -357,6 +361,17 @@ textarea:focus {
   /* Leave room for the editable name, Save as file and Report without hiding actions. */
   .topbar > .tbutton {
     padding-inline: 4px;
+  }
+  /* File actions keep their labelled keyboard stops while the two import controls join
+     the existing row. Full action names remain available in their labels and tooltips. */
+  .topbar > .file-action {
+    width: 32px;
+  }
+  .file-action-label {
+    display: none;
+  }
+  .file-action-icon {
+    display: inline;
   }
   .topbar > .chip {
     max-width: 164px;
@@ -377,7 +392,7 @@ textarea:focus {
    through 1399 px so Compare and the other fixed-width actions fit before it gives way. */
 @media (min-width: 1180px) and (max-width: 1399px) {
   .topbar {
-    gap: 2px;
+    gap: 1px;
     padding-inline: 6px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
@@ -1478,6 +1493,15 @@ textarea:focus {
   color: var(--text-high);
   font-weight: 600;
 }
+.abaqus-import p { line-height: 1.6; overflow-wrap: anywhere; }
+.abaqus-import table { width: 100%; border-collapse: collapse; }
+.abaqus-import th, .abaqus-import td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-divider);
+  overflow-wrap: anywhere;
+}
+.abaqus-import th { color: var(--text-low); font-weight: 500; }
 .gallery-sub {
   flex: 1;
   font-size: 11.5px;
@@ -2826,3 +2850,8 @@ input.model-name:focus {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Optional accounts share the command-driven shell without owning a model. */
+.account-panel{background:var(--bg-panel);border:1px solid var(--border-divider);border-radius:8px;box-shadow:0 24px 60px #000a;width:min(780px,94vw);max-height:88vh;overflow:auto;padding:28px;box-sizing:border-box}.account-heading,.account-identity{display:flex;gap:12px;align-items:center;justify-content:space-between}.account-heading h2{margin:8px 0}.account-login{display:grid;gap:14px;max-width:420px}.account-panel label{display:grid;gap:8px;margin:12px 0}.account-panel input{padding:10px;background:var(--surface,#101c24);color:inherit;border:1px solid var(--line,#31454e);border-radius:5px}.account-balance{display:grid;gap:9px;border:1px solid #33554d;padding:24px;margin:22px 0;border-radius:8px;background:#66ddaa08}.account-balance strong{font-size:40px;color:#84efce}.account-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.account-plan{border:1px solid #30424e;border-radius:8px;padding:18px}.account-plan h3{margin-top:0}.account-panel small,.account-credit-note{color:#91a7b0}.account-panel details{margin-top:24px;border-top:1px solid #30424e;padding-top:16px}.account-panel .eyebrow{font:11px monospace;letter-spacing:.12em;color:#91a7b0}@media(max-width:600px){.account-plans{grid-template-columns:1fr}.account-identity{flex-wrap:wrap}.account-panel{padding:18px}}
+
+.account-button-icon{display:none}@media(min-width:1180px) and (max-width:1699px){.topbar>.account-button{width:32px;padding-inline:4px;flex:none}.account-button-label{display:none}.account-button-icon{display:inline}}

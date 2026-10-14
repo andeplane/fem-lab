@@ -5,8 +5,9 @@ FEM Lab is a finite-element analysis editor + solver that runs in a browser tab.
 Norwegian structural/building engineers (byggingeniører) doing reinforced-concrete and steel checks
 to NS-EN Eurocodes, plus students, researchers, and an in-app AI agent that drives the same
 Commands. This handoff covers the **entire main screen** and its overlays in every key state, with
-one worked model: a reinforced-concrete corbel (C30/37, ULS 6.10b per NS-EN 1990, checked to
-NS-EN 1992-1-1 §6.5).
+a mechanical prototype model: a reinforced-concrete corbel (C30/37, ULS 6.10b per NS-EN 1990,
+checked to NS-EN 1992-1-1 §6.5), and the [production thermal flow](#thermal-flow-production)
+for steady conduction and the NAFEMS T3 transient bar.
 
 Read `DESIGN-BRIEF.md` first — it is the product spec (mental model, workflow, rules). This README
 is the visual + behavioural spec that implements it.
@@ -95,8 +96,9 @@ Light theme: not designed in this round (brief item 9 — pending).
 
 ## Screens & states
 
-One screen; state is `stage` × `built` (how much of the Model exists, 0–9). The review strip at
-the bottom jumps between them; in production these arise naturally.
+The mechanical prototype uses `stage` × `built` (how much of the Model exists, 0–9). Its review
+strip jumps between them. Production readiness comes from the engine warnings for the requested
+Step; the corbel build counter and mandatory mechanical load/support stages do not apply to heat.
 
 ### 0 · Start / projects (issue #41)
 Full-screen `#0a0b0e`, one centred column 880 px wide, left-aligned inside it. Reading order is
@@ -136,7 +138,8 @@ empty with one sentence + `+ add <thing>` (dashed cyan chip). Properties shows *
 The blocker banner (see below) states the *next* missing thing; its mono link performs it.
 Each Apply emits the Command(s) shown in "Will be recorded as", appends to Journal + Script,
 selects the new object, and the viewer updates (column → corbel → mesh edges → pins → arrows).
-Order: frame+box → nib+union → name faces → material → mesh → constraint → load → step → Solve.
+Mechanical prototype order: frame+box → nib+union → name faces → material → mesh → constraint →
+load → step → Solve. The thermal order and procedure-specific requirements follow below.
 
 ### 2 · Geometry (no material) — blocker `W-1101`
 ### 3 · Meshed — Mesh badge `ok` or `1 warning` (Tet 4 chosen → inline warning with **Hex 20** fix)
@@ -155,9 +158,112 @@ Assistant". Solve disabled with the same code in the banner. Console shows the e
 ### Blocker banner (well-posedness before solving)
 32 px strip under the top bar, bg `#1c1410`, border-bottom `#3a2418`. Contents: code chip (mono
 10.5, yellow, border `#56391c`) · plain-language cause (12 px `#f0a97b`) · mono cyan fix command
-(clickable, underlined `#2c4a57`). Codes used: W-1000 no body · W-1001 one box · W-1002 no named
-faces · W-1101 no material · W-1200 no mesh · W-1300 no constraint · W-1400 no load · W-1500 no
-step · E-3140 inverted elements. Solve is disabled (bg `#191b21`, text `#555b64`) while shown.
+(clickable, underlined `#2c4a57`). Solve is disabled while a blocking warning or error applies.
+The banner and top-bar Solve use the same requested Step (the first Step in run order) and its
+`after` predecessors. Warnings on unrelated later Steps remain visible in the tree and Checks;
+global warnings still apply. Engine error cards keep their structured cause, location and fix.
+
+These are the current production warning meanings; the prototype's W-1001 “one box” and
+W-1002 “no named faces” are not production readiness rules.
+
+| Screen code | Meaning | Fix Command |
+|---|---|---|
+| W-1000 | No Body to analyse | `geometry.addBox` |
+| W-1002 | Body dimensions disagree with idealisation | `model.setIdealisation` |
+| W-1101 | Analysed Body has no assigned Material | `material.assign` |
+| W-1102 | Line member has no Section | `section.assign` |
+| W-1103 | Assigned Material lacks a property required by this Step | `material.add` |
+| W-1200 | No mesh | `mesh.set` |
+| W-1300 | Mechanical Step lacks active mechanical supports | `constraint.fix` |
+| W-1301 | Steady heat Step lacks an active temperature reference | `constraint.temperature` |
+| W-1400 | Step has no effective driving input | heat: `load.heatFlux`; mechanical: `load.pressure` |
+| W-1500 | No Step | `step.add` |
+
+### Thermal flow (production)
+
+Use Body → Material → mesh → thermal boundary conditions → heat Step → Solve. A prescribed
+nonzero temperature can drive the problem with `loads: []`; an empty Loads group is then `—`,
+not a blocker. Defining a Constraint or Load only stores it: the Step must name it in its active
+`constraints` or `loads` list. A mechanical fixed support does not fix temperature.
+
+| State | Tree, banner and action |
+|---|---|
+| Material configured | Material rows show all configured properties. A thermal-only Material may omit `E` and `nu`. `heat-steady` needs `k`; `heat-transient` needs `k`, `rho` and `cp`. Properties needed by the Model’s procedures are bold; stored unused properties remain visible in faint text. |
+| Conductivity missing | W-1103: `heat-transient Step 'transient' needs finite positive k; use material.add with k`, at `material 'slab'`. Solve is disabled; its fix opens `material.add`. A steady Step names `heat-steady` in the same cause. Transient density/capacity failures name `rho`/`cp`; they are not requests for elastic stiffness. |
+| Reference missing | W-1301: `heat-steady needs a temperature reference in this Step; use constraint.temperature or load.convection on the analysed Body`. A prescribed temperature (including 0 K) or an anchoring positive convection film supplies the reference. This steady requirement is not imposed on an otherwise valid transient initial-value problem. |
+| Driver missing | W-1400: `no heat load or nonzero prescribed temperature in this Step; use load.heatFlux or constraint.temperature`. A nonzero initial or inherited transient temperature can also drive evolution. |
+| Steady ready | Step summary: `heat-steady · needs k · gives T, reaction power · 2 constraints · 0 loads`. A k-only bar with two different prescribed end temperatures can solve without density, heat capacity or mechanical properties. |
+| Transient ready | Step summary: `heat-transient · needs k, ρ, cp · gives T, reaction power, stored-energy rate · 2 constraints · 0 loads`. Configure `dt`, `tEnd`, `theta`, initial temperature and output retention on this Step. |
+| Solved | Solve reads `Solved · rev N`; the Step adds `· solved`. Results tree contains `T` with its temperature range. Open the bottom `results` tab for Extremes, Probe / Path, reaction power, thermal balance and transient history. |
+| Stale | Editing the Model after the solve retains the old Result with stale status; the Results badge says `stale`, the header marks its producing revision, and Solve reads `Re-solve`. Selecting another retained frame is view state and does not append an engine Journal Command or stale the Result. |
+
+The temperature field is labelled **T**, with **K** as the default unit. It colours the actual
+undeformed mesh. Transient temperature uses a frame scrubber, displayed physical time and playback
+speed; there is no displacement exaggeration slider. The legend subtitle is `transient · 32 s`
+at the final T3 frame. The scrubber selects stored engine fields; it does not invent a sinusoidal
+motion between output times. Probe values follow the selected frame.
+
+Thermal Reactions are headed **Power W**, not three structural force components. The table shows
+`Σ reactions`, `Σ applied` and, when supplied, `Storage rate`; the conservation label is
+`Net applied = removed + storage`. Transient `History · transient` plots extrema at retained
+output times. Temperature models do not acquire displacement/stress fields merely to populate
+mechanical widgets.
+
+Pure thermal Results have no displacement field: steady temperature shows the Step name without
+an exaggeration bar or drawing-scale copy; transient temperature retains physical-time/frame
+controls without deformation wording. A mechanical Result that includes displacement keeps its
+controls, including when its temperature field is selected. This capability behavior is verified
+by [#573](https://github.com/andeplane/fem-lab/issues/573); the dated QA record below preserves
+the earlier screen observations and records the resolution.
+
+#### Build the NAFEMS T3 bar from this handoff
+
+The gallery card is **Transient heat in a bar (NAFEMS T3)**. Opening it prepares the Model;
+press **Solve** to run it. To build the same model, use these Commands in the Script tab's editor
+and press **Run script**, or enter each Command's arguments in its Properties form. Box faces
+`bar.xmin`/`bar.xmax` are created automatically; no manual named-face step is needed.
+
+```ts
+await fem.model.new({ name: "bar-transient-heat" });
+await fem.model.setUnits({ units: { length: "mm", time: "s" } });
+await fem.geometry.addBox({ name: "bar", size: ["0.1 m", "5 mm", "5 mm"] });
+await fem.material.add({ name: "slab", E: "210 GPa", nu: 0.3,
+  rho: "7200 kg/m^3", k: "35 W/(m K)", cp: "440.5 J/(kg K)", source: "NAFEMS T3" });
+await fem.material.assign({ material: "slab", bodies: ["bar"] });
+await fem.mesh.set({ mesher: { kind: "lattice", size: { nx: 20, ny: 1, nz: 1 } } });
+await fem.constraint.temperature({ name: "driven", on: "bar.xmax", value: "100 K" });
+await fem.constraint.temperature({ name: "cold", on: "bar.xmin", value: "0 K" });
+await fem.step.add({ name: "transient", procedure: "heat-transient",
+  constraints: ["driven", "cold"], loads: [], output: ["temperature"],
+  dt: "0.5 s", tEnd: "32 s", theta: 0.5, outputEvery: 16, initial: "0 K",
+  amplitude: { kind: "sine", amplitude: 1, period: "80 s" } });
+await fem.solve.run({ step: "transient" });
+```
+
+This matches the [bundled Journal](../../crates/engine/benches/journals/bar-transient-heat.json).
+Its `E`/`nu` are retained legacy data and are unused by heat; an equivalent thermal-only Material
+can omit them. The material tree shows `k 35 W/(m K)`, `cp 440.5 J/(kg K)` and `ρ 7200 kg/m^3`.
+The mesh has 20 first-order Hex cells. The sine amplitude gives the driven face
+`100 sin(πt/40)` and the other face stays zero; lateral faces are insulated by default.
+There are 64 time increments and five retained frames: **0, 8, 16, 24, 32 s**.
+
+In the `results` tab, enter **80 mm, 2.5 mm, 2.5 mm** in Probe / Path's `from` field and press
+**probe**. At 32 s the display reads approximately **temperature 36.79 K** (the element number
+is mesh-dependent). Home/End on the retained-frame slider select 0/32 s; the same probe reads
+0 K at the initial frame. The comparison reference is **36.60**, with a 0.5 K absolute UI
+comparison tolerance; the independent solver/convergence evidence lives in
+[the Benchmarks](../BENCHMARKS.md).
+
+The [NAFEMS P18 publication](https://www.nafems.org/publications/resource_center/p18/) defines T3;
+[Coreform's published verification case](https://docs.coreform.com/cifa/latest/verification-manual/problems/heat_transfer/transient/nafems-p18-t3/nafems-p18-t3.html)
+records its 0 °C initial/cold end and 36.60 °C reference at 32 s, 20 mm inside the driven end.
+The bundled linear-conduction model uses **temperature rise from zero, expressed in K**.
+A rise of 36.60 K matches that published 36.60 °C rise; converting the bundled probe to an
+absolute Celsius temperature would misread the benchmark convention. Physical models should
+use their intended absolute temperature quantities. See [ADR 0008](../adr/0008-si-inside-units-at-the-boundary.md).
+
+The actual Chromium pass and its scope are recorded in
+[UX-NOTES](../../packages/app/e2e/UX-NOTES.md#thermal-production-pass-issue-473).
 
 ---
 

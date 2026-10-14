@@ -52,13 +52,18 @@ pub enum Query {
     Mesh {},
 
     /// What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
-    /// and corner-node centroid. Tet4/Hex8 volumes integrate the original Jacobian exactly
-    /// up to roundoff. Linear 3D face areas use original shape/tangent quadrature; curved
-    /// bilinear area is numerical and converges under refinement, not an exact skin measure.
-    /// Quadratic-element measures still use corner geometry pending #524.
+    /// and corner-node centroid. Solid volumes integrate every original shape node, including
+    /// Tet10/Hex20 midside nodes: tetrahedron degree3 and tensor degree5 per coordinate are
+    /// sufficient for their Jacobian determinants, up to f64 roundoff. Surface areas and edge
+    /// lengths use original tangents. Linear triangles and lines are exact up to roundoff;
+    /// bilinear faces use Gauss2. Curved norms are numerical, using Gauss3 for Quad8/Line3
+    /// and symmetric triangle degree5 for Tri6.
+    /// Curved area/length accuracy improves under refinement; no corner skin is substituted.
     /// Face Sets also report pressureArea from the load boundary quadrature,
     /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
-    /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+    /// times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+    /// the original midsurface area without requiring Material/Section; curved physical shell
+    /// loads use the Section's top/bottom offsets. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]
@@ -747,6 +752,14 @@ pub struct ResultSummary {
     /// Applied force vector or net thermal power (flux/source plus incoming minus outgoing
     /// convection and radiation) in component 0, with remaining thermal components zero.
     pub applied_total: [Valued; 3],
+    /// Retained force and moment accounting for linear Cartesian static Results only.
+    /// Absent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A
+    /// nonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining
+    /// study before Result publication. If later display units cannot represent the
+    /// retained values, this Query returns a structured error; model.setUnits with
+    /// force N and length m restores readable SI quantities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_equilibrium: Option<Box<StaticEquilibrium>>,
     /// Thermal stored-energy rate in power display units (zero for steady heat). Transient
     /// power totals/reactions use the last θ-method integration stage; the temperature field
     /// itself is at the final time. Positive reactions remove heat: applied − removed = storage.
@@ -786,7 +799,11 @@ pub struct ResultSummary {
     /// One row per retained frequency of a harmonic sweep; empty for every other procedure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sweep: Vec<SweepRow>,
-    /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+    /// Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear
+    /// Cartesian static uses retained unaggregated nodal force/moment actions, with M/L
+    /// converting moments to force. Actual residuals and scales are in staticEquilibrium;
+    /// no residual is snapped to zero. Other structural procedures retain their existing
+    /// largest-force scale. Thermal
     /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
     /// Zero is perfect balance; values above 1e-9 fail the report's conservation check.
@@ -802,6 +819,47 @@ pub struct ResultSummary {
     /// open. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// Linear Cartesian static equilibrium, retained with the solved state in SI and displayed
+/// in the requested unit set. Moments use reference-configuration node coordinates.
+/// A passing force check alone is not moment conservation: translation-only bonded ties
+/// across a gap can transfer a force without its offset couple, leaving a real angular
+/// residual. This diagnostic exposes that model behavior without changing tie mechanics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticEquilibrium {
+    /// First retained Mesh node: the origin used by all applied/support moments.
+    pub reference: [Valued; 3],
+    /// Maximum node distance from reference; independent of element length, covariant under
+    /// rigid frame changes. A zero-span force-only ledger has no moment-derived force scale.
+    pub characteristic_length: Valued,
+    /// Actual vector Σ applied forces + Σ support forces, never rounded away.
+    pub force_residual: [Valued; 3],
+    /// max(Σ|F_applied,node|, Σ|F_support,node|, Σ|M_applied,node|/L, Σ|M_support,node|/L).
+    /// Each nodal moment includes its force lever arm plus rotational couple. Summing
+    /// magnitudes before Constraint grouping preserves scales for opposing actions.
+    pub force_scale: Valued,
+    /// Σ((x-reference)×F_applied + applied rotational couple).
+    pub applied_moment: [Valued; 3],
+    /// Each Constraint's support moment, including force lever arms and raw rotational
+    /// reactions; DOFs shared by Constraints belong to the first owner, as for reactions.
+    pub reaction_moments: Vec<MomentReactionRow>,
+    /// Actual vector Σ applied moments + Σ support moments about reference.
+    pub moment_residual: [Valued; 3],
+    /// max(Σ|M_applied,node|, Σ|M_support,node|, LΣ|F_applied,node|, LΣ|F_support,node|).
+    pub moment_scale: Valued,
+    /// |momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.
+    /// The report checks this separately from force balance at its conservation tolerance.
+    pub moment_balance: f64,
+}
+
+/// One Constraint's support moment about the static equilibrium reference, in torque units.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentReactionRow {
+    pub constraint: String,
+    pub total: [Valued; 3],
 }
 
 /// One frictionless contact of a solved Step.
