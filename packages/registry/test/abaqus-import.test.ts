@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { MAX_ABAQUS_BYTES, readAbaqus, type AbaqusFile, type AbaqusIo } from '../src/abaqus-import';
+import { AbaqusImport, MAX_ABAQUS_BYTES, readAbaqus, type AbaqusFile, type AbaqusIo } from '../src/abaqus-import';
 
 const encode = (text: string) => new TextEncoder().encode(text);
 const file = (name = 'beam.inp', bytes = encode('*NODE\r\n1,0,0,0\r\n')): AbaqusFile => ({ name, size: bytes.byteLength, read: vi.fn(async () => bytes) });
@@ -11,6 +11,24 @@ const io = (picked: AbaqusFile | null = file()): AbaqusIo => ({
 });
 
 describe('Abaqus host byte admission', () => {
+  it('requires explicit mode/source/length and static force without guessing units or discarding ambiguous input', () => {
+    const base = { name: 'bar', body: 'bar', mode: 'mesh', unitLength: '1 mm' };
+    for (const source of [{ text: '*NODE' }, { picker: true }, { path: 'bar.inp' }]) {
+      expect(AbaqusImport.parse({ ...base, ...source })).toEqual({ ...base, ...source });
+      expect(AbaqusImport.parse({ ...base, ...source, mode: 'static', unitForce: { value: 1, unit: 'N' } })).toEqual({ ...base, ...source, mode: 'static', unitForce: { value: 1, unit: 'N' } });
+      const missingForce = AbaqusImport.safeParse({ ...base, ...source, mode: 'static' });
+      expect(missingForce.success).toBe(false);
+      expect(missingForce.error!.issues[0]!.path).toEqual(['unitForce']);
+    }
+    expect(AbaqusImport.safeParse({ ...base, text: '*NODE', picker: true }).success).toBe(false);
+    expect(AbaqusImport.safeParse({ ...base, text: '*NODE', path: 'bar.inp' }).success).toBe(false);
+    expect(AbaqusImport.safeParse({ ...base, text: '*NODE', unitLength: undefined }).success).toBe(false);
+    expect(AbaqusImport.safeParse({ ...base, text: '*NODE', mode: undefined }).success).toBe(false);
+    expect(AbaqusImport.safeParse(base).success).toBe(false);
+    // Mesh force rejection and quantity dimension/positivity belong to the authoritative
+    // converter. The host preserves supplied Quantities so those errors are never hidden.
+    expect(AbaqusImport.parse({ ...base, text: '*NODE', unitForce: '1 N', unitLength: '-1 m' })).toMatchObject({ unitForce: '1 N', unitLength: '-1 m' });
+  });
   it('hashes exact inline UTF-8 and preserves CRLF and a BOM for the converter to validate', async () => {
     const text = '\ufeff*HEADING\r\nÅngström\r\n';
     const host = io();

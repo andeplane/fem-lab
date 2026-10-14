@@ -2,6 +2,7 @@
 // are injected; the converter and checked project replacement remain separate operations.
 import { FemError } from './error';
 import { assertInside } from './project-paths';
+import { z } from 'zod';
 
 export const MAX_ABAQUS_BYTES = 16 * 1024 * 1024;
 export const ABAQUS_ACCEPT = '.inp,text/plain';
@@ -22,6 +23,24 @@ export interface AbaqusIo {
 
 export type AbaqusInput = { text: string } | { picker: true } | { path: string };
 export interface AbaqusText { text: string; sha256: string }
+
+const quantity = z.union([z.string().min(1), z.object({ value: z.number(), unit: z.string().min(1) })]);
+const options = {
+  name: z.string().min(1), body: z.string().min(1),
+  unitLength: quantity.meta({ description: 'Explicit positive length per source coordinate; for example 1 mm. Independent of display units.', 'x-dimension': 'length' }),
+};
+const force = quantity.meta({ description: 'Explicit positive force per source force; for example 1 N. Required in static mode and absent in mesh mode.', 'x-dimension': 'force' });
+const mode = z.discriminatedUnion('mode', [
+  z.object({ ...options, mode: z.literal('mesh'), unitForce: force.optional() }),
+  z.object({ ...options, mode: z.literal('static'), unitForce: force }),
+]);
+const sourceOptions = { ...options, mode: z.enum(['mesh', 'static']), unitForce: force.optional() };
+/** Mode-specific requirements retain precise field errors; source choice is exclusive. */
+export const AbaqusImport = z.intersection(mode, z.union([
+  z.strictObject({ ...sourceOptions, text: z.string() }),
+  z.strictObject({ ...sourceOptions, picker: z.literal(true) }),
+  z.strictObject({ ...sourceOptions, path: z.string() }),
+]));
 
 function bound(size: number): void {
   if (!Number.isSafeInteger(size) || size < 0 || size > MAX_ABAQUS_BYTES) {
