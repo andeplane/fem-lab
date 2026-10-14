@@ -4401,6 +4401,7 @@ fn a_buckling_step_reports_load_factors_and_keeps_its_static_state() {
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"buckle","tolerance":1e-9}"#);
     let summary = result_of(&mut e, Some("buckle"));
+    assert!(summary.static_equilibrium.is_none(), "an eigen Result must omit the static-only wrench ledger");
     // nModes defaulted to one, and a buckling Step reports factors rather than frequencies.
     assert_eq!(summary.buckling_factors.len(), 1);
     assert!(summary.frequencies.is_empty());
@@ -4425,6 +4426,7 @@ fn a_buckling_step_reports_load_factors_and_keeps_its_static_state() {
     assert!(md.contains("#### Buckling load factors"), "{md}");
     assert!(md.contains("| Mode | Load factor |"), "{md}");
     assert!(md.contains("not a safety factor"), "{md}");
+    assert!(!md.contains("Static moment balance"), "{md}");
 }
 
 /// The axisymmetric idealisation has no geometric stiffness written, so a buckling Step over one

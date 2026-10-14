@@ -261,6 +261,9 @@ pub async fn run(
         })
         .collect();
     let mut res = static_::post(p, s, opts, 1.0, 1.0, None, 1, pool, gpu, progress).await?;
+    // The static preload fields remain, but this eigen Result keeps the established
+    // force-only summary; the retained wrench contract belongs to static procedures.
+    res.static_equilibrium = None;
     // The sweeps, not the one static right-hand side: they are what this procedure spent.
     res.solver.iterations = sweeps;
     res.modes = full.iter().map(|v| vector_field(v, dpn)).collect();
