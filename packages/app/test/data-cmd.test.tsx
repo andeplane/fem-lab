@@ -183,17 +183,19 @@ describe('the shell', () => {
   it('inserts the advertised object from every reference control in the rendered shell', async () => {
     const referenced = new Set<string>();
     const current = model();
+    current.bodies[0]!.bbox = [{ value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 1000, unit: 'mm' }, { value: 100, unit: 'mm' }, { value: 100, unit: 'mm' }];
     current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
     current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
+    const solved = { ...result('static', false, 1), frequencies: [{ value: 83, unit: 'Hz' }] };
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
-      const { root, store, commands } = mount({ tab, model: current, panels: { palette: true, examples: true } });
+      const { root, store, commands } = mount({ tab, model: current, result: solved, panels: { palette: true, examples: true } });
       store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' }, false, { kind: 'load', name: 'p' });
       await afterEffects();
       // Discover controls by the wording a person sees, independently of data-cmd. A copy
       // handler retaining the right label or metadata must fail this behavioral check.
       const controls = [...root.querySelectorAll<HTMLButtonElement>('button')]
-        .filter((button) => /^(?:@(?:\s|$)|reference\b)/i.test(button.textContent?.trim() ?? ''));
+        .filter((button) => /\breference in chat\b|^reference\b|^@$/i.test(button.textContent?.trim() ?? ''));
       expect(controls.length, tab).toBeGreaterThan(0);
       expect(controls.some((button) => button.closest('.props')), tab).toBe(true);
       for (const control of controls) {
@@ -205,7 +207,7 @@ describe('the shell', () => {
         referenced.add(ref!);
       }
     }
-    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'load:p', 'material:steel', 'mesh:mesh', 'set:tip', 'step:static']);
+    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'load:p', 'material:steel', 'mesh:mesh', 'result:mode 1', 'set:tip', 'step:static']);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {

@@ -21,4 +21,13 @@ test('@cpu tree references open the Assistant on first use and after collapse', 
   await expect(drawer).toBeVisible();
   await expect(drawer.locator('.tokens .token')).toHaveCount(1);
   await expect(drawer.locator('textarea')).toBeFocused();
+
+  // The callable host Command must retain the same behavior as its UI controls.
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: false }));
+  await expect(drawer).toBeHidden();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' }));
+  await expect(drawer).toBeVisible();
+  await expect(drawer.locator('.tokens .token')).toHaveCount(1);
+  await expect(drawer.locator('.tokens .token')).toContainText('@body:beam');
+  await expect(drawer.locator('textarea')).toBeFocused();
 });
