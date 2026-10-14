@@ -2415,3 +2415,17 @@ statics oracle checks coincident faces and a 0.25 m gap under a 200 N transverse
 load: force equilibrium still holds, while the gap leaves a real 50 N m angular
 residual. The query and report expose this limitation rather than treating the
 force pass as complete equilibrium or modifying bonded mechanics.
+
+**Representability and publication (#445).** Public fully held shafts with opposing
+±1e307 N m actions retain finite 2e307 SI action scales and exact zero residuals.
+Opposing ±1e308 N m actions overflow those scales; a separate 100 m lever with a
+1e308 N transverse force overflows its applied moment. Both are structured solve
+failures before a Result is published, preserving the prior selected Result and
+the immediately preceding Model/Journal/revision. No saturation or epsilon is used.
+Changing the finite large Result's display units to mN/mm also fails clearly for
+selected result/report Queries, because the requested scale conversion overflows.
+Its retained-id Query remains exact in its original N/m context. A solve authored
+with those unrepresentable preferred units preserves its prior readable Result.
+Buckling skips this static-only recovery in the shared postprocessor and retains
+its existing preload/force/buckling-factor contract. Legacy formatting behavior
+outside the new ledger is tracked separately by #580.

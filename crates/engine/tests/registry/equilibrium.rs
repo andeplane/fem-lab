@@ -1,5 +1,7 @@
 //! Public force/moment ledgers checked against statics, not a second assembly kernel.
-use super::{engine, heat_bar, ok, probe_at, report, result_of, two_cubes, Engine, Field, NoClock, Query};
+use super::{
+    engine, err, heat_bar, ok, probe_at, report, result_of, two_cubes, Engine, ErrorCode, Field, NoClock, Query,
+};
 use serde_json::{json, Value};
 
 fn command(e: &mut Engine, value: Value) {
@@ -66,6 +68,125 @@ fn balanced(result: &Value) {
     let ledger = ledger(result);
     assert!(number(&result["balance"]) <= 1e-9, "force balance: {result}");
     assert!(number(&ledger["momentBalance"]) <= 1e-9, "moment balance: {ledger}");
+}
+
+fn held_moment_pair(e: &mut Engine, magnitude: f64) -> Value {
+    shaft(e, 4, [0.0; 3], [1.0, 0.0, 0.0], 1.0);
+    command(e, json!({"cmd":"geometry.nameRegion","name":"shaft-all","where":{"kind":"body","name":"shaft"}}));
+    command(e, json!({"cmd":"constraint.fix","name":"all","on":"shaft-all"}));
+    moment(e, "positive", "shaft.p0", [0.0, magnitude, 0.0]);
+    moment(e, "negative", "shaft.p1", [0.0, -magnitude, 0.0]);
+    solve(e, &["all"], &["positive", "negative"])
+}
+
+#[test]
+fn overflowing_static_action_scales_reject_before_publishing_and_preserve_the_prior_result() {
+    let mut e = engine();
+    let initial = held_moment_pair(&mut e, 1000.0);
+    // Every authored quantity is finite; summing the two action magnitudes overflows.
+    moment(&mut e, "positive", "shaft.p0", [0.0, 1e308, 0.0]);
+    moment(&mut e, "negative", "shaft.p1", [0.0, -1e308, 0.0]);
+    let selected = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(selected["resultId"], initial["resultId"]);
+    assert_eq!(selected["stale"], true);
+    let file = e.export_file();
+    let revision = e.revision();
+    let hash = e.model_hash();
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+    assert_eq!(rejected.code, ErrorCode::SolveDiverged);
+    let at = rejected.where_.as_deref().unwrap();
+    assert!(at.starts_with("staticEquilibrium."), "{rejected:?}");
+    assert!(at.ends_with("forceScale") || at.ends_with("momentScale"), "{rejected:?}");
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(serde_json::to_value(result_of(&mut e, Some("static"))).unwrap(), selected);
+}
+
+#[test]
+fn finite_large_si_actions_reject_unrepresentable_current_display_but_retained_units_stay_exact() {
+    let mut e = engine();
+    let solved = held_moment_pair(&mut e, 1e307);
+    let wrench = ledger(&solved);
+    vector(&wrench["appliedMoment"], [0.0; 3], 0.0, "N m");
+    vector(support(wrench, "all"), [0.0; 3], 0.0, "N m");
+    assert_eq!(number(&wrench["forceScale"]["value"]), 2e307);
+    assert_eq!(number(&wrench["momentScale"]["value"]), 2e307);
+    balanced(&solved);
+    let id = solved["resultId"].as_str().unwrap().to_owned();
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"mN","length":"mm"}}));
+    let file = e.export_file();
+    let revision = e.revision();
+    let hash = e.model_hash();
+    for query in [
+        Query::Result { result_id: None, step: Some("static".into()) },
+        Query::Report { step: Some("static".into()), include: None },
+    ] {
+        let rejected = e.query(query).unwrap_err();
+        assert_eq!(rejected.code, ErrorCode::Schema);
+        assert_eq!(rejected.where_.as_deref(), Some("staticEquilibrium.forceScale"));
+        assert!(rejected.suggestion.as_deref().unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.revision(), revision);
+        assert_eq!(e.model_hash(), hash);
+    }
+    let retained = serde_json::to_value(e.query(Query::Result { result_id: Some(id), step: None }).unwrap()).unwrap();
+    assert_eq!(retained["resultId"], solved["resultId"]);
+    assert_eq!(retained["staticEquilibrium"], solved["staticEquilibrium"]);
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.model_hash(), hash);
+}
+
+#[test]
+fn a_solve_with_unrepresentable_display_units_cannot_replace_a_readable_prior_result() {
+    let mut e = engine();
+    let initial = held_moment_pair(&mut e, 1000.0);
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"force":"mN","length":"mm"}}));
+    moment(&mut e, "positive", "shaft.p0", [0.0, 1e307, 0.0]);
+    moment(&mut e, "negative", "shaft.p1", [0.0, -1e307, 0.0]);
+    let selected = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(selected["resultId"], initial["resultId"]);
+    assert_eq!(selected["stale"], true);
+    let file = e.export_file();
+    let revision = e.revision();
+    let hash = e.model_hash();
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+    assert_eq!(rejected.code, ErrorCode::Schema);
+    assert_eq!(rejected.where_.as_deref(), Some("staticEquilibrium.forceScale"));
+    assert!(rejected.suggestion.as_deref().unwrap().contains("model.setUnits"));
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(serde_json::to_value(result_of(&mut e, Some("static"))).unwrap(), selected);
+}
+
+#[test]
+fn an_overflowing_force_lever_arm_rejects_before_publishing_a_result() {
+    let mut e = engine();
+    shaft(&mut e, 2, [0.0; 3], [1.0, 0.0, 0.0], 100.0);
+    command(&mut e, json!({"cmd":"geometry.nameRegion","name":"shaft-all","where":{"kind":"body","name":"shaft"}}));
+    command(&mut e, json!({"cmd":"constraint.fix","name":"all","on":"shaft-all"}));
+    let initial = solve(&mut e, &["all"], &[]);
+    // Finite F=1e308 N at x=100 m has an unrepresentable y moment of 1e310 N m.
+    command(&mut e, json!({"cmd":"load.force","name":"push","on":"shaft.p1","total":["0 N","0 N","-1e308 N"]}));
+    command(
+        &mut e,
+        json!({"cmd":"step.add","name":"static","procedure":"static","constraints":["all"],"loads":["push"]}),
+    );
+    let selected = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(selected["resultId"], initial["resultId"]);
+    assert_eq!(selected["stale"], true);
+    let file = e.export_file();
+    let revision = e.revision();
+    let hash = e.model_hash();
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+    assert_eq!(rejected.code, ErrorCode::SolveDiverged);
+    assert!(rejected.where_.as_deref().unwrap().starts_with("staticEquilibrium."), "{rejected:?}");
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(serde_json::to_value(result_of(&mut e, Some("static"))).unwrap(), selected);
 }
 
 #[test]

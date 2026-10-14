@@ -660,8 +660,10 @@ impl Engine {
             Some(name) => vec![self.stored(Some(name))?.0.to_string()],
             None => self.model.steps.iter().map(|s| s.name.clone()).filter(|n| self.results.contains_key(n)).collect(),
         };
-        let results: Vec<(ResultSummary, Option<StudyReport>)> =
-            names.iter().map(|n| (self.result_summary(n), self.studies.get(n).cloned())).collect();
+        let results: Vec<(ResultSummary, Option<StudyReport>)> = names
+            .iter()
+            .map(|n| self.result_summary(n).map(|summary| (summary, self.studies.get(n).cloned())))
+            .collect::<Result<_, _>>()?;
         let summary = self.query_model()?;
         let built = self.model.mesh.clone().and_then(|s| self.query_mesh().ok().map(|m| (m, s)));
         let cost = self.model.steps.first().map(|s| s.name.clone()).and_then(|n| self.query_cost(&n).ok());

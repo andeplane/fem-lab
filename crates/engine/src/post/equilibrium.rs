@@ -4,6 +4,7 @@
 //! rotational-DOF couple. Magnitudes are accumulated before Constraint grouping,
 //! so opposite actions remain a physical scale even when their resultant is zero.
 
+use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::ResolvedConstraints;
 use crate::fem::problem::Problem;
 use crate::model::Idealisation;
@@ -159,9 +160,9 @@ pub fn recover(
     thermal: Option<&[f64]>,
     reactions: &[f64],
     pool: &Pool,
-) -> Option<StaticEquilibrium> {
+) -> Result<Option<StaticEquilibrium>, Error> {
     if let Idealisation::Axisymmetric { .. } = p.idealisation {
-        return None;
+        return Ok(None);
     }
     let mut ledger = account(p.mesh, p.dofs_per_node(), load, thermal, reactions, rc, pool);
     // Retain every Constraint, including a Constraint owning no DOF after overlap resolution.
@@ -169,7 +170,29 @@ pub fn recover(
     for ((name, _), constraint) in ledger.reaction_moments.iter_mut().zip(&p.constraints) {
         name.clone_from(&constraint.name);
     }
-    Some(ledger)
+    let balances =
+        [relative(ledger.force_residual, ledger.force_scale), relative(ledger.moment_residual, ledger.moment_scale)];
+    let fields = [
+        ("reference", ledger.reference.as_slice()),
+        ("characteristicLength", std::slice::from_ref(&ledger.characteristic_length)),
+        ("forceResidual", ledger.force_residual.as_slice()),
+        ("appliedMoment", ledger.applied_moment.as_slice()),
+        ("momentResidual", ledger.moment_residual.as_slice()),
+        ("forceScale", std::slice::from_ref(&ledger.force_scale)),
+        ("momentScale", std::slice::from_ref(&ledger.moment_scale)),
+        ("balance", &balances[..1]),
+        ("momentBalance", &balances[1..]),
+    ];
+    let invalid = fields
+        .into_iter()
+        .chain(ledger.reaction_moments.iter().map(|(_, moment)| ("reactionMoments", moment.as_slice())))
+        .find(|(_, values)| values.iter().any(|value| !value.is_finite()));
+    if let Some((field, _)) = invalid {
+        return Err(Error::new(ErrorCode::SolveDiverged, "static equilibrium cannot be represented finitely in SI")
+            .at(format!("staticEquilibrium.{field}"))
+            .suggest("load.force or load.moment with smaller finite magnitudes"));
+    }
+    Ok(Some(ledger))
 }
 
 #[cfg(test)]

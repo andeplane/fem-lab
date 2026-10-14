@@ -17894,7 +17894,7 @@
             "maxItems": 3
           },
           "staticEquilibrium": {
-            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures.",
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench rejects solve.run before Result publication. If preferred\ndisplay units cannot represent the retained values, this Query returns a structured\nerror; model.setUnits with force N and length m restores readable SI quantities.",
             "anyOf": [
               {
                 "$ref": "#/$defs/StaticEquilibrium"
@@ -20141,7 +20141,7 @@
             "maxItems": 3
           },
           "staticEquilibrium": {
-            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures.",
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench rejects solve.run before Result publication. If preferred\ndisplay units cannot represent the retained values, this Query returns a structured\nerror; model.setUnits with force N and length m restores readable SI quantities.",
             "anyOf": [
               {
                 "$ref": "#/$defs/StaticEquilibrium"
@@ -40672,7 +40672,7 @@
             "maxItems": 3
           },
           "staticEquilibrium": {
-            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures.",
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench rejects solve.run before Result publication. If preferred\ndisplay units cannot represent the retained values, this Query returns a structured\nerror; model.setUnits with force N and length m restores readable SI quantities.",
             "anyOf": [
               {
                 "$ref": "#/$defs/StaticEquilibrium"
@@ -48246,7 +48246,7 @@
             "maxItems": 3
           },
           "staticEquilibrium": {
-            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures.",
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench rejects solve.run before Result publication. If preferred\ndisplay units cannot represent the retained values, this Query returns a structured\nerror; model.setUnits with force N and length m restores readable SI quantities.",
             "anyOf": [
               {
                 "$ref": "#/$defs/StaticEquilibrium"

@@ -11577,7 +11577,10 @@ export interface ResultSummary {
   appliedTotal: [Valued, Valued, Valued];
   /**
    * Retained force and moment accounting for linear Cartesian static Results only.
-   * Absent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures.
+   * Absent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A
+   * nonrepresentable SI wrench rejects solve.run before Result publication. If preferred
+   * display units cannot represent the retained values, this Query returns a structured
+   * error; model.setUnits with force N and length m restores readable SI quantities.
    */
   staticEquilibrium?: StaticEquilibrium | null;
   /**

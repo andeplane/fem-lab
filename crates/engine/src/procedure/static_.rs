@@ -160,7 +160,7 @@ pub async fn run(
         return run_contact(p, opts, dt, t_end, amplitude, output_every, pool, gpu, progress).await;
     }
     let s = statics(p, opts, pool, gpu, &mut progress).await?;
-    post(p, s, opts, dt, t_end, amplitude, output_every, pool, gpu, progress).await
+    post(p, s, opts, dt, t_end, amplitude, output_every, true, pool, gpu, progress).await
 }
 
 /// The same Constraints with every prescribed value scaled by `g`: what an amplitude does to
@@ -307,7 +307,7 @@ async fn run_contact(
     let r = contact::residual(&a.k, &settled.u, &f_end);
     let Settled { u, mpc: m, red, solver, factored } = settled;
     let s = Statics { pat, a, applied, f: f_end, rc: rc_end, mpc: m, red, u, solver, factored };
-    let mut res = post(p, s, opts, dt, t_end, None, output_every, pool, gpu, progress).await?;
+    let mut res = post(p, s, opts, dt, t_end, None, output_every, true, pool, gpu, progress).await?;
     let (pressure, contacts) = contact::finish(p, &base, &set, &r, &mut res.warnings);
     res.extremes.extend(extremes(&pressure, p.mesh).into_iter().map(|e| (Field::ContactPressure, e)));
     res.fields.insert(Field::ContactPressure, pressure);
@@ -331,6 +331,7 @@ pub(crate) async fn post(
     t_end: f64,
     amplitude: Option<&Amplitude>,
     output_every: usize,
+    retain_equilibrium: bool,
     pool: &Pool,
     gpu: Option<&crate::gpu::Gpu>,
     mut progress: OnProgress<'_>,
@@ -398,7 +399,11 @@ pub(crate) async fn post(
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
-        static_equilibrium: crate::post::equilibrium::recover(p, &rc, &f, Some(&a.f_thermal), &r, pool),
+        static_equilibrium: if retain_equilibrium {
+            crate::post::equilibrium::recover(p, &rc, &f, Some(&a.f_thermal), &r, pool)?
+        } else {
+            None
+        },
         reaction_quantity: crate::units::ReactionQuantity::Force,
         ply_stresses: pool
             .install(|| stress::shell_ply_stresses(p, &u))
@@ -566,7 +571,7 @@ pub fn run_history(
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
-        static_equilibrium: crate::post::equilibrium::recover(p, &rc, &other, None, &r, pool),
+        static_equilibrium: crate::post::equilibrium::recover(p, &rc, &other, None, &r, pool)?,
         reaction_quantity: crate::units::ReactionQuantity::Force,
         ply_stresses: pool
             .install(|| stress::shell_ply_stresses(p, &u))
