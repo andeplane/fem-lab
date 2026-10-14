@@ -6,7 +6,7 @@ import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/reg
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
-import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
+import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
 import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
@@ -309,13 +309,14 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (!l) return null;
   const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result, s.yieldStress !== null);
   const ticks = legendTicks(l.min, l.max);
+  const deforms = hasDeformation(s.result, s.fieldKey);
   return (
     <div class="legend">
       <div class="legend-head">
         <span class="legend-field mono">{choiceOf(s.fieldKey, s.result).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
-        <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
-          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{s.transient?.catalogue.field === 'temperature' ? '' : ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}`}
+        <span class="legend-sub mono" title={deforms ? exaggerationHelp(s.deformScale) : undefined}>
+          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{deforms ? ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}` : ''}
         </span>
       </div>
       <div class="legend-body">
@@ -403,6 +404,8 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     viewer.current?.previewDeformScale(scale);
   };
   const physical = mode === undefined && (s.result?.history?.length ?? 0) > 0;
+  const deforms = hasDeformation(s.result, s.fieldKey);
+  if (!deforms && !physical) return null;
   const sweeps = mode !== undefined;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
@@ -455,7 +458,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
-      {s.transient?.catalogue.field === 'temperature' ? null : <>
+      {deforms ? <>
       <span class="faint" title={exaggerationHelp(s.deformScale)}>
         exaggeration
       </span>
@@ -481,7 +484,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
-      </Cmd></>}
+      </Cmd></> : null}
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
         screenshot
       </Cmd>

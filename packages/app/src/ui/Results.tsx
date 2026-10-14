@@ -4,7 +4,7 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
+import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber, hasDeformation } from '../fields';
 import { benchmarkProvenance } from '../benchmark';
 import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
@@ -483,7 +483,7 @@ export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatc
 
 /**
  * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
- * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
+ * procedure it came from, and any available displacement scaling — said here too, so
  * a person reading the numbers is not left to infer it from the legend. Everything on it is
  * already in the store: a header is no place to start a Query, and the Checks tab is where the
  * DOF count lives.
@@ -499,7 +499,7 @@ function ResultHeader({ s }: { s: UiState }) {
         {r.solver} · {Math.round(r.timeMs)} ms
       </span>
       <span class="faint">{r.stale ? `solved at rev ${r.revision}, before the edits since` : `solved at rev ${r.revision}`}</span>
-      <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span>
+      {hasDeformation(r, s.fieldKey) ? <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span> : null}
     </div>
   );
 }

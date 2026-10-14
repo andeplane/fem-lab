@@ -209,11 +209,12 @@ Thermal Reactions are headed **Power W**, not three structural force components.
 output times. Temperature models do not acquire displacement/stress fields merely to populate
 mechanical widgets.
 
-Current UI limitation ([#573](https://github.com/andeplane/fem-lab/issues/573)): steady temperature
-still shows the generic exaggeration/true-scale bar and `steady · true scale` legend subtitle;
-the Results header also retains drawing-scale wording for thermal Results. Those controls/captions
-do not imply a thermal displacement field. The intended scalar chrome should follow the transient
-temperature treatment; the linked QA record reports the current screen faithfully.
+Pure thermal Results have no displacement field: steady temperature shows the Step name without
+an exaggeration bar or drawing-scale copy; transient temperature retains physical-time/frame
+controls without deformation wording. A mechanical Result that includes displacement keeps its
+controls, including when its temperature field is selected. This capability behavior is verified
+by [#573](https://github.com/andeplane/fem-lab/issues/573); the dated QA record below preserves
+the earlier screen observations and records the resolution.
 
 #### Build the NAFEMS T3 bar from this handoff
 
