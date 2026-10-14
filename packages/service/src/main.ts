@@ -3,10 +3,14 @@ import { readdir, readFile } from 'node:fs/promises';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import pg from 'pg';
+import OpenAI from 'openai';
 import { accountReader, postgresAccounts } from './accounts';
 import { identityVerifier } from './identity';
 import { migrate } from './migrations';
 import { creditLedger } from './ledger';
+import { reservations } from './reservations';
+import { completionService } from './completions';
+import { openaiGateway } from './provider';
 import { serviceServer } from './http.js';
 
 const port = Number(process.env.PORT ?? 8080);
@@ -23,17 +27,29 @@ if (process.argv.includes('--migrate')) {
     .map(async name => ({ name, sql: await readFile(new URL(name, directory), 'utf8') })));
   const connection = await pool.connect();
   try { await migrate(connection, migrations); } finally { connection.release(); await pool.end(); }
+} else if(process.argv.includes('--recover')) {
+  if(!pool) throw new Error('Recovery requires a configured database.');
+  try {
+    // store:false does not archive Responses for retrieval. Unknown usage is resolved conservatively.
+    const result=await reservations(pool,now,randomUUID).recover(async()=>undefined);
+    process.stdout.write(JSON.stringify({event:'usage-recovery',...result})+'\n');
+  } finally { await pool.end(); }
 } else {
   const readAccount = pool && projectId ? accountReader(identityVerifier(getAuth(initializeApp({ projectId })), projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
   const ledger = pool ? creditLedger(pool, now, randomUUID) : undefined;
+  const holds=pool?reservations(pool,now,randomUUID):undefined;
+  const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
+  const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider}):undefined;
   const account = readAccount && ledger ? async (authorization: string | undefined) => {
     const owner = await readAccount(authorization); await ledger.ensureFree(owner.id);
     return { ...owner, usage: await ledger.balance(owner.id), billingAvailable: false };
   } : undefined;
-  const server = serviceServer({ now, newId: randomUUID, account,
+  const server = serviceServer({ now, newId: randomUUID, account,completions,
+    heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
-    ready: async () => { if (!pool) return false; await pool.query('SELECT id FROM credit_grants LIMIT 0'); return true; },
+    ready: async () => { if (!pool||!completions) return false; await pool.query('SELECT id FROM ai_requests LIMIT 0'); return true; },
   });
   server.listen(port, '0.0.0.0');
+  server.requestTimeout=120000; server.headersTimeout=30000;
   process.once('SIGTERM', () => { server.close(() => { void pool?.end(); }); });
 }
