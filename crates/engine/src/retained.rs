@@ -55,10 +55,13 @@ fn field_location(per: crate::post::Per) -> &'static str {
 }
 
 impl Engine {
-    /// Publish a successful solve on its exact Mesh only after its new wrench ledger
-    /// can be displayed in the retained Model units. Studies share this boundary.
-    pub(crate) fn retain_result(&mut self, step: String, mut result: StepResult) -> Result<(), Error> {
-        crate::solve_run::checked_static_equilibrium(&self.model, result.static_equilibrium.as_ref())?;
+    /// Publish a successful solve only after its complete summary can be displayed in the
+    /// retained Model units. Studies share this boundary; failed candidates consume no ID.
+    pub(crate) fn retain_result(
+        &mut self,
+        step: String,
+        mut result: StepResult,
+    ) -> Result<crate::query::ResultSummary, Error> {
         for warning in &mut result.warnings {
             warning.step = Some(step.clone());
         }
@@ -73,6 +76,7 @@ impl Engine {
             built: self.mesh.as_ref().expect("the successful solve built its Mesh").clone(),
             result,
         });
+        let summary = self.summarize_record(&record, &self.model)?;
         self.next_result = sequence;
         self.results.insert(step, Arc::clone(&record));
         self.retained.push_back(record);
@@ -82,7 +86,7 @@ impl Engine {
                 self.results.remove(&old.step);
             }
         }
-        Ok(())
+        Ok(summary)
     }
 
     pub(crate) fn resident_result_bytes(&self) -> u64 {
@@ -581,6 +585,9 @@ mod tests {
             rel_residual: 0.0,
             time_ms: 0.0,
         });
+        for axis in ["x", "y", "z"] {
+            result.scalars.insert(format!("applied_total_{axis}"), 0.0);
+        }
         result.fields.insert(
             crate::command::Field::Temperature,
             crate::post::FieldData::new(crate::post::Per::Node, 1, vec![value; nodes]),

@@ -2430,6 +2430,10 @@ The same publication check is shared by a convergence study with `restore:false`
 and an adaptive study. Independent fully held beam/tet4 cases have zero motion
 and finite opposing actions; unrepresentable preferred units reject before
 replacing the selected Result, changing its catalogue or advancing its sequence.
+A uniform transient-temperature predecessor retains three genuine frames; its
+fully held static continuation has zero motion and finite stress. Opposing
+±1e308 N forces overflow only the gross wrench scale at chained recovery, which
+rejects without replacing the previous static Result or its catalogue.
 Buckling skips this static-only recovery in the shared postprocessor and retains
 its existing preload/force/buckling-factor contract. Legacy formatting behavior
 outside the new ledger is tracked separately by #580.

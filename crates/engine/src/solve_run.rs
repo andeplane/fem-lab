@@ -971,8 +971,8 @@ impl Engine {
             }
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        self.retain_result(step.name.clone(), result)?;
-        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)?) })
+        let summary = self.retain_result(step.name.clone(), result)?;
+        Ok(Output::Solve { summary: Box::new(summary) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -1171,8 +1171,8 @@ impl Engine {
                 None => relative <= target || iteration + 1 == iterations as usize,
             };
             if done {
-                self.retain_result(step.name.clone(), result)?;
-                let result_id = self.result_record(Some(step_name), None)?.id.clone();
+                let summary = self.retain_result(step.name.clone(), result)?;
+                let result_id = summary.result_id;
                 let report = crate::query::AdaptReport {
                     rows,
                     converged: relative <= target,
@@ -1361,8 +1361,19 @@ impl Engine {
 
     pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
         let record = self.result_record(step, id)?;
+        let model = if id.is_some() { &record.model } else { &self.model };
+        self.summarize_record(record, model)
+    }
+
+    /// The same checked display boundary runs on private candidate records before retention.
+    pub(crate) fn summarize_record(
+        &self,
+        record: &crate::retained::ResultRecord,
+        m: &Model,
+    ) -> Result<ResultSummary, Error> {
         let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
-        let m = if id.is_some() { &record.model } else { &self.model };
+        // Preserve #445's scoped ledger diagnostics before the broader display boundary.
+        let static_equilibrium = checked_static_equilibrium(m, res.static_equilibrium.as_ref())?;
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
         for (_, r) in &res.reactions {
@@ -1422,7 +1433,7 @@ impl Engine {
                 })
                 .collect(),
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
-            static_equilibrium: checked_static_equilibrium(m, res.static_equilibrium.as_ref())?,
+            static_equilibrium,
             assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             prestress_from: res.prestress_from.clone(),

@@ -104,6 +104,60 @@ fn overflowing_static_action_scales_reject_before_publishing_and_preserve_the_pr
 }
 
 #[test]
+fn a_static_temperature_history_rejects_unrepresentable_wrenches_without_publishing() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    command(&mut e, json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}));
+    command(&mut e, json!({"cmd":"geometry.nameRegion","name":"ALL","where":{"kind":"body","name":"bar"}}));
+    command(&mut e, json!({"cmd":"constraint.fix","name":"all","on":"ALL"}));
+    command(&mut e, json!({"cmd":"constraint.temperature","name":"uniform","on":"ALL","value":"0 degC"}));
+    command(
+        &mut e,
+        json!({"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["uniform"],"loads":[],"dt":"0.5 s","tEnd":"1 s","initial":"0 degC","outputEvery":1}),
+    );
+    for (name, on, sign) in [("positive", "bar.xmin", 1.0), ("negative", "bar.xmax", -1.0)] {
+        command(
+            &mut e,
+            json!({"cmd":"load.force","name":name,"on":on,"total":[format!("{} N",sign * 1000.0),"0 N","0 N"]}),
+        );
+    }
+    command(
+        &mut e,
+        json!({"cmd":"step.add","name":"static","procedure":"static","after":"warm","constraints":["all"],"loads":["positive","negative"]}),
+    );
+    command(&mut e, json!({"cmd":"solve.run","step":"warm","solver":"cpu-direct"}));
+    command(&mut e, json!({"cmd":"solve.run","step":"static","solver":"cpu-direct"}));
+    let initial = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(initial["resultId"], "result-2");
+    assert_eq!(initial["history"].as_array().unwrap().len(), 3);
+    balanced(&initial);
+    for (name, on, sign) in [("positive", "bar.xmin", 1.0), ("negative", "bar.xmax", -1.0)] {
+        command(
+            &mut e,
+            json!({"cmd":"load.force","name":name,"on":on,"total":[format!("{} N",sign * 1e308),"0 N","0 N"]}),
+        );
+    }
+    // Authored load edits stale the predecessor too: recompute the genuine uniform
+    // temperature history before exercising the chained static recovery failure.
+    command(&mut e, json!({"cmd":"solve.run","step":"warm","solver":"cpu-direct"}));
+    let selected = serde_json::to_value(result_of(&mut e, Some("static"))).unwrap();
+    assert_eq!(selected["resultId"], initial["resultId"]);
+    assert_eq!(selected["stale"], true);
+    let catalogue = serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap();
+    let file = e.export_file();
+    let revision = e.revision();
+    let hash = e.model_hash();
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+    assert_eq!(rejected.code, ErrorCode::SolveDiverged);
+    assert_eq!(rejected.where_.as_deref(), Some("staticEquilibrium.forceScale"));
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(serde_json::to_value(result_of(&mut e, Some("static"))).unwrap(), selected);
+    assert_eq!(serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap(), catalogue);
+}
+
+#[test]
 fn finite_large_si_actions_reject_unrepresentable_current_display_but_retained_units_stay_exact() {
     let mut e = engine();
     let solved = held_moment_pair(&mut e, 1e307);
