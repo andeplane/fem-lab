@@ -303,6 +303,19 @@ function registryHarness(result: ResultSummary) {
   return { registry, store, transport };
 }
 
+it('keeps the single Result metadata fresh without pushing a new solve into comparison-owned surfaces', async () => {
+  const { store, viewer, results, transport } = harness();
+  store.set({ resultComparison: { ...store.state.resultComparison, configuration: { mode: 'sideBySide', left: { resultId: 'old', field: 'displacement' }, right: { resultId: 'other', field: 'vonMises' } } } });
+  await results.refresh(true);
+  expect(store.state.result?.resultId).toBe(RESULT.resultId);
+  expect(viewer.current.setSurface).not.toHaveBeenCalled(); expect(transport.field).not.toHaveBeenCalled();
+  await results.onAck({ output: { type: 'solve' } });
+  expect(viewer.current.setSurface).not.toHaveBeenCalled();
+  store.set({ resultComparison: { ...store.state.resultComparison, configuration: { mode: 'single' } } });
+  await results.refresh(true);
+  expect(viewer.current.setSurface).toHaveBeenCalled(); expect(transport.field).toHaveBeenCalled();
+});
+
 describe('ResultsView', () => {
   it('pairs a dimmed stale Result with its retained mesh and restores current previews on mode changes', async () => {
     const { store, viewer, results, transport } = harness({ ...RESULT, stale: true });

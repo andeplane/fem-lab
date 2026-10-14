@@ -16,6 +16,7 @@ import { benchmarkProvenance } from './benchmark';
 import { ProjectRepository, indexedDbAtomicProjects, memoryAtomicProjects, type ProjectBinding, type SaveJob } from './project-repository';
 import type { Projects } from './projects';
 import { ResultsView } from './results';
+import { ResultComparison } from './result-comparison';
 import type { CameraState } from './viewer/viewer';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
@@ -45,9 +46,11 @@ class Bundle {
   readonly store = new Store();
   readonly capture = new AnimationCapture(browserAnimationCaptureEnvironment());
   readonly viewer: ViewerRef = { current: null };
+  readonly rightViewer: ViewerRef = { current: null };
   readonly validation = new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), async () => undefined, async () => undefined,
     browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
   readonly results: ResultsView;
+  readonly comparison: ResultComparison;
   uiTransport!: SessionTransport;
   consoleTransport!: SessionTransport;
   private binding: ProjectBinding | null = null;
@@ -68,6 +71,11 @@ class Bundle {
     this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
     this.results = new ResultsView(this.store, transport, this.viewer, { now: () => performance.now(), schedule: (cb, ms) => setTimeout(cb, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) });
+    this.comparison = new ResultComparison(this.store, transport, { left: this.viewer, right: this.rightViewer }, {
+      pauseSingle: () => { this.results.invalidateTransient(); this.viewer.current?.animate(false); },
+      restoreSingle: () => this.results.refresh(true),
+    });
+    this.rightViewer.onReady = () => this.comparison.resume();
     this.viewer.onReady = () => {
       if (this.fitAfterOpen) this.initialCamera = this.viewer.current?.getCamera();
       void this.refresh().catch(error => this.fail(error));
@@ -117,6 +125,7 @@ class Bundle {
     const snapshot = await this.transport.snapshot();
     if (this.publishSnapshot(snapshot)) await this.store.refreshJournalComparison();
     await this.results.refresh();
+    await this.comparison.refresh();
     if (this.disposed) throw expired();
     if (snapshot.file.journal.entries.length && !this.projectDeleted) {
       if (!this.binding) {
@@ -215,8 +224,10 @@ class Bundle {
     this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.results.invalidateTransient();
+    this.comparison.dispose();
     this.validation.stop();
     this.viewer.current = null;
+    this.rightViewer.current = null;
   }
 }
 
@@ -268,7 +279,7 @@ class Producer {
           replace: async (commands, abaqusReport) => { await transport.replaceWith({ kind: 'commands', commands, abaqusReport }, admitted); },
         };
       },
-    }, bundle.capture, undefined, accounts.services);
+    }, bundle.capture, undefined, accounts.services, bundle.comparison);
     ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());
       try {
@@ -291,7 +302,7 @@ class Producer {
       } finally { child.lifetime.signal.removeEventListener('abort', stop); child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); }
     };
     ctx.script.stop = () => { for (const job of scriptJobs) { if (job.producer.bundle !== bundle) continue; job.runner.stop(); job.producer.lifetime.abort(); void job.producer.transport.release().catch(() => undefined); } };
-    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store)] });
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry, bundle.comparison)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store)] });
     return registry;
   }
   async dispatch(command: { cmd: string } & Record<string, unknown>): Promise<unknown> {
@@ -316,6 +327,7 @@ class Producer {
         current.results.invalidateTransient();
         await current.refresh();
         await current.results.onAck(ack);
+        current.comparison.resume();
       }
       current.store.log('command', command.cmd);
       return ack;
@@ -377,7 +389,7 @@ const workspace = new SessionWorkspace<Bundle>({
     window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleRegistry : key === 'dispatch' ? consoleDispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
     bundle.store.dispatch = dispatch;
     if (!root.querySelector('.shell, .start-layout, .start')) root.textContent = '';
-    render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} commands={ui.registry.list().commands} registry={ui.registry} />, root);
+    render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} rightViewer={bundle.rightViewer} comparison={bundle.comparison} commands={ui.registry.list().commands} registry={ui.registry} />, root);
   },
 });
 async function boot(): Promise<void> {

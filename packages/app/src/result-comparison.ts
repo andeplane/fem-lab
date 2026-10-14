@@ -5,7 +5,7 @@ import type { Store } from './store';
 import type { CameraState, Viewer, ViewPreset } from './viewer/viewer';
 
 /** The renderer boundary is injectable without pretending a fake owns a WebGL context. */
-export type ComparisonViewer = Pick<Viewer, 'animate' | 'setField' | 'setDeformed' | 'setSurface' | 'setVisible' | 'setMode' | 'setDim' | 'setColormap' | 'setFieldValidity' | 'setSelection' | 'setCamera' | 'getCamera' | 'preset' | 'setProjection' | 'setComparisonFrameHeight' | 'getCameraZoom' | 'setCameraZoom'>;
+export type ComparisonViewer = Pick<Viewer, 'animate' | 'setField' | 'setDeformed' | 'setSurface' | 'setVisible' | 'setMode' | 'setDim' | 'setColormap' | 'setFieldValidity' | 'setSelection' | 'setCamera' | 'getCamera' | 'preset' | 'setProjection' | 'getProjection' | 'setComparisonFrameHeight' | 'getCameraZoom' | 'setCameraZoom' | 'setLayer' | 'setClip' | 'setTheme' | 'setHover' | 'setHighlight'>;
 export interface ComparisonViewerRef { current: ComparisonViewer | null }
 
 type PairConfiguration = Exclude<ComparisonConfiguration, { mode: 'single' }>;
@@ -39,11 +39,13 @@ function engineError(error: unknown): EngineError {
 /** Catalogue/state lifetime is one Bundle/transport; ids never cross a project replacement. */
 export class ResultComparison implements ResultComparisonHost {
   private epoch = 0;
+  private paneRequests = new Map<string, number>();
   private disposed = false;
   private syncingCamera = false;
   private payloads: Partial<Record<ComparisonPaneName, Payload>> = {};
   private conversions = new Map<string, { scale: number; offset: number }>();
   private requestedScale: number | 'auto' | 'true' = 'true';
+  private clip: Parameters<Viewer['setClip']>[0] = null;
 
   constructor(private readonly store: Store, private readonly transport: EngineTransport,
     readonly viewers: { left: ComparisonViewerRef; right: ComparisonViewerRef }, private readonly lifecycle: ComparisonLifecycle) {}
@@ -55,11 +57,17 @@ export class ResultComparison implements ResultComparisonHost {
     this.store.set({ resultComparison: { ...this.store.state.resultComparison, ...patch, viewMode: this.store.state.viewMode } });
   }
   private current(ticket: number): boolean { return !this.disposed && ticket === this.epoch; }
+  private paneRequest(pane: ComparisonPaneName, action: 'legend' | 'pick') {
+    const key = `${pane}:${action}`, sequence = (this.paneRequests.get(key) ?? 0) + 1, epoch = this.epoch;
+    this.paneRequests.set(key, sequence);
+    return () => this.current(epoch) && this.paneRequests.get(key) === sequence;
+  }
 
   /** Prepare complete immutable payloads before changing either drawing or its labels. */
   async configure(configuration: ComparisonConfiguration): Promise<void> {
     if (this.disposed) throw new FemError('session.expired', 'comparison belongs to a closed project');
     const ticket = ++this.epoch;
+    const wasActive = this.active;
     this.lifecycle.pauseSingle();
     this.publish({ loading: true, error: null });
     try {
@@ -79,6 +87,7 @@ export class ResultComparison implements ResultComparisonHost {
       this.publish({ configuration, catalogue, left: this.pane(left), right: this.pane(right), difference: difference ? this.pane(difference.payload) : null,
         coverage: difference?.response.coverage ?? null, interpolated: difference?.response.interpolated ?? false, warnings: difference?.response.warnings ?? [], loading: false });
       this.draw();
+      if (!wasActive) this.preset('iso');
     } catch (error) {
       if (!this.current(ticket)) return;
       this.publish({ loading: false, error: engineError(error) });
@@ -88,7 +97,7 @@ export class ResultComparison implements ResultComparisonHost {
 
   /** Ordinary edits refresh status without selecting a new solve or rebuilding old values. */
   async refresh(): Promise<void> {
-    const ticket = ++this.epoch;
+    const ticket = this.epoch;
     const catalogue = await this.transport.query({ query: 'query.results' }) as RetainedResults;
     if (!this.current(ticket)) return;
     const patch: Partial<ResultComparisonState> = { catalogue, loading: false };
@@ -109,9 +118,10 @@ export class ResultComparison implements ResultComparisonHost {
   invalidate(): void { this.epoch++; }
   dispose(): void { this.disposed = true; this.invalidate(); this.payloads = {}; this.conversions.clear(); }
   /** Current geometry/mesh modes borrow the primary renderer without replacing pinned ids. */
-  suspend(): void { this.resetPresentation(); }
+  suspend(): void { this.invalidate(); this.publish({ loading: false }); this.resetPresentation(); }
   resume(): void { this.draw(); }
   private resetPresentation(): void {
+    if (!Object.keys(this.payloads).length) return;
     for (const viewer of [this.viewers.left.current, this.viewers.right.current]) {
       if (!viewer) continue;
       viewer.setVisible([...new Set(Object.values(this.payloads).flatMap(p => p.surface.bodyNames))], true);
@@ -183,7 +193,7 @@ export class ResultComparison implements ResultComparisonHost {
 
   async legend(input: ComparisonLegendSpec): Promise<void> {
     const { metadata, payload } = this.target(input.pane, input.resultId);
-    const ticket = ++this.epoch;
+    const current = this.paneRequest(input.pane, 'legend');
     let legend = metadata.legend;
     if (input.range === 'auto') legend = this.legendOf(payload, legend ? { ...legend, automatic: true } : null);
     else if (input.range) {
@@ -194,26 +204,28 @@ export class ResultComparison implements ResultComparisonHost {
       if (bounds[0]! >= bounds[1]!) throw new FemError('schema', 'legend lower bound must be less than its upper bound', 'range');
       legend = { min: quantity(bounds[0]!, payload.unit), max: quantity(bounds[1]!, payload.unit), automatic: false, colormap: legend?.colormap ?? 'viridis', difference: input.pane === 'difference' };
     }
-    if (!this.current(ticket)) return;
-    this.publish({ [input.pane]: { ...metadata, legend: legend ? { ...legend, colormap: input.colormap ?? legend.colormap } : null } });
+    if (!current()) return;
+    const latest = this.target(input.pane, input.resultId).metadata;
+    this.publish({ [input.pane]: { ...latest, legend: legend ? { ...legend, colormap: input.colormap ?? latest.legend?.colormap ?? legend.colormap } : null } });
     this.draw();
   }
   visible(input: ComparisonVisibilitySpec): void {
     const { metadata } = this.target(input.pane, input.resultId);
     for (const body of input.bodies) if (!metadata.bodyNames.includes(body)) throw new FemError('not-found', `Body '${body}' does not belong to this retained Result`, 'bodies');
     const hiddenBodies = input.on ? metadata.hiddenBodies.filter(body => !input.bodies.includes(body)) : [...new Set([...metadata.hiddenBodies, ...input.bodies])];
-    this.publish({ [input.pane]: { ...metadata, hiddenBodies } });
+    this.publish({ [input.pane]: { ...metadata, hiddenBodies, pick: metadata.pick?.body && hiddenBodies.includes(metadata.pick.body) ? null : metadata.pick } });
     this.draw();
   }
   async pick(input: ComparisonPickSpec): Promise<ComparisonPick | null> {
-    const { metadata, payload } = this.target(input.pane, input.resultId);
+    const { payload } = this.target(input.pane, input.resultId);
     if (!this.active) throw new FemError('unsupported', 'comparison picking requires Results view', 'pane', 'view.setMode results');
     if (input.body && !payload.surface.bodyNames.includes(input.body)) throw new FemError('not-found', `Body '${input.body}' does not belong to this retained Result`, 'body');
     if (input.face && !payload.surface.faceNames.includes(input.face) && !payload.surface.setNames?.includes(input.face))
       throw new FemError('not-found', `face or Set '${input.face}' does not belong to this retained Result`, 'face');
-    const ticket = ++this.epoch;
+    const current = this.paneRequest(input.pane, 'pick');
     const at = await Promise.all(input.at.map(q => this.convert(q, 'm')));
-    if (!this.current(ticket)) return null;
+    if (!current()) return null;
+    const { metadata } = this.target(input.pane, input.resultId);
     const picked = nearestEntity(payload, metadata.hiddenBodies, at, input.body, input.face, this.store.state.deformScale);
     if (!picked) return null;
     const raw = payload.values[picked.entity] ?? null;
@@ -259,9 +271,12 @@ export class ResultComparison implements ResultComparisonHost {
     if (camera) this.setCamera(camera);
   }
   setProjection(projection: 'perspective' | 'orthographic'): void {
-    this.viewers.left.current?.setProjection(projection); this.viewers.right.current?.setProjection(projection);
+    this.syncingCamera = true;
+    try { this.viewers.left.current?.setProjection(projection); this.viewers.right.current?.setProjection(projection); }
+    finally { this.syncingCamera = false; }
     this.cameraChanged('left');
   }
+  setClip(clip: Parameters<Viewer['setClip']>[0]): void { this.clip = clip; this.viewers.left.current?.setClip(clip); this.viewers.right.current?.setClip(clip); }
   setDeformScale(scale: number | 'auto' | 'true'): void {
     this.requestedScale = scale;
     this.draw();
@@ -275,7 +290,8 @@ export class ResultComparison implements ResultComparisonHost {
     let deformScale = this.requestedScale === 'true' ? 1 : this.requestedScale === 'auto' ? this.autoScale() : this.requestedScale;
     if (!Number.isFinite(deformScale)) deformScale = 1;
     if (this.store.state.deformScale !== deformScale) this.store.set({ deformScale });
-    for (const name of names) {
+    this.syncingCamera = true;
+    try { for (const name of names) {
       const viewer = this.viewers[name === 'right' ? 'right' : 'left'].current;
       const metadata = this.store.state.resultComparison[name], payload = this.payloads[name];
       if (!viewer || !metadata || !payload) continue;
@@ -285,6 +301,11 @@ export class ResultComparison implements ResultComparisonHost {
       viewer.setVisible(payload.surface.bodyNames, true);
       viewer.setSurface({ ...payload.surface, source: 'mesh' });
       viewer.setComparisonFrameHeight(height);
+      if (name === 'right') viewer.setProjection(this.viewers.left.current?.getProjection() ?? 'perspective');
+      viewer.setTheme(this.store.state.theme);
+      viewer.setClip(this.clip);
+      for (const [layer, on] of Object.entries(this.store.state.layerVisibility)) viewer.setLayer(layer, on);
+      viewer.setHover({ bodies: [], faces: [], sets: [] }); viewer.setHighlight({});
       viewer.setVisible(metadata.hiddenBodies, false);
       viewer.setMode('results'); viewer.setDim(metadata.summary.stale);
       const legend = metadata.legend;
@@ -293,7 +314,7 @@ export class ResultComparison implements ResultComparisonHost {
       viewer.setFieldValidity(payload.valid);
       viewer.setDeformed(payload.displacement, deformScale);
       viewer.setSelection({ bodies: metadata.pick?.body ? [metadata.pick.body] : [], faces: metadata.pick?.face ? [metadata.pick.face] : [], sets: [] });
-    }
+    } } finally { this.syncingCamera = false; }
     this.cameraChanged('left');
   }
   private displayedPayloads(): Payload[] {

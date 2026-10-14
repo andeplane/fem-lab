@@ -14,6 +14,7 @@ import type { HostCaps } from './capabilities';
 import { choiceOf, modeCount } from './fields';
 import type { Projects } from './projects';
 import type { ResultsView } from './results';
+import type { ResultComparison } from './result-comparison';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
@@ -135,6 +136,7 @@ export function makeHostContext(
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
   abaqusIo?: AbaqusIo,
   account?: AccountServices,
+  comparison?: ResultComparison,
 ): HostContext {
   const own = session.projects;
   const v = (): Viewer => {
@@ -144,17 +146,20 @@ export function makeHostContext(
   return {
     account,
     transport,
+    ...(comparison ? { resultComparison: comparison } : {}),
     abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {
-      fit: () => v().fit(),
-      setCamera: (c) => v().setCamera(c as CameraState),
-      preset: (p) => v().preset(p),
-      setProjection: (p) => v().setProjection(p),
-      showField: (f) => {
+      fit: () => comparison?.active ? comparison.preset('iso') : v().fit(),
+      setCamera: (c) => comparison?.active ? comparison.setCamera(c as CameraState) : v().setCamera(c as CameraState),
+      preset: (p) => comparison?.active ? comparison.preset(p) : v().preset(p),
+      setProjection: (p) => comparison?.active ? comparison.setProjection(p) : v().setProjection(p),
+      showField: async (f) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         return results?.showField(f as { field: string | null; component?: number | null });
       },
       setLegend: (l) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison legends require an explicit pane and Result', 'view.setLegend', 'view.setComparisonLegend');
         if (!results) {
           if (!l.colormap) return;
           store.set({ colormap: l.colormap as ColormapName });
@@ -164,23 +169,27 @@ export function makeHostContext(
         return results.setLegend(l as { colormap?: string; range?: [number, number] | 'auto' });
       },
       setDeformScale: (s) => {
+        if (comparison?.active) return comparison.setDeformScale(s);
         if (!results) return store.set({ deformScale: typeof s === 'number' ? s : 1 });
         v();
         results.setDeformScale(s);
       },
       setClip: (p) => {
         store.set({ clipOn: p !== null });
+        if (comparison?.active) return comparison.setClip(p ? { normal: p.normal, offset: p.offset } : null);
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
       toggle: (layer, on) => {
         const visible = v().setLayer(layer, on);
+        if (comparison?.active) comparison.viewers.right.current?.setLayer(layer, visible);
         store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
       },
       setVisible: (bodies, on) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison visibility requires an explicit pane and Result', 'view.setVisible', 'view.setComparisonVisible');
         v().setVisible(bodies, on);
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
-      highlight: (s) => viewer.current?.setHighlight(s),
+      highlight: (s) => { if (!comparison?.active) viewer.current?.setHighlight(s); },
       hover: async (s) => {
         const commit = store.beginHover();
         const target = s.load
@@ -192,14 +201,17 @@ export function makeHostContext(
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
+        if (comparison?.active) comparison.viewers.right.current?.setTheme(t);
       },
-      animate: (a) => {
+      animate: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
         return results.animate(a);
       },
-      playTransient: (a) => {
+      playTransient: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
         return results.playTransient(a);
       },
@@ -460,7 +472,7 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
     {
@@ -495,7 +507,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       tool: true,
       run: async (input) => {
         const { mode } = input as { mode: ViewMode };
-        if (results) return results.setMode(mode);
+        if (results) {
+          if (comparison && mode !== 'results') comparison.suspend();
+          await results.setMode(mode);
+          comparison?.resume();
+          return;
+        }
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
       },

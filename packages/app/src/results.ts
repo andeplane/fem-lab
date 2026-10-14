@@ -162,6 +162,9 @@ export class ResultsView {
     const result = await this.readResult();
     if (epoch !== this.displayEpoch) return;
     this.store.set({ result });
+    // A comparison owns its immutable payloads and drawing; keep the single Result metadata
+    // current for restoration without sending a new solve's fields into a retained pane.
+    if (this.store.state.resultComparison.configuration.mode !== 'single' && this.store.state.viewMode === 'results') return;
     const transient = this.store.state.transient;
     if (transient) {
       if (!result || result.stale || result.resultId !== transient.catalogue.resultId || this.store.state.viewMode !== 'results') {
@@ -394,7 +397,7 @@ export class ResultsView {
     await this.refresh(true);
     if (epoch !== this.displayEpoch) return;
     const result = this.store.state.result;
-    if (out.type === 'solve' && result?.history?.length) await this.playTransient({ step: result.step, playing: false, sample: { kind: 'frame', index: result.history.length - 1 } });
+    if (this.store.state.resultComparison.configuration.mode === 'single' && out.type === 'solve' && result?.history?.length) await this.playTransient({ step: result.step, playing: false, sample: { kind: 'frame', index: result.history.length - 1 } });
   }
 }
 

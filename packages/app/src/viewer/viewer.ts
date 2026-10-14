@@ -636,6 +636,7 @@ export class Viewer {
     this.frameOrtho();
     this.setCamera(state);
   }
+  getProjection(): 'perspective' | 'orthographic' { return this.camera === this.orthographic ? 'orthographic' : 'perspective'; }
 
   setTheme(theme: 'dark' | 'light'): void {
     this.scene.background = new Color(theme === 'dark' ? 0x0d0f13 : 0xf3f4f6);

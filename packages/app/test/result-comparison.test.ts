@@ -12,7 +12,8 @@ function viewer() {
   let camera: CameraState = { position: [3, 4, 5], target: [0, 0, 0] }, zoom = 1;
   const fake = {
     animate: vi.fn(), setField: vi.fn(), setDeformed: vi.fn(), setSurface: vi.fn(), setVisible: vi.fn(), setMode: vi.fn(),
-    setDim: vi.fn(), setColormap: vi.fn(), setFieldValidity: vi.fn(), setSelection: vi.fn(), preset: vi.fn(), setProjection: vi.fn(),
+    setDim: vi.fn(), setColormap: vi.fn(), setFieldValidity: vi.fn(), setSelection: vi.fn(), preset: vi.fn(), setProjection: vi.fn(), getProjection: () => 'perspective' as const,
+    setLayer: vi.fn(() => true), setClip: vi.fn(), setTheme: vi.fn(), setHover: vi.fn(), setHighlight: vi.fn(),
     setCamera: vi.fn((next: CameraState) => { camera = next; }), getCamera: () => camera,
     setComparisonFrameHeight: vi.fn(), getCameraZoom: () => zoom, setCameraZoom: vi.fn((next: number) => { zoom = next; }),
   } satisfies ComparisonViewer;
@@ -169,4 +170,52 @@ it('fences late surface replies after a new configuration or project disposal an
   transport.surface = vi.fn(async () => surface('wrong'));
   await expect(comparison.configure(pair)).rejects.toMatchObject({ code: 'result.stale' });
   comparison.dispose(); await expect(comparison.configure(pair)).rejects.toMatchObject({ code: 'session.expired' });
+});
+
+it('allows independent concurrent pane clamps and merges late updates without undoing later body visibility', async () => {
+  const { comparison, reply } = setup(); await comparison.configure(pair);
+  const releases: (() => Promise<void>)[] = [];
+  reply(async (query, original) => {
+    if (query.query === 'query.convert' && [4, 12].includes((query.quantity as Valued).value))
+      return new Promise(resolve => { releases.push(async () => resolve(await original(query))); });
+    return original(query);
+  });
+  const pending = Promise.all([
+    comparison.legend({ pane: 'left', resultId: 'old', range: [q(0, 'mm'), q(4, 'mm')] }),
+    comparison.legend({ pane: 'right', resultId: 'new', range: [q(0, 'MPa'), q(12, 'MPa')] }),
+  ]);
+  await vi.waitFor(() => expect(releases).toHaveLength(2));
+  comparison.visible({ pane: 'left', resultId: 'old', bodies: ['body-old'], on: false });
+  await Promise.all(releases.map(release => release())); await pending;
+  expect(comparison.state().left?.legend?.max).toEqual(q(4, 'mm'));
+  expect(comparison.state().right?.legend?.max).toEqual(q(12, 'MPa'));
+  expect(comparison.state().left?.hiddenBodies).toEqual(['body-old']);
+});
+
+it('uses the latest hidden bodies when a delayed pick finishes and never reopens that body', async () => {
+  const { comparison, reply } = setup(); await comparison.configure(pair);
+  let release!: () => Promise<void>;
+  reply(async (query, original) => {
+    if (query.query === 'query.convert' && (query.quantity as Valued).value === 1)
+      return new Promise(resolve => { release = async () => resolve(await original(query)); });
+    return original(query);
+  });
+  const pending = comparison.pick({ pane: 'left', resultId: 'old', at: [q(1), q(0), q(0)] });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  comparison.visible({ pane: 'left', resultId: 'old', bodies: ['body-old'], on: false });
+  await release(); expect(await pending).toBeNull();
+  expect(comparison.state().left?.hiddenBodies).toEqual(['body-old']);
+});
+
+it('cancels a first comparison load when the user explicitly switches to current geometry or mesh', async () => {
+  for (const mode of ['geometry', 'mesh'] as const) {
+    const { comparison, store, transport, left } = setup();
+    let release!: (value: Surface) => void;
+    transport.surface = vi.fn(selector => selector!.resultId === 'old' ? new Promise<Surface>(resolve => { release = resolve; }) : Promise.resolve(surface('new')));
+    const pending = comparison.configure(pair);
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    store.set({ viewMode: mode }); comparison.suspend(); release(surface('old')); await pending;
+    expect(store.state.viewMode).toBe(mode); expect(comparison.state().loading).toBe(false);
+    expect(comparison.state().configuration.mode).toBe('single'); expect(left.setSurface).not.toHaveBeenCalled();
+  }
 });
