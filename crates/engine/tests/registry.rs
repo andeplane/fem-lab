@@ -4645,6 +4645,11 @@ fn explicit_cost_and_run_share_the_fixed_massless_element_grid() {
         &mut e,
         r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":["hold"],"loads":[],"tEnd":"1e-8 s","dtFactor":0.9,"outputEvery":2}"#,
     );
+    assert!(
+        !e.warnings().iter().any(|w| w.code == "material.missing-property" || w.code == "model.unconstrained"),
+        "held massless geometry is valid alongside a massive free Body: {:?}",
+        e.warnings()
+    );
     let QueryResult::Cost(cost) = e.query(Query::Cost { step: "dynamic".into() }).unwrap() else { panic!() };
     ok(&mut e, r#"{"cmd":"solve.run","step":"dynamic"}"#);
     let summary = result_of(&mut e, Some("dynamic"));
@@ -6025,6 +6030,151 @@ fn a_convergence_study_scales_every_mesher() {
 }
 
 #[test]
+fn valid_free_body_benchmarks_have_no_support_or_load_warning() {
+    for journal in [
+        include_str!("../benches/journals/explicit-free-fall.json"),
+        include_str!("../benches/journals/free-free-beam-modal.json"),
+    ] {
+        let mut e = engine();
+        let entries: Vec<femlab_engine::journal::JournalEntry> = serde_json::from_str(journal).unwrap();
+        // These warnings are a pre-mesh contract. The existing numerical Benchmarks and
+        // Chromium all-example gate exercise the actual solves independently.
+        pollster::block_on(e.replay(&entries, true, false)).unwrap();
+        assert!(e.warnings().is_empty(), "{:?}", e.warnings());
+    }
+}
+
+#[test]
+fn only_active_mechanical_anchors_support_static_procedures() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin","dofs":["ux"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 K"}"#);
+    for procedure in ["static", "static-nonlinear", "buckling"] {
+        for constraints in ["[]", r#"["hot"]"#] {
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"step.add","name":"s","procedure":"{procedure}","constraints":{constraints},"loads":[]}}"#
+                ),
+            );
+            let warnings = e.warnings();
+            let support = warnings.iter().find(|w| w.code == "model.unconstrained").unwrap();
+            assert_eq!(support.where_.as_deref(), Some("step 's'"));
+            assert_eq!(support.step.as_deref(), Some("s"));
+            let missing = if constraints == "[]" { "no constraints" } else { "no active mechanical supports" };
+            assert_eq!(support.text, format!("{missing}; a {procedure} solve needs supports (constraint.fix)"));
+        }
+        ok(
+            &mut e,
+            &format!(r#"{{"cmd":"step.add","name":"s","procedure":"{procedure}","constraints":["root"],"loads":[]}}"#),
+        );
+        assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+        // One fixed component is only a known anchor, not proof of a nonsingular system.
+        assert!(e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    }
+}
+
+#[test]
+fn steady_heat_requires_its_own_temperature_reference_but_transient_heat_may_be_insulated() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"slab","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"slab.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"slab.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"ambient","on":"slab.xmax","h":"10 W/(m^2*K)","tInf":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"radiate","on":"slab.xmax","emissivity":0.5,"tInf":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"flux","on":"slab.xmax","q":"1 W/m^2"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"force","on":"slab.xmax","total":["1 N","0 N","0 N"]}"#);
+    for loads in ["[]", r#"["flux"]"#, r#"["force"]"#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"warm","procedure":"heat-steady","constraints":["root"],"loads":{loads}}}"#
+            ),
+        );
+        let warnings = e.warnings();
+        assert!(!warnings.iter().any(|w| w.code == "model.unconstrained"));
+        let reference = warnings.iter().find(|w| w.code == "model.no-temperature-reference").unwrap();
+        assert_eq!(reference.where_.as_deref(), Some("step 'warm'"));
+        assert!(reference.text.contains("constraint.temperature"));
+        assert_eq!(warnings.iter().any(|w| w.code == "model.unloaded"), loads != r#"["flux"]"#);
+    }
+    for loads in [r#"["ambient"]"#, r#"["radiate"]"#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"warm","procedure":"heat-steady","constraints":[],"loads":{loads}}}"#
+            ),
+        );
+        assert!(!e.warnings().iter().any(|w| w.code == "model.no-temperature-reference" || w.code == "model.unloaded"));
+    }
+    ok(&mut e, r#"{"cmd":"step.add","name":"warm","procedure":"heat-steady","constraints":["cold"],"loads":[]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.no-temperature-reference"));
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":[],"loads":[],"dt":"1 s","tEnd":"2 s"}"#,
+    );
+    assert!(!e
+        .warnings()
+        .iter()
+        .any(|w| w.code == "model.no-temperature-reference" || w.code == "model.unconstrained"));
+    ok(&mut e, r#"{"cmd":"step.add","name":"warm","procedure":"static","constraints":["root"],"loads":["flux"]}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unloaded"));
+}
+
+#[test]
+fn material_requirements_name_only_assigned_materials_and_the_affected_step() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"slab","E":"1 GPa","nu":0.2}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"unused","E":"1 GPa","nu":0.2}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"slab","bodies":["bar"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":[],"loads":[],"dt":"1 s","tEnd":"2 s"}"#,
+    );
+    let warnings = e.warnings();
+    let material: Vec<_> = warnings.iter().filter(|w| w.code == "material.missing-property").collect();
+    assert_eq!(material.len(), 3);
+    for (warning, property) in material.iter().zip(["k", "rho", "cp"]) {
+        assert_eq!(warning.where_.as_deref(), Some("material 'slab'"));
+        assert_eq!(warning.step.as_deref(), Some("warm"));
+        assert_eq!(
+            warning.text,
+            format!("heat-transient Step 'warm' needs finite positive {property}; use material.add with {property}")
+        );
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"slab","E":"1 GPa","nu":0.2,"k":"10 W/(m*K)","rho":"1000 kg/m^3","cp":"500 J/(kg*K)"}"#,
+    );
+    assert!(!e.warnings().iter().any(|w| w.code == "material.missing-property"));
+    let mut orthotropic = lamina_block();
+    orthotropic["k"] = serde_json::json!(["10 W/(m*K)", "20 W/(m*K)", "30 W/(m*K)"]);
+    ok(
+        &mut e,
+        &serde_json::json!({"cmd":"material.add","name":"slab","orthotropic":orthotropic,"rho":"0 kg/m^3"}).to_string(),
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"warm","procedure":"heat-steady","constraints":[],"loads":[]}"#);
+    assert!(
+        !e.warnings().iter().any(|w| w.code == "material.missing-property"),
+        "every material axis has conductivity"
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"warm","procedure":"modal","constraints":[],"loads":[],"nModes":1}"#);
+    let warnings = e.warnings();
+    assert_eq!(warnings.len(), 1, "{:?}", warnings);
+    assert_eq!(
+        warnings[0].text,
+        "modal Step 'warm' has no mass: assign positive rho with material.add or add geometry.addMass"
+    );
+    ok(&mut e, r#"{"cmd":"geometry.addMass","name":"tip","at":["1 m","0 m","0 m"],"mass":"1 kg"}"#);
+    assert!(
+        !e.warnings().iter().any(|w| w.code == "material.missing-property"),
+        "mass can come from a point; free DOF admissibility remains a solve check"
+    );
+}
+
+#[test]
 fn prescribed_values_drive_only_the_steps_that_use_them() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
@@ -6117,6 +6267,55 @@ fn transient_heat_initial_temperature_is_a_driver_even_without_loads() {
 }
 
 #[test]
+fn mapped_steps_use_references_on_the_analysed_body_in_the_active_step() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"elsewhere","on":"other.xmin"}"#);
+    ok(&mut e, COOK);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"sheet.left"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["elsewhere"],"loads":[]}"#);
+    let warnings = e.warnings();
+    let support = warnings.iter().find(|w| w.code == "model.unconstrained").unwrap();
+    assert!(support.text.contains("no constraints target Body 'sheet'"));
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":[]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"other.xmin","value":"100 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"ambient","on":"other.xmax","h":"10 W/(m^2*K)","tInf":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":["cold"],"loads":["ambient"]}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.no-temperature-reference"));
+    ok(&mut e, r#"{"cmd":"load.convection","name":"ambient","on":"sheet.right","h":"10 W/(m^2*K)","tInf":"300 K"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.no-temperature-reference"));
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"sheet.left","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":["cold"],"loads":[]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.no-temperature-reference"));
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"explicit","constraints":[],"loads":[],"tEnd":"1 s"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+}
+
+#[test]
+fn an_active_tie_can_transmit_an_anchor_to_a_mapped_body_but_cannot_supply_one() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(&mut e, COOK);
+    ok(&mut e, r#"{"cmd":"material.add","name":"solid","E":"1 Pa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"force","on":"sheet.right","total":["0 N","1 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addMass","name":"support","at":["0 m","22 m","0 m"],"mass":"1 kg"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"support"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.couple","name":"tie","point":"support","on":"sheet.left","kind":"rigid"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["tie"],"loads":[]}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"), "a relative tie supplies no anchor");
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["hold","tie"],"loads":["force"]}"#);
+    assert!(e.warnings().is_empty(), "pairing and rank remain mesh checks: {:?}", e.warnings());
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let solved = result(&mut e);
+    assert!(!solved.stale);
+    assert!((solved.applied_total[1].value - 1.0).abs() < 1e-10);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["hold"],"loads":[]}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"), "an inactive tie cannot transmit support");
+}
+
+#[test]
 fn mapped_body_warns_until_a_constraint_targets_its_sets() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"supports"}"#);
@@ -6126,6 +6325,7 @@ fn mapped_body_warns_until_a_constraint_targets_its_sets() {
     let warnings = e.warnings();
     let warning = warnings.iter().find(|w| w.code == "model.unconstrained").unwrap();
     assert_eq!(warning.where_.as_deref(), Some("body 'sheet'"));
+    assert_eq!(warning.step, None, "before defining a Step, the check is global");
     assert!(warning.text.contains("constraint.fix"));
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"sheet.left"}"#);
     assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));

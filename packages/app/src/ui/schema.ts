@@ -391,7 +391,9 @@ const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.ill-posed': { code: 'W-1002', text: 'A Body and the idealisation disagree on dimension.', fix: 'model.setIdealisation' },
   'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
   'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
-  'model.unconstrained': { code: 'W-1300', text: 'Nothing holds the body — six rigid body modes.', fix: 'constraint.fix' },
+  'model.unconstrained': { code: 'W-1300', text: 'No active mechanical support.', fix: 'constraint.fix' },
+  'model.no-temperature-reference': { code: 'W-1301', text: 'Steady heat needs a temperature reference.', fix: 'constraint.temperature' },
+  'material.missing-property': { code: 'W-1103', text: 'An assigned material lacks a property needed by this Step.', fix: 'material.add' },
   'model.unloaded': { code: 'W-1400', text: 'No driving load or prescribed value.', fix: 'load.pressure' },
   'model.no-step': { code: 'W-1500', text: 'No Step. A Step says what to solve.', fix: 'step.add' },
   'load.no-density': { code: 'W-2210', text: 'Gravity skips a body whose material has no density.', fix: 'material.add' },
@@ -413,7 +415,7 @@ export function blockers(warnings: { code: string; text: string; where?: string 
       return { code: m!.code, text: w.text, fixLabel: fix, fixCmd: fix, where: w.where ?? null };
     }
     return m
-      ? { code: m.code, text: m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
+      ? { code: m.code, text: ['model.unconstrained', 'model.no-temperature-reference', 'material.missing-property'].includes(w.code) ? w.text : m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
       : { code: w.code, text: w.text, fixLabel: '', fixCmd: '', where: w.where ?? null };
   });
   if (hasBodies && !hasMesh) mapped.push(MESH);

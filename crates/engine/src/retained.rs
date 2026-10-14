@@ -56,7 +56,10 @@ fn field_location(per: crate::post::Per) -> &'static str {
 
 impl Engine {
     /// Only called after a successful solve, with its exact Mesh still installed.
-    pub(crate) fn retain_result(&mut self, step: String, result: StepResult) {
+    pub(crate) fn retain_result(&mut self, step: String, mut result: StepResult) {
+        for warning in &mut result.warnings {
+            warning.step = Some(step.clone());
+        }
         let sequence = next_sequence(&self.next_result);
         let record = Arc::new(ResultRecord {
             id: format!("result-{sequence}"),
@@ -486,6 +489,7 @@ impl Engine {
         sampled.map(|()| {
             let warnings = if left.name.starts_with("mode:") || right.name.starts_with("mode:") {
                 vec![crate::error::Warning {
+                step: None,
                     code: "result.mode-uncorrelated".into(),
                     text: "Modal signs and ordering are not correlated; values are raw left minus right without sign alignment"
                         .into(),

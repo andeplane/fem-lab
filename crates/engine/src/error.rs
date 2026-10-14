@@ -118,6 +118,10 @@ impl std::fmt::Display for ErrorCode {
 pub struct Warning {
     pub code: String,
     pub text: String,
+    /// Exact Step identity for a procedure-dependent warning. Omitted for global checks;
+    /// hosts must use this identity rather than parse names from display text or `where`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
     #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
     pub where_: Option<String>,
 }
@@ -234,8 +238,14 @@ mod tests {
         assert_eq!(nf2.suggestion.as_deref(), Some("known bodys: none defined"));
         let se: Error = serde_json::from_str::<u32>("\"x\"").unwrap_err().into();
         assert_eq!(se.code, ErrorCode::Schema);
-        let w = Warning { code: "assumption".into(), text: "rho unset".into(), where_: None };
+        let w = Warning { code: "assumption".into(), text: "rho unset".into(), step: None, where_: None };
         let wj = serde_json::to_string(&w).unwrap();
         assert!(!wj.contains("where"));
+        assert!(!wj.contains("step"));
+        assert_eq!(serde_json::from_str::<Warning>(&wj).unwrap().step, None);
+        let scoped = Warning { step: Some("heat 'stage'".into()), where_: Some("material 'slab'".into()), ..w };
+        let sj = serde_json::to_value(&scoped).unwrap();
+        assert_eq!(sj["step"], "heat 'stage'");
+        assert_eq!(sj["where"], "material 'slab'");
     }
 }

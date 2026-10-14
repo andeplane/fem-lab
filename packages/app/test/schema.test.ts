@@ -276,6 +276,18 @@ describe('shapeKinds and missingRequired', () => {
 });
 
 describe('blockers', () => {
+  it('keeps the procedure-specific cause and the matching fix Command', () => {
+    const list = blockers([
+      { code: 'model.unconstrained', text: 'no supports in buckling', where: "step 'buckle'" },
+      { code: 'model.no-temperature-reference', text: 'heat-steady needs a temperature reference', where: "step 'warm'" },
+      { code: 'material.missing-property', text: 'heat-transient needs cp', where: "material 'slab'" },
+    ], true, true);
+    expect(list.map(b => [b.code, b.text, b.fixCmd, b.where])).toEqual([
+      ['W-1103', 'heat-transient needs cp', 'material.add', "material 'slab'"],
+      ['W-1300', 'no supports in buckling', 'constraint.fix', "step 'buckle'"],
+      ['W-1301', 'heat-steady needs a temperature reference', 'constraint.temperature', "step 'warm'"],
+    ]);
+  });
   it('offers a heat load for an undriven heat Step, including in a mixed Model', () => {
     const warning = { code: 'model.unloaded', text: 'No heat load or prescribed temperature.', where: "step 'warmup'" };
     const steps = [{ name: 'warmup', procedure: 'heat-transient' }, { name: 'bend', procedure: 'static' }] as const;

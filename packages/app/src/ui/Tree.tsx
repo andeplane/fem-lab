@@ -89,6 +89,8 @@ const GROUP_OF: Record<string, string> = {
   'model.no-material': 'Materials',
   'model.no-section': 'Materials',
   'model.unconstrained': 'Constraints',
+  'model.no-temperature-reference': 'Constraints',
+  'material.missing-property': 'Materials',
   'model.unloaded': 'Loads',
   'model.no-step': 'Steps',
   'load.no-density': 'Loads',

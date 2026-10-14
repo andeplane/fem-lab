@@ -465,6 +465,14 @@ export interface Fem {
      * pseudo-time, and keeps every converged one.
      * Heat-steady requires a finite positive material conductivity `k`; heat-transient also
      * requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
+     * `query.model` checks each Step's active Constraints/Loads and assigned Materials:
+     * static, static-nonlinear and buckling need mechanical supports; steady heat needs a
+     * prescribed temperature or an ambient convection/radiation boundary. Free-free modal
+     * and unconstrained dynamics are valid, and transient heat may be insulated. These
+     * pre-mesh warnings identify missing inputs; only the resolved solve can establish that
+     * every connected component is restrained and every selected Set contains nodes.
+     * Step-specific warnings carry their exact `step` identity separately from the display
+     * location in `where`, so hosts can scope blockers without parsing names or prose.
      * `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
      * on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
      * Step that is linear.

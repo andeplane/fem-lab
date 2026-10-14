@@ -16,6 +16,7 @@ use crate::model::{
     NamedSet, PointMass, SetSource, Step,
 };
 use crate::par::Pool;
+use crate::procedure::Reference;
 use crate::query::{Ack, Output};
 use crate::units::{Dimension, Q};
 
@@ -25,6 +26,49 @@ fn constraint_drives(constraint: &Constraint, heat: bool) -> bool {
         ConstraintKind::Temperature { value } => heat && *value != 0.0,
         ConstraintKind::Prescribe { value, .. } => !heat && *value != 0.0,
         _ => false,
+    }
+}
+
+/// A reference to a Body is knowable without meshing; the size of its selected Set is not.
+fn set_targets_body(model: &Model, on: &str, body: &str) -> bool {
+    if let Some(set) = model.sets.iter().find(|s| s.name == on) {
+        match &set.source {
+            SetSource::Face { of, .. } => of == body,
+            SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
+            SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
+        }
+    } else {
+        on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+    }
+}
+
+/// Relative ties and contacts do not anchor a structure to its surroundings.
+fn constraint_references(constraint: &Constraint, reference: Reference) -> bool {
+    match &constraint.kind {
+        ConstraintKind::Temperature { .. } => reference == Reference::Temperature,
+        ConstraintKind::Fix { .. }
+        | ConstraintKind::Pin
+        | ConstraintKind::Prescribe { .. }
+        | ConstraintKind::Symmetry { .. } => reference == Reference::Displacement,
+        _ => false,
+    }
+}
+
+/// A positive ambient film fixes the temperature level of a steady conduction problem.
+fn load_references_temperature(load: &Load) -> bool {
+    matches!(load.kind, LoadKind::Convection { .. } | LoadKind::Radiation { .. })
+}
+
+/// Loads in the other physical field cannot drive this Step. A thermal contact only transfers
+/// heat between Bodies; it neither supplies heat nor fixes an absolute temperature.
+fn load_drives(load: &Load, heat: bool) -> bool {
+    match load.kind {
+        LoadKind::Convection { .. }
+        | LoadKind::Radiation { .. }
+        | LoadKind::HeatFlux { .. }
+        | LoadKind::HeatSource { .. } => heat,
+        LoadKind::ThermalContact { .. } => false,
+        _ => !heat,
     }
 }
 
@@ -341,9 +385,11 @@ impl Engine {
         // The mapped mesher's implicit Body is geometry too: it answers "is there anything to
         // analyse yet", and it needs a material like any other Body.
         let implicit = m.implicit_body();
+        let selected_body = implicit.or_else(|| m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()));
         let has_geometry = !m.bodies.is_empty() || implicit.is_some();
         if let Some(body) = implicit.filter(|body| m.material_of_body(body).is_none()) {
             w.push(Warning {
+                step: None,
                 code: "model.no-material".into(),
                 text: format!("Body '{body}' has no material; assign one with material.assign"),
                 where_: Some(format!("body '{body}'")),
@@ -360,6 +406,7 @@ impl Engine {
                     .is_none()
         }) {
             w.push(Warning {
+                step: None,
                 code: "model.no-section".into(),
                 text: format!("Body '{body}' needs a shell thickness section; use section.add and section.assign"),
                 where_: Some(format!("body '{body}'")),
@@ -368,6 +415,7 @@ impl Engine {
         for b in &m.bodies {
             if m.material_of_body(&b.name).is_none() {
                 w.push(Warning {
+                    step: None,
                     code: "model.no-material".into(),
                     text: format!("Body '{}' has no material; assign one with material.assign", b.name),
                     where_: Some(format!("body '{}'", b.name)),
@@ -380,6 +428,7 @@ impl Engine {
             let is_line_under_3d = b.shape.dim() == 1 && m.idealisation.dim() == 3;
             if !is_line_under_3d && b.shape.dim() != m.idealisation.dim() {
                 w.push(Warning {
+                    step: None,
                     code: "model.ill-posed".into(),
                     text: format!(
                         "Body '{}' is {}D but the idealisation is {}D; change one with model.setIdealisation",
@@ -393,35 +442,28 @@ impl Engine {
         }
         if !has_geometry {
             w.push(Warning {
+                step: None,
                 code: "model.empty".into(),
                 text: "no geometry yet; add a body with geometry.addBox or geometry.add".into(),
                 where_: None,
             });
         }
-        if m.constraints.is_empty() && has_geometry {
+        if m.steps.is_empty() && m.constraints.is_empty() && has_geometry {
             w.push(Warning {
+                step: None,
                 code: "model.unconstrained".into(),
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
-        } else if let Some(body) = implicit {
+        } else if let Some(body) = implicit.filter(|_| m.steps.is_empty()) {
             // Box regions select geometrically across the mesh; Body regions and faces name
             // their Body explicitly. A constraint left on another Body is not a support
             // for the mapped mesher's implicit Body. This is a reference check, not a claim
             // that the selected DOFs eliminate every rigid mode.
-            let targeted = m.constraints.iter().any(|c| {
-                if let Some(set) = m.sets.iter().find(|s| s.name == c.on) {
-                    match &set.source {
-                        SetSource::Face { of, .. } => of == body,
-                        SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
-                        SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
-                    }
-                } else {
-                    c.on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
-                }
-            });
+            let targeted = m.constraints.iter().any(|c| set_targets_body(m, &c.on, body));
             if !targeted {
                 w.push(Warning {
+                    step: None,
                     code: "model.unconstrained".into(),
                     text: format!("no constraints target Body '{body}'; add supports on its Sets with constraint.fix"),
                     where_: Some(format!("body '{body}'")),
@@ -434,17 +476,114 @@ impl Engine {
             && !m.constraints.iter().any(|c| constraint_drives(c, false) || constraint_drives(c, true))
         {
             w.push(Warning {
+                step: None,
                 code: "model.unloaded".into(),
                 text: "no driving load or nonzero prescribed value; add a load or prescribed boundary condition".into(),
                 where_: None,
             });
         }
         for step in m.steps.iter().filter(|_| has_geometry) {
-            let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
-            // Modal analysis has no forcing. Transients may inherit a field, start warm or
-            // start in motion, so absent Loads never imply zero output.
-            let transient =
-                matches!(step.procedure, Procedure::HeatTransient | Procedure::Explicit | Procedure::Implicit);
+            let requirements = step.procedure.requirements();
+            let heat = requirements.heat;
+            let transient = requirements.transient;
+            let active_constraints: Vec<_> =
+                m.constraints.iter().filter(|c| step.constraints.contains(&c.name)).collect();
+            let active_loads: Vec<_> = m.loads.iter().filter(|l| step.loads.contains(&l.name)).collect();
+            if let Some(reference) = requirements.reference {
+                let anchors: Vec<_> =
+                    active_constraints.iter().filter(|c| constraint_references(c, reference)).collect();
+                let films: Vec<_> = active_loads.iter().filter(|l| load_references_temperature(l)).collect();
+                let held = !anchors.is_empty() || (heat && !films.is_empty());
+                let targeted = selected_body.is_none_or(|body| {
+                    anchors.iter().any(|c| set_targets_body(m, &c.on, body))
+                        // A tie may transmit a support from another Body or an anchored
+                        // point. Its actual pairing and rank need the mesh, so do not reject
+                        // a possible path before those checks can run.
+                        || active_constraints.iter().any(|c| {
+                            matches!(c.kind, ConstraintKind::Bonded { .. } | ConstraintKind::Frictionless { .. }
+                                | ConstraintKind::Cyclic { .. } | ConstraintKind::Couple { .. })
+                                && c.sets().iter().any(|on| set_targets_body(m, on, body))
+                        })
+                        || (heat && films.iter().any(|l| l.kind.set().is_some_and(|on| set_targets_body(m, on, body))))
+                });
+                if !held || !targeted {
+                    let (code, text) = if heat {
+                        ("model.no-temperature-reference", format!(
+                            "{} needs a temperature reference in this Step; use constraint.temperature or load.convection on the analysed Body",
+                            requirements.name
+                        ))
+                    } else if !held {
+                        let missing = if active_constraints.is_empty() {
+                            "no constraints"
+                        } else {
+                            "no active mechanical supports"
+                        };
+                        (
+                            "model.unconstrained",
+                            format!("{missing}; a {} solve needs supports (constraint.fix)", requirements.name),
+                        )
+                    } else {
+                        ("model.unconstrained", format!(
+                            "no constraints target Body '{}'; add supports on its Sets with constraint.fix for this {} Step",
+                            selected_body.expect("an untargeted reference belongs to the selected Body"), requirements.name
+                        ))
+                    };
+                    w.push(Warning {
+                        code: code.into(),
+                        text,
+                        step: Some(step.name.clone()),
+                        where_: Some(format!("step '{}'", step.name)),
+                    });
+                }
+            }
+            // Thermal transport reads the block material; structural mass also reads every
+            // laminate ply. Unused material definitions carry no requirement for this Step.
+            let mut assigned = std::collections::BTreeSet::new();
+            for body in m
+                .bodies
+                .iter()
+                .map(|b| b.name.as_str())
+                .filter(|body| selected_body.is_none_or(|name| *body == name))
+                .chain(implicit)
+            {
+                if let Some(material) = m.material_of_body(body) {
+                    assigned.insert(material);
+                }
+                if let Some(section) = m.section_of_body(body).filter(|_| !heat) {
+                    assigned.extend(section.plies.iter().map(|ply| ply.material.as_str()));
+                }
+            }
+            if requirements.mass
+                && m.points.is_empty()
+                && !assigned
+                    .iter()
+                    .filter_map(|name| m.material(name))
+                    .any(|material| crate::procedure::MaterialProperty::Density.present(material))
+            {
+                w.push(Warning {
+                    step: Some(step.name.clone()),
+                    code: "material.missing-property".into(),
+                    text: format!(
+                        "{} Step '{}' has no mass: assign positive rho with material.add or add geometry.addMass",
+                        requirements.name, step.name
+                    ),
+                    where_: Some(format!("step '{}'", step.name)),
+                });
+            }
+            for material in assigned.into_iter().filter_map(|name| m.material(name)) {
+                for property in requirements.properties.iter().filter(|property| !property.present(material)) {
+                    let property = property.name();
+                    w.push(Warning {
+                        step: Some(step.name.clone()),
+                        code: "material.missing-property".into(),
+                        text: format!(
+                            "{} Step '{}' needs finite positive {property}; use material.add with {property}",
+                            requirements.name, step.name
+                        ),
+                        where_: Some(format!("material '{}'", material.name)),
+                    });
+                }
+            }
             let inherited = transient && step.after.is_some();
             let initial_heat = step.procedure == Procedure::HeatTransient && step.initial.unwrap_or(293.15) != 0.0;
             let motion = matches!(step.procedure, Procedure::Explicit | Procedure::Implicit)
@@ -454,14 +593,15 @@ impl Engine {
                     .is_some_and(|velocities| velocities.iter().any(|v| v.value.iter().any(|x| *x != 0.0)));
             let prescribed =
                 m.constraints.iter().any(|c| step.constraints.contains(&c.name) && constraint_drives(c, heat));
-            if step.procedure != Procedure::Modal
+            if requirements.driven
                 && !inherited
                 && !initial_heat
-                && step.loads.is_empty()
+                && !active_loads.iter().any(|l| load_drives(l, heat))
                 && !motion
                 && !prescribed
             {
                 w.push(Warning {
+                step: Some(step.name.clone()),
                     code: "model.unloaded".into(),
                     text: if heat {
                         "no heat load or nonzero prescribed temperature in this Step; use load.heatFlux or constraint.temperature"
@@ -474,6 +614,7 @@ impl Engine {
         }
         if m.steps.is_empty() && has_geometry {
             w.push(Warning {
+                step: None,
                 code: "model.no-step".into(),
                 text: "no analysis step; add one with step.add".into(),
                 where_: None,
@@ -486,6 +627,7 @@ impl Engine {
                         b.material.as_deref().and_then(|n| m.material(n)).is_some_and(|mat| mat.rho.is_some());
                     if !has_rho {
                         w.push(Warning {
+                            step: None,
                             code: "load.no-density".into(),
                             text: format!(
                                 "gravity '{}' skips body '{}': its material has no density (rho)",
