@@ -213,3 +213,39 @@ it('colours each triangle by its element id and restores nodal colouring afterwa
   expect(colour(0)).not.toEqual(colour(1));
   expect(colour(0)).toEqual(colour(3)); // shared node, not shared element
 });
+
+it.each(['lines', 'triangles'] as const)('uses arriving %s bounds for orthographic picks without moving an explicit camera', kind => {
+  const canvas = document.createElement('canvas'); document.body.append(canvas);
+  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, left: 0, top: 0, right: 640, bottom: 480, width: 640, height: 480, toJSON: () => ({}),
+  });
+  const viewer = new Viewer(canvas); viewers.push(viewer);
+  // Camera Commands can precede the first asynchronous surface publication.
+  viewer.setProjection('orthographic');
+  viewer.setCamera({ position: [6, 1, 20], target: [6, 1, 0], up: [0, 1, 0] });
+  const camera = viewer.getCamera();
+  const arriving: AppSurface = {
+    ...lineSurface, positions: Float32Array.from([0,0,0, 12,0,0, 0,2,0, 12,2,0]),
+    edges: Uint32Array.from([0,1, 2,3]), edgeBody: Uint32Array.of(0,0),
+    edgeFace: Uint32Array.of(0,1), faceNames: ['bottom', 'top', 'sheet'],
+    ...(kind === 'triangles' ? { indices: Uint32Array.from([0,1,2, 1,3,2]), triBody: Uint32Array.of(0,0), triFace: Uint32Array.of(2,2) } : {}),
+  };
+  const point = kind === 'lines' ? [5, 0] : [5, 0.5];
+  const check = (width: number, height: number) => {
+    expect(viewer.getCamera()).toEqual(camera);
+    // WebGLRenderer normally updates these matrices; this suite fakes only that GPU boundary.
+    (viewer as unknown as { camera: import('three').Camera }).camera.updateMatrixWorld();
+    const scale = 480 / (2 * Math.hypot(width, height) * 0.7);
+    const hit = viewer.pick(320 + (point[0]! - 6) * scale, 240 - (point[1]! - 1) * scale);
+    expect(hit?.body).toBe('truss');
+    expect(hit?.point[0]).toBeCloseTo(point[0]!, 10);
+    expect(hit?.point[1]).toBeCloseTo(point[1]!, 10);
+  };
+  viewer.setSurface(arriving);
+  check(12, 2);
+  // Model replacement changes its extent without a window resize or another camera Command.
+  viewer.setSurface({ ...arriving, positions: Float32Array.from([0,0,0, 24,0,0, 0,4,0, 24,4,0]) });
+  check(24, 4);
+  viewer.resize();
+  check(24, 4);
+});
