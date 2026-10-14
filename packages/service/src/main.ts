@@ -6,6 +6,7 @@ import pg from 'pg';
 import { accountReader, postgresAccounts } from './accounts';
 import { identityVerifier } from './identity';
 import { migrate } from './migrations';
+import { creditLedger } from './ledger';
 import { serviceServer } from './http.js';
 
 const port = Number(process.env.PORT ?? 8080);
@@ -23,10 +24,15 @@ if (process.argv.includes('--migrate')) {
   const connection = await pool.connect();
   try { await migrate(connection, migrations); } finally { connection.release(); await pool.end(); }
 } else {
-  const account = pool && projectId ? accountReader(identityVerifier(getAuth(initializeApp({ projectId })), projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
+  const readAccount = pool && projectId ? accountReader(identityVerifier(getAuth(initializeApp({ projectId })), projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
+  const ledger = pool ? creditLedger(pool, now, randomUUID) : undefined;
+  const account = readAccount && ledger ? async (authorization: string | undefined) => {
+    const owner = await readAccount(authorization); await ledger.ensureFree(owner.id);
+    return { ...owner, usage: await ledger.balance(owner.id), billingAvailable: false };
+  } : undefined;
   const server = serviceServer({ now, newId: randomUUID, account,
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
-    ready: async () => { if (!pool) return false; await pool.query('SELECT id FROM accounts LIMIT 0'); return true; },
+    ready: async () => { if (!pool) return false; await pool.query('SELECT id FROM credit_grants LIMIT 0'); return true; },
   });
   server.listen(port, '0.0.0.0');
   process.once('SIGTERM', () => { server.close(() => { void pool?.end(); }); });

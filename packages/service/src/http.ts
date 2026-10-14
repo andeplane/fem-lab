@@ -1,12 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { ServiceFailure } from './errors';
-import type { Account } from './accounts';
+import type { AccountResponse } from './accounts';
 
 export interface HttpDependencies {
   now(): Date;
   newId(): string;
   ready(): Promise<boolean>;
-  account?(authorization: string | undefined): Promise<Account>;
+  account?(authorization: string | undefined): Promise<AccountResponse>;
   origins?: readonly string[];
 }
 
