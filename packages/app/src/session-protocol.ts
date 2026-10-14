@@ -1,5 +1,5 @@
 import type { FieldRequest } from './result-transfer';
-import type { ResultSelector } from '@femlab/registry';
+import type { AbaqusConversionReport, ResultSelector } from '@femlab/registry';
 import type { ActiveBenchmark } from './benchmark';
 import type { ProjectRecord } from './project-repository';
 import type { BufferSpec, ProjectMeta, Command, DocumentSnapshot, EngineError, ExecutionContext, JournalEntry, ModelFile, Progress, Query, RunLease, SessionRef, Stamp, StateVersion } from '@femlab/registry';
@@ -8,7 +8,7 @@ export interface SessionOptions { gpu: boolean; threads: number }
 export type ReplacementSource = (
   | { kind: 'commands'; commands: Command[] }
   | { kind: 'journal'; entries: JournalEntry[]; skipSolves: boolean; revision?: number }
-  | { kind: 'file'; file: ModelFile }) & { project?: { meta: ProjectMeta; expected: ProjectRecord | null }; benchmark?: ActiveBenchmark };
+  | { kind: 'file'; file: ModelFile }) & { project?: { meta: ProjectMeta; expected: ProjectRecord | null }; benchmark?: ActiveBenchmark; abaqusReport?: AbaqusConversionReport };
 export type SessionRequest = { id: number } & (
   | { op: 'create'; epoch: string; options: SessionOptions }
   | { op: 'beginRun'; session: SessionRef }

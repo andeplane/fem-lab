@@ -40,14 +40,22 @@ describe('read-only script validation', () => {
     expect(result.diagnostics.every((item) => item.code.startsWith('TS') && item.hint.includes('before running'))).toBe(true);
   });
 
-  it('validates registered host arguments and limits host commands to the serving host', () => {
-    const browser = JSON.parse(readFileSync(new URL('../src/generated/script-declarations-browser.json', import.meta.url), 'utf8')) as ScriptDeclarations;
-    const mcp = JSON.parse(readFileSync(new URL('../src/generated/script-declarations-mcp.json', import.meta.url), 'utf8')) as ScriptDeclarations;
-    expect(validateScript('await fem.view.fit();', browser)).toEqual({ ok: true, diagnostics: [] });
-    expect(validateScript('await fem.view.setMode({ mode: 7 });', browser).ok).toBe(false);
-    expect(validateScript('await fem.view.fit();', mcp).ok).toBe(false);
-    expect(validateScript('await fem.export.file({ format: "journal", path: "model.json" });', mcp)).toEqual({ ok: true, diagnostics: [] });
-    expect(validateScript('await fem.export.file({ format: "invented", path: "model.json" });', mcp).ok).toBe(false);
+  const servingHosts = {
+    browser: JSON.parse(readFileSync(new URL('../src/generated/script-declarations-browser.json', import.meta.url), 'utf8')) as ScriptDeclarations,
+    mcp: JSON.parse(readFileSync(new URL('../src/generated/script-declarations-mcp.json', import.meta.url), 'utf8')) as ScriptDeclarations,
+  };
+  // Each independent compiler program gets the ordinary test deadline, as the source cases
+  // above do. All argument and serving-host checks still use the actual registered types.
+  it.each([
+    ['accepts a registered browser view action', 'browser', 'await fem.view.fit();', true],
+    ['rejects an invalid browser view argument', 'browser', 'await fem.view.setMode({ mode: 7 });', false],
+    ['rejects a browser action on the MCP host', 'mcp', 'await fem.view.fit();', false],
+    ['accepts the registered MCP export action', 'mcp', 'await fem.export.file({ format: "journal", path: "model.json" });', true],
+    ['rejects an invalid MCP export format', 'mcp', 'await fem.export.file({ format: "invented", path: "model.json" });', false],
+  ] as const)('%s', (_name, host, code, ok) => {
+    const result = validateScript(code, servingHosts[host]);
+    if (ok) expect(result).toEqual({ ok: true, diagnostics: [] });
+    else expect(result.ok).toBe(false);
   });
 
   it('maps an argument error to its authored line and column', () => {

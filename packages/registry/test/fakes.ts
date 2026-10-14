@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
+import type { AbaqusConversion, Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
 import type { FolderInfo, HostContext, OpenProject, ProjectMeta } from '../src/host-commands';
 import type { EngineTransport } from '../src/transport';
 
@@ -7,6 +7,10 @@ export const ACK: Ack = { seq: 1, revision: 1, hash: 'h', warnings: [], output: 
 export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { name: 'beam' }, journal: { entries: [] } } as unknown as ModelFile;
 export const FOLDER: FolderInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
 export const PROJECT: ProjectMeta = { id: 'p1', name: 'beam', at: 1_700_000_000_000, createdAt: 1_700_000_000_000, commands: 9, hash: 'h', thumbnail: null };
+export const ABAQUS_CONVERSION: AbaqusConversion = {
+  report: { mode: 'mesh', sha256: 'a'.repeat(64), conversionVersion: 'abaqus/1', inputBytes: 5, body: 'bar', unitLength: { value: 0.001, unit: 'm' }, sourceNodes: 4, activeNodes: 4, sourceElements: 1, elementKind: 'tet4', analysisConfigured: false, bbox: ['0 m', '0 m', '0 m', '1 m', '1 m', '1 m'], sourceLabels: { nodes: [1, 2, 3, 4], elements: [1], unusedNodes: [] }, sets: [], headings: [], preprint: [] },
+  commands: [{ cmd: 'model.new', name: 'imported' }],
+};
 
 export const SAVED = { name: 'beam', at: 1_700_000_000_000, commands: 9 };
 export const AUTOSAVES = [
@@ -54,6 +58,7 @@ const REPLIES: Record<string, unknown> = {
   'query.result': RESULT,
   'query.results': { limit: 8, records: [] },
   'query.path': PATH,
+  'query.convertAbaqus': ABAQUS_CONVERSION,
 };
 
 export function fakeTransport(): EngineTransport {
@@ -79,6 +84,11 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
   return {
     transport,
+    abaqus: { capture: vi.fn(() => ({
+      io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },
+      replace: vi.fn(async () => undefined),
+      convert: vi.fn(async () => ABAQUS_CONVERSION),
+    })) },
     view: {
       fit: vi.fn(),
       setCamera: vi.fn(),

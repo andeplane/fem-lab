@@ -10,7 +10,7 @@ test('@cpu every panel, disclosure and tab survives two open/close cycles', asyn
     // Only the OS folder picker is faked; the real ProjectFolder reads and renders the rules.
     const file: FileHandle = {
       kind: 'file', name: 'AGENTS.md',
-      getFile: async () => ({ size: 26, lastModified: 1, text: async () => 'Check dimensions and units.' }),
+      getFile: async () => ({ size: 26, lastModified: 1, text: async () => 'Check dimensions and units.', arrayBuffer: async () => new TextEncoder().encode('Check dimensions and units.').buffer }),
       createWritable: async () => { throw new Error('read-only test folder'); },
     };
     const directory: DirHandle = {

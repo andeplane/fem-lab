@@ -19,6 +19,99 @@ fn femlab() -> Command {
     Command::cargo_bin("femlab").unwrap()
 }
 
+fn abaqus_import(source: &std::path::Path, out: &std::path::Path) -> Command {
+    let mut command = femlab();
+    command.arg("import-inp").arg(source).arg("--out").arg(out).args([
+        "--name",
+        "imported bar",
+        "--body",
+        "bar",
+        "--mode",
+        "static",
+        "--unit-length",
+        "1 mm",
+        "--cpu",
+        "--threads",
+        "1",
+    ]);
+    command
+}
+
+#[test]
+fn abaqus_import_is_unsolved_and_its_portable_commands_solve_in_the_existing_cli() {
+    let dir = scratch("abaqus-import");
+    let source = engine_dir().join("tests/fixtures/abaqus-static/bar-hex-mm-n.inp");
+    let saved = dir.join("bar.femlab.json");
+    let output = abaqus_import(&source, &saved).args(["--unit-force", "1 N"]).assert().success();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(report["sourceNodes"], 12);
+    assert_eq!(report["activeNodes"], 12);
+    assert_eq!(report["sourceElements"], 2);
+    assert_eq!(report["analysis"]["material"], "STEEL");
+    assert_eq!(report["analysis"]["step"], "AXIAL");
+    assert_eq!(report["analysis"]["finalEquilibriumOnly"], true);
+    assert_eq!(report["unitLength"], serde_json::json!({"value":0.001,"unit":"m"}));
+    assert_eq!(report["unitForce"], serde_json::json!({"value":1.0,"unit":"N"}));
+    let bytes = std::fs::read(&saved).unwrap();
+    let file: femlab_engine::ModelFile = serde_json::from_slice(&bytes).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(!text.contains(source.to_str().unwrap()));
+    assert!(!text.contains("*NODE"));
+    let before =
+        femlab().arg("run").arg(&saved).args(["--cpu", "--query", r#"{"query":"query.model"}"#]).assert().success();
+    let before: Vec<serde_json::Value> = serde_json::from_slice(&before.get_output().stdout).unwrap();
+    assert_eq!(before[0]["steps"][0]["solved"], false);
+
+    // Public portable Commands, not a fabricated Model snapshot: existing `run` solves them.
+    let mut commands: Vec<femlab_engine::Command> = file.journal.entries.into_iter().map(|entry| entry.cmd).collect();
+    commands.push(
+        serde_json::from_value(serde_json::json!({"cmd":"solve.run","step":"AXIAL","solver":"cpu-direct"})).unwrap(),
+    );
+    let script = dir.join("solve.json");
+    std::fs::write(&script, serde_json::to_vec(&commands).unwrap()).unwrap();
+    let solved = femlab()
+        .arg("run")
+        .arg(&script)
+        .args(["--cpu", "--query", r#"{"query":"query.result","step":"AXIAL"}"#])
+        .assert()
+        .success();
+    let result: Vec<serde_json::Value> = serde_json::from_slice(&solved.get_output().stdout).unwrap();
+    let ux = result[0]["extremes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["field"] == "displacement" && value["component"] == 0)
+        .unwrap();
+    assert_eq!(ux["max"]["unit"], "m");
+    assert!((ux["max"]["value"].as_f64().unwrap() - 5e-7).abs() < 1e-14);
+    let root_force: f64 =
+        result[0]["reactions"].as_array().unwrap().iter().map(|row| row["total"][0]["value"].as_f64().unwrap()).sum();
+    assert!((root_force + 1000.0).abs() < 1e-7);
+    assert!(!result[0]["stale"].as_bool().unwrap());
+}
+
+#[test]
+fn abaqus_import_rejects_units_unsupported_decks_and_databases_without_overwriting_output() {
+    let dir = scratch("abaqus-rejections");
+    let source = engine_dir().join("tests/fixtures/abaqus-static/bar-hex-mm-n.inp");
+    let saved = dir.join("kept.femlab.json");
+    std::fs::write(&saved, "prior project").unwrap();
+    abaqus_import(&source, &saved).assert().code(1).stderr(contains("unitForce"));
+    abaqus_import(&source, &saved).arg("--unit-force=-1 N").assert().code(1);
+    let bad = dir.join("assembly.inp");
+    std::fs::write(&bad, "*PART,NAME=P\n").unwrap();
+    abaqus_import(&bad, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains("unsupported"));
+    for extension in ["odb", "cae"] {
+        let binary = dir.join(format!("results.{extension}"));
+        std::fs::write(&binary, [0xff, 0]).unwrap();
+        abaqus_import(&binary, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains("database"));
+    }
+    let huge = dir.join("huge.inp");
+    std::fs::File::create(&huge).unwrap().set_len(16 * 1024 * 1024 + 1).unwrap();
+    abaqus_import(&huge, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains("16 MiB"));
+    assert_eq!(std::fs::read_to_string(saved).unwrap(), "prior project");
+}
+
 #[test]
 fn version_prints_all_three() {
     femlab().arg("version").assert().success().stdout(contains("engine"));

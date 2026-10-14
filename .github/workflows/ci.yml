@@ -158,10 +158,13 @@ jobs:
         run: npm run test:package -w packages/mcp
       - run: node tools/test-transient-replay.mjs
       - run: node tools/test-retained-replay.mjs
+      - run: node tools/test-shell-pressure-area-replay.mjs
       - run: node tools/test-adaptive-replay.mjs
       - run: node tools/test-imported-source-replay.mjs
-
       - run: node tools/test-original-measures-replay.mjs
+      - run: node tools/test-abaqus-mesh-replay.mjs
+      - run: node tools/test-abaqus-static-replay.mjs
+      - run: node tools/test-abaqus-hosts.mjs target/release/femlab
       - run: node tools/test-random-vibration-replay.mjs
       - name: replay every fixture natively and in wasm
         run: |

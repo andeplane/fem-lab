@@ -6,10 +6,30 @@ Implementation: [#501](https://github.com/andeplane/fem-lab/issues/501),
 [#503](https://github.com/andeplane/fem-lab/issues/503),
 [#504](https://github.com/andeplane/fem-lab/issues/504).
 
-Status, 2026-10-14: proposed implementation plan, **no Abaqus reader shipped**.
-The endpoint names below are proposals until their implementation issues land.
-This plan covers text `.inp` mesh/model conversion. Binary `.odb` Results and `.cae`
-model databases are separate formats and are outside this slice.
+Status, 2026-10-14: the first strict flat-input slice is implemented by #502–504, with
+persistent imported sources, explicit source units and checked atomic host publication.
+The supported input is one connected C3D4/C3D8 Body: mesh mode imports exact labelled Mesh
+and Sets; static mode additionally imports one homogeneous isotropic elastic Material,
+translational Constraints, CLOAD and one small-displacement STATIC Step. Import never solves.
+PART/ASSEMBLY/INSTANCE, OUTPUT, other element/procedure families, binary `.odb` Results and
+`.cae` model databases are rejected. This is a limited text `.inp` reader, not general
+Abaqus/CAE model or result loading.
+
+In Chromium, choose **Import Abaqus .inp**, choose mesh/static mode and enter one source
+Length Quantity, such as `1 mm`. Static also requires a Force Quantity, such as `1 N`.
+Pick a file or paste its text; source quantities are independent of the display units.
+The callable host Command is `file.importAbaqus` with exactly one `text`, `picker` or scoped
+`path` source. The native CLI is `femlab import-inp bar.inp --out bar.femlab.json --name bar
+--body bar --mode static --unit-length "1 mm" --unit-force "1 N" --cpu`; use the existing
+Solve action or `femlab run bar.femlab.json --cpu` explicitly afterward. Saved normal Model
+files replay without the original deck. [README usage](../../README.md) describes the same
+supported boundary.
+
+Issue #501 covers persistent-source acceptance, including #516, #517 and #523. That source,
+geometry and Query implementation is accepted; its issue closure follows the recorded source
+integration matrix. Text conversion and host loading in #502–504 are separate acceptance
+scopes. Retain every release gate below: an individual parser, source, host or focused
+numerical proof does not establish complete composed loading acceptance.
 
 Export label correctness is tracked separately in [#518](https://github.com/andeplane/fem-lab/issues/518).
 That fix preserves qualified/case-sensitive names with Abaqus quotes and rejects unsupported
@@ -17,9 +37,10 @@ labels. The first reader subset below still rejects quoted labels: ordinary qual
 exports are outside its round-trip subset. A supported bare-uppercase fixture round-trip is an
 additional test, not evidence that arbitrary exported decks can be loaded.
 
-## What exists
+## Baseline before the imported-source implementation
 
-Checked against `origin/main` at `4e364b60`:
+The following historical comparison was checked against `origin/main` at `4e364b60` before
+this slice; it explains why a persistent source and a separate strict reader were needed:
 
 | Capability | Evidence | Current boundary |
 |---|---|---|
@@ -30,8 +51,8 @@ Checked against `origin/main` at `4e364b60`:
 | Transactional replacement | [`replacement.rs`](../../crates/engine/src/replacement.rs), [session host contract](../session-host-contract.md) | `Candidate::commands` builds privately; `finish` validates the first snapshot; checked replacement publishes once. |
 
 The master [PLAN §3.8](../PLAN.md) describes a larger mesh I/O ambition, including a full
-analysis writer and Gmsh read path. It is roadmap text, not evidence of current Abaqus
-loading. This plan does not enlarge the existing writer's claims.
+analysis writer and Gmsh read path. Those ambitions remain roadmap text. The implemented
+strict reader does not enlarge the existing writer's claims or promise arbitrary round trips.
 
 ## Why a parser alone is insufficient
 
@@ -50,9 +71,10 @@ The minimum correct route needs one persistent imported-source representation, t
 small strict parser. It needs no new element kernel, file system inside Rust, CAD kernel or
 Extension Point. Implement it through the existing Mesher point
 ([ADR 0010](../adr/0010-plugins-fixed-extension-points-three-languages.md)).
-[#501](https://github.com/andeplane/fem-lab/issues/501) records the hard-to-reverse source
-representation/lifecycle decision in the next available ADR and updates the glossary then.
-This plan proposes that decision; it does not silently redefine today's derived Mesh.
+The source representation and lifecycle are recorded in
+[ADR 0026](../adr/0026-imported-mesh-source.md) and the glossary. The ordinary BuiltMesh
+remains derived; [#501](https://github.com/andeplane/fem-lab/issues/501) tracks integration
+acceptance of source preview, lifecycle and Queries, separately from the #502–504 reader/hosts.
 
 ## Representation and callable surface
 
@@ -85,22 +107,23 @@ Extend `MesherSpec`/`MesherSettings` with an immutable `imported` source:
   coerced into C3D8. No current geometric mesher changes its behavior.
 
 `build` returns the ordinary `BuiltMesh`: correct `body_of_block`, all resolved Set kinds,
-boundary skin and source-label mappings. Imported element Sets need explicit resolution;
-the current node-only mesher Set pass is insufficient. Reuse ordinary quality checks,
-assembly, Results, probes, retained surfaces and exporters. Update the unsolved viewer to
-draw the imported boundary rather than requiring a `Solid` geometry preview. Cost/count
-Queries must count this source without pretending it can be regenerated at another size.
+boundary skin and source-label mappings. Imported element Sets resolve exact authored
+memberships. The ordinary quality checks, assembly, Results, probes, retained surfaces and
+exporters consume that mesh. The unsolved viewer draws the imported boundary without a
+`Solid` geometry preview. Cost/count Queries count this source without claiming it can be
+regenerated at another size.
 
-Proposed `query.convertAbaqus` takes inline text, an explicit model/Body name, `mode`
-(`mesh` or `static`), and unit scales. A pure Rust converter returns a typed report and
+`query.convertAbaqus` takes inline text and its exact-byte SHA-256, explicit model/Body
+names, `mode` (`mesh` or `static`), mandatory `unitLength` and static-only `unitForce`
+Quantities. A pure Rust converter returns a typed report and
 ordinary Commands: `model.new`, explicit `model.setIdealisation { solid3d }`, `mesh.set`
 with the imported source, and any supported Material/Constraint/Load/Step Commands.
 It neither mutates the active Model nor performs a solve.
 
-Proposed host Command `file.importAbaqus` reads an injected picker or scoped project path,
+Host Command `file.importAbaqus` reads an injected picker or scoped project path,
 or accepts inline text. It uses the same converter and existing checked
 `Candidate::commands`/`finish`/replacement route. Do not add a second mutable engine API.
-The native CLI gets a thin `import-inp` host entry, with I/O outside the engine
+The native CLI has a thin `import-inp` host entry, with I/O outside the engine
 ([ADRs 0011](../adr/0011-engine-is-a-headless-library-browser-is-one-host.md),
 [0012](../adr/0012-engine-in-rust-hosts-in-typescript.md)).
 
@@ -153,13 +176,13 @@ must appear in the tool description and error report. See
 | `*NODE` | Positive labels, x/y/z, optional `NSET`, `SYSTEM=R` or absent; omitted y/z = 0 | Same; global rectangular coordinates only | [NODE](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-node.htm) |
 | `*ELEMENT` | `TYPE=C3D4` or `C3D8`, optional `ELSET`; exact arity | Same; preserve standard full integration | [ELEMENT](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-element.htm), [solid element types/order](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEELMRefMap/simaelm-r-3delem.htm) |
 | `*NSET`, `*ELSET` | Sorted explicit label lists, `GENERATE` with positive integral increment (default 1), previously defined same-kind Set references; repeated definitions append | Same; referenced Sets capture membership at that record, not future additions. NSET from `ELSET` is supported with no data lines. | [NSET](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-nset.htm), [ELSET](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-elset.htm), [Node definition](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEMODRefMap/simamod-c-node.htm) |
-| `*SURFACE` | `TYPE=ELEMENT`, `NAME`; source element or previously defined ELSET plus valid explicit `S1…S4`/`S1…S6` | Same; membership retained even if no imported Load uses it | [SURFACE](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-surface.htm) |
+| `*SURFACE` | `TYPE=ELEMENT`, `NAME`; source element or previously defined ELSET plus valid explicit `S1…S4`/`S1…S6`; repeated surface names are rejected in the first slice | Same; membership retained even if no imported Load uses it | [SURFACE](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-surface.htm) |
 | `*PREPRINT` | Recognize `ECHO`, `MODEL`, `HISTORY`, `CONTACT` with YES/NO as presentation-only metadata; report no solver listing produced | Same | [PREPRINT](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-preprint.htm) |
 | `*MATERIAL`, `*ELASTIC` | Reject | Exactly one material, `NAME`; isotropic `TYPE` or absent; one E/ν record. No temperature/dependency columns or property tables. | [ELASTIC](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-elastic.htm) |
 | `*SOLID SECTION` | Reject | Exactly one homogeneous `ELSET`/`MATERIAL` association covering every element once; empty/default attribute line only for supported 3D solids | [SOLID SECTION](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-solidsection.htm) |
 | `*BOUNDARY` | Reject | Direct format, source node or NSET, DOFs 1–3, last DOF defaults to first. Model-data magnitude must be absent/zero; Step-data displacement magnitude defaults to zero. `TYPE=DISPLACEMENT` or absent only. | [BOUNDARY](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-boundary.htm) |
 | `*CLOAD` | Reject | Step data, source node or NSET, DOF 1–3, required scalar magnitude; no parameters | [CLOAD](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-cload.htm) |
-| `*STEP`, `*STATIC`, `*END STEP` | Reject | Exactly one Step; optional `NAME`, `NLGEOM=NO` or absent; plain `STATIC` with absent/default increment fields only (initial = 1, period = 1, minimum = 1e-5, maximum unspecified). Import final linear equilibrium, with an explicit report that there is no Abaqus increment history. | [STEP](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-step.htm), [STATIC](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-static.htm) |
+| `*STEP`, `*STATIC`, `*END STEP` | Reject | Exactly one Step; optional `NAME`, `NLGEOM=NO` or absent; plain `STATIC` with absent/default increment fields only (initial = 1, period = 1, minimum = 1e-5, maximum unspecified). Zero in the first three fields also denotes these defaults. Import final linear equilibrium, with an explicit report that there is no Abaqus increment history. | [STEP](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-step.htm), [STATIC](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-static.htm) |
 
 For NSET CLOAD, Abaqus's scalar is applied to each member node. FEM Lab `load.force.total`
 is a Set total ([loads.rs](../../crates/engine/src/fem/loads.rs)). Convert total = magnitude
@@ -184,6 +207,23 @@ Suggested initial bounds, enforced in hosts and Rust before allocation: 16 MiB i
 before range expansion or allocation. Reject input whose resulting `femlab/1` snapshot plus
 Journal exceeds the current 16 MiB Model-file limit, rather than creating an unsavable Model.
 These are product bounds, not promises about available browser memory or solver feasibility.
+The parser counts expanded declarations before deduplication, so repeated labels and prior
+Set captures also consume the membership budget; accepted final membership remains sorted
+and unique.
+
+The #502 read-only mesh conversion Query also checks the actual serialized response against
+a 16 MiB response bound using a counting writer, without allocating a second response copy.
+This is a stricter output limit for the conversion report and Commands, not an estimate of
+the final Model/Journal size or permission to publish. #504 must always prepare those
+Commands through the existing Candidate path and check the exact serialized Model file
+before atomic publication. Current document conflicts and lifecycle checks remain Candidate
+authoritative. The conversion Query never constructs a second approximate Model.
+The authoritative prepared-file fence from [#536](https://github.com/andeplane/fem-lab/issues/536)
+runs in `Candidate.finish`: it snapshots once, encodes through the injected host encoder and
+checks the actual UTF-8 payload against the host limit before any SessionOwner publication.
+Whitespace and any final newline count. Native output retains those checked bytes; JavaScript
+hosts share the encoder with their real save path. #504 must supply that exact save policy and
+the 16 MiB limit when preparing the conversion Commands.
 
 Check duplicate/invalid labels (1…999999999), missing connectivity references, unsupported
 arity, nonfinite coordinates, repeated local nodes, positive Jacobians at the element's
@@ -239,6 +279,7 @@ and the fuller main matrix remain separate evidence ([ADR 0022](../adr/0022-fast
 | [#502](https://github.com/andeplane/fem-lab/issues/502) | Strict mesh parser and schema-owned conversion Query | #501 | Independent text fixtures convert; unsupported model intent fails; native/WASM outputs agree. |
 | [#503](https://github.com/andeplane/fem-lab/issues/503) | Homogeneous small-displacement static-deck translation | #501, #502 | Imported independent supported decks solve with analytical displacement/stress/reactions at refinements; units and per-node CLOAD meaning verified. |
 | [#504](https://github.com/andeplane/fem-lab/issues/504) | Registry picker/inline host Command, Chromium flow and CLI | #502, #503 | Atomic file load, actual solve, save/reopen without source file and adverse session cases pass. Only then advertise supported `.inp` loading. |
+| [#536](https://github.com/andeplane/fem-lab/issues/536) | Exact prepared Model-file byte limit before publication | Required by #504 | Actual persisted JSON bytes, threshold boundaries and unchanged active state on rejection. |
 
 Each implementation issue links this plan and remains unclaimed until work begins. If an
 implementation grows beyond a day, split its remaining deliverables rather than widening a
@@ -249,10 +290,10 @@ output database ([file extensions](https://docs.software.vt.edu/abaqusv2025/Engl
 [binary database](https://docs.software.vt.edu/abaqusv2025/English/SIMACAECAERefMap/simacae-t-xypcopytoodbbtn.htm)).
 No binary-results reader or future Python/remote host is promised by this plan.
 
-Issue #501 is now split into #516 and #517 to keep implementations issue-sized. This does
-not reduce #501's original supported slice or verification. A foundation PR closes #516
-only; no foundation publication accepts uncertified cells, and no parser/loading feature
-is advertised while original #501–504 acceptance remains incomplete. Unused authored
+Issue #501 was split into #516 and #517 to keep implementations issue-sized. This did
+not reduce #501's original supported slice or verification. Foundation integration accepts
+only certified cells and its own source matrix; the parser/loading feature requires the
+separate #502–504 composed acceptance matrix. Unused authored
 nodes and exact memberships remain in the source: derived DOFs/Fields use participating
 nodes only, with explicit source-label mapping and unused-label reporting. A support or
 Load that includes an unused node fails structurally, rather than fabricating a result.
@@ -260,5 +301,5 @@ Load that includes an unused node fails structurally, rather than fabricating a 
 The original warped-face fixtures also exposed existing Query measurement assumptions:
 `query.set.measure` and implicit Body volume use planar-skin estimates, while assembly and
 load normalization already use original shape Jacobians. Issue #523 corrects that shared
-Query path. Its independent curved-face/volume evidence is part of #501's remaining Query
-acceptance; the sound certificate alone does not establish measurement accuracy.
+Query path. Its independent curved-face/volume evidence is part of #501's accepted Query
+implementation; the sound certificate alone does not establish measurement accuracy.

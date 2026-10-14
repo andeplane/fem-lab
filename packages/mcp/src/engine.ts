@@ -17,9 +17,14 @@ export interface EngineHandle {
   release(): Promise<void>;
   dispatch(cmd: Record<string, unknown>): Promise<unknown>;
   query(q: Record<string, unknown>): Promise<unknown>;
+  /** Host import publication: validate converted Commands in a private checked Candidate. */
+  replaceCommands(commands: Record<string, unknown>[]): Promise<void>;
+  /** Capture the session and state before async input; intervening edits cannot authorize publication. */
+  captureImport(): ImportEngineHandle;
   /** The `femlab/1` file: the Model snapshot plus its Journal. */
   modelFile(): unknown;
 }
+export type ImportEngineHandle = Pick<EngineHandle, 'query' | 'replaceCommands'>;
 
 /** The wasm build's entry file, wherever it may be. */
 export const WASM_ENTRY = 'femlab_engine_wasm.js';

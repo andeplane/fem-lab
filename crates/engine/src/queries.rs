@@ -80,6 +80,26 @@ impl Engine {
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
+            Query::ConvertAbaqus { text, name, body, mode, unit_length, unit_force, sha256 } => match mode {
+                AbaqusImportMode::Mesh => {
+                    if unit_force.is_some() {
+                        return Err(Error::schema("unitForce is supported only in static mode")
+                            .at("unitForce")
+                            .suggest("query.convertAbaqus with mode static"));
+                    }
+                    crate::io::abaqus::convert_mesh(&text, &name, &body, &unit_length, &sha256)
+                        .map(QueryResult::AbaqusConversion)
+                }
+                AbaqusImportMode::Static => {
+                    let force = unit_force.ok_or_else(|| {
+                        Error::schema("static import requires explicit unitForce")
+                            .at("unitForce")
+                            .suggest("query.convertAbaqus with mode static and unitForce, for example 1 N")
+                    })?;
+                    crate::io::abaqus_static::convert_static(&text, &name, &body, &unit_length, &force, &sha256)
+                        .map(QueryResult::AbaqusConversion)
+                }
+            },
             Query::MaterialLibrary { name } => {
                 crate::material_library::query(name.as_deref()).map(QueryResult::MaterialLibrary)
             }
