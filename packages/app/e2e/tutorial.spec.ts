@@ -59,6 +59,24 @@ test.describe('@cpu the guided tutorial', () => {
     await expect(page.locator('.tutorial-title')).toContainText('done');
   });
 
+  test('renders the concrete slab closing theory with readable maths and prose', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
+    await page.locator('.tutorial-pick', { hasText: 'Concrete floor slab' }).click();
+    for (let step = 0; step < 40 && !(await page.locator('.tutorial-theory').count()); step++) {
+      await page.locator('.tutorial-btn', { hasText: 'Skip' }).click();
+    }
+    const theory = page.locator('.tutorial-theory');
+    await expect(theory.locator('.katex-display')).toBeVisible();
+    await expect(theory.locator('strong').first()).toHaveText('The load.');
+    await expect(theory.locator('code').first()).toHaveText('bearing-a');
+    await expect(theory.locator('li')).toHaveCount(3);
+    expect(await theory.textContent()).not.toMatch(/\$|\*\*/);
+    expect(await page.locator('.tutorial-panel').evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  });
+
   test('a stale saved position with no Model starts the tutorial over', async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem('femlab.tour.dismissed', '1');

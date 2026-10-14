@@ -76,7 +76,9 @@ A step:
 - **`expect: null`** makes a read-only step: Next always advances it. Use it for the closing
   theory and for steps that ask the reader to look at something rather than do something.
 - **`theory`** is a KaTeX-ready block, `$…$` inline and `$$…$$` display, on the closing step. It
-  is where the tutorial earns its keep: the Commands are discoverable, the physics is not.
+  supports paragraphs separated by blank lines, **bold**, *emphasis*, `code` spans and `- `
+  bullet lists. Raw HTML stays escaped text. It is where the tutorial earns its keep: the
+  Commands are discoverable, the physics is not.
 - **`doIt` may include `solve.run`.** It used to be forbidden because the solver was not merged;
   it now is, so every tutorial that builds a Model ends by solving it and reading the answer.
 - **Omit `doIt`** on a read-only step. Omit `highlight` when no single control emits the
