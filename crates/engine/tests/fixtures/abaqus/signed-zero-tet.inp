@@ -1,0 +1,14 @@
+*HEADING
+Hand-authored unit Tet with both signed-zero spellings and an unused signed-zero node.
+*NODE,NSET=AUTHORED
+40,-0,-0.0,-0
+10,1,-0,-0.0
+70,-0.0,1,-0
+20,-0,-0.0,1
+99,-0.0,-0,-0.0
+*ELEMENT,TYPE=C3D4,ELSET=ALL
+900,40,10,70,20
+*NSET,NSET=BASE
+40,10,70
+*SURFACE,NAME=BASE,TYPE=ELEMENT
+900,S1

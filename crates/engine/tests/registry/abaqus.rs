@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 const TET: &str = include_str!("../fixtures/abaqus/sparse-label-tet.inp");
 const HEX: &str = include_str!("../fixtures/abaqus/brick-sets.inp");
 const FAR: &str = include_str!("../fixtures/abaqus/far-unused-tet.inp");
+const ZERO_TET: &str = include_str!("../fixtures/abaqus/signed-zero-tet.inp");
+const ZERO_HEX: &str = include_str!("../fixtures/abaqus/signed-zero-hex.inp");
 
 fn request(text: &str, scale: &str) -> Query {
     serde_json::from_value(json!({
@@ -155,6 +157,31 @@ fn abaqus_far_unused_node_is_authored_but_never_inflates_physical_bounds() {
 }
 
 #[test]
+fn abaqus_signed_zero_coordinates_are_portable_without_changing_the_source_digest() {
+    for (text, scale, expected_volume) in [(ZERO_TET, "1 m", 1.0 / 6.0), (ZERO_HEX, "1 mm", 6.0)] {
+        let mut e = engine();
+        let conversion = converted(&mut e, text, scale);
+        let source = serde_json::to_value(&conversion.commands[2]).unwrap();
+        let mut zeros = 0;
+        for node in source["mesher"]["nodes"].as_array().unwrap() {
+            for coordinate in node["at"].as_array().unwrap() {
+                let value = coordinate["value"].as_f64().unwrap();
+                if value == 0.0 {
+                    assert_eq!(value.to_bits(), 0.0f64.to_bits());
+                    zeros += 1;
+                }
+            }
+        }
+        assert_eq!(zeros, 12);
+        assert_eq!(source["mesher"]["provenance"]["sha256"], sha256_hex(text.as_bytes()));
+        assert_eq!(conversion.report.sha256, sha256_hex(text.as_bytes()));
+        install(&mut e, &conversion);
+        let model = read(&mut e, json!({"query":"query.model"}));
+        assert!((model["bodies"][0]["measure"]["value"].as_f64().unwrap() - expected_volume).abs() < 1e-13);
+    }
+}
+
+#[test]
 fn abaqus_conversion_is_a_read_even_on_an_existing_solved_model() {
     let mut e = engine();
     cantilever(&mut e);
@@ -218,6 +245,58 @@ fn abaqus_rejects_unsupported_intent_instead_of_silently_dropping_it() {
 }
 
 #[test]
+fn abaqus_keyword_and_record_guards_report_the_original_input_location() {
+    let mut e = engine();
+    let before = e.export_file();
+    for keyword in [
+        "HEADING,BOGUS",
+        "PREPRINT,BOGUS=YES",
+        "PREPRINT,ECHO",
+        "NODE,SYSTEM",
+        "NODE,NSET",
+        "NODE,NSET=a.b",
+        "ELEMENT,TYPE=C3D4,BOGUS",
+        "ELEMENT,TYPE",
+        "ELEMENT,TYPE=C3D4,ELSET",
+        "ELEMENT,TYPE=C3D4,ELSET=a.b",
+        "SURFACE,TYPE=ELEMENT,BOGUS",
+        "SURFACE,TYPE=ELEMENT,NAME",
+        "SURFACE,TYPE=ELEMENT,NAME=a.b",
+        "NSET,NSET",
+        "NSET,NSET=N,GENERATE=YES",
+        "NSET,NSET=N,ELSET",
+        "NSET,NSET=N,ELSET=a.b",
+    ] {
+        let text = format!("*{keyword}\n");
+        let rejected = e.query(request(&text, "1 m")).unwrap_err();
+        let name = keyword.split(',').next().unwrap();
+        assert!(rejected.where_.as_deref().unwrap().starts_with(&format!("line 1 *{name} ")), "{rejected:?}");
+    }
+    for text in ["*NODE\n1\n", "*NODE,\n∞\n", "*HEADING\n∞\n", "*NODE\n*HEADING\n", "*NODE,\n"] {
+        let rejected = e.query(request(text, "1 m")).unwrap_err();
+        assert!(rejected.where_.as_deref().unwrap().starts_with("line "), "{rejected:?}");
+    }
+    for addition in [
+        "*ELEMENT,TYPE=C3D4\n0,40,10,70,20\n",
+        "*ELEMENT,TYPE=C3D4\n900,40,10,70,20\n",
+        "*ELEMENT,TYPE=C3D4\n901,0,10,70,20\n",
+        "*NSET,NSET=BAD,GENERATE\n1\n",
+        "*NSET,NSET=BAD,GENERATE\n0,10\n",
+        "*NSET,NSET=BAD,GENERATE\n1,0\n",
+        "*NSET,NSET=BAD\n1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1\n",
+        "*NSET,NSET=BAD\n0\n",
+        "*NSET,NSET=BAD\nbad.name\n",
+        "*SURFACE,NAME=BAD,TYPE=ELEMENT\n900\n",
+        "*SURFACE,NAME=BAD,TYPE=ELEMENT\n0,S1\n",
+        "*SURFACE,NAME=BAD,TYPE=ELEMENT\nbad.name,S1\n",
+    ] {
+        let rejected = e.query(request(&format!("{TET}{addition}"), "1 m")).unwrap_err();
+        assert!(rejected.where_.as_deref().unwrap().starts_with("line "), "{rejected:?}");
+    }
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
 fn abaqus_malformed_labels_memberships_connectivity_and_source_geometry_locate_original_records() {
     let mut e = engine();
     let cases = [
@@ -228,6 +307,7 @@ fn abaqus_malformed_labels_memberships_connectivity_and_source_geometry_locate_o
         TET.replace("40, 0\n", "0, 0\n"),
         TET.replace("40, 0\n", "1000000000, 0\n"),
         TET.replace("10, 1D0,", "10, 1D999,"),
+        TET.replace("10, 1D0,", "10,,"),
         TET.replace("NSET=SAME", "NSET=\"SAME\""),
         TET.replace("NSET=SAME", "NSET=part.SAME"),
         TET.replace("SAME\n*NSET", "UNDEFINED\n*NSET"),
@@ -254,6 +334,10 @@ fn abaqus_malformed_labels_memberships_connectivity_and_source_geometry_locate_o
         "*NSET,NSET=N,GENERATE,ELSET=SAME\n",
         "*NSET,NSET=N,ELSET=SAME\n10\n",
         "*SURFACE,NAME=FACE1,TYPE=ELEMENT\n900,S1\n",
+        "*SURFACE,NAME=UNDEFINED_ELSET,TYPE=ELEMENT\nUNDEFINED,S1\n",
+        "*NSET,NSET=BAD\n999\n",
+        "*ELSET,ELSET=BAD\n999\n",
+        "*ELSET,ELSET=BAD\n999\n*NSET,NSET=DERIVED,ELSET=BAD\n",
     ] {
         let text = format!("{TET}{addition}");
         assert!(e.query(request(&text, "1 m")).is_err(), "{addition}");
@@ -267,6 +351,25 @@ fn abaqus_bounds_hash_units_and_expanded_memberships_fail_before_publication() {
     for scale in ["0 m", "-1 m", "1 N"] {
         assert!(e.query(request(TET, scale)).is_err());
     }
+    for text in ["", "*HEADING\n", "*NODE\n1,0\n", "1,0\n", "*NODE\n", "*PREPRINT\nDATA\n"] {
+        assert!(e.query(request(text, "1 m")).is_err(), "{text}");
+    }
+    for digest in ["0".repeat(63), "A".repeat(64)] {
+        let mut invalid = serde_json::to_value(request(TET, "1 m")).unwrap();
+        invalid["sha256"] = json!(digest);
+        let rejected = e.query(serde_json::from_value(invalid).unwrap()).unwrap_err();
+        assert_eq!(rejected.where_.as_deref(), Some("sha256"));
+    }
+    let mut invalid_body = serde_json::to_value(request(TET, "1 m")).unwrap();
+    invalid_body["body"] = json!("part.bad");
+    let rejected = e.query(serde_json::from_value(invalid_body).unwrap()).unwrap_err();
+    assert_eq!(rejected.where_.as_deref(), Some("body"));
+    for name in [String::from(" \t"), "é".repeat(513)] {
+        let mut invalid_name = serde_json::to_value(request(TET, "1 m")).unwrap();
+        invalid_name["name"] = json!(name);
+        let rejected = e.query(serde_json::from_value(invalid_name).unwrap()).unwrap_err();
+        assert_eq!(rejected.where_.as_deref(), Some("name"));
+    }
     let mut wrong = serde_json::to_value(request(TET, "1 m")).unwrap();
     wrong["sha256"] = json!("0".repeat(64));
     let rejected = e.query(serde_json::from_value(wrong).unwrap()).unwrap_err();
@@ -277,6 +380,41 @@ fn abaqus_bounds_hash_units_and_expanded_memberships_fail_before_publication() {
     let memberships = format!("{TET}*NSET,NSET=TOO_MANY,GENERATE\n1,1000001,1\n");
     let rejected = e.query(request(&memberships, "1 m")).unwrap_err();
     assert!(rejected.cause.contains("1000000"));
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
+fn abaqus_exact_membership_budget_applies_to_each_kind_of_declaration() {
+    let mut text = String::from(
+        "*NODE\n1,0,0,0\n2,1,0,0\n3,0,1,0\n4,0,0,1\n5,0,0,-1\n\
+         *ELEMENT,TYPE=C3D4,ELSET=ONE\n1,1,2,3,4\n*NSET,NSET=BUDGET\n",
+    );
+    // The implicit ONE membership plus 999999 explicit duplicates exactly fills the budget.
+    // All labels and references exist; deduplication must never erase allocation accounting.
+    for _ in 0..62_499 {
+        text.push_str("1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1\n");
+    }
+    text.push_str("1,1,1,1,1,1,1,1,1,1,1,1,1,1,1\n");
+    let mut e = engine();
+    let before = e.export_file();
+    let accepted = converted(&mut e, &text, "1 m");
+    assert_eq!(accepted.report.source_nodes, 5);
+    assert_eq!(accepted.report.source_labels.unused_nodes, [5]);
+    let source = serde_json::to_value(&accepted.commands[2]).unwrap();
+    assert_eq!(source["mesher"]["nodeSets"]["BUDGET"], json!([1]));
+    for addition in [
+        "*NODE,NSET=EXTRA\n6,0,0,2\n",
+        "*ELEMENT,TYPE=C3D4,ELSET=EXTRA\n2,1,3,2,5\n",
+        "*NSET,NSET=DERIVED,ELSET=ONE\n",
+        "*NSET,NSET=EXTRA\n1\n",
+        "*NSET,NSET=EXTRA\nBUDGET\n",
+        "*SURFACE,NAME=EXTRA,TYPE=ELEMENT\nONE,S1\n",
+        "*SURFACE,NAME=EXTRA,TYPE=ELEMENT\n1,S1\n",
+    ] {
+        let rejected = e.query(request(&format!("{text}{addition}"), "1 m")).unwrap_err();
+        assert!(rejected.cause.contains("1000000 memberships"), "{rejected:?}");
+        assert!(rejected.where_.as_deref().unwrap().ends_with(" memberships"), "{rejected:?}");
+    }
     assert_eq!(e.export_file(), before);
 }
 
@@ -359,9 +497,14 @@ fn abaqus_uppercase_raw_mesh_writer_roundtrip_is_supplementary_to_independent_fi
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
     #[test]
-    fn abaqus_arbitrary_text_never_panics_or_mutates_the_model(text in any::<String>()) {
+    fn abaqus_arbitrary_text_never_panics_or_mutates_the_model(mut text in prop_oneof![
+        any::<String>(),
+        proptest::collection::vec(0u8..=127, 0..2048).prop_map(|bytes| String::from_utf8(bytes).unwrap()),
+    ]) {
         let mut e = engine();
         let before = e.export_file();
+        // Reach the lexer rather than mostly exercising the required-final-newline guard.
+        text.push('\n');
         let _ = e.query(request(&text, "1 m"));
         prop_assert_eq!(e.export_file(), before);
     }

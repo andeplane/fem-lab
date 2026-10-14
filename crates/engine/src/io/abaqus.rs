@@ -209,7 +209,14 @@ pub(crate) fn label(text: &str, line: usize, keyword: &str, field: &str) -> Resu
 }
 
 pub(crate) fn scalar(text: &str, line: usize, keyword: &str, field: &str, scale: f64) -> Result<f64, Error> {
-    let value = text.replace(['D', 'd'], "E").parse::<f64>().ok().map(|n| n * scale).filter(|n| n.is_finite());
+    let value = text
+        .replace(['D', 'd'], "E")
+        .parse::<f64>()
+        .ok()
+        // Numeric zero has one portable Command representation. JavaScript JSON erases its
+        // sign, while Rust serde preserves it; the original text digest is kept independently.
+        .map(|n| n * scale + 0.0)
+        .filter(|n| n.is_finite());
     value.ok_or_else(|| malformed(line, keyword, field, format!("'{text}' must convert to a finite numeric value")))
 }
 
@@ -295,21 +302,13 @@ impl Builder {
         Ok(())
     }
 
-    fn add_members(
-        &mut self,
-        nodes: bool,
-        set: &str,
-        members: Vec<u32>,
-        line: usize,
-        keyword: &str,
-    ) -> Result<(), Error> {
-        self.reserve_members(members.len(), line, keyword)?;
+    /// Insert members after their declaration count was checked and reserved.
+    fn append_members(&mut self, nodes: bool, set: &str, members: Vec<u32>, line: usize) {
         let sets = if nodes { &mut self.node_sets } else { &mut self.element_sets };
         let entry = sets.entry(set.to_string()).or_insert_with(|| NamedSet { members: BTreeMap::new() });
         for member in members {
             entry.members.entry(member).or_insert(line);
         }
-        Ok(())
     }
 
     pub(crate) fn start(&mut self, keyword: Keyword) -> Result<Active, Error> {
@@ -436,13 +435,14 @@ impl Builder {
                 count = count.saturating_add(element.nodes.len());
             }
             self.room_for(count, keyword.line, "NSET")?;
+            self.memberships += count;
             let mut members = Vec::with_capacity(count);
             for &id in elements.members.keys() {
                 // Every element reference was checked before allocation above.
                 let (element, _) = self.elements.get(&id).expect("element references validated above");
                 members.extend_from_slice(&element.nodes);
             }
-            self.add_members(true, &set, members, keyword.line, "NSET")?;
+            self.append_members(true, &set, members, keyword.line);
             return Ok(Section::SetFromElements);
         }
         Ok(Section::Set { nodes, name: set, generate })
@@ -481,7 +481,8 @@ impl Builder {
                 }
                 self.nodes.insert(id, (ImportedNodeSpec { label: id, at }, record.line));
                 if let Some(set) = set {
-                    self.add_members(true, set, vec![id], record.line, "NODE")?;
+                    self.reserve_members(1, record.line, "NODE")?;
+                    self.append_members(true, set, vec![id], record.line);
                 }
             }
             Section::Elements { kind, set } => {
@@ -517,7 +518,8 @@ impl Builder {
                 }
                 self.elements.insert(id, (ImportedElement { label: id, kind: *kind, nodes }, record.line));
                 if let Some(set) = set {
-                    self.add_members(false, set, vec![id], record.line, "ELEMENT")?;
+                    self.reserve_members(1, record.line, "ELEMENT")?;
+                    self.append_members(false, set, vec![id], record.line);
                 }
             }
             Section::Set { nodes, name: set, generate } => {
@@ -538,7 +540,7 @@ impl Builder {
                         ));
                     }
                     let count = ((last - first) / increment + 1) as usize;
-                    self.room_for(count, record.line, keyword)?;
+                    self.reserve_members(count, record.line, keyword)?;
                     (0..count).map(|index| first + index as u32 * increment).collect()
                 } else {
                     let values = fields(record, keyword, 1, 16)?;
@@ -563,9 +565,12 @@ impl Builder {
                             members.extend(captured.members.keys().copied());
                         }
                     }
+                    // Every push/extension checked the cumulative count before allocation.
+                    // Consume it once; repeating a fallible reservation here cannot fail.
+                    self.memberships += members.len();
                     members
                 };
-                self.add_members(*nodes, set, members, record.line, keyword)?;
+                self.append_members(*nodes, set, members, record.line);
             }
             Section::Surface { name: set } => {
                 let values = fields(record, "SURFACE", 2, 2)?;
@@ -586,7 +591,9 @@ impl Builder {
                     }
                 };
                 let elements = if values[0].starts_with(|c: char| c.is_ascii_digit() || c == '+' || c == '-') {
-                    vec![label(values[0], record.line, "SURFACE", "source element")?]
+                    let element = label(values[0], record.line, "SURFACE", "source element")?;
+                    self.reserve_members(1, record.line, "SURFACE")?;
+                    vec![element]
                 } else {
                     let reference = name(values[0], record.line, "SURFACE", "ELSET")?;
                     let captured =
@@ -599,9 +606,10 @@ impl Builder {
                             )
                         })?;
                     self.room_for(captured.members.len(), record.line, "SURFACE")?;
-                    captured.members.keys().copied().collect()
+                    let elements = captured.members.keys().copied().collect();
+                    self.memberships += captured.members.len();
+                    elements
                 };
-                self.reserve_members(elements.len(), record.line, "SURFACE")?;
                 let (_, surface) = self.surfaces.get_mut(set).expect("surface created by its keyword");
                 for element in elements {
                     surface.entry(ImportedFace { element, face }).or_insert(record.line);
@@ -1013,6 +1021,7 @@ mod tests {
             "*NODE,NSET=A=B\n",
             "*NODE,,NSET=A\n",
             "*NODE,NSET=A,nset=B\n",
+            "*NODE,∞\n",
             "*NODE,\n",
             "*NODE,\n*ELEMENT,TYPE=C3D4\n",
         ] {
@@ -1046,6 +1055,9 @@ mod tests {
         }
         for text in ["", "NaN", "inf", "-inf", "1E309", "1 E2", "1.0.0"] {
             assert_eq!(scalar(text, 5, "NODE", "x", 1.0).unwrap_err().code, ErrorCode::Schema);
+        }
+        for text in ["-0", "-0.0", "+0", "0D0"] {
+            assert_eq!(scalar(text, 5, "NODE", "x", 0.001).unwrap().to_bits(), 0.0f64.to_bits());
         }
         assert_eq!(scalar("1E308", 5, "NODE", "x", 10.0).unwrap_err().code, ErrorCode::Schema);
         assert_eq!(fields(Record { line: 2, text: "1,0,," }, "NODE", 2, 4).unwrap(), ["1", "0", "", ""]);

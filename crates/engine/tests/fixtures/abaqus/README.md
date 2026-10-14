@@ -31,3 +31,8 @@ The first importer rejects quoted labels and unquoted periods. Ordinary FEM Lab 
 currently contain qualified names such as `beam.xmin`; those are outside this parser subset,
 and their export spelling is separately tracked in #518. A writer/reader check using supported
 names is supplementary evidence, not the oracle for these fixtures.
+
+`signed-zero-tet.inp` and `signed-zero-hex.inp` independently spell coordinate zeros as both
+`-0` and `-0.0`, including the unused Tet node. Their physical bounds/volumes are the same
+closed forms above; the SHA-256 still hashes the original exact text. These expose signed-zero
+transport fidelity at the Rust serde/JavaScript JSON boundary and persisted replay path.

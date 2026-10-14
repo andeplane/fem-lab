@@ -30,6 +30,8 @@ try {
     ['sparse-label-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1]],
     ['brick-sets.inp', '1 mm', 8, 8, [], [0, 0, 0, 1, 2, 3]],
     ['far-unused-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1]],
+    ['signed-zero-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1]],
+    ['signed-zero-hex.inp', '1 mm', 8, 8, [], [0, 0, 0, 1, 2, 3]],
   ]) {
     const text = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus', fixture), 'utf8');
     const conversionQuery = request(text, unitLength);
@@ -48,6 +50,18 @@ try {
       assert.equal(converted.commands[2].order, 1);
       assert.equal(converted.commands[2].mesher.provenance.sha256, conversionQuery.sha256);
       for (const threads of [1, 4]) assert.deepEqual(nativeQueries(empty, threads, [conversionQuery]), [converted]);
+
+      // The actual native host constructs the ModelFile; neither test nor browser synthesizes
+      // a Model snapshot. Exercise its raw text and the browser's JSON parse/stringify route.
+      const commandsPath = path.join(scratch, 'commands.json');
+      writeFileSync(commandsPath, JSON.stringify(converted.commands));
+      const nativeFileText = execFileSync(native, ['export', commandsPath, '--cpu', '--format', 'journal'], { encoding: 'utf8' });
+      const nativeFile = JSON.parse(nativeFileText);
+      const nativeHashes = nativeFile.journal.entries.map(entry => entry.hashAfter);
+      for (const text of [nativeFileText, JSON.stringify(nativeFile)]) {
+        await engine.import_file(text);
+        assert.deepEqual(JSON.parse(engine.export_file()).journal.entries.map(entry => entry.hashAfter), nativeHashes);
+      }
 
       for (const command of converted.commands) await engine.dispatch(JSON.stringify(command));
       const file = JSON.parse(engine.export_file());
