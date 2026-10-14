@@ -2355,7 +2355,7 @@ fn section_lines<'a>(text: &'a str, header: &str) -> Vec<&'a str> {
 #[test]
 fn inp_writes_node_and_element_counts_that_parse_back() {
     let m = Structured { kind: ElementKind::Hex20, n: [2, 1, 1] }.box_([1.0, 1.0, 1.0]);
-    let text = write_inp(&m, "demo");
+    let text = write_inp(&m, "demo").unwrap();
     assert!(text.starts_with("*HEADING\ndemo\n"));
     assert_eq!(section_lines(&text, "*NODE").len(), m.n_nodes());
     // C3D20 = 21 fields per element (id + 20 nodes), so 16 + 5 wraps onto two lines
@@ -2368,20 +2368,38 @@ fn inp_writes_node_and_element_counts_that_parse_back() {
 #[test]
 fn inp_writes_every_set_and_correct_box_face_labels() {
     let m = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
-    let text = write_inp(&m, "box");
+    let text = write_inp(&m, "box").unwrap();
     for name in ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax"] {
-        assert!(text.contains(&format!("*NSET, NSET={name}\n")), "{name}");
-        assert!(text.contains(&format!("*SURFACE, TYPE=ELEMENT, NAME={name}\n")), "{name}");
+        assert!(text.contains(&format!("*NSET, NSET=\"{name}\"\n")), "{name}");
+        assert!(text.contains(&format!("*SURFACE, TYPE=ELEMENT, NAME=\"{name}\"\n")), "{name}");
     }
-    assert!(text.contains("*ELSET, ELSET=all\n"));
+    assert!(text.contains("*ELSET, ELSET=\"all\"\n"));
     // hex S6/S4, S3/S5, S1/S2 on the low/high side per axis (structured.rs FACE_LOCAL_3D)
     for (name, want) in [("xmin", "S6"), ("xmax", "S4"), ("ymin", "S3"), ("ymax", "S5"), ("zmin", "S1"), ("zmax", "S2")]
     {
-        let header = format!("*SURFACE, TYPE=ELEMENT, NAME={name}");
+        let header = format!("*SURFACE, TYPE=ELEMENT, NAME=\"{name}\"");
         let lines = section_lines(&text, &header);
         assert_eq!(lines.len(), 1, "{name}");
         assert!(lines[0].ends_with(&format!(", {want}")), "{name}: {}", lines[0]);
     }
+}
+
+#[test]
+fn inp_preserves_bare_quoted_and_case_distinct_memberships_in_each_namespace() {
+    let mesh = Mesh {
+        dim: 3,
+        coords: vec![0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.],
+        blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+        node_sets: BTreeMap::from([("BASE_1-X".into(), vec![0, 2]), ("BASE.part".into(), vec![1])]),
+        elem_sets: BTreeMap::from([("ALL".into(), vec![0]), ("All".into(), vec![0])]),
+        face_sets: BTreeMap::from([
+            ("FACE1".into(), vec![Face { elem: 0, local: 0 }]),
+            ("Face 1".into(), vec![Face { elem: 0, local: 2 }]),
+        ]),
+    };
+    // Independent text: each namespace keeps its identity and explicit 1-based membership.
+    let expected = "*HEADING\nlabels\n*NODE\n1, 0, 0, 0\n2, 1, 0, 0\n3, 0, 1, 0\n4, 0, 0, 1\n*ELEMENT, TYPE=C3D4, ELSET=BLOCK1\n1, 1, 2, 3, 4\n*NSET, NSET=\"BASE.part\"\n2\n*NSET, NSET=BASE_1-X\n1, 3\n*ELSET, ELSET=ALL\n1\n*ELSET, ELSET=\"All\"\n1\n*SURFACE, TYPE=ELEMENT, NAME=FACE1\n1, S1\n*SURFACE, TYPE=ELEMENT, NAME=\"Face 1\"\n1, S3\n";
+    assert_eq!(write_inp(&mesh, "labels").unwrap(), expected);
 }
 
 /// A line member travels through all three formats: Gmsh's line element (type 1, both
@@ -2405,7 +2423,7 @@ fn a_line_block_round_trips_through_msh_and_names_itself_in_inp_and_vtu() {
     };
     m.validate().expect("a 1D block belongs in a 3D mesh");
     assert_msh_round_trips(&m, "hex8 plus truss2");
-    let inp = write_inp(&m, "frame");
+    let inp = write_inp(&m, "frame").unwrap();
     assert!(inp.contains("*ELEMENT, TYPE=T3D2, ELSET=BLOCK2"), "{inp}");
     // VTK cell type 3 is VTK_LINE; the types array is base64, so check the mesh writes at all
     // and that the truss did not become a face or vanish.
@@ -2426,7 +2444,7 @@ fn inp_maps_every_element_kind_to_its_abaqus_type() {
         (ElementKind::Tri6, "CPS6"),
     ] {
         let m = Structured { kind, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
-        let text = write_inp(&m, "t");
+        let text = write_inp(&m, "t").unwrap();
         assert!(text.contains(&format!("*ELEMENT, TYPE={want}, ELSET=BLOCK1")), "{kind:?} -> {want}");
     }
 }

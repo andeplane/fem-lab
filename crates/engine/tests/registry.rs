@@ -3123,9 +3123,9 @@ fn named_sets_keep_their_exact_membership_in_msh_and_inp_exports() {
             .map(|(_, rest)| rest.lines().take_while(|line| !line.starts_with('*')).collect())
             .unwrap_or_default()
     };
-    assert_eq!(records("*ELSET, ELSET=left-cell\n"), ["1"]);
+    assert_eq!(records("*ELSET, ELSET=\"left-cell\"\n"), ["1"]);
     let node_ids = |name: &str| -> Vec<u32> {
-        records(&format!("*NSET, NSET={name}\n"))
+        records(&format!("*NSET, NSET=\"{name}\"\n"))
             .iter()
             .flat_map(|line| line.split(", "))
             .map(|id| id.parse().unwrap())
@@ -3134,7 +3134,19 @@ fn named_sets_keep_their_exact_membership_in_msh_and_inp_exports() {
     assert_eq!(node_ids("left-cell"), expected_left.iter().map(|node| node + 1).collect::<Vec<_>>());
     assert_eq!(node_ids("mid-plane"), expected_mid.iter().map(|node| node + 1).collect::<Vec<_>>());
     assert_eq!(node_ids("loaded"), expected_loaded.iter().map(|node| node + 1).collect::<Vec<_>>());
-    assert_eq!(records("*SURFACE, TYPE=ELEMENT, NAME=loaded\n"), ["2, S4"]);
+    assert_eq!(records("*SURFACE, TYPE=ELEMENT, NAME=\"loaded\"\n"), ["2, S4"]);
+}
+
+#[test]
+fn abaqus_label_errors_do_not_change_the_model_or_journal() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam\"quoted","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}},"order":1}"#);
+    let before = e.export_file();
+    let error = err(&mut e, r#"{"cmd":"mesh.export","format":"inp"}"#);
+    assert_eq!(error.code, ErrorCode::ExportUnavailable);
+    assert!(error.where_.unwrap().contains("beam\\\"quoted"));
+    assert_eq!(e.export_file(), before);
 }
 
 #[test]

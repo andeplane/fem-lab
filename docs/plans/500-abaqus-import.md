@@ -11,6 +11,12 @@ The endpoint names below are proposals until their implementation issues land.
 This plan covers text `.inp` mesh/model conversion. Binary `.odb` Results and `.cae`
 model databases are separate formats and are outside this slice.
 
+Export label correctness is tracked separately in [#518](https://github.com/andeplane/fem-lab/issues/518).
+That fix preserves qualified/case-sensitive names with Abaqus quotes and rejects unsupported
+labels. The first reader subset below still rejects quoted labels: ordinary qualified FEM Lab
+exports are outside its round-trip subset. A supported bare-uppercase fixture round-trip is an
+additional test, not evidence that arbitrary exported decks can be loaded.
+
 ## What exists
 
 Checked against `origin/main` at `4e364b60`:

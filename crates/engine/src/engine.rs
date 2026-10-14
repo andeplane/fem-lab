@@ -1675,7 +1675,7 @@ impl Engine {
             }
             ExportFormat::Inp => {
                 let mesh = self.mesh()?.mesh.clone();
-                crate::io::write_inp(&mesh, &name)
+                crate::io::write_inp(&mesh, &name)?
             }
             ExportFormat::Stl => crate::io::write_stl_mesh(&self.mesh()?.mesh),
         };

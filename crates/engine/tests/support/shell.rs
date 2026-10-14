@@ -441,10 +441,10 @@ fn shell_rotated_orthotropic_law_and_expansion_keep_material_axes() {
 #[test]
 fn shell_mesh_exports_preserve_connectivity_and_surface_sides() {
     let mesh = femlab_geometry::Structured { kind: ElementKind::Shell4, n: [1, 1, 1] }.build(|p| [p[0], 0.0, p[1]]);
-    let inp = femlab_engine::io::inp::write_inp(&mesh, "plate");
+    let inp = femlab_engine::io::inp::write_inp(&mesh, "plate").unwrap();
     assert!(inp.contains("TYPE=S4"), "{inp}");
-    assert!(inp.contains("NAME=top\n1, SPOS\n"), "{inp}");
-    assert!(inp.contains("NAME=bottom\n1, SNEG\n"), "{inp}");
+    assert!(inp.contains("NAME=\"top\"\n1, SPOS\n"), "{inp}");
+    assert!(inp.contains("NAME=\"bottom\"\n1, SNEG\n"), "{inp}");
     let msh = femlab_engine::io::msh::write_msh(&mesh).unwrap();
     let roundtrip = femlab_engine::io::msh::read_msh(&msh).unwrap();
     assert_eq!(roundtrip.coords, mesh.coords);
