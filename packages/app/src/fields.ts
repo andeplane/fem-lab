@@ -99,6 +99,7 @@ export const FIELD_CHOICES: FieldChoice[] = [
   ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
   ...VEC.map((a, i) => ({ key: `r${a}`, label: `θ${a}`, field: 'rotation', component: i })),
   ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
+  ...VOIGT.map((a, i) => ({ key: `sUnaveraged${a}`, label: `σ${a} unaveraged`, field: 'stressUnaveraged', component: i })),
   ...['Top', 'Bottom'].flatMap((side) => VOIGT.map((a, i) => ({ key: `s${side}${a}`, label: `σ${a} ${side.toLowerCase()}`, field: `stress${side}`, component: i }))),
   ...VOIGT.map((a, i) => ({ key: `shellM${a}`, label: `M${a} / width`, field: 'shellMoment', component: i })),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
