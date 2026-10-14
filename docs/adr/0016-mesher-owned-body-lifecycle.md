@@ -18,6 +18,12 @@ or copying mapped block coordinates into a second representation. Its name canno
 an explicit Body or cut when mesh geometry is defined; explicit geometry cannot replace an
 existing mesher-owned Body.
 
+The geometry-name invariant also covers named Sets and point masses (#537): `geometry.remove`
+has one name argument and must identify one owner. Constructors, mesher replacement, rename
+and duplicate reject another geometry owner's name in either command order. Reissuing the
+same owner's definition still updates it; Material, Load and other object namespaces stay
+independent. Shell surface and imported-source meshers use the same implicit-Body guard.
+
 `model.rename` renames that identity inside the mesher, including sweep bases. Material
 association stays attached. Auto-face references, named Faces, whole-Body regions, Constraints
 and Loads follow the rename. Free meshers own no Body; their explicit source-Body reference

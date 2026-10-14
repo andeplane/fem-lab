@@ -1608,6 +1608,13 @@ prove is the same either way.
 
 ## Named Sets on mesher-defined Bodies (#239)
 
+The geometry-namespace regression (#537) uses public Commands for point-first and
+implicit-Body-first construction across mapped, surface and swept mapped meshers. It checks
+structured `NameTaken` locations, unchanged Model/Journal/revision after rejected writes,
+named-Set and Body rename/copy collisions, same-owner upserts and remeshing, independent
+Material names, unambiguous removal and exact undo/replay identity. A public command Journal
+with a collision fails at that entry and leaves only its valid prefix, without a second owner.
+
 The registry patch `mapped_and_swept_bodies_resolve_face_and_body_selectors_for_an_exact_patch`
 uses a 2 × 1 m mapped rectangle (0.1 m plane-stress thickness) and its 3 m extrusion.
 For both element orders and subdivision scales 1, 2 and 4, geometric face rules resolve the

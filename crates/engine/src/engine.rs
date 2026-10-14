@@ -20,6 +20,29 @@ use crate::procedure::Reference;
 use crate::query::{Ack, Output};
 use crate::units::{Dimension, Q};
 
+/// Geometry is removed by name, so its owners share one namespace. Reissuing a
+/// definition may replace its own kind; it must never change the kind of owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GeometryOwner {
+    Body,
+    MesherBody,
+    Cut,
+    Set,
+    PointMass,
+}
+
+impl GeometryOwner {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Body => "an explicit Body",
+            Self::MesherBody => "the mesher-defined Body",
+            Self::Cut => "a cut",
+            Self::Set => "a named Set",
+            Self::PointMass => "a point mass",
+        }
+    }
+}
+
 /// Only a prescribed value in the Step's own physical field can drive its solution.
 fn constraint_drives(constraint: &Constraint, heat: bool) -> bool {
     match &constraint.kind {
@@ -877,6 +900,8 @@ impl Engine {
             }
             Command::GeometryNameFace { name, of, where_ } => {
                 check_name(name)?;
+                self.check_geometry_name(name, GeometryOwner::Set)
+                    .map_err(|e| e.at("name").suggest("geometry.nameFace with another name"))?;
                 self.check_body(of).map_err(|e| e.at("of"))?;
                 let pred = where_.to_si()?;
                 let set = NamedSet { name: name.clone(), source: SetSource::Face { of: of.clone(), where_: pred } };
@@ -884,6 +909,8 @@ impl Engine {
             }
             Command::GeometryNameRegion { name, where_ } => {
                 check_name(name)?;
+                self.check_geometry_name(name, GeometryOwner::Set)
+                    .map_err(|e| e.at("name").suggest("geometry.nameRegion with another name"))?;
                 let pred = where_.to_si()?;
                 if let femlab_geometry::RegionPredicate::Body { name: b } = &pred {
                     self.check_body(b).map_err(|e| e.at("where.name"))?;
@@ -901,17 +928,8 @@ impl Engine {
                 for (k, q) in at.iter().enumerate() {
                     point[k] = q.si().map_err(|e| e.at(format!("at[{k}]")))?;
                 }
-                // A point owns a Set of its own name, so it may not shadow one that exists.
-                if self.model.point(name).is_none()
-                    && (self.model.knows_set(name) || self.model.set_prefixes().contains(name))
-                {
-                    return Err(Error::new(
-                        ErrorCode::NameTaken,
-                        format!("'{name}' already names a Set or a Body, and a point mass owns a Set of its name"),
-                    )
-                    .at("name")
-                    .suggest("geometry.addMass with another name"));
-                }
+                self.check_geometry_name(name, GeometryOwner::PointMass)
+                    .map_err(|e| e.at("name").suggest("geometry.addMass with another name"))?;
                 self.invalidate_geometry();
                 let pm = PointMass { name: name.clone(), at: point, mass: kg };
                 Ok(upsert(&mut self.model.points, pm, |p| &p.name, ObjectKind::Set))
@@ -1113,14 +1131,8 @@ impl Engine {
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
                     check_name(body).map_err(|e| e.at("mesher.body"))?;
-                    if self.model.body(body).is_some() || self.model.cuts.iter().any(|c| c.name == body) {
-                        return Err(Error::new(
-                            ErrorCode::NameTaken,
-                            format!("'{body}' already names explicit geometry"),
-                        )
-                        .at("mesher.body")
-                        .suggest("retry mesh.set with another mesher.body name"));
-                    }
+                    self.check_geometry_name(body, GeometryOwner::MesherBody)
+                        .map_err(|e| e.at("mesher.body").suggest("retry mesh.set with another mesher.body name"))?;
                 }
                 if old_body != new_body {
                     if let Some(body) = old_body {
@@ -1684,16 +1696,8 @@ impl Engine {
 
     fn add_body(&mut self, name: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
-        if self.model.implicit_body() == Some(name) {
-            return Err(Error::new(ErrorCode::NameTaken, format!("'{name}' is the mesher-defined Body"))
-                .at("name")
-                .suggest("edit its geometry with mesh.set or use another Body name"));
-        }
-        if self.model.cuts.iter().any(|c| c.name == name) {
-            return Err(
-                Error::new(ErrorCode::NameTaken, format!("'{name}' is already a cut")).at(format!("body '{name}'"))
-            );
-        }
+        self.check_geometry_name(name, GeometryOwner::Body)
+            .map_err(|e| e.at("name").suggest("geometry.add with another name, or edit its existing owner"))?;
         let dim = shape.dim();
         let old = self.model.body(name);
         let body = Body {
@@ -1719,11 +1723,8 @@ impl Engine {
 
     fn add_cut(&mut self, name: &str, from: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
-        if self.model.names(ObjectKind::Body).contains(&name) {
-            return Err(
-                Error::new(ErrorCode::NameTaken, format!("'{name}' is already a body")).at(format!("cut '{name}'"))
-            );
-        }
+        self.check_geometry_name(name, GeometryOwner::Cut)
+            .map_err(|e| e.at("name").suggest("geometry.subtract with another name"))?;
         if self.model.implicit_body() == Some(from) {
             return Err(Error::new(
                 ErrorCode::Unsupported,
@@ -1746,6 +1747,27 @@ impl Engine {
         let replaced = self.model.cuts.iter().any(|c| c.name == name);
         upsert(&mut self.model.cuts, cut, |c| &c.name, ObjectKind::Set);
         Ok(if replaced { Output::Replaced { kind: ObjectKind::Body, name: name.to_string() } } else { Output::None })
+    }
+
+    fn check_geometry_name(&self, name: &str, requested: GeometryOwner) -> Result<(), Error> {
+        let m = &self.model;
+        let owner = if m.body(name).is_some() {
+            Some(GeometryOwner::Body)
+        } else if m.implicit_body() == Some(name) {
+            Some(GeometryOwner::MesherBody)
+        } else if m.cuts.iter().any(|c| c.name == name) {
+            Some(GeometryOwner::Cut)
+        } else if m.sets.iter().any(|s| s.name == name) {
+            Some(GeometryOwner::Set)
+        } else if m.point(name).is_some() {
+            Some(GeometryOwner::PointMass)
+        } else {
+            None
+        };
+        if let Some(owner) = owner.filter(|owner| *owner != requested) {
+            return Err(Error::new(ErrorCode::NameTaken, format!("'{name}' already names {}", owner.label())));
+        }
+        Ok(())
     }
 
     /// Removing mesher-owned geometry must obey the same references as explicit geometry.
@@ -1890,6 +1912,16 @@ impl Engine {
             return Err(Error::new(ErrorCode::NameTaken, format!("name '{to}' is already in use"))
                 .at(format!("{} '{to}'", kind.label()))
                 .suggest("retry model.rename with another name"));
+        }
+        let geometry_owner = match kind {
+            ObjectKind::Body if self.model.implicit_body() == Some(name) => Some(GeometryOwner::MesherBody),
+            ObjectKind::Body => Some(GeometryOwner::Body),
+            ObjectKind::Set => Some(GeometryOwner::Set),
+            _ => None,
+        };
+        if let Some(owner) = geometry_owner {
+            self.check_geometry_name(to, owner)
+                .map_err(|e| e.at("to").suggest("retry model.rename with another name"))?;
         }
         let m = &mut self.model;
         match kind {
@@ -2079,6 +2111,15 @@ impl Engine {
         {
             return Err(Error::new(ErrorCode::NameTaken, format!("name '{as_}' is already in use"))
                 .at(format!("{} '{as_}'", kind.label())));
+        }
+        let geometry_owner = match kind {
+            ObjectKind::Body => Some(GeometryOwner::Body),
+            ObjectKind::Set => Some(GeometryOwner::Set),
+            _ => None,
+        };
+        if let Some(owner) = geometry_owner {
+            self.check_geometry_name(as_, owner)
+                .map_err(|e| e.at("as").suggest("retry model.duplicate with another name"))?;
         }
         let m = &mut self.model;
         match kind {
