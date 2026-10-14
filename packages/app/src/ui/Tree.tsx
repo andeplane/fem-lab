@@ -2,7 +2,7 @@
 // with a glyph, a mono name and a one-line summary in display units, the `@` reference button and
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
-import { refOf } from '@femlab/registry';
+import { refOf, type Command } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
@@ -11,6 +11,7 @@ import { Cmd, type Dispatch } from './cmd';
 import { humanise } from './schema';
 import { procedureSummary } from './procedures';
 import { materialProperties, type MaterialProperty } from './materialSummary';
+import { loadTargets } from '../loadTargets';
 
 export interface TreeItem {
   /** The Command a click puts in the Properties form, with the object read back as its arguments. */
@@ -536,7 +537,12 @@ export function ModelTree({ s, dispatch, shapes = [], hoverFrames = browserHover
                             // A superseded definition read returns no Command. It must not
                             // start a fresh selection/edit after another form has taken over.
                             if (showsTargets) void open()?.then(definition => {
-                              if (definition && request === selectionRun.current) return dispatch({ cmd: 'selection.set', ...item.select });
+                              if (definition && request === selectionRun.current) {
+                                // form.edit returns the engine's exact Command. Select its
+                                // drawables explicitly so selection.set need not read it again.
+                                const targets = item.kind === 'load' ? loadTargets(definition as Command, s.model) : item.select;
+                                return dispatch({ cmd: 'selection.set', ...targets });
+                              }
                               return undefined;
                             }).catch(() => undefined);
                             else void open()?.catch(() => undefined);

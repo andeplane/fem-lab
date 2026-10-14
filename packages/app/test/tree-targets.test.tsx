@@ -129,10 +129,13 @@ describe('Constraint and Load targets in the Model tree', () => {
     await waitFor(() => app.store.state.hover.bodies.length + app.store.state.hover.sets.length > 0, 'body load hover');
     expect(app.store.state.hover).toEqual({ bodies, faces: [], sets });
     expect(app.store.state.form).toBeNull();
+    vi.mocked(app.transport.query).mockClear();
     app.row(name as string).click();
     await waitFor(() => app.store.state.form?.target?.name === name, 'body load form');
     expect(app.store.state.selection.bodies).toEqual(bodies);
     expect(app.store.state.selection.sets).toEqual(sets);
+    expect(vi.mocked(app.transport.query).mock.calls).toEqual([[{ query: 'query.definition', kind: 'load', name }]]);
+    expect(app.sent.filter(command => command.cmd === 'selection.set')).toEqual([{ cmd: 'selection.set', ...(bodies.length ? { bodies } : { sets }) }]);
     expect(app.transport.dispatch).not.toHaveBeenCalled();
   });
 

@@ -5,6 +5,7 @@ import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type Ai
 
 import { z } from 'zod';
 import type { Command } from '@femlab/registry';
+import { loadTargets } from './loadTargets';
 import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
@@ -172,7 +173,7 @@ export function makeHostContext(
       hover: async (s) => {
         const commit = store.beginHover();
         const target = s.load
-          ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store)
+          ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store.state.model)
           : s;
         commit({ bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] });
       },
@@ -228,7 +229,7 @@ export function makeHostContext(
         const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
         if (item?.cmd === 'form.edit') {
           const definition = await editDefinition(store, transport, item.args as DefinitionTarget);
-          if (definition && load) store.select({ ...targets, ...loadTargets(definition, store) });
+          if (definition && load) store.select({ ...targets, ...loadTargets(definition, store.state.model) });
         }
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },
@@ -422,14 +423,6 @@ export async function openExample(name: string, session: SessionHostServices) {
 type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
 type DefinitionCommand = Command;
 
-/** Read exact targets from the engine definition, never the unit-formatted display summary. */
-function loadTargets(command: DefinitionCommand, store: Store): Partial<Pick<Selection, 'bodies' | 'faces' | 'sets'>> {
-  if ('on' in command && typeof command.on === 'string') return { sets: [command.on] };
-  if ('bodies' in command) return { bodies: command.bodies };
-  if (command.cmd === 'load.gravity') return { bodies: store.state.model?.bodies.map(body => body.name) ?? [] };
-  const connection = command.cmd === 'contact.thermal' ? store.state.model?.connections.find(item => item.name === command.of) : undefined;
-  return connection ? { sets: [connection.master, connection.slave] } : {};
-}
 const definitionRequests = new WeakMap<Store, number>();
 
 function invalidateDefinition(store: Store): number {
