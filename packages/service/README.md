@@ -24,10 +24,30 @@ database rows. Reservation/settlement admission follows in #549.
 The Node host is separate from the headless Rust engine. It shares provider blocks,
 completed tool/continuation events and versioned request schemas with the browser
 through `@femlab/ai`. OpenAI clients, identity, storage, clock and request IDs are
-host dependencies. This first slice (#546) supplies the protocol and HTTP host;
-it does not yet admit an inference or claim that billing/login are implemented.
+host dependencies. Authentication and account-owned admission are independent of
+the engine; the service never executes tool calls or creates an engine Session.
 
 `npm run build -w packages/service`, then `PORT=8087 npm start -w packages/service`.
-`GET /healthz` proves the process is live; `/readyz` remains 503 until real service
-adapters are configured. Unknown routes return a structured error and never echo
-request bodies or credentials. Later slices add the typed API and injected adapters.
+`GET /healthz` proves the process is live; `/readyz` is 503 until identity, database
+migrations and provider configuration are available. Unknown routes return a
+structured error and never echo request bodies or credentials.
+
+`POST /v1/ai/completions` (alias `/chat/completions`) accepts the strict normalized
+`CompletionInput` protocol, a Firebase bearer ID token and an `Idempotency-Key`.
+This uses FEM Lab events rather than the OpenAI Chat Completions wire format.
+The service counts the exact Responses input, reserves maximum cost, commits
+dispatch and streams SSE envelopes (`request`, `receipt`, `chat`). A receipt is
+emitted before completed tool calls. Upstream failures with confirmed usage are
+settled; absent usage remains pending. Explicit HTTP rejections without a started
+response receive an unbilled rejection receipt. SDK generation retries are disabled.
+
+`GET /v1/ai/requests/:id` returns only the authenticated owner's status/receipt;
+it never replays response text. `GET /v1/ai/models` reports the owner's effective
+allowlist and limits. Launch context is bounded at 64,000 counted input tokens for
+Free / 128,000 for paid, with 4,096 / up to 16,000 output tokens. HTTP bodies are
+bounded at 16 MiB. At most two PNG/JPEG/WebP images are accepted, each at most
+5 MiB and 1568 pixels on the longest edge; remote file references are rejected.
+
+Deploy long SSE directly to Cloud Run/the API load balancer. Firebase Hosting
+rewrites time out at 60 seconds. Run `node dist/main.mjs --recover` as a scheduled,
+authenticated Cloud Run Job, not as post-response work in the HTTP process.

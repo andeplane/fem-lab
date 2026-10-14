@@ -77,7 +77,7 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
       const account = (await sql.query('SELECT status FROM accounts WHERE id=$1 FOR UPDATE', [accountId])).rows[0];
       if (account?.status !== 'active') throw new ServiceFailure(403, 'account-inactive', 'This account cannot use hosted AI.', 'account');
       // Launch context ceiling, including images, schemas and encrypted continuation. Never truncate.
-      if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > 128_000) throw new ServiceFailure(422, 'context-too-large', 'Reduce conversation context or start a new chat.', 'admission', 'ai.newChat');
+      if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > (row.plan==='free'?64_000:128_000)) throw new ServiceFailure(422, 'context-too-large', 'Reduce conversation context or start a new chat.', 'admission', 'ai.newChat');
       const heldCredits = maximumCharge(String(row.model), inputTokens, Number(row.max_output), String(row.tariff_version)), cost = supplierMicros(heldCredits);
       const limits = (await sql.query('SELECT * FROM ai_limits WHERE id=true')).rows[0]!;
       const day = new Date(Date.UTC(clock.getUTCFullYear(),clock.getUTCMonth(),clock.getUTCDate())), month = calendarPeriod(clock).start;
@@ -120,12 +120,13 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
     if (!/^resp_[a-zA-Z0-9_-]{1,200}$/.test(provider)) throw new Error('Invalid provider response identity.');
     await db.query("UPDATE ai_requests SET provider_id=$3,updated_at=$4 WHERE id=$1 AND account_id=$2 AND state=ANY($5) AND (provider_id IS NULL OR provider_id=$3)", [id,accountId,provider,now(),['dispatched','pending_reconciliation']]);
   }
-  async function finish(accountId: string, id: string, usage: Usage | null, outcome: 'confirmed'|'undispatched'|'unknown'): Promise<Receipt> {
+  async function finish(accountId: string, id: string, usage: Usage | null, outcome: 'confirmed'|'undispatched'|'unknown'|'provider-rejected'): Promise<Receipt> {
     return transaction(db, async sql => {
       const row = await owned(sql,accountId,id), previous = await receipt(sql,id);
       if (previous) return previous;
       if (outcome === 'confirmed' && (!usage || !['dispatched','pending_reconciliation'].includes(String(row.state)))) throw new Error('Cannot settle unconfirmed or undispatched usage.');
       if (outcome === 'undispatched' && !['preflight','reserved'].includes(String(row.state))) throw new Error('Cannot release a possibly billed request.');
+      if (outcome === 'provider-rejected' && (row.state !== 'dispatched' || row.provider_id)) throw new Error('Cannot classify a started response as rejected.');
       if (outcome === 'unknown' && (!['dispatched','pending_reconciliation'].includes(String(row.state)) || now().getTime()-(row.created_at as Date).getTime() < 86_400_000)) throw new Error('Unconfirmed usage remains held for recovery.');
       const actual = usage ? usageCharge(String(row.model),usage,String(row.tariff_version)) : 0n, ceiling = integer(row.held_subcredits), charged = actual < ceiling ? actual : ceiling;
       let remaining = charged;
@@ -163,6 +164,7 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
     return result;
   }
   return { prepare,reserve,dispatch,providerId,pending,settle:(accountId:string,id:string,usage:Usage)=>finish(accountId,id,usage,'confirmed'),release:(accountId:string,id:string)=>finish(accountId,id,null,'undispatched'),recover,
+    rejected:(accountId:string,id:string)=>finish(accountId,id,null,'provider-rejected'),
     status:async(accountId:string,id:string)=>status(db,await owned(db,accountId,id),true) };
 }
 export type Reservations = ReturnType<typeof reservations>;
