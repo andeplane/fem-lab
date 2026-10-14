@@ -14164,3 +14164,6 @@ fn original_bilinear_query_areas_converge_and_replay_independently_of_owner_and_
     }
     assert_eq!(thread_values[0], thread_values[1]);
 }
+
+#[path = "registry/quadratic_measures.rs"]
+mod quadratic_measures;

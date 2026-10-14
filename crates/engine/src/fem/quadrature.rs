@@ -211,3 +211,95 @@ const TET_125_TABLE: ([[f64; 3]; 125], [f64; 125]) = {
 
 /// Positive collapsed Gauss rule on the unit tetrahedron, exact through total degree 7.
 pub const TET_125: Rule = Rule { points: &TET_125_TABLE.0, weights: &TET_125_TABLE.1 };
+
+/// Positive symmetric triangle rule, exact through degree5. Geometry queries use it
+/// for quadratic surfaces; the stiffness and physical boundary rules stay unchanged.
+/// The six off-centre points form complete barycentric permutation orbits.
+const SQRT15: f64 = 3.872_983_346_207_417;
+const T7_A: f64 = (6.0 + SQRT15) / 21.0;
+const T7_B: f64 = (9.0 - 2.0 * SQRT15) / 21.0;
+const T7_C: f64 = (6.0 - SQRT15) / 21.0;
+const T7_D: f64 = (9.0 + 2.0 * SQRT15) / 21.0;
+const T7_WA: f64 = (155.0 + SQRT15) / 2400.0;
+const T7_WC: f64 = (155.0 - SQRT15) / 2400.0;
+pub const TRI_7: Rule = Rule {
+    points: &[
+        [1.0 / 3.0, 1.0 / 3.0, 0.0],
+        [T7_A, T7_A, 0.0],
+        [T7_A, T7_B, 0.0],
+        [T7_B, T7_A, 0.0],
+        [T7_C, T7_C, 0.0],
+        [T7_C, T7_D, 0.0],
+        [T7_D, T7_C, 0.0],
+    ],
+    weights: &[9.0 / 80.0, T7_WA, T7_WA, T7_WA, T7_WC, T7_WC, T7_WC],
+};
+
+const TET_27_TABLE: ([[f64; 3]; 27], [f64; 27]) = {
+    let mut points = [[0.0; 3]; 27];
+    let mut weights = [0.0; 27];
+    let mut i = 0;
+    while i < 27 {
+        let (u, wu) = UNIT_GL3[i / 9];
+        let (v, wv) = UNIT_GL3[(i / 3) % 3];
+        let (z, wz) = UNIT_GL3[i % 3];
+        points[i] = [u, (1.0 - u) * v, (1.0 - u) * (1.0 - v) * z];
+        weights[i] = wu * wv * wz * (1.0 - u) * (1.0 - u) * (1.0 - v);
+        i += 1;
+    }
+    (points, weights)
+};
+
+/// Positive collapsed Gauss rule, exact through tetrahedron degree3. Three-point
+/// Gauss is exact through degree5 in u, including the collapsed Jacobian (1-u)².
+/// This suffices for a Tet10 geometry determinant, which has total degree3.
+pub const TET_27: Rule = Rule { points: &TET_27_TABLE.0, weights: &TET_27_TABLE.1 };
+
+#[cfg(test)]
+mod geometry_rule_tests {
+    use super::*;
+
+    fn factorial(n: usize) -> f64 {
+        (1..=n).product::<usize>() as f64
+    }
+
+    #[test]
+    fn triangle_geometry_rule_has_positive_weights_and_degree_five_exactness() {
+        for (&[u, v, _], &weight) in TRI_7.points.iter().zip(TRI_7.weights) {
+            assert!(u > 0.0 && v > 0.0 && u + v < 1.0 && weight > 0.0);
+        }
+        for p in 0..=5 {
+            for q in 0..=5 - p {
+                let integral: f64 = TRI_7
+                    .points
+                    .iter()
+                    .zip(TRI_7.weights)
+                    .map(|(x, w)| w * x[0].powi(p as i32) * x[1].powi(q as i32))
+                    .sum();
+                let exact = factorial(p) * factorial(q) / factorial(p + q + 2);
+                assert!((integral - exact).abs() < 2e-15);
+            }
+        }
+    }
+
+    #[test]
+    fn tetrahedron_geometry_rule_has_positive_weights_and_degree_three_exactness() {
+        for (&[u, v, z], &weight) in TET_27.points.iter().zip(TET_27.weights) {
+            assert!(u > 0.0 && v > 0.0 && z > 0.0 && u + v + z < 1.0 && weight > 0.0);
+        }
+        for p in 0..=3 {
+            for q in 0..=3 - p {
+                for r in 0..=3 - p - q {
+                    let integral: f64 = TET_27
+                        .points
+                        .iter()
+                        .zip(TET_27.weights)
+                        .map(|(x, w)| w * x[0].powi(p as i32) * x[1].powi(q as i32) * x[2].powi(r as i32))
+                        .sum();
+                    let exact = factorial(p) * factorial(q) * factorial(r) / factorial(p + q + r + 3);
+                    assert!((integral - exact).abs() < 2e-15);
+                }
+            }
+        }
+    }
+}
