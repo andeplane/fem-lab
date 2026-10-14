@@ -2140,3 +2140,17 @@ cube with `x+y<=2` and an affine cell `(5/4+(s-t)/2,7/8+(s+t)/2,r)` with
 `x+y>=17/8` and determinant `1/2`. All three AABB ranges overlap; an independent
 strict plane gap of `1/8` proves separation in both source record orders. Negative-z
 broad-phase separation also preserves the existing positive/negative axis cases.
+
+Mixed Tet/Hex guards have explicit original-geometry witnesses. For
+`q=x-1-y*z/4`, one positive-Jacobian Tet has strictly positive corner values yet
+an edge midpoint at `q=-1/32`; another Tet uses the four noncoplanar quadric
+corners (all `q=0`) yet its diagonal edge midpoint has `q=-1/16`. Both overlap
+the Hex interior and fail closed. The injective Hex map
+`(1+5*s*t/4+r,s,t)`, determinant `1`, has `q=s*t+r` and an L-shaped zero
+corner set, so its undeclared ruling-edge contact is rejected.
+
+The bijective map `(1+s/4+(t+r-t*r)/16,t,r)`, determinant `1/4`, only touches
+the unit cube at one labelled vertex. Its exact normalized Sylvester minors
+are `1/4,255/4096,127/8192`, but one face-separator quotient is `(1-r)/16`.
+This nonstrict quotient demonstrates a reachable conservative proof failure:
+the valid pair is explicitly inconclusive, never silently accepted or called invalid.

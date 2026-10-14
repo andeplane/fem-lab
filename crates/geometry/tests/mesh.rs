@@ -2541,6 +2541,18 @@ fn shell_surface_patches_merge_shared_edges_and_keep_creases() {
     assert!(surface(&[a, b]).is_err());
 }
 
+#[test]
+fn untagged_shell_edges_leave_no_temporary_sets() {
+    let mut patch = surface_patch([[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]]);
+    patch.tags = [None, None, None, None];
+    let result = femlab_geometry::surface(&[patch]).unwrap();
+    assert_eq!(result.mesh.n_nodes(), 9);
+    assert_eq!(result.mesh.n_elems(), 4);
+    assert!(result.mesh.node_sets.is_empty());
+    assert_eq!(result.mesh.face_sets["top"].len(), 4);
+    assert!(result.directors.iter().flatten().all(|normal| *normal == [0., 0., 1.]));
+}
+
 proptest! {
     #[test]
     fn random_shell_surface_patches_never_panic(corners in prop::array::uniform4(prop::array::uniform3(-10.0f64..10.0)),n in prop::array::uniform2(0usize..5)) {
@@ -2954,6 +2966,89 @@ fn certificate_requires_an_identically_zero_interface_not_just_zero_corners() {
     let mut connectivity: Vec<_> = (0..8).collect();
     connectivity.extend(second);
     assert!(certify_imported_geometry(&authored_hex(&points, &connectivity)).is_err());
+}
+
+#[test]
+fn certificate_rejects_mixed_tet_edge_crossing_a_warped_face_between_positive_vertices() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // A's face is q=x-1-y*z/4. All four Tet vertices have q>0, but
+    // the edge from (33/32,0,1) to (33/32,1,0) has midpoint
+    // q=1/32-1/16=-1/32, strictly inside A. Its exact detJ is 1/8.
+    // Vertex-only classification would silently accept this volume overlap.
+    let left = SOURCE_HEX.map(|[s, t, r]| [s * (1. + t * r / 4.), t, r]);
+    let mut mixed = authored_hex(&left, &(0..8).collect::<Vec<_>>());
+    let tet = [[33. / 32., 0., 1.], [33. / 32., 0., 0.], [33. / 32., 1., 0.], [37. / 32., 0., 0.]];
+    for [x, y, z] in tet {
+        assert!(x - 1. - y * z / 4. > 0.);
+    }
+    assert_eq!(33. / 32. - 1. - 0.5 * 0.5 / 4., -1. / 32.);
+    mixed.coords.extend(tet.into_iter().flatten());
+    mixed.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![8, 9, 10, 11], first_elem: 1 });
+    assert_eq!(
+        certify_imported_geometry(&mixed).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0, 1],
+            cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact"
+                .into(),
+        }
+    );
+}
+
+#[test]
+fn certificate_rejects_nonplanar_quadric_corner_hull_and_noncartesian_zero_contact() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    let left = SOURCE_HEX.map(|[s, t, r]| [s * (1. + t * r / 4.), t, r]);
+    // Four noncoplanar corners of q=x-1-y*z/4 form a positive Tet,
+    // detJ=1/4, but every vertex is zero. Its edge from (1,1,0) to
+    // (1,0,1) has q=-1/16 at the midpoint and crosses inside A.
+    let mut mixed = authored_hex(&left, &(0..8).collect::<Vec<_>>());
+    let tet = [[1., 0., 0.], [1., 1., 0.], [1., 0., 1.], [1.25, 1., 1.]];
+    for [x, y, z] in tet {
+        assert_eq!(x - 1. - y * z / 4., 0.);
+    }
+    assert_eq!(1. - 1. - 0.5 * 0.5 / 4., -1. / 16.);
+    mixed.coords.extend(tet.into_iter().flatten());
+    mixed.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![8, 9, 10, 11], first_elem: 1 });
+    let expected = ImportedCertificateError::Inconclusive {
+        elements: vec![0, 1],
+        cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact".into(),
+    };
+    assert_eq!(certify_imported_geometry(&mixed).unwrap_err(), expected);
+
+    // B=(1+5*s*t/4+r,s,t), detJ=1, has q(B)=s*t+r.
+    // Its zero corners form an L, not a single reference entity. With
+    // distinct source labels, both boundary ruling-edge contacts are undeclared.
+    let right = SOURCE_HEX.map(|[s, t, r]| [1. + 5. * s * t / 4. + r, s, t]);
+    let mut points = left.to_vec();
+    let second = append_source_hex(&mut points, &right, false);
+    let mut connectivity: Vec<_> = (0..8).collect();
+    connectivity.extend(second);
+    assert_eq!(certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap_err(), expected);
+}
+
+#[test]
+fn certificate_reports_nonstrict_zero_entity_quotients_as_inconclusive() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // B=(1+s/4+(t+r-t*r)/16,t,r) has detJ=1/4 and explicit
+    // inverse s=4*(x-1)-(y+z-y*z)/4. Its only contact with A is
+    // the labelled vertex s=t=r=0. All normalized corner matrices
+    // are SPD (minors 1/4,255/4096,127/8192), so this is a valid cell.
+    // On x=1 the factor quotients are 1/4,(1-r)/16,1/16.
+    // The second vanishes at r=1: this sufficient proof fails closed
+    // even though q>0 away from the shared vertex.
+    let right = SOURCE_HEX.map(|[s, t, r]| [1. + s / 4. + (t + r - t * r) / 16., t, r]);
+    let mut points = SOURCE_HEX.to_vec();
+    let second = append_source_hex(&mut points, &right, true);
+    let mut connectivity: Vec<_> = (0..8).collect();
+    connectivity.extend(second);
+    assert_eq!(
+        certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0, 1],
+            cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact"
+                .into(),
+        }
+    );
 }
 
 #[test]
