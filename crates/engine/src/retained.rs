@@ -340,6 +340,25 @@ impl Engine {
                 })
             })
             .collect();
+        let edge_element: Vec<u32> = surface
+            .faces
+            .iter()
+            .take(surface.edges.len())
+            .map(|face| face.elem)
+            .chain(surface.line_elem.iter().copied())
+            .collect();
+        let edge_element_node = surface
+            .edges
+            .iter()
+            .chain(&surface.lines)
+            .zip(&edge_element)
+            .flat_map(|(edge, &elem)| {
+                edge.map(|node| {
+                    offsets[elem as usize]
+                        + mesh.elem_nodes(elem).iter().position(|&n| n == node).expect("edge belongs to element") as u32
+                })
+            })
+            .collect();
         Ok(crate::query::ResultSurface {
             result_id: record.id.clone(),
             step: record.step.clone(),
@@ -361,6 +380,8 @@ impl Engine {
             tri_sets,
             body_names: built.body_of_block.clone(),
             edges: surface.edges.iter().chain(&surface.lines).flatten().copied().collect(),
+            edge_element,
+            edge_element_node,
             edge_face: surface
                 .set_of_face
                 .iter()

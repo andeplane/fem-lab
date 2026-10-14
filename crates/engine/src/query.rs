@@ -1225,6 +1225,11 @@ pub struct ResultSurface {
     pub body_names: Vec<String>,
     /// Sheet boundary edges and line members, two node indices per segment.
     pub edges: Vec<u32>,
+    /// Global element behind each boundary edge or line member; indexes element-based fields.
+    pub edge_element: Vec<u32>,
+    /// Element-node field index for each edge endpoint, in the same order as edges.
+    /// Members sharing a mesh node retain their own values at that joint.
+    pub edge_element_node: Vec<u32>,
     /// u32::MAX means no face Set, including line members.
     pub edge_face: Vec<u32>,
     pub edge_body: Vec<u32>,

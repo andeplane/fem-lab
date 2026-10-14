@@ -1,4 +1,39 @@
-import { expect, test } from './fixtures';
+import { expect, test, type Page } from './fixtures';
+
+async function memberPatch(page: Page, x: number, y: number) {
+  return page.locator('canvas').evaluate((canvas, point) => {
+    const source = canvas as HTMLCanvasElement;
+    const copy = document.createElement('canvas');
+    copy.width = source.width;
+    copy.height = source.height;
+    const context = copy.getContext('2d')!;
+    context.drawImage(source, 0, 0);
+    // The explicit front orthographic camera centres (6, 1). The 12 × 2 m model's
+    // enclosing diagonal fixes its viewport height; sample the middle of a named chord.
+    const scale = source.height / (2 * Math.hypot(12, 2) * 0.7);
+    const px = Math.round(source.width / 2 + (point.x - 6) * scale);
+    const py = Math.round(source.height / 2 - (point.y - 1) * scale);
+    const pixels = context.getImageData(px - 4, py - 4, 9, 9).data;
+    let count = 0, saturation = 0;
+    const total = [0, 0, 0];
+    for (let i = 0; i < pixels.length; i += 4) {
+      const high = Math.max(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!);
+      const low = Math.min(pixels[i]!, pixels[i + 1]!, pixels[i + 2]!);
+      saturation = Math.max(saturation, high - low);
+      if (high > 70) {
+        count++;
+        total[0]! += pixels[i]!; total[1]! += pixels[i + 1]!; total[2]! += pixels[i + 2]!;
+      }
+    }
+    return { count, saturation, mean: total.map(value => count ? value / count : 0) };
+  }, { x, y });
+}
+
+async function clickMember(page: Page, x: number, y: number) {
+  const rect = (await page.locator('canvas').boundingBox())!;
+  const scale = rect.height / (2 * Math.hypot(12, 2) * 0.7);
+  await page.mouse.click(rect.x + rect.width / 2 + (x - 6) * scale, rect.y + rect.height / 2 - (y - 1) * scale);
+}
 
 test('@cpu selects unaveraged member stress on the steel roof truss', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
@@ -50,6 +85,29 @@ test('@cpu selects unaveraged member stress on the steel roof truss', async ({ p
     }
     return count;
   });
-  console.log(`unaveraged truss contour: ${saturated} saturated canvas pixels`);
+  expect(saturated).toBeGreaterThan(100);
+  const bottom = await memberPatch(page, 5, 0);
+  const top = await memberPatch(page, 5, 2);
+  expect(bottom.count).toBeGreaterThan(0);
+  expect(top.count).toBeGreaterThan(0);
+  expect(bottom.saturation).toBeGreaterThan(25);
+  expect(top.saturation).toBeGreaterThan(25);
+  expect(bottom.mean.reduce((difference, value, i) => difference + Math.abs(value - top.mean[i]!), 0)).toBeGreaterThan(100);
+  await clickMember(page, 5, 0);
+  await expect(page.locator('.probe')).toContainText('60.7');
+  await clickMember(page, 5, 2);
+  await expect(page.locator('.probe')).toContainText('-68.29');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.clear' }));
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['truss'], on: false }));
+  expect((await memberPatch(page, 5, 0)).count).toBe(0);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['truss'], on: true }));
+  expect((await memberPatch(page, 5, 0)).saturation).toBeGreaterThan(25);
+  // Editing a load keeps the selected solve's contour and line identities on screen.
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'load.force', name: 'purlins', on: 'top-joints', total: ['0 kN', '-120 kN', '0 kN'] }));
+  await expect(page.locator('.stale-banner')).toBeVisible();
+  await expect(page.locator('.legend-field')).toHaveText('σxx unaveraged');
+  expect((await memberPatch(page, 5, 0)).saturation).toBeGreaterThan(25);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'journal.undo', steps: 1 }));
+  await expect(page.locator('.stale-banner')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('unaveraged-roof-truss.png') });
 });
