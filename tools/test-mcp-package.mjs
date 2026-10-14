@@ -42,7 +42,7 @@ try {
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(installed, manifest.bin['femlab-mcp'])], cwd: directory, env, stderr: 'inherit' }));
   const { tools } = await client.listTools();
   const names = new Set(tools.map(({ name }) => name));
-  for (const name of ['query_model', 'model_new', 'run_script', 'validate_script']) assert(names.has(name), `missing installed tool ${name}`);
+  for (const name of ['query_model', 'model_new', 'run_script', 'validate_script', 'file_importAbaqus']) assert(names.has(name), `missing installed tool ${name}`);
   const call = async (name, args) => {
     const response = await client.callTool({ name, arguments: args });
     assert.notEqual(response.isError, true, JSON.stringify(response));
@@ -60,13 +60,33 @@ try {
   const script = await call('run_script', { code: 'const m = await fem.query.model(); return m.name;' });
   assert.equal(script.error, undefined);
   assert.equal(script.result, 'installed artifact');
+  // The SDK validated listTools above. The provider-facing object projection does not relax
+  // the original mode/Force/source constraints used by actual installed dispatch.
+  const meshText = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus/sparse-label-tet.inp'), 'utf8');
+  const staticText = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus-static/bar-hex-mm-n.inp'), 'utf8');
+  const meshArgs = { name: 'installed mesh', body: 'tet', mode: 'mesh', unitLength: '1 cm', text: meshText };
+  const staticArgs = { name: 'installed static', body: 'bar', mode: 'static', unitLength: '1 mm', text: staticText };
+  for (const args of [staticArgs, { ...meshArgs, unitForce: '1 N' }, { ...meshArgs, path: 'conflicting.inp' }]) {
+    const rejected = await client.callTool({ name: 'file_importAbaqus', arguments: args });
+    assert.equal(rejected.isError, true, JSON.stringify(rejected));
+    assert.equal(JSON.parse(rejected.content[0].text).code, 'schema');
+    assert.deepEqual(await call('query_journal', {}), beforeValidation, 'rejected imports must preserve the installed engine');
+  }
+  const meshImport = await call('file_importAbaqus', meshArgs);
+  assert.deepEqual(meshImport.report.sourceLabels.unusedNodes, [99]);
+  assert.equal(meshImport.report.analysisConfigured, false);
+  assert.deepEqual((await call('query_model', {})).steps, []);
+  assert.equal((await call('query_mesh', {})).nodes, 4);
+  const staticImport = await call('file_importAbaqus', { ...staticArgs, unitForce: '1 N' });
+  assert.equal(staticImport.report.analysisConfigured, true);
+  assert.equal((await call('query_model', {})).steps[0].solved, false);
   // Release publication consumes the exact tarball that this process installed and tested.
   if (process.argv[2]) {
     const destination = path.resolve(process.argv[2]);
     mkdirSync(path.dirname(destination), { recursive: true });
     copyFileSync(path.join(directory, packed.filename), destination);
   }
-  console.log(`Installed ${packed.filename}: stdio tools, engine, worker script and exact WASM payload passed`);
+  console.log(`Installed ${packed.filename}: stdio tools, strict Abaqus modes, engine, worker script and exact WASM payload passed`);
 } finally {
   await client?.close();
   rmSync(directory, { recursive: true, force: true });
