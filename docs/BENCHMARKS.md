@@ -2254,3 +2254,33 @@ query metrics remain separately tracked in [#524](https://github.com/andeplane/f
 Shell `pressureArea` has a separate pre-existing query defect, tracked in
 [#525](https://github.com/andeplane/fem-lab/issues/525); its physical Shell4
 load normalization is not changed by this measurement fix.
+
+### Strict Abaqus linear-static conversion (#503)
+
+Independent text fixtures live in `crates/engine/tests/fixtures/abaqus-static/`; their
+Cartesian connectivity and forces are authored without FEM Lab's meshers or `.inp`
+writer. The source scale is explicit: SI uses `unitLength: 1 m, unitForce: 1 N`;
+mm/N uses `unitLength: 1 mm, unitForce: 1 N` and E = 200000 N/mm². Conversion
+returns portable Commands and performs no solve or publication.
+
+| Registry test | Independent answer and refinement gate |
+|---|---|
+| `abaqus_static_axial_bars_match_independent_si_oracles_at_three_refinements` | C3D4 and standard full-integration C3D8, each at 2/4/8 axial cells and in SI/mm/N. L = 1 m, A = 0.01 m², E = 200 GPa, ν = 0 and F = 1 kN give δ = FL/(EA) = 5e-7 m (absolute error < 1e-16 m), σxx = F/A = 1e5 Pa (error < 1e-6 Pa), zero other stress components (< 1e-6 Pa), and total root reaction −1 kN (error < 1e-8 N). |
+| `abaqus_static_affine_prescribed_patch_matches_hooke_stress_and_reaction_conservation` | Both solid kinds at 2/4/8 cells in SI/mm/N, E = 200 GPa, ν = 0.25, prescribed engineering strain [1e-4, 2e-4, −1e-4, 0.5e-4, 0.7e-4, −0.3e-4]. Every stress component agrees with σ = λ tr(ε) I + 2με to 1e-5 Pa; each net reaction component is below 1e-5 N. |
+| `abaqus_static_set_loads_are_per_node_and_numeric_targets_are_reported_singletons` | Four-node CLOAD Set magnitudes [3, −5, 7] N plus a 10 N x force on one source node produce totals [22, −20, 28] N. Reactions balance each component to 1e-9 N. Only the numeric target receives a singleton Set. |
+| `abaqus_static_nonzero_step_displacements_and_equal_boundary_overlap_are_preserved` | Step-level 0.001 mm axial displacement is retained as 1e-6 m. σxx = Eδ/L = 2e5 Pa and the total root reaction is −EAδ/L = −2 kN (error < 1e-8 N); repeated/equal constraints do not double reactions. |
+
+The axial and affine patches lie exactly in the first-order finite-element spaces;
+all three refinements must reproduce the answer, rather than asserting an artificial
+convergence rate. End forces are defined independently: the hex face's four corners
+receive F/4; each tet face triangle contributes its area fraction times F/3 to each
+of its vertices, giving F/3 on the two shared-diagonal corners and F/6 on the others.
+This specifically checks Abaqus's per-node CLOAD meaning against FEM Lab's Set-total
+`load.force` contract.
+
+Static conversion also gates full section/material coverage, finite unit scaling,
+model-level zero versus Step-level nonzero displacement, ambiguous overlapping CLOAD
+rejection, and unsupported physics/options without active Model/Journal/Result mutation.
+Native one/three-thread replay and native/WASM conversion/hash parity are separate
+checks. Only final linear equilibrium is imported; an Abaqus increment history is
+explicitly outside this supported slice.

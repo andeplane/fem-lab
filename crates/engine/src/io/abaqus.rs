@@ -153,7 +153,7 @@ impl Keyword {
                     self.line,
                     &self.name,
                     key,
-                    format!("parameter {key} is outside the supported mesh subset"),
+                    format!("parameter {key} is outside the supported import subset"),
                 ));
             }
         }
@@ -917,11 +917,13 @@ pub(crate) fn conversion_from_mesh(
         input_bytes: input_bytes as u32,
         body: body.to_string(),
         unit_length: parsed.unit_length,
+        unit_force: None,
         source_nodes: parsed.source.nodes.len() as u32,
         active_nodes: parsed.source_labels.nodes.len() as u32,
         source_elements: parsed.source.elements.len() as u32,
         element_kind: parsed.source.elements.first().expect("read_mesh requires nonempty elements").kind,
         analysis_configured: false,
+        analysis: None,
         bbox: parsed.bbox,
         source_labels: parsed.source_labels,
         sets,
