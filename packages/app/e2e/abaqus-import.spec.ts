@@ -74,6 +74,7 @@ test('@cpu Abaqus picker imports explicit units, solves, edits source with undo/
   await expect(report).toContainText('bar.nset_TIP');
   await expect(report).toContainText('STEEL');
   await expect(report).toContainText('AXIAL');
+  await report.screenshot({ path: info.outputPath('abaqus-import-report.png') });
   const model = await q<ModelSummary>(page, 'query.model');
   expect(model.name).toBe('Imported axial bar');
   expect(model.materials[0]!.name).toBe('STEEL');
@@ -83,6 +84,9 @@ test('@cpu Abaqus picker imports explicit units, solves, edits source with undo/
   expect(mesh.nodes).toBe(12); expect(mesh.elements).toBe(2);
   expect(mesh.bbox[3]!).toEqual({ value: 1, unit: 'm' });
   await report.getByTitle('Close Abaqus import report', { exact: true }).click();
+  await expect(page.locator('aside.tree')).toContainText('STEEL');
+  await expect(page.locator('aside.tree')).toContainText('AXIAL');
+  await expect(page.locator('aside.tree')).toContainText('bar.nset_ROOT');
   await expect(page.locator('.topbar button[data-cmd="solve.run"]')).toBeEnabled();
   await expect(page.locator('canvas')).toBeVisible();
   await page.locator('canvas').screenshot({ path: info.outputPath('imported-hex-mesh.png') });
@@ -145,11 +149,12 @@ test('@cpu invalid inline imports and unsupported database files retain the solv
   const chosen = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Choose .inp and import', exact: true }).click();
   await (await chosen).setFiles({ name: 'results.odb', mimeType: 'application/octet-stream', buffer: Buffer.from([0xff, 0]) });
-  await expect(page.getByRole('alert')).toContainText('binary Abaqus results database');
+  await expect(page.getByRole('dialog', { name: 'Import Abaqus input deck', exact: true }).getByRole('alert')).toContainText('binary Abaqus results database');
   expect((await q<ModelSummary>(page, 'query.model')).hash).toBe(before.hash);
   await page.getByTitle('Close Abaqus import', { exact: true }).click();
   const text = (await readFile(fixture, 'utf8')).replace('*ELEMENT,TYPE=C3D8', '9999,9000,0,0\n*ELEMENT,TYPE=C3D8');
-  const scripted = await page.evaluate(async text => window.fem.dispatch({ cmd: 'script.run', code: `await fem.file.importAbaqus(${JSON.stringify({ ...input(text), cmd: undefined })}); await fem.solve.run({step:"AXIAL",solver:"cpu-direct"}); return await fem.query.result({step:"AXIAL"});` }), text) as { error?: string; result: ResultSummary };
+  const code = `await fem.file.importAbaqus(${JSON.stringify({ ...input(text), cmd: undefined })}); await fem.solve.run({step:"AXIAL",solver:"cpu-direct"}); return await fem.query.result({step:"AXIAL"});`;
+  const scripted = await page.evaluate(code => window.fem.dispatch({ cmd: 'script.run', code }), code) as { error?: string; result: ResultSummary };
   expect(scripted.error).toBeUndefined(); axial(scripted.result);
   await expect(page.getByRole('dialog', { name: 'Abaqus import report', exact: true })).toContainText('9999');
   await expect(page.getByRole('dialog', { name: 'Abaqus import report', exact: true })).toContainText('physically unanalysed');
