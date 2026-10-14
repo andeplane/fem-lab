@@ -771,6 +771,17 @@ inferred from D6's solved answer.
 | E6 | Radiating slab, conduction into a grey-body face | T_L from bisecting `k(T0 − T_L)/L = σε(T_L⁴ − T∞⁴)`: 927.0039504520639 K at k = 55.6 W/(m K), L = 0.1 m, T0 = 1000 K, T∞ = 300 K, ε = 0.98 | 1e-9 relative at three mesh sizes, and heat in through the held face = power radiated to 1e-9 | radiation BC, its Newton iteration, and the discrete energy balance it closes | engine test + green |
 | E7 | Radiating block, analytic transient | `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)`, `c = σεA/(ρ c_p V)`: 381.49284808810995 K at t = 1 s | Crank–Nicolson at dt = 5 ms within 1e-4 relative; observed temporal rate > 0.85 at θ = 1 and > 1.7 at θ = 0.5 under two halvings | the fourth-power law itself, and the θ-method's order on a nonlinear boundary | engine test + green |
 | E8 | Restrained strip, transient thermal stress (#84 transient field chaining) | `σxx = σyy = −Eα ΔT/(1 − ν)`, plane-stress biaxial restraint; ΔT(x,t) the E5 Fourier series generalised to a rise between two endpoints: 300 MPa scale at Eα(T1−T0)/(1−ν), T0 = 300 K, T1 = 400 K | per-frame min/max within 1 % of the 300 MPa scale at every one of 11 retained frames; final frame pointwise within 1e-6 relative | one static solve per retained frame of a heat-transient predecessor, with the reduced stiffness factorised once and reused | engine test + green |
+| E9 | Free expansion of a heat→static bar without an explicit structural Load (#511) | `T(x) = 293.15 + 100x K`; `u_x(1 m) = alpha ∫₀¹ (T−293.15) dx = 0.0005 m` at `alpha = 1e-5 /K` | absolute end-displacement error ≤ 1e-12 m at nx = 2, 4, 8, ny = nz = 1; identical fields at 1 and 2 threads | inherited temperature as a static driving field, current predecessor/Result provenance, no false W-1400 | native registry + Chromium regression |
+
+**E9 uses a one-metre 100 × 100 mm bar**, held at x = 0, with E = 1 GPa,
+ν = 0.3, k = 10 W/(m K), and α = 1e-5 /K. Its heat Step fixes 293.15 K at x = 0
+and 393.15 K at x = 1 m; the static Step has an empty Load list and names the heat
+Step with `after`. Both Steps are defined before either solve so the heat Result stays
+current. The linear temperature and integrated axial end displacement are exact at
+every listed mesh size, so this case requires agreement on all three meshes rather
+than an observed asymptotic rate. A current consumed thermal field removes the structural
+`model.unloaded` warning; unavailable or stale fields, a modal predecessor's displacement,
+and harmonic/random response without forcing retain their true unloaded warnings.
 
 E1 runs the four element families on the same bar and checks every node, not just a probe: the
 profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
