@@ -25,9 +25,11 @@ Solve action or `femlab run bar.femlab.json --cpu` explicitly afterward. Saved n
 files replay without the original deck. [README usage](../../README.md) describes the same
 supported boundary.
 
-Issue #501 remains the acceptance umbrella: retain every release gate below, and close it
-only after the complete composed implementation passes its actual full integration matrix.
-An individual parser, source, host or focused numerical proof does not replace that matrix.
+Issue #501 covers persistent-source acceptance, including #516, #517 and #523. That source,
+geometry and Query implementation is accepted; its issue closure follows the recorded source
+integration matrix. Text conversion and host loading in #502–504 are separate acceptance
+scopes. Retain every release gate below: an individual parser, source, host or focused
+numerical proof does not establish complete composed loading acceptance.
 
 Export label correctness is tracked separately in [#518](https://github.com/andeplane/fem-lab/issues/518).
 That fix preserves qualified/case-sensitive names with Abaqus quotes and rejects unsupported
@@ -69,9 +71,10 @@ The minimum correct route needs one persistent imported-source representation, t
 small strict parser. It needs no new element kernel, file system inside Rust, CAD kernel or
 Extension Point. Implement it through the existing Mesher point
 ([ADR 0010](../adr/0010-plugins-fixed-extension-points-three-languages.md)).
-[#501](https://github.com/andeplane/fem-lab/issues/501) records the hard-to-reverse source
-representation/lifecycle decision in the next available ADR and updates the glossary then.
-This plan proposes that decision; it does not silently redefine today's derived Mesh.
+The source representation and lifecycle are recorded in
+[ADR 0026](../adr/0026-imported-mesh-source.md) and the glossary. The ordinary BuiltMesh
+remains derived; [#501](https://github.com/andeplane/fem-lab/issues/501) tracks integration
+acceptance of source preview, lifecycle and Queries, separately from the #502–504 reader/hosts.
 
 ## Representation and callable surface
 
@@ -104,22 +107,23 @@ Extend `MesherSpec`/`MesherSettings` with an immutable `imported` source:
   coerced into C3D8. No current geometric mesher changes its behavior.
 
 `build` returns the ordinary `BuiltMesh`: correct `body_of_block`, all resolved Set kinds,
-boundary skin and source-label mappings. Imported element Sets need explicit resolution;
-the current node-only mesher Set pass is insufficient. Reuse ordinary quality checks,
-assembly, Results, probes, retained surfaces and exporters. Update the unsolved viewer to
-draw the imported boundary rather than requiring a `Solid` geometry preview. Cost/count
-Queries must count this source without pretending it can be regenerated at another size.
+boundary skin and source-label mappings. Imported element Sets resolve exact authored
+memberships. The ordinary quality checks, assembly, Results, probes, retained surfaces and
+exporters consume that mesh. The unsolved viewer draws the imported boundary without a
+`Solid` geometry preview. Cost/count Queries count this source without claiming it can be
+regenerated at another size.
 
-Proposed `query.convertAbaqus` takes inline text, an explicit model/Body name, `mode`
-(`mesh` or `static`), and unit scales. A pure Rust converter returns a typed report and
+`query.convertAbaqus` takes inline text and its exact-byte SHA-256, explicit model/Body
+names, `mode` (`mesh` or `static`), mandatory `unitLength` and static-only `unitForce`
+Quantities. A pure Rust converter returns a typed report and
 ordinary Commands: `model.new`, explicit `model.setIdealisation { solid3d }`, `mesh.set`
 with the imported source, and any supported Material/Constraint/Load/Step Commands.
 It neither mutates the active Model nor performs a solve.
 
-Proposed host Command `file.importAbaqus` reads an injected picker or scoped project path,
+Host Command `file.importAbaqus` reads an injected picker or scoped project path,
 or accepts inline text. It uses the same converter and existing checked
 `Candidate::commands`/`finish`/replacement route. Do not add a second mutable engine API.
-The native CLI gets a thin `import-inp` host entry, with I/O outside the engine
+The native CLI has a thin `import-inp` host entry, with I/O outside the engine
 ([ADRs 0011](../adr/0011-engine-is-a-headless-library-browser-is-one-host.md),
 [0012](../adr/0012-engine-in-rust-hosts-in-typescript.md)).
 
@@ -286,10 +290,10 @@ output database ([file extensions](https://docs.software.vt.edu/abaqusv2025/Engl
 [binary database](https://docs.software.vt.edu/abaqusv2025/English/SIMACAECAERefMap/simacae-t-xypcopytoodbbtn.htm)).
 No binary-results reader or future Python/remote host is promised by this plan.
 
-Issue #501 is now split into #516 and #517 to keep implementations issue-sized. This does
-not reduce #501's original supported slice or verification. A foundation PR closes #516
-only; no foundation publication accepts uncertified cells, and no parser/loading feature
-is advertised while original #501–504 acceptance remains incomplete. Unused authored
+Issue #501 was split into #516 and #517 to keep implementations issue-sized. This did
+not reduce #501's original supported slice or verification. Foundation integration accepts
+only certified cells and its own source matrix; the parser/loading feature requires the
+separate #502–504 composed acceptance matrix. Unused authored
 nodes and exact memberships remain in the source: derived DOFs/Fields use participating
 nodes only, with explicit source-label mapping and unused-label reporting. A support or
 Load that includes an unused node fails structurally, rather than fabricating a result.
@@ -297,5 +301,5 @@ Load that includes an unused node fails structurally, rather than fabricating a 
 The original warped-face fixtures also exposed existing Query measurement assumptions:
 `query.set.measure` and implicit Body volume use planar-skin estimates, while assembly and
 load normalization already use original shape Jacobians. Issue #523 corrects that shared
-Query path. Its independent curved-face/volume evidence is part of #501's remaining Query
-acceptance; the sound certificate alone does not establish measurement accuracy.
+Query path. Its independent curved-face/volume evidence is part of #501's accepted Query
+implementation; the sound certificate alone does not establish measurement accuracy.
