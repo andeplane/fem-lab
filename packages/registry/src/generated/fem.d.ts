@@ -227,7 +227,9 @@ export interface Fem {
      * geometry: the selected mesher still determines the boundary approximation, and the `tet`
      * mesher is the one that meshes a curved solid freely. `formulation` has no effect when
      * `simplices` is true, or under the `tet` mesher, because simplex elements have no
-     * incompatible modes.
+     * incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
+     * default to full integration, and require order 1, solid3d, no simplex split/refinement.
+     * Removing or emptying a referenced imported Set fails without mutation.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**

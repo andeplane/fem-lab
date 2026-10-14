@@ -1,0 +1,19 @@
+{
+  "cmd": "mesh.set",
+  "mesher": {
+    "kind": "imported",
+    "body": "part",
+    "nodes": [
+      {"label": 301, "at": ["0 mm", "0 mm", "1000 mm"]},
+      {"label": 10, "at": ["0 mm", "0 mm", "0 mm"]},
+      {"label": 88, "at": ["0 mm", "1000 mm", "0 mm"]},
+      {"label": 77, "at": ["1000 mm", "0 mm", "0 mm"]},
+      {"label": 999, "at": ["0 mm", "0 mm", "0 mm"]}
+    ],
+    "elements": [{"label": 409, "kind": "tet4", "nodes": [10, 77, 88, 301]}],
+    "nodeSets": {"ALL": [999, 301, 10, 88, 77, 10], "COINCIDENT": [999, 10], "EMPTY": [], "ACTIVE": [10, 77]},
+    "elementSets": {"ALL": [409, 409]},
+    "surfaces": {"BASE": [{"element": 409, "face": 1}]},
+    "nodeTargets": [77]
+  }
+}

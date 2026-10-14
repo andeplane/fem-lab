@@ -233,6 +233,9 @@ and the fuller main matrix remain separate evidence ([ADR 0022](../adr/0022-fast
 | Issue | Deliverable | Depends on | Done when |
 |---|---|---|---|
 | [#501](https://github.com/andeplane/fem-lab/issues/501) | Persistent imported Mesher source, exact Sets/labels, Body lifecycle, source preview and ADR/glossary | #500 plan | Independent typed source can build/solve/replay; no parser is claimed. |
+| [#516](https://github.com/andeplane/fem-lab/issues/516) | Issue-sized persistent-source foundation under #501; exact source lifecycle, safe geometry gates, active/unused label mapping | #500; sound geometry certificate before accepting cells | Foundation acceptance passes; closes #516 only. Parent #501 stays open. |
+| [#517](https://github.com/andeplane/fem-lab/issues/517) | Certificate for original warped Hex8 geometry and cell contacts, with explicit inconclusive rejection | #500; #501 representation contract | Accepted original cells have actual injectivity/conformity/non-overlap proof and independent warped/invalid fixtures. Parent #501 still requires its full integration matrix. |
+| [#523](https://github.com/andeplane/fem-lab/issues/523) | Original warped-cell geometric measurements in Queries | #501 query acceptance; independent original-cell fixtures | Exact original-cell volumes and owner-independent bilinear-face quadrature with documented accuracy; no planar-skin substitution. |
 | [#502](https://github.com/andeplane/fem-lab/issues/502) | Strict mesh parser and schema-owned conversion Query | #501 | Independent text fixtures convert; unsupported model intent fails; native/WASM outputs agree. |
 | [#503](https://github.com/andeplane/fem-lab/issues/503) | Homogeneous small-displacement static-deck translation | #501, #502 | Imported independent supported decks solve with analytical displacement/stress/reactions at refinements; units and per-node CLOAD meaning verified. |
 | [#504](https://github.com/andeplane/fem-lab/issues/504) | Registry picker/inline host Command, Chromium flow and CLI | #502, #503 | Atomic file load, actual solve, save/reopen without source file and adverse session cases pass. Only then advertise supported `.inp` loading. |
@@ -245,3 +248,17 @@ requires a separately designed results exchange path; the vendor describes it as
 output database ([file extensions](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEEXCRefMap/simaexc-c-fileextensions.htm),
 [binary database](https://docs.software.vt.edu/abaqusv2025/English/SIMACAECAERefMap/simacae-t-xypcopytoodbbtn.htm)).
 No binary-results reader or future Python/remote host is promised by this plan.
+
+Issue #501 is now split into #516 and #517 to keep implementations issue-sized. This does
+not reduce #501's original supported slice or verification. A foundation PR closes #516
+only; no foundation publication accepts uncertified cells, and no parser/loading feature
+is advertised while original #501–504 acceptance remains incomplete. Unused authored
+nodes and exact memberships remain in the source: derived DOFs/Fields use participating
+nodes only, with explicit source-label mapping and unused-label reporting. A support or
+Load that includes an unused node fails structurally, rather than fabricating a result.
+
+The original warped-face fixtures also exposed existing Query measurement assumptions:
+`query.set.measure` and implicit Body volume use planar-skin estimates, while assembly and
+load normalization already use original shape Jacobians. Issue #523 corrects that shared
+Query path. Its independent curved-face/volume evidence is part of #501's remaining Query
+acceptance; the sound certificate alone does not establish measurement accuracy.

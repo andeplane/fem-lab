@@ -754,7 +754,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -3584,6 +3584,88 @@ const commands = {
             "kind",
             "patches"
           ]
+        },
+        {
+          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ImportedNodeSpec"
+              }
+            },
+            "elements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ImportedElement"
+              }
+            },
+            "nodeSets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              }
+            },
+            "elementSets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              }
+            },
+            "surfaces": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ImportedFace"
+                }
+              }
+            },
+            "nodeTargets": {
+              "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "provenance": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ImportedProvenance"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "imported"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "body",
+            "nodes",
+            "elements"
+          ]
         }
       ]
     },
@@ -3967,6 +4049,108 @@ const commands = {
             "radius"
           ]
         }
+      ]
+    },
+    "ImportedNodeSpec": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Positive original node label, at most 999999999.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "at": {
+          "description": "Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "at"
+      ]
+    },
+    "ImportedElement": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Positive original element label, at most 999999999.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/ImportedElementKind"
+        },
+        "nodes": {
+          "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "kind",
+        "nodes"
+      ]
+    },
+    "ImportedElementKind": {
+      "description": "Only the explicitly supported standard, first-order 3D solids.",
+      "type": "string",
+      "enum": [
+        "tet4",
+        "hex8"
+      ]
+    },
+    "ImportedFace": {
+      "type": "object",
+      "properties": {
+        "element": {
+          "description": "Original element label.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "face": {
+          "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "element",
+        "face"
+      ]
+    },
+    "ImportedProvenance": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
+          "type": "string"
+        },
+        "conversionVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "conversionVersion"
       ]
     },
     "Formulation": {
@@ -5484,6 +5668,11 @@ const queries = {
     "SweepSpec": commands.$defs["SweepSpec"],
     "SurfacePatchSpec": commands.$defs["SurfacePatchSpec"],
     "SurfaceProjectionSpec": commands.$defs["SurfaceProjectionSpec"],
+    "ImportedNodeSpec": commands.$defs["ImportedNodeSpec"],
+    "ImportedElement": commands.$defs["ImportedElement"],
+    "ImportedElementKind": commands.$defs["ImportedElementKind"],
+    "ImportedFace": commands.$defs["ImportedFace"],
+    "ImportedProvenance": commands.$defs["ImportedProvenance"],
     "Formulation": commands.$defs["Formulation"],
     "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
     "SizeBoxSpec": commands.$defs["SizeBoxSpec"],

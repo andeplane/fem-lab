@@ -307,3 +307,10 @@ deviations, not a signed equilibrium field. Beam stresses are the largest standa
 among the four extreme fibres at each member end, with cross-modal correlation retained until
 after integration. Von Mises and principal stress are nonlinear quantities and are not
 reported as standard deviations of the componentwise RMS tensor.
+
+**Imported source** — Immutable, labelled finite-element connectivity and exact memberships
+owned by an imported Mesher in the Model. Command coordinates carry length units; stored
+coordinates are SI. Original labels distinguish coincident nodes; dense Mesh indices are
+only a deterministic mapping of participating nodes. Unused labels remain in the source
+and exact memberships, are explicitly reported, and have no FE DOFs or Result values. Replacing the source is `mesh.set`, never editing a
+mesh cache or individual generated Set. See ADR 0026 and issue #501.

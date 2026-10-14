@@ -1927,6 +1927,26 @@ export type MesherSpec =
       body?: string | null;
       patches: SurfacePatchSpec[];
       kind: "surface";
+    }
+  | {
+      body: string;
+      nodes: ImportedNodeSpec[];
+      elements: ImportedElement[];
+      nodeSets?: {
+        [k: string]: number[] | undefined;
+      };
+      elementSets?: {
+        [k: string]: number[] | undefined;
+      };
+      surfaces?: {
+        [k: string]: ImportedFace[] | undefined;
+      };
+      /**
+       * Allocate <body>.node_<label> targets only for requested numeric node references.
+       */
+      nodeTargets?: number[];
+      provenance?: ImportedProvenance | null;
+      kind: "imported";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -2138,6 +2158,10 @@ export type SurfaceProjectionSpec =
           };
       kind: "cylinder";
     };
+/**
+ * Only the explicitly supported standard, first-order 3D solids.
+ */
+export type ImportedElementKind = "tet4" | "hex8";
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
@@ -2603,6 +2627,23 @@ export type AxialRow = Valued | [Valued, Valued, Valued];
  * Mesher settings, SI.
  */
 export type MesherSettings =
+  | {
+      body: string;
+      nodes: ImportedNode[];
+      elements: ImportedElement[];
+      nodeSets?: {
+        [k: string]: number[] | undefined;
+      };
+      elementSets?: {
+        [k: string]: number[] | undefined;
+      };
+      surfaces?: {
+        [k: string]: ImportedFace[] | undefined;
+      };
+      nodeTargets?: number[];
+      provenance?: ImportedProvenance | null;
+      kind: "imported";
+    }
   | {
       body: string;
       patches: SurfacePatch[];
@@ -6272,6 +6313,71 @@ export interface SurfacePatchSpec {
   tags?: [string | null, string | null, string | null, string | null] | null;
   projection?: SurfaceProjectionSpec | null;
 }
+export interface ImportedNodeSpec {
+  /**
+   * Positive original node label, at most 999999999.
+   */
+  label: number;
+  /**
+   * Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.
+   *
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  at: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+}
+export interface ImportedElement {
+  /**
+   * Positive original element label, at most 999999999.
+   */
+  label: number;
+  kind: ImportedElementKind;
+  /**
+   * Source node labels in Abaqus connectivity order, exactly four or eight.
+   */
+  nodes: number[];
+}
+export interface ImportedFace {
+  /**
+   * Original element label.
+   */
+  element: number;
+  /**
+   * Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
+   */
+  face: number;
+}
+export interface ImportedProvenance {
+  /**
+   * SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.
+   */
+  sha256: string;
+  conversionVersion: string;
+}
 /**
  * Local maximum edge lengths applied after the chosen mesher. Bounds are world
  * coordinates; touching element boxes obey the finest overlapping size. Only
@@ -6814,6 +6920,17 @@ export interface MeshSettings {
   refinement?: LocalRefinement | null;
 }
 /**
+ * Coordinates are SI; labels remain the immutable identity of the authored mesh.
+ */
+export interface ImportedNode {
+  label: number;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  at: [number, number, number];
+}
+/**
  * One oriented quadrilateral patch. Corners run counter-clockwise when seen from
  * its positive side. Tags name node Sets on edges 0–1, 1–2, 2–3 and 3–0.
  */
@@ -6935,6 +7052,10 @@ export interface ObjectDefinition {
  * `query.mesh` response.
  */
 export interface MeshSummary {
+  /**
+   * Source labels in dense node/element order for an imported source; absent otherwise.
+   */
+  sourceLabels?: SourceLabels | null;
   nodes: number;
   elements: number;
   elementKind: string;
@@ -6948,6 +7069,21 @@ export interface MeshSummary {
   maxEdge: Valued;
   sets: SetRow[];
   quality?: QualitySummary | null;
+}
+/**
+ * Dense arrays' source labels, in dense node/element order. No label is inferred from position.
+ */
+export interface SourceLabels {
+  /**
+   * Participating authored labels in dense FE node order, forming the derived node
+   * prefix. Ordinary auxiliary nodes may follow without authored source labels.
+   */
+  nodes: number[];
+  elements: number[];
+  /**
+   * Retained in the Model source, with no FE DOF or fabricated Result value.
+   */
+  unusedNodes?: number[];
 }
 /**
  * Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.
@@ -6987,6 +7123,14 @@ export interface QualityRow {
  * `query.set` response.
  */
 export interface SetInfo {
+  /**
+   * Authored membership for an imported node Set, including retained unused labels.
+   */
+  sourceNodeLabels?: number[] | null;
+  /**
+   * These source nodes have no FE DOFs and cannot be load/support targets.
+   */
+  unusedSourceNodeLabels?: number[];
   name: string;
   kind: string;
   count: number;
@@ -7231,6 +7375,10 @@ export interface RetainedResult {
  * A solved Mesh surface. Flat arrays preserve original node identities for field lookup.
  */
 export interface ResultSurface {
+  /**
+   * Authored label mapping for this retained Mesh, independent of later source edits.
+   */
+  sourceLabels?: SourceLabels | null;
   resultId: string;
   step: string;
   nodeCount: number;

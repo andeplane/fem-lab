@@ -578,6 +578,9 @@ pub struct ModelSummary {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MeshSummary {
+    /// Source labels in dense node/element order for an imported source; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_labels: Option<crate::imported::SourceLabels>,
     pub nodes: u32,
     pub elements: u32,
     pub element_kind: String,
@@ -624,6 +627,12 @@ pub struct QualityRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetInfo {
+    /// Authored membership for an imported node Set, including retained unused labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_node_labels: Option<Vec<u32>>,
+    /// These source nodes have no FE DOFs and cannot be load/support targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused_source_node_labels: Vec<u32>,
     pub name: String,
     pub kind: String,
     pub count: u32,
@@ -1230,6 +1239,9 @@ pub struct RetainedResults {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultSurface {
+    /// Authored label mapping for this retained Mesh, independent of later source edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_labels: Option<crate::imported::SourceLabels>,
     pub result_id: String,
     pub step: String,
     pub node_count: usize,

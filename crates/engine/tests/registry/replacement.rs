@@ -474,3 +474,69 @@ fn batch_replay_without_recorded_hashes_still_requires_a_consistent_file() {
     assert_eq!(owner.snapshot(&context(&lease, "read")).unwrap().file, before.file);
     owner.abandon_replacement(&ticket).unwrap();
 }
+
+#[test]
+fn imported_recorded_studies_cannot_publish_during_skipped_replay() {
+    let (mut owner, lease) = setup();
+    let before = owner.snapshot(&context(&lease, "read")).unwrap();
+    let mut source = super::engine();
+    super::ok(&mut source, super::IMPORTED_TET);
+    super::ok(&mut source, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":[],"loads":[]}"#);
+    let original = source.export_file().journal.entries;
+    // No trusted hashes are required. Empty choices and restoring convergence still
+    // request an unsupported study; a nonempty choice must reject before mutation.
+    for (i, text) in [
+        r#"{"cmd":"study.adapt","step":"static","targetError":0.1,"refinements":[[]]}"#,
+        r#"{"cmd":"study.adapt","step":"static","targetError":0.1,"refinements":[]}"#,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"vonMises"},"restore":true}"#,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"vonMises"}}"#,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"vonMises"},"restore":false}"#,
+    ].iter().enumerate() {
+        let mut entries = original.clone();
+        let mut recorded = entries.last().unwrap().clone();
+        recorded.seq += 1;
+        recorded.hash_after.clear();
+        recorded.cmd = command(text);
+        entries.push(recorded);
+        let ticket = owner.begin_replacement(context(&lease, &(i+2).to_string()), lease.stamp.state_version.clone()).unwrap();
+        let error = pollster::block_on(Candidate::new(ticket.clone(), None, Box::new(NoClock), 1).replay(entries, true, false)).err().unwrap();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some("mesher"));
+        assert!(error.cause.contains("imported source cannot be remeshed or refined"));
+        let during = owner.snapshot(&context(&lease, "read")).unwrap();
+        assert_eq!(during.file, before.file);
+        assert_eq!(during.stamp, before.stamp);
+        owner.abandon_replacement(&ticket).unwrap();
+        let after = owner.snapshot(&context(&lease, "read")).unwrap();
+        assert_eq!(after.file, before.file);
+        assert_eq!(after.stamp, before.stamp);
+    }
+}
+
+#[test]
+fn imported_candidate_replays_and_encodes_the_actual_complete_source_file() {
+    let (mut owner, mut lease) = setup();
+    let mut engine = super::engine();
+    super::ok(&mut engine, r#"{"cmd":"model.new","name":"Å imported source"}"#);
+    super::ok(&mut engine, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+    let mut source: serde_json::Value = serde_json::from_str(super::IMPORTED_TET).unwrap();
+    source["mesher"]["nodes"][4]["at"] = serde_json::json!(["1000000 m", "-2000000 m", "3000000 m"]);
+    super::ok(&mut engine, &source.to_string());
+    super::ok(&mut engine, r#"{"cmd":"geometry.addMass","name":"lug","at":["2 m","-3 m","4 m"],"mass":"1 kg"}"#);
+    let file = engine.export_file();
+    let ticket = owner.begin_replacement(context(&lease, "2"), lease.stamp.state_version.clone()).unwrap();
+    let prepared = pollster::block_on(Candidate::new(ticket, None, Box::new(NoClock), 1).file(file.clone()))
+        .unwrap()
+        .finish(&mut JsonEncoder, 16 * 1024 * 1024)
+        .unwrap();
+    assert!(prepared.file_bytes().ends_with(b"\n"));
+    assert_eq!(serde_json::from_slice::<femlab_engine::ModelFile>(prepared.file_bytes()).unwrap(), file);
+    assert_eq!(prepared.snapshot().model.bodies[0].bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+    let persisted: serde_json::Value = serde_json::from_slice(prepared.file_bytes()).unwrap();
+    assert_eq!(persisted["model"]["mesh"]["mesher"]["nodes"][4]["label"], 999);
+    assert_eq!(persisted["model"]["mesh"]["mesher"]["nodes"][4]["at"], serde_json::json!([1e6, -2e6, 3e6]));
+    let snapshot = owner.commit_replacement(prepared).unwrap();
+    assert_eq!(snapshot.file, file);
+    lease.stamp = snapshot.stamp;
+    assert_eq!(owner.snapshot(&context(&lease, "read")).unwrap().file, file);
+}
