@@ -2402,6 +2402,71 @@ fn inp_preserves_bare_quoted_and_case_distinct_memberships_in_each_namespace() {
     assert_eq!(write_inp(&mesh, "labels").unwrap(), expected);
 }
 
+fn inp_tetra() -> Mesh {
+    Mesh {
+        dim: 3,
+        coords: vec![0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.],
+        blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn inp_qualified_memberships_have_exact_independent_keyword_spelling() {
+    let mut mesh = inp_tetra();
+    mesh.node_sets.insert("beam.xmin".into(), vec![0, 2, 3]);
+    mesh.elem_sets.insert("beam.all".into(), vec![0]);
+    mesh.face_sets.insert("beam.xmin".into(), vec![Face { elem: 0, local: 3 }]);
+    let expected = "*HEADING\nlabels\n*NODE\n1, 0, 0, 0\n2, 1, 0, 0\n3, 0, 1, 0\n4, 0, 0, 1\n*ELEMENT, TYPE=C3D4, ELSET=BLOCK1\n1, 1, 2, 3, 4\n*NSET, NSET=\"beam.xmin\"\n1, 3, 4\n*ELSET, ELSET=\"beam.all\"\n1\n*SURFACE, TYPE=ELEMENT, NAME=\"beam.xmin\"\n1, S4\n";
+    assert_eq!(write_inp(&mesh, "labels").unwrap(), expected);
+    for keyword in ["*MATERIAL", "*BOUNDARY", "*CLOAD", "*STEP"] {
+        assert!(!expected.contains(keyword));
+    }
+}
+
+#[test]
+fn inp_namespaces_and_case_distinctions_do_not_merge_memberships() {
+    let mut mesh = inp_tetra();
+    mesh.node_sets.insert("BASE".into(), vec![0]);
+    mesh.node_sets.insert("base".into(), vec![1]);
+    mesh.elem_sets.insert("BASE".into(), vec![0]);
+    mesh.face_sets.insert("BASE".into(), vec![Face { elem: 0, local: 0 }]);
+    let text = write_inp(&mesh, "labels").unwrap();
+    assert!(text.contains("*NSET, NSET=BASE\n1\n*NSET, NSET=\"base\"\n2\n"));
+    assert!(text.contains("*ELSET, ELSET=BASE\n1\n"));
+    assert!(text.contains("*SURFACE, TYPE=ELEMENT, NAME=BASE\n1, S1\n"));
+    // Two conforming tetrahedra, with an authored BLOCK1 containing only the second.
+    mesh.coords.extend([0., 0., -1.]);
+    mesh.blocks[0].conn.extend([0, 2, 1, 4]);
+    mesh.elem_sets.insert("BLOCK1".into(), vec![1]);
+    let collision = write_inp(&mesh, "labels").unwrap();
+    assert!(collision.contains("*ELEMENT, TYPE=C3D4\n1, 1, 2, 3, 4\n"));
+    assert!(!collision.contains("TYPE=C3D4, ELSET=BLOCK1"));
+    assert!(collision.contains("*ELSET, ELSET=BLOCK1\n2\n*SURFACE"));
+}
+
+#[test]
+fn inp_each_set_namespace_and_heading_propagates_a_structured_error() {
+    for namespace in 0..3 {
+        let mut mesh = inp_tetra();
+        if namespace == 0 {
+            mesh.node_sets.insert("bad\"name".into(), vec![0]);
+        }
+        if namespace == 1 {
+            mesh.elem_sets.insert("bad\"name".into(), vec![0]);
+        }
+        if namespace == 2 {
+            mesh.face_sets.insert("bad\"name".into(), vec![Face { elem: 0, local: 0 }]);
+        }
+        let error = write_inp(&mesh, "labels").unwrap_err();
+        assert_eq!(error.code, ErrorCode::ExportUnavailable);
+        assert!(error.where_.unwrap().contains("bad\\\"name"));
+    }
+    assert_eq!(write_inp(&inp_tetra(), "*NODE").unwrap_err().where_.as_deref(), Some("model.name"));
+}
+
 /// A line member travels through all three formats: Gmsh's line element (type 1, both
 /// directions), Abaqus's `T3D2` and VTK's `VTK_LINE`, mixed into a mesh that also has solids.
 #[test]
