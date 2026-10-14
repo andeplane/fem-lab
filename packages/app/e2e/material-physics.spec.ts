@@ -18,6 +18,15 @@ test('@cpu Material physics chips lead with heat properties and preserve hidden 
   await expect(panel.locator('[data-field="E"]')).toHaveCount(0);
   await expect(panel.locator('.props-body > [data-field]').first()).toHaveAttribute('data-field', 'name');
   expect(await panel.locator('.props-body > [data-field]').evaluateAll(fields => fields.map(field => field.getAttribute('data-field')))).toEqual(['name', 'k', 'cp', 'rho', 'source']);
+  await panel.locator('[data-field="k"] input').fill('12 W/(m K)');
+  await panel.locator('[data-field="rho"] input').fill('1000 kg/m^3');
+  await panel.locator('[data-field="cp"] input').fill('1000 J/(kg K)');
+  await panel.locator('.apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.model()).materials.some(material => material.name === 'conductor'))).toBe(true);
+  const thermalOnly = await page.evaluate(() => window.fem.query.definition({ kind: 'material', name: 'conductor' }));
+  expect(thermalOnly).toMatchObject({ command: { cmd: 'material.add', name: 'conductor', k: { value: 12, unit: 'W/(m K)' }, rho: { value: 1000, unit: 'kg/m^3' }, cp: { value: 1000, unit: 'J/(kg K)' } } });
+  expect(thermalOnly.command).not.toHaveProperty('E');
+  expect(thermalOnly.command).not.toHaveProperty('nu');
   await page.evaluate(async () => {
     await window.fem.material.add({ name: 'steel', E: '210 GPa', nu: 0.3, k: '45 W/(m K)', cp: '460 J/(kg K)', rho: '7850 kg/m^3', source: 'EN 10025' });
     await window.fem.dispatch({ cmd: 'form.edit', kind: 'material', name: 'steel' });
