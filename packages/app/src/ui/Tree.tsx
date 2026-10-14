@@ -8,6 +8,7 @@ import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 import { humanise } from './schema';
+import { procedureSummary } from './procedures';
 
 export interface TreeItem {
   /** The Command a click puts in the Properties form, with the object read back as its arguments. */
@@ -305,7 +306,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         glyph: '▶',
         glyphClass: x.solved ? 'glyph green' : 'glyph low',
         name: x.name,
-        summary: `${x.procedure} · ${x.constraints.length} constraints · ${x.loads.length} loads${x.solved ? ' · solved' : ''}`,
+        summary: `${procedureSummary(x.procedure)} · ${x.constraints.length} constraints · ${x.loads.length} loads${x.solved ? ' · solved' : ''}`,
         select: {},
         remove: 'step.remove',
       })),

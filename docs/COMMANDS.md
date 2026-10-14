@@ -975,7 +975,10 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress, and a modal Step after a static one
 picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
 which is what a tensioned or preloaded member needs. The remaining fields belong to one
-procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+procedure each and are ignored by the others. Each field declares `x-procedures` in the
+schema (`*` means common to every procedure), so hosts can present the selected procedure
+without discarding values when it changes. The Procedure enum declares material inputs
+and result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`
 alone (default 1) to buckling, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
 `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
@@ -1024,36 +1027,36 @@ amplitude at the frequency of peak response. Its Constraints may only hold DOFs 
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| procedure | yes | <code>{"$ref":"#/$defs/Procedure"}</code> |  |
-| constraints | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| loads | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| output | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Field"}}</code> |  |
-| after | no | <code>{"type":["string","null"]}</code> |  |
-| nModes | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| shift | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Maximum time increment of a heat-transient Step, or of a static Step with an amplitude. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
-| tEnd | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> |  |
-| theta | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| outputEvery | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
-| amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
-| initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
-| alpha | no | <code>{"type":["number","null"],"format":"double"}</code> | HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark average acceleration, no numerical damping); -0.05 is the usual choice when the mesh-frequency ringing of a sudden load should die out. |
-| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Mass-proportional Rayleigh damping α of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = α / (2ω)&#96;, most of it at low frequency). Default "0 Hz"; must be non-negative, e.g. "0.5 1/s". |
-| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Stiffness-proportional Rayleigh damping β of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = βω / 2&#96;, most of it at high frequency). Default "0 s"; must be non-negative, e.g. "1e-5 s". |
-| initialVelocity | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/InitialVelocitySpec"}}</code> | Initial velocities of an explicit or implicit Step, one uniform vector per Set of nodes; nodes in no entry start from rest. |
-| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
-| maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
-| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
-| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
-| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | First frequency of a harmonic sweep, e.g. "1 Hz". |
-| fStop | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Last frequency of a harmonic sweep; must be above fStart. |
-| points | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | How many frequencies the sweep evaluates, including both endpoints. At least 2. |
-| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}]}</code> | Frequency spacing of a harmonic sweep; default linear. |
-| dampingRatio | no | <code>{"type":["number","null"],"format":"double"}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused together with &#96;dampingRatios&#96; on the same Step. |
-| dampingRatios | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"}}</code> | Per-mode modal damping ratios &#96;[ζ₁, ζ₂, …]&#96; of a harmonic Step, e.g. &#96;[0.01, 0.02]&#96; for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past the end of the list holds the last entry, so a two-entry list on a five-mode basis gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly like &#96;dampingRatio&#96;. Refused together with &#96;dampingRatio&#96; on the same Step. |
-| psd | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/PsdPoint"}}</code> | One-sided PSD table for randomVibration. All Loads form one spatial pattern multiplied by the same zero-mean stationary random process. Use density "1 s" (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots, &#96;after&#96; naming a solved modal Step, identical constraints, and positive damping. Outputs are componentwise standard deviations, never a signed equilibrium state. |
+| name | yes | <code>{"type":"string","x-procedures":["*"]}</code> |  |
+| procedure | yes | <code>{"$ref":"#/$defs/Procedure","x-procedures":["*"]}</code> |  |
+| constraints | yes | <code>{"type":"array","items":{"type":"string"},"x-procedures":["*"]}</code> |  |
+| loads | yes | <code>{"type":"array","items":{"type":"string"},"x-procedures":["*"]}</code> |  |
+| output | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Field"},"x-procedures":["*"]}</code> |  |
+| after | no | <code>{"type":["string","null"],"x-procedures":["*"]}</code> |  |
+| nModes | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["modal","buckling"]}</code> |  |
+| shift | no | <code>{"type":["number","null"],"format":"double","x-procedures":["modal"]}</code> |  |
+| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}],"x-procedures":["static","heat-transient","implicit"]}</code> | Maximum time increment of a heat-transient Step, or of a static Step with an amplitude. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
+| tEnd | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}],"x-procedures":["static","static-nonlinear","heat-transient","explicit","implicit"]}</code> |  |
+| theta | no | <code>{"type":["number","null"],"format":"double","x-procedures":["heat-transient"]}</code> |  |
+| outputEvery | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static","heat-transient","explicit","implicit","harmonic"]}</code> |  |
+| dtFactor | no | <code>{"type":["number","null"],"format":"double","x-procedures":["explicit"]}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
+| amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}],"x-procedures":["static","static-nonlinear","heat-transient","implicit"]}</code> |  |
+| initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}],"x-procedures":["heat-transient"]}</code> |  |
+| alpha | no | <code>{"type":["number","null"],"format":"double","x-procedures":["implicit"]}</code> | HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark average acceleration, no numerical damping); -0.05 is the usual choice when the mesh-frequency ringing of a sudden load should die out. |
+| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["implicit","harmonic","randomVibration"]}</code> | Mass-proportional Rayleigh damping α of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = α / (2ω)&#96;, most of it at low frequency). Default "0 Hz"; must be non-negative, e.g. "0.5 1/s". |
+| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}],"x-procedures":["implicit","harmonic","randomVibration"]}</code> | Stiffness-proportional Rayleigh damping β of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = βω / 2&#96;, most of it at high frequency). Default "0 s"; must be non-negative, e.g. "1e-5 s". |
+| initialVelocity | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/InitialVelocitySpec"},"x-procedures":["explicit","implicit"]}</code> | Initial velocities of an explicit or implicit Step, one uniform vector per Set of nodes; nodes in no entry start from rest. |
+| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear"]}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
+| maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear"]}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
+| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double","x-procedures":["static-nonlinear","heat-steady","heat-transient"]}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
+| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear","heat-steady","heat-transient"]}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
+| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | First frequency of a harmonic sweep, e.g. "1 Hz". |
+| fStop | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Last frequency of a harmonic sweep; must be above fStart. |
+| points | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["harmonic"]}</code> | How many frequencies the sweep evaluates, including both endpoints. At least 2. |
+| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Frequency spacing of a harmonic sweep; default linear. |
+| dampingRatio | no | <code>{"type":["number","null"],"format":"double","x-procedures":["harmonic","randomVibration"]}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused together with &#96;dampingRatios&#96; on the same Step. |
+| dampingRatios | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"},"x-procedures":["harmonic","randomVibration"]}</code> | Per-mode modal damping ratios &#96;[ζ₁, ζ₂, …]&#96; of a harmonic Step, e.g. &#96;[0.01, 0.02]&#96; for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past the end of the list holds the last entry, so a two-entry list on a five-mode basis gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly like &#96;dampingRatio&#96;. Refused together with &#96;dampingRatio&#96; on the same Step. |
+| psd | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/PsdPoint"},"x-procedures":["randomVibration"]}</code> | One-sided PSD table for randomVibration. All Loads form one spatial pattern multiplied by the same zero-mean stationary random process. Use density "1 s" (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots, &#96;after&#96; naming a solved modal Step, identical constraints, and positive damping. Outputs are componentwise standard deviations, never a signed equilibrium state. |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
@@ -2383,57 +2386,199 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Analysis procedures.",
+  "description": "Analysis procedures. The schema declares each procedure's consumed Material properties,\nrequired property groups and produced results for every host. `x-material-needs` names\nalternative stiffness laws as one requirement; `x-material-properties` includes optional\nlaws the procedure can read, rather than claiming all of them are mandatory.",
   "oneOf": [
     {
       "description": "Linear static equilibrium.",
       "type": "string",
-      "const": "static"
+      "const": "static",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions"
+      ]
     },
     {
       "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
       "type": "string",
-      "const": "static-nonlinear"
+      "const": "static-nonlinear",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "yield",
+        "plasticity"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "Cauchy stress",
+        "reactions"
+      ]
     },
     {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.\n\n**Prestressed (stress-stiffened) modal analysis.** Give the Step an `after` naming a\nsolved `static` or `static-nonlinear` Step and it vibrates *about that loaded state*:\nthe stress stiffening of the preload is added to the stiffness, so a guy rope or a\ntensioned tie rings higher, a strut in compression rings lower, and a member loaded to\nits buckling load has a first frequency of zero. Use it whenever the axial force in a\nmember is a large fraction of its Euler load — cable nets, tension rods, preloaded\nbolts, slender bracing — because the unprestressed frequency of such a member is simply\nthe wrong number. Without `after` this is the ordinary modal analysis of the unloaded\nstructure, unchanged.\n\nThe preload Step's own Loads are what does the stiffening; this Step's Loads are\nignored, as they are for any modal Step. `query.result` reports `prestressFrom` naming\nthe Step the stiffening came from. Not available for the axisymmetric idealisation\n(the hoop term of a ring's stress stiffening is not written), and a preload far past the\nbuckling load is refused: past it the structure has no vibration about that state.",
       "type": "string",
-      "const": "modal"
+      "const": "modal",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "natural frequencies",
+        "mode shapes"
+      ]
     },
     {
       "description": "Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening\nthat state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`\nwith the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this\nStep's Loads by `lambda` to get the critical load.\n\nRead the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*\nthe structure buckles, never how far — so never report a displacement from it. A\n**negative** factor is not an error: it means the structure buckles under the *reversed*\nload, which matters if the load can change sign. And the factor is an **upper bound**: it\nignores imperfections, pre-buckling rotation and yielding, so a real column carries less\nthan this predicts. It is not a safety factor; treat it as the ceiling a perfect,\nperfectly elastic structure would reach. Not available for the axisymmetric idealisation,\nand it needs the direct solver: the iteration back-substitutes hundreds of times through\none factorisation, which `cpu-pcg` and `gpu-pcg` do not build.",
       "type": "string",
-      "const": "buckling"
+      "const": "buckling",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "elastic stiffness"
+      ],
+      "x-results": [
+        "load factors",
+        "mode shapes"
+      ]
     },
     {
       "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
       "type": "string",
-      "const": "heat-steady"
+      "const": "heat-steady",
+      "x-material-properties": [
+        "k",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "k"
+      ],
+      "x-results": [
+        "T",
+        "reaction power"
+      ]
     },
     {
       "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
       "type": "string",
-      "const": "heat-transient"
+      "const": "heat-transient",
+      "x-material-properties": [
+        "k",
+        "orthotropic",
+        "rho",
+        "cp"
+      ],
+      "x-material-needs": [
+        "k",
+        "ρ",
+        "cp"
+      ],
+      "x-results": [
+        "T",
+        "reaction power",
+        "stored-energy rate"
+      ]
     },
     {
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
-      "const": "explicit"
+      "const": "explicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ]
     },
     {
       "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
       "type": "string",
-      "const": "implicit"
+      "const": "implicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ]
     },
     {
       "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
       "type": "string",
-      "const": "harmonic"
+      "const": "harmonic",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "amplitude",
+        "phase",
+        "frequency response"
+      ]
     },
     {
       "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
       "type": "string",
-      "const": "randomVibration"
+      "const": "randomVibration",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "1σ displacement",
+        "1σ stress"
+      ]
     }
   ]
 }
@@ -5976,26 +6121,38 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress, and a modal Step after a static one\npicks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,\nwhich is what a tensioned or preloaded member needs. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`\nalone (default 1) to buckling, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,\n`rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.\nA modal Step's `after` is optional and means stress stiffening: naming a solved\n`static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the\nfrequencies are those of the *preloaded* structure (tension up, compression down, zero\nat the buckling load), and `prestressFrom` on the Result names the preload Step. Naming\na heat Step instead keeps the existing meaning, the temperature field alone, and\nstiffens nothing.\nA harmonic Step requires `after` to name a Step whose `modal` Result is current: it\nsuperposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is\nbounded by that Step's `nModes`. It drives its own Loads at each swept frequency and\nanswers a nodal amplitude and a phase lag per retained frequency; `displacement` is the\namplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero\n— a moving support is base excitation, which this procedure does not do.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress, and a modal Step after a static one\npicks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,\nwhich is what a tensioned or preloaded member needs. The remaining fields belong to one\nprocedure each and are ignored by the others. Each field declares `x-procedures` in the\nschema (`*` means common to every procedure), so hosts can present the selected procedure\nwithout discarding values when it changes. The Procedure enum declares material inputs\nand result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`\nalone (default 1) to buckling, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,\n`rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.\nA modal Step's `after` is optional and means stress stiffening: naming a solved\n`static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the\nfrequencies are those of the *preloaded* structure (tension up, compression down, zero\nat the buckling load), and `prestressFrom` on the Result names the preload Step. Naming\na heat Step instead keeps the existing meaning, the temperature field alone, and\nstiffens nothing.\nA harmonic Step requires `after` to name a Step whose `modal` Result is current: it\nsuperposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is\nbounded by that Step's `nModes`. It drives its own Loads at each swept frequency and\nanswers a nodal amplitude and a phase lag per retained frequency; `displacement` is the\namplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero\n— a moving support is base excitation, which this procedure does not do.",
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "type": "string",
+          "x-procedures": [
+            "*"
+          ]
         },
         "procedure": {
-          "$ref": "#/$defs/Procedure"
+          "$ref": "#/$defs/Procedure",
+          "x-procedures": [
+            "*"
+          ]
         },
         "constraints": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "x-procedures": [
+            "*"
+          ]
         },
         "loads": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "x-procedures": [
+            "*"
+          ]
         },
         "output": {
           "type": [
@@ -6004,12 +6161,18 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "items": {
             "$ref": "#/$defs/Field"
-          }
+          },
+          "x-procedures": [
+            "*"
+          ]
         },
         "after": {
           "type": [
             "string",
             "null"
+          ],
+          "x-procedures": [
+            "*"
           ]
         },
         "nModes": {
@@ -6018,14 +6181,21 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "modal",
+            "buckling"
+          ]
         },
         "shift": {
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "modal"
+          ]
         },
         "dt": {
           "description": "Maximum time increment of a heat-transient Step, or of a static Step with an\namplitude. A uniform increment no larger than dt is chosen to finish exactly at\ntEnd; the Result reports the increment actually used.",
@@ -6036,6 +6206,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "static",
+            "heat-transient",
+            "implicit"
           ]
         },
         "tEnd": {
@@ -6046,6 +6221,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "static",
+            "static-nonlinear",
+            "heat-transient",
+            "explicit",
+            "implicit"
           ]
         },
         "theta": {
@@ -6053,7 +6235,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "heat-transient"
+          ]
         },
         "outputEvery": {
           "type": [
@@ -6061,7 +6246,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static",
+            "heat-transient",
+            "explicit",
+            "implicit",
+            "harmonic"
+          ]
         },
         "dtFactor": {
           "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
@@ -6069,7 +6261,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "explicit"
+          ]
         },
         "amplitude": {
           "anyOf": [
@@ -6079,6 +6274,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "static",
+            "static-nonlinear",
+            "heat-transient",
+            "implicit"
           ]
         },
         "initial": {
@@ -6089,6 +6290,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "heat-transient"
           ]
         },
         "alpha": {
@@ -6097,7 +6301,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "implicit"
+          ]
         },
         "rayleighAlpha": {
           "description": "Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step\n(directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).\nDefault \"0 Hz\"; must be non-negative, e.g. \"0.5 1/s\".",
@@ -6108,6 +6315,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "implicit",
+            "harmonic",
+            "randomVibration"
           ]
         },
         "rayleighBeta": {
@@ -6119,6 +6331,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "implicit",
+            "harmonic",
+            "randomVibration"
           ]
         },
         "initialVelocity": {
@@ -6129,7 +6346,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "items": {
             "$ref": "#/$defs/InitialVelocitySpec"
-          }
+          },
+          "x-procedures": [
+            "explicit",
+            "implicit"
+          ]
         },
         "increments": {
           "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.\nEqual load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
@@ -6138,7 +6359,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static-nonlinear"
+          ]
         },
         "maxCutbacks": {
           "description": "Halvings a static-nonlinear Step may use when an increment does not converge\n(default 5, at most 20). After the last one the Step fails with `newton.diverged`.",
@@ -6147,7 +6371,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static-nonlinear"
+          ]
         },
         "nonlinearTolerance": {
           "description": "Convergence tolerance for a Step that must iterate, relative in both cases: the\nsup-norm change of the solution between two passes for a radiating heat Step\n(default 1e-6), and the residual force and the displacement correction of one Newton\nincrement for static-nonlinear (default 1e-8). It is never the *linear* solver's\ntolerance, which is `solve.run`'s.",
@@ -6155,7 +6382,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "static-nonlinear",
+            "heat-steady",
+            "heat-transient"
+          ]
         },
         "nonlinearMaxIterations": {
           "description": "Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a\nheat Step (default 50); for static-nonlinear it is what makes an increment cut back\nand try again at half the load (default 20, and full Newton reaches 1e-8 in four or\nfive iterations from a good starting point).",
@@ -6164,7 +6396,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static-nonlinear",
+            "heat-steady",
+            "heat-transient"
+          ]
         },
         "fStart": {
           "description": "First frequency of a harmonic sweep, e.g. \"1 Hz\".",
@@ -6175,6 +6412,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "harmonic"
           ]
         },
         "fStop": {
@@ -6186,6 +6426,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "harmonic"
           ]
         },
         "points": {
@@ -6195,7 +6438,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "harmonic"
+          ]
         },
         "sweep": {
           "description": "Frequency spacing of a harmonic sweep; default linear.",
@@ -6206,6 +6452,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "harmonic"
           ]
         },
         "dampingRatio": {
@@ -6214,7 +6463,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "harmonic",
+            "randomVibration"
+          ]
         },
         "dampingRatios": {
           "description": "Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`\nfor 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past\nthe end of the list holds the last entry, so a two-entry list on a five-mode basis\ngives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly\nlike `dampingRatio`. Refused together with `dampingRatio` on the same Step.",
@@ -6225,7 +6478,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "items": {
             "type": "number",
             "format": "double"
-          }
+          },
+          "x-procedures": [
+            "harmonic",
+            "randomVibration"
+          ]
         },
         "psd": {
           "description": "One-sided PSD table for randomVibration. All Loads form one spatial pattern\nmultiplied by the same zero-mean stationary random process. Use density \"1 s\"\n(1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,\n`after` naming a solved modal Step, identical constraints, and positive damping.\nOutputs are componentwise standard deviations, never a signed equilibrium state.",
@@ -6235,7 +6492,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "items": {
             "$ref": "#/$defs/PsdPoint"
-          }
+          },
+          "x-procedures": [
+            "randomVibration"
+          ]
         },
         "cmd": {
           "type": "string",
@@ -7837,57 +8097,199 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Analysis procedures.",
+  "description": "Analysis procedures. The schema declares each procedure's consumed Material properties,\nrequired property groups and produced results for every host. `x-material-needs` names\nalternative stiffness laws as one requirement; `x-material-properties` includes optional\nlaws the procedure can read, rather than claiming all of them are mandatory.",
   "oneOf": [
     {
       "description": "Linear static equilibrium.",
       "type": "string",
-      "const": "static"
+      "const": "static",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions"
+      ]
     },
     {
       "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
       "type": "string",
-      "const": "static-nonlinear"
+      "const": "static-nonlinear",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "yield",
+        "plasticity"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "Cauchy stress",
+        "reactions"
+      ]
     },
     {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.\n\n**Prestressed (stress-stiffened) modal analysis.** Give the Step an `after` naming a\nsolved `static` or `static-nonlinear` Step and it vibrates *about that loaded state*:\nthe stress stiffening of the preload is added to the stiffness, so a guy rope or a\ntensioned tie rings higher, a strut in compression rings lower, and a member loaded to\nits buckling load has a first frequency of zero. Use it whenever the axial force in a\nmember is a large fraction of its Euler load — cable nets, tension rods, preloaded\nbolts, slender bracing — because the unprestressed frequency of such a member is simply\nthe wrong number. Without `after` this is the ordinary modal analysis of the unloaded\nstructure, unchanged.\n\nThe preload Step's own Loads are what does the stiffening; this Step's Loads are\nignored, as they are for any modal Step. `query.result` reports `prestressFrom` naming\nthe Step the stiffening came from. Not available for the axisymmetric idealisation\n(the hoop term of a ring's stress stiffening is not written), and a preload far past the\nbuckling load is refused: past it the structure has no vibration about that state.",
       "type": "string",
-      "const": "modal"
+      "const": "modal",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "natural frequencies",
+        "mode shapes"
+      ]
     },
     {
       "description": "Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening\nthat state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`\nwith the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this\nStep's Loads by `lambda` to get the critical load.\n\nRead the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*\nthe structure buckles, never how far — so never report a displacement from it. A\n**negative** factor is not an error: it means the structure buckles under the *reversed*\nload, which matters if the load can change sign. And the factor is an **upper bound**: it\nignores imperfections, pre-buckling rotation and yielding, so a real column carries less\nthan this predicts. It is not a safety factor; treat it as the ceiling a perfect,\nperfectly elastic structure would reach. Not available for the axisymmetric idealisation,\nand it needs the direct solver: the iteration back-substitutes hundreds of times through\none factorisation, which `cpu-pcg` and `gpu-pcg` do not build.",
       "type": "string",
-      "const": "buckling"
+      "const": "buckling",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "elastic stiffness"
+      ],
+      "x-results": [
+        "load factors",
+        "mode shapes"
+      ]
     },
     {
       "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
       "type": "string",
-      "const": "heat-steady"
+      "const": "heat-steady",
+      "x-material-properties": [
+        "k",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "k"
+      ],
+      "x-results": [
+        "T",
+        "reaction power"
+      ]
     },
     {
       "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
       "type": "string",
-      "const": "heat-transient"
+      "const": "heat-transient",
+      "x-material-properties": [
+        "k",
+        "orthotropic",
+        "rho",
+        "cp"
+      ],
+      "x-material-needs": [
+        "k",
+        "ρ",
+        "cp"
+      ],
+      "x-results": [
+        "T",
+        "reaction power",
+        "stored-energy rate"
+      ]
     },
     {
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
-      "const": "explicit"
+      "const": "explicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ]
     },
     {
       "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
       "type": "string",
-      "const": "implicit"
+      "const": "implicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ]
     },
     {
       "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
       "type": "string",
-      "const": "harmonic"
+      "const": "harmonic",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "amplitude",
+        "phase",
+        "frequency response"
+      ]
     },
     {
       "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
       "type": "string",
-      "const": "randomVibration"
+      "const": "randomVibration",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "1σ displacement",
+        "1σ stress"
+      ]
     }
   ]
 }

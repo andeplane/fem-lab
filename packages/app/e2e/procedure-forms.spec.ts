@@ -1,0 +1,62 @@
+// Production Chromium and the real engine: complete Step definitions survive conditional UI.
+import { expect, test } from './fixtures';
+
+test('@cpu Step forms follow static, heat and dynamic procedures without losing hidden values', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.addInitScript(() => {
+    localStorage.setItem('femlab.tour.dismissed', '1');
+    localStorage.setItem('femlab.autosave', 'off');
+  });
+  await page.goto('./');
+  await page.waitForFunction(() => Boolean(window.fem));
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'example.open', name: 'bar-transient-heat' }));
+  const model = await page.evaluate(() => window.fem.query.model());
+  const step = model.steps[0]!;
+  const row = page.locator('.step-row', { hasText: step.name });
+  await expect(row.locator('.summary')).toContainText('needs k, ρ, cp · gives T');
+  await row.locator('.row-main').click();
+  const field = (path: string) => page.locator(`.props [data-field="${path}"]`);
+  await expect(field('theta')).toBeVisible();
+  await expect(field('initial')).toBeVisible();
+  await expect(field('alpha')).toHaveCount(0);
+  await expect(field('fStart')).toHaveCount(0);
+  await expect(page.locator('.procedure-summary')).toContainText('needs k, ρ, cp · gives T');
+  // The fixture's name is read through query.model, independent of the form's field traversal.
+  const definition = await page.evaluate(async name => (await window.fem.query.definition({ kind: 'step', name })).command, step.name);
+  await field('procedure').getByRole('button', { name: 'implicit', exact: true }).click();
+  await expect(field('alpha')).toBeVisible();
+  await expect(field('initialVelocity')).toBeVisible();
+  await expect(field('theta')).toHaveCount(0);
+  await expect(field('initial')).toHaveCount(0);
+  await field('alpha').locator('input').fill('-0.05');
+  await expect(page.locator('.recorded-cmd')).toContainText('theta');
+  const before = await page.evaluate(async () => (await window.fem.query.journal()).entries.length);
+  await page.locator('.props .apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.length)).toBe(before + 1);
+  const changed = await page.evaluate(async name => (await window.fem.query.definition({ kind: 'step', name })).command, step.name);
+  expect(changed).toEqual({ ...definition, procedure: 'implicit', alpha: -0.05 });
+  await page.locator('.props').getByRole('button', { name: 'Revert', exact: true }).click();
+  await expect(field('theta')).toBeVisible();
+  await expect(field('alpha')).toHaveCount(0);
+  await page.locator('.props .apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.journal()).entries.length)).toBe(before + 2);
+  expect(await page.evaluate(async name => (await window.fem.query.definition({ kind: 'step', name })).command, step.name)).toEqual(definition);
+  await field('procedure').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('heat-step-form.png') });
+  await field('procedure').getByRole('button', { name: 'static', exact: true }).click();
+  await expect(field('dt')).toBeVisible();
+  await expect(field('theta')).toHaveCount(0);
+  await expect(field('nModes')).toHaveCount(0);
+  await expect(page.locator('.procedure-summary')).toContainText('gives u, stress, reactions');
+  await field('procedure').getByRole('button', { name: 'explicit', exact: true }).click();
+  await expect(field('dtFactor')).toBeVisible();
+  await expect(field('initialVelocity')).toBeVisible();
+  await expect(field('dt')).toHaveCount(0);
+  await expect(field('alpha')).toHaveCount(0);
+  await field('procedure').getByRole('button', { name: 'heat-steady', exact: true }).click();
+  await expect(field('nonlinearTolerance')).toBeVisible();
+  await expect(field('dt')).toHaveCount(0);
+  await expect(field('initialVelocity')).toHaveCount(0);
+  await expect(page.locator('.procedure-summary')).toContainText('needs k · gives T, reaction power');
+});

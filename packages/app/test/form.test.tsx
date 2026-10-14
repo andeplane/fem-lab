@@ -67,6 +67,49 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('changes Step fields with the selected procedure while keeping full values for Apply and Revert', async () => {
+    const original = { name: 'cooling', procedure: 'heat-transient', constraints: [], loads: [], dt: '1 s', tEnd: '10 s', theta: 0.5, initial: '300 K', alpha: -0.05, initialVelocity: [] };
+    const { root, store, sent } = mount('step.add', original);
+    expect(field(root, 'theta')).not.toBeNull();
+    expect(field(root, 'initial')).not.toBeNull();
+    expect(field(root, 'alpha')).toBeNull();
+    expect(field(root, 'initialVelocity')).toBeNull();
+    expect(root.querySelector('.procedure-summary')!.textContent).toContain('needs k, ρ, cp · gives T');
+    const choose = (name: string) => [...field(root, 'procedure').querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === name)!.click();
+    choose('implicit');
+    expect(field(root, 'alpha')).not.toBeNull();
+    expect(field(root, 'initialVelocity')).not.toBeNull();
+    expect(field(root, 'theta')).toBeNull();
+    expect(field(root, 'initial')).toBeNull();
+    expect(store.state.form!.values).toEqual({ ...original, procedure: 'implicit' });
+    type(field(root, 'alpha').querySelector('input')!, '-0.1');
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('initial: "300 K"');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'step.add', ...original, procedure: 'implicit', alpha: -0.1 });
+    root.querySelector<HTMLButtonElement>('[title="Revert to the values this form opened with"]')!.click();
+    expect(store.state.form!.values).toEqual(original);
+    expect(field(root, 'theta')).not.toBeNull();
+    expect(field(root, 'alpha')).toBeNull();
+    choose('static');
+    expect(field(root, 'dt')).not.toBeNull();
+    expect(field(root, 'nModes')).toBeNull();
+    expect(field(root, 'nonlinearTolerance')).toBeNull();
+    expect(root.querySelector('.procedure-summary')!.textContent).toContain('gives u, stress, reactions');
+    choose('randomVibration');
+    expect(field(root, 'psd')).not.toBeNull();
+    expect(field(root, 'dampingRatio')).not.toBeNull();
+    expect(field(root, 'fStart')).toBeNull();
+    expect(field(root, 'dt')).toBeNull();
+    await Promise.resolve();
+  });
+
+  it('shows errors for retained values whose procedure field is currently hidden', () => {
+    const { root, store } = mount('step.add', { name: 'static', procedure: 'static', constraints: [], loads: [], dampingRatio: -1 });
+    store.set({ formError: { code: 'schema', cause: 'dampingRatio must be non-negative', where: 'dampingRatio', suggestion: 'step.add with dampingRatio 0.02' } });
+    expect(field(root, 'dampingRatio')).toBeNull();
+    expect(root.querySelector('.surface.error')!.textContent).toContain('dampingRatio must be non-negative');
+  });
+
   it.each([
     ['body', 'geometry.addBox'], ['material', 'material.add'], ['set', 'geometry.nameFace'],
     ['constraint', 'constraint.fix'], ['load', 'load.pressure'], ['step', 'step.add'],

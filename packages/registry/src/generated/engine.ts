@@ -796,7 +796,23 @@ export type Command =
     }
   | {
       name: string;
-      procedure: Procedure;
+      /**
+       * Analysis procedures. The schema declares each procedure's consumed Material properties,
+       * required property groups and produced results for every host. `x-material-needs` names
+       * alternative stiffness laws as one requirement; `x-material-properties` includes optional
+       * laws the procedure can read, rather than claiming all of them are mandatory.
+       */
+      procedure:
+        | "static"
+        | "static-nonlinear"
+        | "modal"
+        | "buckling"
+        | "heat-steady"
+        | "heat-transient"
+        | "explicit"
+        | "implicit"
+        | "harmonic"
+        | "randomVibration";
       constraints: string[];
       loads: string[];
       output?: Field[] | null;
@@ -2110,20 +2126,6 @@ export type ContactKind = "bonded" | "frictionless";
  */
 export type CoupleKind = "distributed" | "rigid";
 /**
- * Analysis procedures.
- */
-export type Procedure =
-  | "static"
-  | "static-nonlinear"
-  | "modal"
-  | "buckling"
-  | "heat-steady"
-  | "heat-transient"
-  | "explicit"
-  | "implicit"
-  | "harmonic"
-  | "randomVibration";
-/**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
  * display units. Transient thermal reactions include stored energy and refer to the last
@@ -3108,6 +3110,23 @@ export type Load1 =
       kind: "thermalContact";
     };
 /**
+ * Analysis procedures. The schema declares each procedure's consumed Material properties,
+ * required property groups and produced results for every host. `x-material-needs` names
+ * alternative stiffness laws as one requirement; `x-material-properties` includes optional
+ * laws the procedure can read, rather than claiming all of them are mandatory.
+ */
+export type Procedure =
+  | "static"
+  | "static-nonlinear"
+  | "modal"
+  | "buckling"
+  | "heat-steady"
+  | "heat-transient"
+  | "explicit"
+  | "implicit"
+  | "harmonic"
+  | "randomVibration";
+/**
  * A time function scaling the prescribed temperatures of a transient Step, SI.
  */
 export type Amplitude =
@@ -3917,7 +3936,23 @@ export type ModelFile_Command =
     }
   | {
       name: string;
-      procedure: Procedure;
+      /**
+       * Analysis procedures. The schema declares each procedure's consumed Material properties,
+       * required property groups and produced results for every host. `x-material-needs` names
+       * alternative stiffness laws as one requirement; `x-material-properties` includes optional
+       * laws the procedure can read, rather than claiming all of them are mandatory.
+       */
+      procedure:
+        | "static"
+        | "static-nonlinear"
+        | "modal"
+        | "buckling"
+        | "heat-steady"
+        | "heat-transient"
+        | "explicit"
+        | "implicit"
+        | "harmonic"
+        | "randomVibration";
       constraints: string[];
       loads: string[];
       output?: Field[] | null;
@@ -5275,7 +5310,23 @@ export type DocumentSnapshot_Command =
     }
   | {
       name: string;
-      procedure: Procedure;
+      /**
+       * Analysis procedures. The schema declares each procedure's consumed Material properties,
+       * required property groups and produced results for every host. `x-material-needs` names
+       * alternative stiffness laws as one requirement; `x-material-properties` includes optional
+       * laws the procedure can read, rather than claiming all of them are mandatory.
+       */
+      procedure:
+        | "static"
+        | "static-nonlinear"
+        | "modal"
+        | "buckling"
+        | "heat-steady"
+        | "heat-transient"
+        | "explicit"
+        | "implicit"
+        | "harmonic"
+        | "randomVibration";
       constraints: string[];
       loads: string[];
       output?: Field[] | null;

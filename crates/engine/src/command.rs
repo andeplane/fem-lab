@@ -222,11 +222,17 @@ impl ObjectKind {
     }
 }
 
-/// Analysis procedures.
+/// Analysis procedures. The schema declares each procedure's consumed Material properties,
+/// required property groups and produced results for every host. `x-material-needs` names
+/// alternative stiffness laws as one requirement; `x-material-properties` includes optional
+/// laws the procedure can read, rather than claiming all of them are mandatory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Procedure {
     /// Linear static equilibrium.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
+    #[schemars(extend("x-results" = ["u", "stress", "reactions"]))]
     Static,
     /// Static equilibrium with geometric nonlinearity: large displacement and large rotation,
     /// solved by Newton–Raphson over `increments` load increments. The strain measure is
@@ -237,6 +243,9 @@ pub enum Procedure {
     /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
     /// follow the deformation (a pressure keeps its reference direction and area) and a
     /// temperature field is applied in full rather than ramped with the load factor.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "yield", "plasticity"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
+    #[schemars(extend("x-results" = ["u", "Cauchy stress", "reactions"]))]
     StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
     ///
@@ -255,6 +264,9 @@ pub enum Procedure {
     /// the Step the stiffening came from. Not available for the axisymmetric idealisation
     /// (the hoop term of a ring's stress stiffening is not written), and a preload far past the
     /// buckling load is refused: past it the structure has no vibration about that state.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["natural frequencies", "mode shapes"]))]
     Modal,
     /// Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening
     /// that state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`
@@ -270,24 +282,45 @@ pub enum Procedure {
     /// perfectly elastic structure would reach. Not available for the axisymmetric idealisation,
     /// and it needs the direct solver: the iteration back-substitutes hundreds of times through
     /// one factorisation, which `cpu-pcg` and `gpu-pcg` do not build.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness"]))]
+    #[schemars(extend("x-results" = ["load factors", "mode shapes"]))]
     Buckling,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
+    #[schemars(extend("x-material-properties" = ["k", "orthotropic"]))]
+    #[schemars(extend("x-material-needs" = ["k"]))]
+    #[schemars(extend("x-results" = ["T", "reaction power"]))]
     HeatSteady,
     /// Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.
+    #[schemars(extend("x-material-properties" = ["k", "orthotropic", "rho", "cp"]))]
+    #[schemars(extend("x-material-needs" = ["k", "ρ", "cp"]))]
+    #[schemars(extend("x-results" = ["T", "reaction power", "stored-energy rate"]))]
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
     Explicit,
     /// Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on
     /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
     /// `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
     Implicit,
     /// Steady-state response to a sinusoidal load over a frequency sweep, by mode
     /// superposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,
     /// `fStop` and `points`.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["amplitude", "phase", "frequency response"]))]
     Harmonic,
     /// One-sided PSD response of the solved modal Step named by `after`. Produces
     /// componentwise 1σ displacement and stress, including cross-modal correlations.
     #[serde(rename = "randomVibration")]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["1σ displacement", "1σ stress"]))]
     RandomVibration,
 }
 
@@ -1754,7 +1787,10 @@ pub enum Command {
     /// temperature field and turns it into thermal stress, and a modal Step after a static one
     /// picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
     /// which is what a tensioned or preloaded member needs. The remaining fields belong to one
-    /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+    /// procedure each and are ignored by the others. Each field declares `x-procedures` in the
+    /// schema (`*` means common to every procedure), so hosts can present the selected procedure
+    /// without discarding values when it changes. The Procedure enum declares material inputs
+    /// and result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`
     /// alone (default 1) to buckling, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
     /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
@@ -1804,55 +1840,74 @@ pub enum Command {
     #[serde(rename = "step.add", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     StepAdd {
+        #[schemars(extend("x-procedures" = ["*"]))]
         name: String,
+        #[schemars(extend("x-procedures" = ["*"]))]
         procedure: Procedure,
+        #[schemars(extend("x-procedures" = ["*"]))]
         constraints: Vec<String>,
+        #[schemars(extend("x-procedures" = ["*"]))]
         loads: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["*"]))]
         output: Option<Vec<Field>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["*"]))]
         after: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["modal", "buckling"]))]
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["modal"]))]
         shift: Option<f64>,
         /// Maximum time increment of a heat-transient Step, or of a static Step with an
         /// amplitude. A uniform increment no larger than dt is chosen to finish exactly at
         /// tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "heat-transient", "implicit"]))]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "heat-transient", "explicit", "implicit"]))]
         t_end: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["heat-transient"]))]
         theta: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "heat-transient", "explicit", "implicit", "harmonic"]))]
         output_every: Option<u32>,
         /// Maximum fraction of the explicit critical time step (usually 0.9). The increment
         /// may be reduced uniformly to finish exactly at tEnd.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["explicit"]))]
         dt_factor: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "heat-transient", "implicit"]))]
         amplitude: Option<AmplitudeSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["heat-transient"]))]
         initial: Option<Q<Temperature>>,
         /// HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
         /// average acceleration, no numerical damping); -0.05 is the usual choice when the
         /// mesh-frequency ringing of a sudden load should die out.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["implicit"]))]
         alpha: Option<f64>,
         /// Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step
         /// (directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).
         /// Default "0 Hz"; must be non-negative, e.g. "0.5 1/s".
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["implicit", "harmonic", "randomVibration"]))]
         rayleigh_alpha: Option<Q<Frequency>>,
         /// Stiffness-proportional Rayleigh damping β of `C = αM + βK`, read by an implicit Step
         /// (directly) and a harmonic one (as `ζ = βω / 2`, most of it at high frequency).
         /// Default "0 s"; must be non-negative, e.g. "1e-5 s".
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["implicit", "harmonic", "randomVibration"]))]
         rayleigh_beta: Option<Q<Time>>,
         /// Initial velocities of an explicit or implicit Step, one uniform vector per Set of
         /// nodes; nodes in no entry start from rest.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["explicit", "implicit"]))]
         initial_velocity: Option<Vec<InitialVelocitySpec>>,
         /// Convergence tolerance for a Step that must iterate: the relative sup-norm change of
         /// the solution between two passes. Default 1e-6.
@@ -1860,10 +1915,12 @@ pub enum Command {
         /// (default 10). More increments cost proportionally more but start each Newton solve
         /// closer to equilibrium, which is what makes a stiffening or buckling model converge.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear"]))]
         increments: Option<u32>,
         /// Halvings a static-nonlinear Step may use when an increment does not converge
         /// (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear"]))]
         max_cutbacks: Option<u32>,
         /// Convergence tolerance for a Step that must iterate, relative in both cases: the
         /// sup-norm change of the solution between two passes for a radiating heat Step
@@ -1871,29 +1928,36 @@ pub enum Command {
         /// increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
         /// tolerance, which is `solve.run`'s.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear", "heat-steady", "heat-transient"]))]
         nonlinear_tolerance: Option<f64>,
         /// Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
         /// heat Step (default 50); for static-nonlinear it is what makes an increment cut back
         /// and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
         /// five iterations from a good starting point).
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear", "heat-steady", "heat-transient"]))]
         nonlinear_max_iterations: Option<u32>,
         /// First frequency of a harmonic sweep, e.g. "1 Hz".
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
         f_start: Option<Q<Frequency>>,
         /// Last frequency of a harmonic sweep; must be above fStart.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
         f_stop: Option<Q<Frequency>>,
         /// How many frequencies the sweep evaluates, including both endpoints. At least 2.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
         points: Option<u32>,
         /// Frequency spacing of a harmonic sweep; default linear.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
         sweep: Option<SweepSpacing>,
         /// Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
         /// for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused
         /// together with `dampingRatios` on the same Step.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic", "randomVibration"]))]
         damping_ratio: Option<f64>,
         /// Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`
         /// for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past
@@ -1901,6 +1965,7 @@ pub enum Command {
         /// gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly
         /// like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic", "randomVibration"]))]
         damping_ratios: Option<Vec<f64>>,
         /// One-sided PSD table for randomVibration. All Loads form one spatial pattern
         /// multiplied by the same zero-mean stationary random process. Use density "1 s"
@@ -1908,6 +1973,7 @@ pub enum Command {
         /// `after` naming a solved modal Step, identical constraints, and positive damping.
         /// Outputs are componentwise standard deviations, never a signed equilibrium state.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["randomVibration"]))]
         psd: Option<Vec<PsdPoint>>,
     },
 

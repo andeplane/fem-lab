@@ -109,7 +109,7 @@ describe('treeGroups', () => {
     });
     expect(group(s, 'Loads').items[0]).toMatchObject({ cmd: 'form.edit', summary: 'total [0, 0, -1] kN on beam.xmax' });
     expect(group(s, 'Mesh').items[0]!.summary).toBe('lattice · order 1 · incompatible-modes');
-    expect(group(s, 'Steps').items[0]!.summary).toBe('static · 1 constraints · 1 loads · solved');
+    expect(group(s, 'Steps').items[0]!.summary).toBe('static · needs elastic stiffness (E, ν or orthotropic) · gives u, stress, reactions · 1 constraints · 1 loads · solved');
   });
 
   it('badges a group as ok, as warning, or as empty', () => {
@@ -123,6 +123,14 @@ describe('treeGroups', () => {
     const warned = state({ ...MODEL, warnings: [{ code: 'model.no-material', text: 'x', where: null }, { code: 'model.unloaded', text: 'y', where: null }] } as ModelSummary);
     expect(group(warned, 'Materials')).toMatchObject({ badge: '1 warning', badgeClass: 'badge warn' });
     expect(group(warned, 'Loads').badge).toBe('1 warning');
+  });
+
+  it('explains a heat Step through its material inputs and temperature results', () => {
+    const s = state({ ...MODEL, steps: [{ name: 'cooling', procedure: 'heat-transient', constraints: ['root'], loads: [], solved: false }] });
+    expect(group(s, 'Steps').items[0]).toMatchObject({
+      cmd: 'form.edit', args: { kind: 'step', name: 'cooling' },
+      summary: 'heat-transient · needs k, ρ, cp · gives T, reaction power, stored-energy rate · 1 constraints · 0 loads',
+    });
   });
 
   it('warns on Mesh when there are Bodies but no mesh settings, which no engine warning covers', () => {
