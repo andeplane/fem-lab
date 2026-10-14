@@ -2730,3 +2730,363 @@ fn local_refinement_closes_multiple_marked_edges_of_one_triangle() {
     assert!(min_element_measure(&refined) > 0.);
     assert_eq!(refine(&refined, &boxes, 100).unwrap(), refined);
 }
+
+// ---- exact authored Tet4 pair conformity (#501) -----------------------------------------------
+
+const PAIR_TET: [[f64; 3]; 4] = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
+
+fn tet_pair_mesh(points: &[[f64; 3]], connectivity: &[u32]) -> Mesh {
+    Mesh {
+        dim: 3,
+        coords: points.iter().flatten().copied().collect(),
+        blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: connectivity.to_vec(), first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn authored_tetrahedra_allow_only_their_labelled_vertex_edge_or_face() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    // These are independently authored positive cells in the positive/negative octants.
+    // Contact is, respectively, exactly the origin, the x edge, and the xy face.
+    for (extra, second) in [
+        (vec![[-1., 0., 0.], [0., -1., 0.], [0., 0., -1.]], [0, 5, 4, 6]),
+        (vec![[0., -1., 0.], [0., 0., -1.]], [0, 1, 4, 5]),
+        (vec![[0., 0., -1.]], [0, 2, 1, 4]),
+    ] {
+        let mut points = PAIR_TET.to_vec();
+        points.extend(extra);
+        let mesh = tet_pair_mesh(&points, &[0, 1, 2, 3, second[0], second[1], second[2], second[3]]);
+        assert!(min_element_measure(&mesh) > 0.);
+        validate_tet_pairs(&mesh).unwrap();
+    }
+    let single = tet_pair_mesh(&PAIR_TET, &[0, 1, 2, 3]);
+    validate_tet_pairs(&single).unwrap();
+    let mut unused = PAIR_TET.to_vec();
+    unused.push(PAIR_TET[0]);
+    let untouched = tet_pair_mesh(&unused, &[0, 1, 2, 3]);
+    validate_tet_pairs(&untouched).unwrap();
+    assert_eq!(untouched.n_nodes(), 5, "unused coincident labelled nodes survive");
+}
+
+#[test]
+fn authored_tetrahedra_reject_crossing_containment_partial_faces_and_t_junctions() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    let fixtures = [
+        // Nested cell: no boundary intersection is needed to expose the overlap.
+        [[0.1, 0.1, 0.1], [0.2, 0.1, 0.1], [0.1, 0.2, 0.1], [0.1, 0.1, 0.2]],
+        // Crossing cells with no vertex contained in the other: x,y >= .3 and
+        // z >= -.3 intersects x+y+z <= 1 near (.4,.4,.1).
+        [[0.3, 0.3, -0.3], [1.3, 0.3, -0.3], [0.3, 1.3, -0.3], [0.3, 0.3, 0.7]],
+        // Opposite-side cells with overlapping coplanar faces, but no face vertex
+        // in the other triangle. The connectivity reverses the bottom triangle.
+        [[-0.1, 0.4, 0.], [0.8, 0.8, 0.], [0.4, -0.1, 0.], [0.4, 0.4, -1.]],
+        // Unlabelled vertex on the first cell's x edge is a T-junction.
+        [[0.5, 0., 0.], [0.5, -1., 0.], [0.5, 0., -1.], [1.5, 0., 0.]],
+    ];
+    for fixture in fixtures {
+        let mut points = PAIR_TET.to_vec();
+        points.extend(fixture);
+        let mesh = tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert!(min_element_measure(&mesh) > 0.);
+        let error = validate_tet_pairs(&mesh).unwrap_err();
+        assert!(error.0.contains("tetrahedra 0 and 1 overlap or meet"));
+    }
+    // Equal coordinates are not equal source identities: this otherwise matching
+    // opposite-side face has three independently labelled vertices.
+    let mut points = PAIR_TET.to_vec();
+    points.extend([[0., 0., 0.], [0., 1., 0.], [1., 0., 0.], [0., 0., -1.]]);
+    assert!(validate_tet_pairs(&tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7])).is_err());
+}
+
+#[test]
+fn matching_labelled_faces_do_not_hide_same_side_overlap_or_duplicate_cells() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    // Both cells are positive; the second apex lies outside the first cell, and
+    // the first apex lies outside the second. Their interiors still overlap near
+    // the shared base, so accepting that base must not skip the remaining faces.
+    let mut points = PAIR_TET.to_vec();
+    points.push([10., 10., 1.]);
+    let overlapping = tet_pair_mesh(&points, &[0, 1, 2, 3, 0, 1, 2, 4]);
+    assert!(min_element_measure(&overlapping) > 0.);
+    assert!(validate_tet_pairs(&overlapping).is_err());
+    assert!(validate_tet_pairs(&tet_pair_mesh(&PAIR_TET, &[0, 1, 2, 3, 0, 1, 2, 3])).is_err());
+    // Sharing a vertex or an edge likewise cannot authorize another crossing.
+    let mut vertex_crossing = PAIR_TET.to_vec();
+    vertex_crossing.extend([[2., -0.1, 0.2], [0.2, 2., -0.1], [-0.1, 0.2, 2.]]);
+    let mesh = tet_pair_mesh(&vertex_crossing, &[0, 1, 2, 3, 0, 4, 5, 6]);
+    assert!(min_element_measure(&mesh) > 0.);
+    assert!(validate_tet_pairs(&mesh).is_err());
+    let mut edge_crossing = PAIR_TET.to_vec();
+    edge_crossing.extend([[10., 2., -0.1], [10., -0.1, 2.]]);
+    let mesh = tet_pair_mesh(&edge_crossing, &[0, 1, 2, 3, 0, 1, 4, 5]);
+    assert!(min_element_measure(&mesh) > 0.);
+    assert!(validate_tet_pairs(&mesh).is_err());
+}
+
+#[test]
+fn tetrahedron_pair_broad_phase_handles_disjoint_boxes_and_disjoint_cells_with_overlapping_boxes() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    for fixture in [
+        // Expire the first cell from the x sweep.
+        PAIR_TET.map(|p| [p[0] + 3., p[1], p[2]]),
+        // Keep x overlap but separate y, then z.
+        PAIR_TET.map(|p| [p[0], p[1] + 3., p[2]]),
+        PAIR_TET.map(|p| [p[0], p[1], p[2] + 3.]),
+        PAIR_TET.map(|p| [p[0], p[1] - 3., p[2]]),
+        PAIR_TET.map(|p| [p[0], p[1], p[2] - 3.]),
+        // Boxes overlap, but the first cell has x+y+z <= 1 and this cell
+        // has x+y+z >= 2.5. The second order is positively oriented.
+        [[1., 1., 1.], [1., 0.5, 1.], [0.5, 1., 1.], [1., 1., 0.5]],
+    ] {
+        let mut points = PAIR_TET.to_vec();
+        points.extend(fixture);
+        let mesh = tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert!(min_element_measure(&mesh) > 0.);
+        validate_tet_pairs(&mesh).unwrap();
+    }
+    // Reversed source order exercises the geometric sort independently of ids.
+    let mut points = PAIR_TET.map(|p| [p[0] + 3., p[1], p[2]]).to_vec();
+    points.extend(PAIR_TET);
+    validate_tet_pairs(&tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7])).unwrap();
+    let empty = Mesh { blocks: Vec::new(), ..tet_pair_mesh(&[], &[]) };
+    validate_tet_pairs(&empty).unwrap();
+    // This entry point intentionally makes no Hex8 claim, even for duplicate
+    // cubes. The imported-source caller must provide that separate certificate.
+    let mut hex = cube(ElementKind::Hex8, [1, 1, 1]);
+    let duplicate = hex.blocks[0].conn.clone();
+    hex.blocks[0].conn.extend(duplicate);
+    validate_tet_pairs(&hex).unwrap();
+}
+
+// ---- original warped Hex8 certificates (#517) -------------------------------------------------
+
+const SOURCE_HEX: [[f64; 3]; 8] =
+    [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]];
+
+fn authored_hex(points: &[[f64; 3]], connectivity: &[u32]) -> Mesh {
+    let mut mesh = tet_pair_mesh(points, connectivity);
+    mesh.blocks[0].kind = ElementKind::Hex8;
+    mesh
+}
+
+fn append_source_hex(points: &mut Vec<[f64; 3]>, corners: &[[f64; 3]; 8], shared: bool) -> [u32; 8] {
+    // The fixture author explicitly assigns equal positions the same source label
+    // when requested. The production importer never runs this fixture construction.
+    corners.map(|point| {
+        let existing = points.iter().position(|p| *p == point).filter(|_| shared);
+        if let Some(node) = existing {
+            node as u32
+        } else {
+            let node = points.len() as u32;
+            points.push(point);
+            node
+        }
+    })
+}
+
+#[test]
+fn certificate_accepts_true_bilinear_warped_shared_faces_and_si_scalings() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // Left F=(s*(1+t*r/4),t,r); right F=(1+t*r/4+s*(1-t*r/4),t,r).
+    // Determinants are 1+t*r/4 and 1-t*r/4, at least 3/4. The shared
+    // nonplanar face is exactly x=1+y*z/4, and divides the two interiors.
+    let points = [
+        [0., 0., 0.],
+        [0., 1., 0.],
+        [0., 1., 1.],
+        [0., 0., 1.],
+        [1., 0., 0.],
+        [1., 1., 0.],
+        [1.25, 1., 1.],
+        [1., 0., 1.],
+        [2., 0., 0.],
+        [2., 1., 0.],
+        [2., 1., 1.],
+        [2., 0., 1.],
+    ];
+    let connectivity = [0, 4, 5, 1, 3, 7, 6, 2, 4, 8, 9, 5, 7, 11, 10, 6];
+    for scale in [1.0, 1.0 / 1024.0, 1024.0] {
+        let scaled = points.map(|p| p.map(|v| v * scale));
+        certify_imported_geometry(&authored_hex(&scaled, &connectivity)).unwrap();
+    }
+    // An orientation-preserving, rotated/sheared affine transform retains the
+    // actual warped geometry. It must not require axis-aligned face equations.
+    let transformed = points.map(|[x, y, z]| [-2. * y + z / 4., x + z / 2., 4. * z]);
+    certify_imported_geometry(&authored_hex(&transformed, &connectivity)).unwrap();
+}
+
+#[test]
+fn certificate_subdivides_curved_separators_and_rejects_undeclared_warped_tangency() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // A's boundary is q=x-1-y*z/4=0. B=(1+c+r/8,s,1-s+t/8) is
+    // affine, detJ=1/64. q(B)=c+r/8-s*(1-s+t/8)/4. Its minimum
+    // is c-81/1024 at (s,t,r)=(9/16,1,0). The positive case has
+    // margin1/1024, despite negative initial Bernstein middle coefficients.
+    let left = SOURCE_HEX.map(|[s, t, r]| [s * (1. + t * r / 4.), t, r]);
+    for (c, succeeds) in [(41. / 512., true), (81. / 1024., false)] {
+        let right = SOURCE_HEX.map(|[s, t, r]| [1. + c + r / 8., s, 1. - s + t / 8.]);
+        let mut points = left.to_vec();
+        let second = append_source_hex(&mut points, &right, false);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        let outcome = certify_imported_geometry(&authored_hex(&points, &connectivity));
+        assert_eq!(outcome.is_ok(), succeeds);
+    }
+}
+
+#[test]
+fn certificate_requires_an_identically_zero_interface_not_just_zero_corners() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // A's warped face is x=1+y*z/8 on -1<=y,z<=1. B's planar
+    // diamond has all four face corners on that quadric (y*z=0), but its
+    // interior crosses it. The exact restriction has a nonzero remainder.
+    let left = SOURCE_HEX.map(|[s, t, r]| {
+        let y = 2. * t - 1.;
+        let z = 2. * r - 1.;
+        [s * (1. + y * z / 8.), y, z]
+    });
+    let right = SOURCE_HEX.map(|[s, t, r]| [1. + s / 4., r - t, 1. - t - r]);
+    let mut points = left.to_vec();
+    let second = append_source_hex(&mut points, &right, false);
+    let mut connectivity: Vec<_> = (0..8).collect();
+    connectivity.extend(second);
+    assert!(certify_imported_geometry(&authored_hex(&points, &connectivity)).is_err());
+}
+
+#[test]
+fn certificate_accepts_labelled_hex_face_edge_vertex_and_separated_cells() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    for offset in [[1., 0., 0.], [1., 1., 0.], [1., 1., 1.], [3., 0., 0.], [0., 3., 0.], [0., 0., 3.], [0., -3., 0.]] {
+        let mut points = SOURCE_HEX.to_vec();
+        let next = SOURCE_HEX.map(|p| std::array::from_fn(|k| p[k] + offset[k]));
+        let second = append_source_hex(&mut points, &next, true);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap();
+    }
+    certify_imported_geometry(&authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>())).unwrap();
+    certify_imported_geometry(&Mesh { blocks: Vec::new(), ..authored_hex(&[], &[]) }).unwrap();
+}
+
+#[test]
+fn certificate_rejects_overlap_undeclared_tangency_and_hanging_hex_faces() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    for (next, shared) in [
+        // Volume overlap has no supporting separator.
+        (SOURCE_HEX.map(|[x, y, z]| [x + 0.5, y, z]), true),
+        // Whole matching face and point contacts with distinct source identities.
+        (SOURCE_HEX.map(|[x, y, z]| [x + 1., y, z]), false),
+        (SOURCE_HEX.map(|[x, y, z]| [x + 1., y + 1., z + 1.]), false),
+        // Only the y=0 edge uses the same labels; the y=.5 nodes hang in the
+        // first cube's full x=1 face. Geometry meets over a half-face.
+        (SOURCE_HEX.map(|[x, y, z]| [x + 1., y / 2., z]), true),
+    ] {
+        let mut points = SOURCE_HEX.to_vec();
+        let second = append_source_hex(&mut points, &next, shared);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        assert_eq!(
+            certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap_err(),
+            ImportedCertificateError::Inconclusive {
+                elements: vec![0, 1],
+                cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact"
+                    .into(),
+            }
+        );
+    }
+}
+
+#[test]
+fn certificate_rejects_negative_jacobian_pockets_even_when_corners_gauss_and_center_pass() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // F=(s,(s-a)*t+b*r,b*t+(s-a)*r), det=(s-a)^2-b^2. All values
+    // are dyadic rationals. Both cells fool the eight corners and Gauss rule;
+    // a=3/8,b=1/32 also fools all 27 half-grid samples, including the center.
+    for (a, b) in [(0.5, 0.125), (0.375, 0.03125)] {
+        let points = SOURCE_HEX.map(|[s, t, r]| [s, (s - a) * t + b * r, b * t + (s - a) * r]);
+        for s in [0., 1., (1. - 1. / 3f64.sqrt()) / 2., (1. + 1. / 3f64.sqrt()) / 2.] {
+            assert!((s - a) * (s - a) - b * b > 0.);
+        }
+        assert_eq!((a - a) * (a - a) - b * b, -b * b);
+        let error = certify_imported_geometry(&authored_hex(&points, &(0..8).collect::<Vec<_>>())).unwrap_err();
+        if a == 0.5 {
+            assert_eq!(
+                error,
+                ImportedCertificateError::Invalid {
+                    elements: vec![0],
+                    cause: "Hex8 has a nonpositive exact Jacobian at reference [1/2,0/2,0/2]".into(),
+                }
+            );
+        } else {
+            assert!((0.5 - a) * (0.5 - a) - b * b > 0.);
+            assert_eq!(
+                error,
+                ImportedCertificateError::Inconclusive {
+                    elements: vec![0],
+                    cause: "exact normalized-Jacobian matrix certificate could not prove Hex8 global injectivity"
+                        .into(),
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn certificate_reports_valid_but_unproved_warp_as_inconclusive() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // F=(s+10*t*r,t,r) is bijective with explicit inverse (x-10*y*z,y,z)
+    // and detJ=1. Large shear violates the sufficient normalized SPD condition.
+    let points = SOURCE_HEX.map(|[s, t, r]| [s + 10. * t * r, t, r]);
+    assert_eq!(
+        certify_imported_geometry(&authored_hex(&points, &(0..8).collect::<Vec<_>>())).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0],
+            cause: "exact normalized-Jacobian matrix certificate could not prove Hex8 global injectivity".into(),
+        }
+    );
+}
+
+#[test]
+fn certificate_covers_tet_pairs_and_supported_mixed_contacts_without_skin_substitution() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // Tet4/Tet4 uses its complete original simplex certificate.
+    let mut points = PAIR_TET.to_vec();
+    points.push([0., 0., -1.]);
+    certify_imported_geometry(&tet_pair_mesh(&points, &[0, 1, 2, 3, 0, 2, 1, 4])).unwrap();
+    assert_eq!(
+        certify_imported_geometry(&tet_pair_mesh(&PAIR_TET, &[0, 1, 2, 3, 0, 1, 2, 3])).unwrap_err(),
+        ImportedCertificateError::Invalid {
+            elements: vec![0, 1],
+            cause: "tetrahedra overlap or meet outside their shared labelled entity".into(),
+        }
+    );
+    assert_eq!(
+        certify_imported_geometry(&tet_pair_mesh(&PAIR_TET, &[0, 2, 1, 3])).unwrap_err(),
+        ImportedCertificateError::Invalid {
+            elements: vec![0],
+            cause: "tetrahedron has a nonpositive exact Jacobian".into()
+        }
+    );
+    // The negative-octant tetrahedron shares only the labelled cube origin.
+    let mut mixed = authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>());
+    mixed.coords.extend([-1., 0., 0., 0., -1., 0., 0., 0., -1.]);
+    mixed.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 9, 8, 10], first_elem: 1 });
+    certify_imported_geometry(&mixed).unwrap();
+    // A tetrahedral triangular face covering half a Hex8 quad is not a matching
+    // full labelled face; mixed-element conformity cannot silently triangulate it.
+    let mut partial = authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>());
+    partial.coords.extend([2., 0., 0.]);
+    partial.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![1, 2, 5, 8], first_elem: 1 });
+    assert!(certify_imported_geometry(&partial).is_err());
+    let unsupported = cube(ElementKind::Quad4, [1, 1, 1]);
+    assert_eq!(
+        certify_imported_geometry(&unsupported).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0],
+            cause: "original-geometry certificate supports only Tet4 and Hex8".into(),
+        }
+    );
+}

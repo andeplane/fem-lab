@@ -2115,3 +2115,22 @@ solution, ensuring spatial iterations restart rather than accumulate physical ti
 native execution at one/four threads and WASM, with exact per-entry hashes and
 surface topology and 1e-9 agreement of temperature/error fields. Both hosts also
 verify the same Model hashes when replay skips the solves.
+
+### Original imported-cell geometry certificates (#517)
+
+Geometry's `certificate_*` tests independently cover transformed/scaled warped faces,
+labelled face/edge/vertex contacts, crossing/contained/partial-face/T-junction rejection,
+nonzero interface remainders despite zero corners, and curved separators requiring
+Bernstein subdivision. Two original Hex8 maps share the bilinear face x = 1 + yz/4;
+their determinants are 1 + yz/4 and 1 - yz/4, so both are injective with disjoint
+interiors. Rigid transforms and scales retain that oracle. Tet4 pairs use independently
+known convex containment/intersection cases and exact contact entities.
+
+Negative-pocket maps F = (s, (s-a)t + br, bt + (s-a)r) have determinant
+(s-a)^2 - b^2. The cases (a,b) = (1/2,1/8) and (3/8,1/32) show that corner/Gauss
+sampling, and even additional half-grid samples, cannot prove injectivity. Both fail
+closed. A valid large-shear map F = (s + 10tr,t,r), det = 1, is inconclusive under the
+sufficient certificate, rather than falsely classified as invalid. Pure arithmetic
+tests check exact closed-form polynomials, de Casteljau coefficients and depth/work
+limits including an interior zero at 1/3. Proof budgets are deterministic; exhaustion
+is explicitly inconclusive, never accepted.
