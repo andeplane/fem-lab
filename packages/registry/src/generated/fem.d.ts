@@ -230,6 +230,8 @@ export interface Fem {
      * Result fields require the Model state they were solved on; `result.stale` means run
      * `solve.run` on that Step again before exporting it with the current Mesh.
      * `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
+     * `inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading
+     * returns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.
      */
     export(args: Omit<Extract<Command, { cmd: 'mesh.export' }>, 'cmd'>): Promise<Ack>;
   };
