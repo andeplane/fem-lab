@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { ServiceFailure } from './errors';
 import type { AccountResponse } from './accounts';
 import type { Completions } from './completions';
+import type { BillingLifecycle } from './billing';
 
 export interface HttpDependencies {
   now(): Date;
@@ -12,17 +13,22 @@ export interface HttpDependencies {
   origins?: readonly string[];
   completions?: Completions;
   heartbeat?(callback:()=>void):()=>void;
+  billing?:BillingLifecycle;
 }
 
-async function readJson(req:IncomingMessage):Promise<unknown> {
-  if(req.headers['content-type']?.split(';')[0]?.trim().toLowerCase()!=='application/json') throw new ServiceFailure(415,'json-required','Send this request as JSON.','request');
+async function readBytes(req:IncomingMessage,limit:number):Promise<Buffer> {
   const chunks:Buffer[]=[]; let length=0;
   for await(const chunk of req.iterator({destroyOnReturn:false})) {
     const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk); length+=bytes.length;
-    if(length>16*1024*1024) { req.resume(); throw new ServiceFailure(413,'request-too-large','Reduce attachments or chat context.','request'); }
+    if(length>limit) { req.resume(); throw new ServiceFailure(413,'request-too-large','Reduce attachments or chat context.','request'); }
     chunks.push(bytes);
   }
-  try { return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks))); }
+  return Buffer.concat(chunks);
+}
+async function readJson(req:IncomingMessage):Promise<unknown> {
+  if(req.headers['content-type']?.split(';')[0]?.trim().toLowerCase()!=='application/json') throw new ServiceFailure(415,'json-required','Send this request as JSON.','request');
+  const bytes=await readBytes(req,16*1024*1024);
+  try { return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)); }
   catch { throw new ServiceFailure(400,'invalid-json','Send a valid JSON request.','request'); }
 }
 function failure(res:ServerResponse,error:unknown,requestId:string) {
@@ -58,6 +64,13 @@ export function serviceServer(deps: HttpDependencies) {
       res.statusCode = ready ? 200 : 503;
       res.end(JSON.stringify({ status: ready ? 'ready' : 'unavailable' }));
       return;
+    }
+    if(req.method==='POST'&&req.url==='/v1/billing/webhook') {
+      try {
+        if(!deps.billing)throw new ServiceFailure(503,'billing-unavailable','Payments are not configured yet.','billing');
+        const signature=req.headers['stripe-signature'];
+        res.end(JSON.stringify(await deps.billing.receive(await readBytes(req,1024*1024),typeof signature==='string'?signature:undefined)));
+      } catch(error) {failure(res,error,requestId);}return;
     }
     if (req.method === 'GET' && req.url === '/v1/account' && deps.account) {
       try { res.end(JSON.stringify(await deps.account(req.headers.authorization))); }

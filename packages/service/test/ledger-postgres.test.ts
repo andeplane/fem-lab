@@ -15,7 +15,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
   const accounts = postgresAccounts(pool, () => clock, randomUUID);
   beforeAll(async () => {
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations = await Promise.all(['001-accounts.sql', '002-credit-ledger.sql', '003-ai-reservations.sql'].map(async name => ({ name, sql: await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8') })));
+    const migrations = await Promise.all(['001-accounts.sql', '002-credit-ledger.sql', '003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name => ({ name, sql: await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8') })));
     const connection = await pool.connect();
     try { await migrate(connection, migrations); } finally { connection.release(); }
   });

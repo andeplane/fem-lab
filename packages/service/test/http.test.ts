@@ -63,4 +63,11 @@ describe('headless service host', () => {
     const refused = await fetch(`${url}/v1/account`, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
     expect(refused.status).toBe(403); expect(refused.headers.get('access-control-allow-origin')).toBeNull();
   });
+  it('passes original payment webhook bytes/signature and refuses an unconfigured payment service',async()=>{
+    let raw='',signature:string|undefined;
+    const url=await host(async()=>true,{billing:{receive:async(bytes,header)=>{raw=new TextDecoder().decode(bytes);signature=header;return {received:true};},process:async()=>false,recover:async()=>({processed:0,failed:0})}});
+    const response=await fetch(`${url}/v1/billing/webhook`,{method:'POST',headers:{'stripe-signature':'signed-header'},body:'{ "original": 1 }\n'});
+    expect(response.status).toBe(200);expect(raw).toBe('{ "original": 1 }\n');expect(signature).toBe('signed-header');
+    const missing=await fetch(`${await host(async()=>true)}/v1/billing/webhook`,{method:'POST',body:'{}'});expect(missing.status).toBe(503);expect(await missing.json()).toMatchObject({code:'billing-unavailable'});
+  });
 });

@@ -30,7 +30,9 @@ async function eligibleGrants(sql: Sql, accountId: string, clock: Date) {
   const rows = (await sql.query(`SELECT g.*, g.amount
     + COALESCE((SELECT sum(e.amount) FROM credit_entries e WHERE e.grant_id=g.id),0)
     - COALESCE((SELECT sum(h.amount) FROM credit_holds h JOIN ai_requests r ON r.id=h.request_id WHERE h.grant_id=g.id AND r.state=ANY($3)),0) AS available
-    FROM credit_grants g WHERE account_id=$1 AND starts_at <= $2 AND expires_at > $2 ORDER BY expires_at,id`, [accountId, clock, held])).rows;
+    FROM credit_grants g LEFT JOIN billing_accounts b ON b.account_id=g.account_id
+    WHERE g.account_id=$1 AND starts_at <= $2 AND expires_at > $2 AND (g.plan='free' OR NOT COALESCE(b.blocked,false))
+    ORDER BY expires_at,g.id`, [accountId, clock, held])).rows;
   const paid = rows.some(row => row.plan !== 'free');
   return rows.filter(row => paid ? row.plan !== 'free' : row.plan === 'free');
 }

@@ -4,6 +4,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import pg from 'pg';
 import OpenAI from 'openai';
+import Stripe from 'stripe';
 import { accountReader, postgresAccounts } from './accounts';
 import { identityVerifier } from './identity';
 import { migrate } from './migrations';
@@ -11,6 +12,8 @@ import { creditLedger } from './ledger';
 import { reservations } from './reservations';
 import { completionService } from './completions';
 import { openaiGateway } from './provider';
+import {stripeGateway} from './stripe';
+import {billingLifecycle} from './billing';
 import { serviceServer } from './http.js';
 
 const port = Number(process.env.PORT ?? 8080);
@@ -20,6 +23,10 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT m
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const pool = projectId ? new pg.Pool({ max: 8, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 }) : undefined;
 const now = () => new Date();
+const prices={plus:process.env.STRIPE_PRICE_PLUS??'',pro:process.env.STRIPE_PRICE_PRO??'',studio:process.env.STRIPE_PRICE_STUDIO??''};
+const stripe=process.env.STRIPE_SECRET_KEY?new Stripe(process.env.STRIPE_SECRET_KEY,{timeout:5000,maxNetworkRetries:1}):undefined;
+const billing=pool&&stripe&&process.env.STRIPE_WEBHOOK_SECRET&&Object.values(prices).every(price=>/^price_[a-zA-Z0-9_]+$/.test(price))?
+  billingLifecycle(pool,stripeGateway(stripe,process.env.STRIPE_WEBHOOK_SECRET),{live:process.env.BILLING_MODE==='live',prices},now,randomUUID):undefined;
 if (process.argv.includes('--migrate')) {
   if (!pool) throw new Error('FIREBASE_PROJECT_ID and database connection must be configured.');
   const directory = new URL('./migrations/', import.meta.url);
@@ -33,6 +40,7 @@ if (process.argv.includes('--migrate')) {
     // store:false does not archive Responses for retrieval. Unknown usage is resolved conservatively.
     const result=await reservations(pool,now,randomUUID).recover(async()=>undefined);
     process.stdout.write(JSON.stringify({event:'usage-recovery',...result})+'\n');
+    if(billing){const payments=await billing.recover();process.stdout.write(JSON.stringify({event:'billing-recovery',severity:payments.failed?'ERROR':'INFO',...payments})+'\n');if(payments.failed)process.exitCode=1;}
   } finally { await pool.end(); }
 } else {
   const readAccount = pool && projectId ? accountReader(identityVerifier(getAuth(initializeApp({ projectId })), projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
@@ -44,7 +52,7 @@ if (process.argv.includes('--migrate')) {
     const owner = await readAccount(authorization); await ledger.ensureFree(owner.id);
     return { ...owner, usage: await ledger.balance(owner.id), billingAvailable: false };
   } : undefined;
-  const server = serviceServer({ now, newId: randomUUID, account,completions,
+  const server = serviceServer({ now, newId: randomUUID, account,completions,billing,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
     ready: async () => { if (!pool||!completions) return false; await pool.query('SELECT id FROM ai_requests LIMIT 0'); return true; },

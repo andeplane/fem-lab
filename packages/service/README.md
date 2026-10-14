@@ -21,6 +21,20 @@ Tariff `2026-10-14.v1` stores 30 integer subcredits per public credit, including
 writes once and reasoning inside total output. Financial grants/debits are immutable
 database rows. Reservation/settlement admission follows in #549.
 
+Payment webhooks use `POST /v1/billing/webhook`, with the original raw bytes and
+Stripe signature. The durable inbox stores event/object/customer IDs and a digest,
+not raw card/customer payloads. Canonical invoice/subscription reads and a leased
+customer lock make duplicate/unordered events safe. Paid invoice/period sources are
+unique; failed renewals and proration updates grant no new allowance. Cancellation
+preserves an already-paid period. Refund/dispute events freeze paid access for an
+auditable billing review without changing consumed-token history.
+
+Set separate test/live `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`STRIPE_PRICE_PLUS`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_STUDIO` and `BILLING_MODE`.
+Missing configuration disables payment handling without disabling free AI. Scheduled
+recovery retries failed inbox items; failures emit an error event and fail the job.
+No live Stripe account or payment is configured by the fixtures in this repository.
+
 The Node host is separate from the headless Rust engine. It shares provider blocks,
 completed tool/continuation events and versioned request schemas with the browser
 through `@femlab/ai`. OpenAI clients, identity, storage, clock and request IDs are
