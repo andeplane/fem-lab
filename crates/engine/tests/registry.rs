@@ -13299,6 +13299,52 @@ fn imported_source_geometry_and_idealisation_guards_preserve_the_document() {
 }
 
 #[test]
+fn imported_geometry_namespace_is_atomic_in_both_construction_orders() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addMass","name":"part","at":["2 m","0 m","0 m"],"mass":"1 kg"}"#);
+    let before = e.export_file();
+    let error = err(&mut e, IMPORTED_TET);
+    assert_eq!(error.code, ErrorCode::NameTaken);
+    assert_eq!(error.where_.as_deref(), Some("mesher.body"));
+    assert_eq!(e.export_file(), before);
+
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let source = e.export_file();
+    for command in [
+        r#"{"cmd":"geometry.addMass","name":"part","at":["2 m","0 m","0 m"],"mass":"1 kg"}"#,
+        r#"{"cmd":"geometry.nameRegion","name":"part","where":{"kind":"body","name":"part"}}"#,
+        r#"{"cmd":"geometry.nameFace","name":"part","of":"part","where":{"kind":"normal","normal":[0,0,-1]}}"#,
+    ] {
+        assert_eq!(err(&mut e, command).code, ErrorCode::NameTaken);
+        assert_eq!(e.export_file(), source);
+    }
+    for name in ["part.nset_ACTIVE", "part.elset_ALL", "part.surface_BASE", "part.node_77"] {
+        let command = serde_json::json!({"cmd":"geometry.addMass","name":name,"at":["0 m","0 m","0 m"],"mass":"1 kg"});
+        assert_eq!(err(&mut e, &command.to_string()).code, ErrorCode::Schema);
+        assert_eq!(e.export_file(), source);
+    }
+    ok(&mut e, r#"{"cmd":"geometry.addMass","name":"lug","at":["2 m","0 m","0 m"],"mass":"1 kg"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"custom","where":{"kind":"body","name":"part"}}"#);
+    let before = e.export_file();
+    for command in [
+        r#"{"cmd":"model.rename","kind":"body","name":"part","to":"lug"}"#,
+        r#"{"cmd":"model.rename","kind":"set","name":"custom","to":"part"}"#,
+        r#"{"cmd":"model.duplicate","kind":"set","name":"custom","as":"part"}"#,
+        r#"{"cmd":"model.rename","kind":"set","name":"custom","to":"part.nset_ACTIVE"}"#,
+        r#"{"cmd":"model.duplicate","kind":"set","name":"custom","as":"part.nset_ACTIVE"}"#,
+    ] {
+        assert!(run(&mut e, command).is_err());
+        assert_eq!(e.export_file(), before);
+    }
+    // Same-owner replacement remains legal and keeps auxiliary identity intact.
+    ok(&mut e, IMPORTED_TET);
+    assert_eq!(e.export_file().model, before.model);
+    assert_eq!(e.mesh().unwrap().source_labels.nodes, [10, 77, 88, 301]);
+    assert_eq!(e.mesh().unwrap().sets["lug"].nodes, [4]);
+}
+
+#[test]
 fn imported_source_survives_a_legal_empty_region_and_undo_recovers_its_preview() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);

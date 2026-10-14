@@ -6319,6 +6319,8 @@ export interface ImportedNodeSpec {
    */
   label: number;
   /**
+   * Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.
+   *
    * @minItems 3
    * @maxItems 3
    *
@@ -6349,6 +6351,9 @@ export interface ImportedNodeSpec {
   ];
 }
 export interface ImportedElement {
+  /**
+   * Positive original element label, at most 999999999.
+   */
   label: number;
   kind: ImportedElementKind;
   /**

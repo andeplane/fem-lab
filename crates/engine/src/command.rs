@@ -740,6 +740,8 @@ pub enum MesherSpec {
     /// warped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.
     /// Coincident labelled nodes remain distinct. Replace the whole checked
     /// source with mesh.set; named source Sets belong to the mesher and cannot be edited alone.
+    /// Input is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships
+    /// across Sets, surfaces and numeric node targets, before canonical deduplication.
     Imported(ImportedMeshSpec),
 }
 
@@ -768,6 +770,7 @@ pub struct ImportedMeshSpec {
 pub struct ImportedNodeSpec {
     /// Positive original node label, at most 999999999.
     pub label: u32,
+    /// Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.
     pub at: [Q<Length>; 3],
 }
 
@@ -791,6 +794,7 @@ impl ImportedElementKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportedElement {
+    /// Positive original element label, at most 999999999.
     pub label: u32,
     pub kind: ImportedElementKind,
     /// Source node labels in Abaqus connectivity order, exactly four or eight.

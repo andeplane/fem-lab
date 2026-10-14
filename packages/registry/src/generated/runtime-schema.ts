@@ -84,7 +84,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Bodies and Sets also share the geometry namespace with\ncuts and point masses, so their new name cannot shadow any geometry owner.\nMapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
       "type": "object",
       "properties": {
         "kind": {
@@ -110,7 +110,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
+      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.\nA Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.",
       "type": "object",
       "properties": {
         "kind": {
@@ -394,7 +394,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
+      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
       "type": "object",
       "properties": {
         "name": {
@@ -420,7 +420,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
+      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
       "type": "object",
       "properties": {
         "name": {
@@ -442,7 +442,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
+      "description": "Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.\nFails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
       "type": "object",
       "properties": {
         "name": {
@@ -460,7 +460,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing an existing point-mass name\nreplaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes\nit. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
       "type": "object",
       "properties": {
         "name": {
@@ -495,9 +495,12 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "description": "Unique Material name; reusing a name replaces its full definition.",
+          "type": "string",
+          "x-physics": "common"
         },
         "E": {
+          "description": "Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -505,16 +508,20 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "stiffness"
         },
         "nu": {
+          "description": "Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "orthotropic": {
+          "description": "Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orthotropic"
@@ -522,9 +529,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "orientation": {
+          "description": "Rotation of the Material axes from global axes; omitted means the global axes.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orientation"
@@ -532,9 +541,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "rho": {
+          "description": "Mass density for gravity, inertia and transient heat capacity.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_density"
@@ -542,9 +553,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "mass"
         },
         "alpha": {
+          "description": "Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_thermal_expansion"
@@ -552,9 +565,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "expansion"
         },
         "k": {
+          "description": "Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_conductivity"
@@ -562,9 +577,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "cp": {
+          "description": "Specific heat per unit mass for transient heat conduction; used with rho.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_specific_heat"
@@ -572,9 +589,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "yield": {
+          "description": "Initial yield stress for plasticity and the reported safety factor.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -582,9 +601,11 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "plasticity": {
+          "description": "J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.",
           "anyOf": [
             {
               "$ref": "#/$defs/Plasticity"
@@ -592,13 +613,16 @@ const commands = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "source": {
+          "description": "Source or reference for these property values, retained with the Material.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-physics": "common"
         },
         "cmd": {
           "type": "string",
@@ -730,7 +754,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -784,7 +808,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+      "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).\n`inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading\nreturns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.",
       "type": "object",
       "properties": {
         "format": {
@@ -2961,34 +2985,43 @@ const commands = {
       "type": "object",
       "properties": {
         "E1": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "E2": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "E3": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "G12": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "G13": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "G23": {
-          "$ref": "#/$defs/Q_stress"
+          "$ref": "#/$defs/Q_stress",
+          "x-physics": "stiffness"
         },
         "nu12": {
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "nu13": {
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "nu23": {
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "alpha": {
           "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -3000,7 +3033,8 @@ const commands = {
             "$ref": "#/$defs/Q_thermal_expansion"
           },
           "minItems": 3,
-          "maxItems": 3
+          "maxItems": 3,
+          "x-physics": "expansion"
         },
         "k": {
           "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -3012,7 +3046,8 @@ const commands = {
             "$ref": "#/$defs/Q_conductivity"
           },
           "minItems": 3,
-          "maxItems": 3
+          "maxItems": 3,
+          "x-physics": "thermal"
         }
       },
       "additionalProperties": false,
@@ -3551,7 +3586,7 @@ const commands = {
           ]
         },
         {
-          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.",
+          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
           "type": "object",
           "properties": {
             "body": {
@@ -4026,6 +4061,7 @@ const commands = {
           "minimum": 0
         },
         "at": {
+          "description": "Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -4044,6 +4080,7 @@ const commands = {
       "type": "object",
       "properties": {
         "label": {
+          "description": "Positive original element label, at most 999999999.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -4309,6 +4346,9 @@ const commands = {
             "u",
             "stress",
             "reactions"
+          ],
+          "x-material-physics": [
+            "stiffness"
           ]
         },
         {
@@ -4330,6 +4370,10 @@ const commands = {
             "u",
             "Cauchy stress",
             "reactions"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "plasticity"
           ]
         },
         {
@@ -4349,6 +4393,10 @@ const commands = {
           "x-results": [
             "natural frequencies",
             "mode shapes"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4367,6 +4415,9 @@ const commands = {
           "x-results": [
             "load factors",
             "mode shapes"
+          ],
+          "x-material-physics": [
+            "stiffness"
           ]
         },
         {
@@ -4383,6 +4434,10 @@ const commands = {
           "x-results": [
             "T",
             "reaction power"
+          ],
+          "x-material-physics": [
+            "thermal",
+            "mass"
           ]
         },
         {
@@ -4404,6 +4459,10 @@ const commands = {
             "T",
             "reaction power",
             "stored-energy rate"
+          ],
+          "x-material-physics": [
+            "thermal",
+            "mass"
           ]
         },
         {
@@ -4426,6 +4485,10 @@ const commands = {
             "stress",
             "reactions",
             "time history"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4448,6 +4511,10 @@ const commands = {
             "stress",
             "reactions",
             "time history"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4468,6 +4535,10 @@ const commands = {
             "amplitude",
             "phase",
             "frequency response"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         },
         {
@@ -4487,6 +4558,10 @@ const commands = {
           "x-results": [
             "1σ displacement",
             "1σ stress"
+          ],
+          "x-material-physics": [
+            "stiffness",
+            "mass"
           ]
         }
       ]
