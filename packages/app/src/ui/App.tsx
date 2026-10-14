@@ -93,7 +93,7 @@ const SI = { length: 'm', force: 'N', stress: 'Pa' };
 
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const dirty = useMemo(() => unsaved(s), [s.journal, s.savedJournal]);
-  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
+  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? []);
   const step = s.model?.steps[0]?.name ?? '';
   // Design state 7: while an error card stands, Solve is disabled and carries the same code.
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
@@ -196,7 +196,7 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       </div>
     );
   }
-  const b = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
+  const b = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? [])[0];
   if (!b) return null;
   return (
     <div class="banner">
