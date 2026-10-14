@@ -852,8 +852,34 @@ fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
     libm::sqrt((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2))
 }
 
-/// Area of a face (3D) or length of a boundary edge (2D).
+/// Geometric face measure. Linear 3D faces use their original shape/tangent
+/// quadrature, including bilinear Hex8/Shell4 patches. Curved area is numerical,
+/// not the area of a triangle skin. Quadratic corner metrics remain #524.
 fn face_measure(mesh: &Mesh, f: Face) -> f64 {
+    let face_kind = mesh.kind_of(f.elem).face_kind();
+    if mesh.dim == 3 && face_kind.n_corners() > 2 && face_kind.n_nodes() == face_kind.n_corners() {
+        use crate::fem::shape::{face_dshape_of, face_rule_of};
+        let nodes: Vec<_> = mesh.face_nodes(f).collect();
+        let mut derivatives = vec![[0.0; 2]; face_kind.n_nodes()];
+        let rule = face_rule_of(face_kind);
+        let mut area = 0.0;
+        for (point, weight) in rule.points.iter().zip(rule.weights) {
+            face_dshape_of(face_kind, [point[0], point[1]], &mut derivatives);
+            let mut tangent = [[0.0; 3]; 2];
+            for (&node, derivative) in nodes.iter().zip(&derivatives) {
+                let position = mesh.node(node);
+                for axis in 0..2 {
+                    for (component, value) in position.iter().enumerate() {
+                        tangent[axis][component] += value * derivative[axis];
+                    }
+                }
+            }
+            let [u, v] = tangent;
+            let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            area += weight * libm::sqrt(cross.iter().map(|x| x * x).sum());
+        }
+        return area;
+    }
     let p: Vec<[f64; 3]> =
         mesh.face_nodes(f).take(mesh.kind_of(f.elem).face_kind().n_corners()).map(|n| mesh.node(n)).collect();
     if p.len() == 2 {
@@ -869,10 +895,34 @@ fn face_measure(mesh: &Mesh, f: Face) -> f64 {
     area
 }
 
-/// Volume of an element (area in 2D). Exact for the planar-faced cells a lattice makes: the
-/// divergence theorem over the faces in 3D, the shoelace over the corners in 2D.
+/// Volume of an element (area in 2D). Tet4/Hex8 integrate the original Jacobian,
+/// exactly for those polynomial maps up to f64 roundoff. Higher-order corner
+/// geometry and 2D shoelace metrics are retained explicitly for #524.
 fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
     let kind = mesh.kind_of(e);
+    if kind.dim() == 3 && kind.n_nodes() == kind.n_corners() {
+        use crate::fem::shape::{dshape_of, rule_of};
+        let mut derivatives = vec![[0.0; 3]; kind.n_nodes()];
+        let rule = rule_of(kind);
+        let mut volume = 0.0;
+        for (&point, weight) in rule.points.iter().zip(rule.weights) {
+            dshape_of(kind, point, &mut derivatives);
+            let mut jacobian = [[0.0; 3]; 3];
+            for (&node, derivative) in mesh.elem_nodes(e).iter().zip(&derivatives) {
+                let position = mesh.node(node);
+                for (component, row) in jacobian.iter_mut().enumerate() {
+                    for axis in 0..3 {
+                        row[axis] += position[component] * derivative[axis];
+                    }
+                }
+            }
+            let [a, b, c] = jacobian;
+            let determinant = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]);
+            volume += weight * determinant;
+        }
+        return volume;
+    }
     if kind == femlab_geometry::ElementKind::Shell4 {
         return face_measure(mesh, Face { elem: e, local: 1 });
     }
@@ -907,4 +957,126 @@ fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> String {
         units::fmt_sig(d[2].value, 4),
         d[0].unit
     )
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+    use femlab_geometry::{ElementBlock, ElementKind};
+    use std::collections::BTreeMap;
+
+    fn warped_pair(n: usize) -> Mesh {
+        let mut coords = Vec::new();
+        for plane in 0..3 {
+            for z in 0..=n {
+                for y in 0..=n {
+                    let yy = y as f64 / n as f64;
+                    let zz = z as f64 / n as f64;
+                    let x = if plane == 1 { 1.0 + yy * zz / 4.0 } else { plane as f64 };
+                    coords.extend([x, yy, zz]);
+                }
+            }
+        }
+        let node = |x: usize, y: usize, z: usize| (x * (n + 1) * (n + 1) + z * (n + 1) + y) as u32;
+        let mut conn = Vec::new();
+        for x in 0..2 {
+            for z in 0..n {
+                for y in 0..n {
+                    conn.extend([
+                        node(x, y, z),
+                        node(x + 1, y, z),
+                        node(x + 1, y + 1, z),
+                        node(x, y + 1, z),
+                        node(x, y, z + 1),
+                        node(x + 1, y, z + 1),
+                        node(x + 1, y + 1, z + 1),
+                        node(x, y + 1, z + 1),
+                    ]);
+                }
+            }
+        }
+        Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![ElementBlock { kind: ElementKind::Hex8, conn, first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn original_warped_hex_volumes_and_bilinear_areas_have_independent_refinement_oracles() {
+        // For x=1+a*y*z, volume integrals are1+a/4 and1-a/4. The
+        // original face area has an independent rectangle-potential closed form.
+        let a = 0.25;
+        let r = libm::sqrt(1.0 + 2.0 * a * a);
+        let exact_area =
+            (r + (a * a + 3.0) / a * libm::asinh(a / libm::sqrt(1.0 + a * a)) - libm::atan(a * a / r) / (a * a)) / 3.0;
+        assert!((exact_area - 1.0205395019733228).abs() < 2e-15);
+        let mut previous_error = None;
+        for n in [1, 2, 4, 8] {
+            let mesh = warped_pair(n);
+            let cells = (n * n) as u32;
+            let left: f64 = (0..cells).map(|e| elem_measure(&mesh, e)).sum();
+            let right: f64 = (cells..2 * cells).map(|e| elem_measure(&mesh, e)).sum();
+            assert!((left - 17.0 / 16.0).abs() < 2e-14);
+            assert!((right - 15.0 / 16.0).abs() < 2e-14);
+            assert!((left + right - 2.0).abs() < 3e-14);
+            let area_left: f64 = (0..cells).map(|elem| face_measure(&mesh, Face { elem, local: 3 })).sum();
+            let area_right: f64 = (cells..2 * cells).map(|elem| face_measure(&mesh, Face { elem, local: 5 })).sum();
+            assert!((area_left - area_right).abs() < 2e-14);
+            let physical: f64 = (0..cells)
+                .map(|elem| {
+                    crate::fem::element::loaded_face_measure(&mesh, Face { elem, local: 3 }, &Idealisation::Solid3d)
+                })
+                .sum();
+            assert!((area_left - physical).abs() < 2e-14);
+            let error = (area_left - exact_area).abs();
+            assert!(error < 5e-6);
+            if let Some(previous) = previous_error {
+                let order = libm::log(previous / error) / libm::log(2.0);
+                assert!((3.8..4.2).contains(&order), "observed area quadrature order {order}");
+            }
+            previous_error = Some(error);
+        }
+    }
+
+    #[test]
+    fn original_linear_measures_preserve_tetrahedra_planar_faces_and_sheet_area() {
+        let tetrahedron = Mesh {
+            dim: 3,
+            coords: vec![0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.],
+            blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        assert!((elem_measure(&tetrahedron, 0) - 1.0 / 6.0).abs() < 1e-15);
+        assert!((face_measure(&tetrahedron, Face { elem: 0, local: 2 }) - libm::sqrt(3.0) / 2.0).abs() < 1e-15);
+        assert!((face_measure(&tetrahedron, Face { elem: 0, local: 0 }) - 0.5).abs() < 1e-15);
+        let sheet = Mesh {
+            dim: 2,
+            coords: vec![0., 0., 0., 2., 0., 0., 2., 3., 0., 0., 3., 0.],
+            blocks: vec![ElementBlock { kind: ElementKind::Quad4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        assert_eq!(elem_measure(&sheet, 0), 6.0);
+        assert_eq!(face_measure(&sheet, Face { elem: 0, local: 0 }), 2.0);
+        // A line face remains a length even when its containing mesh is embedded
+        // in 3D. It has one tangent, so a two-tangent area cross product is wrong.
+        let embedded_sheet = Mesh { dim: 3, ..sheet.clone() };
+        assert_eq!(face_measure(&embedded_sheet, Face { elem: 0, local: 0 }), 2.0);
+        let mut planar = warped_pair(1);
+        for point in planar.coords.chunks_exact_mut(3) {
+            if point[0] > 0.0 && point[0] < 2.0 {
+                point[0] = 1.0;
+            }
+        }
+        assert!((elem_measure(&planar, 0) - 1.0).abs() < 1e-15);
+        assert!((elem_measure(&planar, 1) - 1.0).abs() < 1e-15);
+        assert!((face_measure(&planar, Face { elem: 0, local: 3 }) - 1.0).abs() < 1e-15);
+    }
 }

@@ -4763,7 +4763,7 @@ const queries = {
       "x-returns": "MeshSummary"
     },
     {
-      "description": "What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure\nand centroid. Face Sets also report pressureArea from the load boundary quadrature,\nincluding thickness or radial weighting (plane strain: one metre of depth). Pressure\ntimes pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.",
+      "description": "What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure\nand corner-node centroid. Tet4/Hex8 volumes integrate the original Jacobian exactly\nup to roundoff. Linear 3D face areas use original shape/tangent quadrature; curved\nbilinear area is numerical and converges under refinement, not an exact skin measure.\nQuadratic-element measures still use corner geometry pending #524.\nFace Sets also report pressureArea from the load boundary quadrature,\nincluding thickness or radial weighting (plane strain: one metre of depth). Pressure\ntimes pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.",
       "type": "object",
       "properties": {
         "name": {
