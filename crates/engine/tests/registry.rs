@@ -442,9 +442,16 @@ fn upsert_edits_in_place_and_reports_replaced() {
     assert!(m.loads[3].summary.starts_with("g = [0, 0, -9.81] m/s^2"));
     assert!(m.loads[4].summary.contains("373.2 K"), "{}", m.loads[4].summary);
     assert!(m.loads[5].summary.contains("reference 273.2 K"));
-    // gravity with a material lacking density is a warning, not an error
-    assert!(m.warnings.iter().any(|w| w.code == "load.no-density"));
+    // The definition is unused by this Step; activating it adds a scoped diagnostic.
+    assert!(!m.warnings.iter().any(|w| w.code == "load.no-density"));
     assert_eq!(e.model().loads.iter().filter(|l| l.kind.set().is_some()).count(), 3);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["g"],"output":["displacement"]}"#,
+    );
+    let warning = e.warnings().into_iter().find(|w| w.code == "load.no-density").unwrap();
+    assert_eq!(warning.step.as_deref(), Some("static"));
+    assert_eq!(warning.where_.as_deref(), Some("load 'g'"));
 }
 
 #[test]
