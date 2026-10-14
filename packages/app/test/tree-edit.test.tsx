@@ -64,7 +64,7 @@ describe('editing Model tree objects', () => {
     const app = await mount(c.command);
     try {
       const before = JSON.parse(app.engine.export_file()).model;
-      expect(app.sent[0]).toEqual({ cmd: 'form.edit', kind: c.kind, name: 'editable' });
+      expect(app.sent.find(command => command.cmd === 'form.edit')).toEqual({ cmd: 'form.edit', kind: c.kind, name: 'editable' });
       expect(app.store.state.form!.cmd).toBe(c.command.cmd);
       expect(app.store.state.form!.target).toEqual({ kind: c.kind, name: 'editable' });
       app.root.querySelector<HTMLButtonElement>('.apply')!.click(); await app.done();

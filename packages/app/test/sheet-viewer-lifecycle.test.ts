@@ -87,6 +87,33 @@ it('colours line members from endpoint results and keeps body emphasis on outlin
   expect(colours()[0]).toBeLessThan(resultColours[0]!);
 });
 
+it('previews face/Set and body targets while retaining selection and independent Journal emphasis', () => {
+  const { viewer, objects } = setup();
+  const colours = () => Array.from(objects.mesh.geometry.getAttribute('color').array);
+  viewer.setSurface({ ...surface, setNames: ['named-face'], triSetOffsets: Uint32Array.of(0, 1), triSets: Uint32Array.of(0) });
+  viewer.setSelection({ bodies: [], faces: ['bottom'], sets: [] });
+  const selected = colours();
+  viewer.setHover({ bodies: [], faces: [], sets: ['named-face'] });
+  expect(colours()).not.toEqual(selected);
+  viewer.setHover({ bodies: [], faces: [], sets: [] });
+  expect(colours()).toEqual(selected);
+  viewer.setHighlight({ bodies: ['sheet'] });
+  const journal = colours();
+  viewer.setHover({ bodies: ['sheet'], faces: [], sets: [] });
+  expect(colours()).not.toEqual(journal);
+  viewer.setHover({ bodies: [], faces: [], sets: [] });
+  expect(colours()).toEqual(journal);
+  viewer.setHighlight({});
+  expect(colours()).toEqual(selected);
+  viewer.setSurface(lineSurface);
+  const outline = () => Array.from(objects.outlines.geometry.getAttribute('color').array);
+  const normal = outline();
+  viewer.setHover({ bodies: ['truss'], faces: [], sets: [] });
+  expect(outline()).not.toEqual(normal);
+  viewer.setHover({ bodies: [], faces: [], sets: [] });
+  expect(outline()).toEqual(normal);
+});
+
 it('keeps line element-node colours distinct at shared joints through hiding and deformation', () => {
   const { viewer, objects } = setup();
   const retained: AppSurface = { ...lineSurface,

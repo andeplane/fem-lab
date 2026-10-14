@@ -123,6 +123,8 @@ export class Viewer {
   private selectedFaces = new Set<string>();
   private highlightedBodies = new Set<string>();
   private highlightedFaces = new Set<string>();
+  private hoveredBodies = new Set<string>();
+  private hoveredFaces = new Set<string>();
   private readonly hidden = new Set<string>();
   /** Visibility survives the replacement of mesh, edge, grid and axis objects. */
   private readonly layerVisibility = new Map<string, boolean>();
@@ -133,6 +135,11 @@ export class Viewer {
   private animation: AnimationState = { playing: false, phase: 0.25, speed: 1 };
   private readonly click = (e: MouseEvent) => this.pickCb?.(this.pick(e.clientX, e.clientY));
   private readonly pointerMove = (e: PointerEvent) => this.hoverAt(e);
+  private readonly pointerLeave = () => {
+    this.hoverFace = null;
+    this.paint();
+    this.render();
+  };
   /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
    *  animation can sweep the same array without the host re-fetching it every frame. */
   private deformation: Float32Array | null = null;
@@ -162,6 +169,7 @@ export class Viewer {
 
     canvas.addEventListener('click', this.click);
     canvas.addEventListener('pointermove', this.pointerMove);
+    canvas.addEventListener('pointerleave', this.pointerLeave);
     this.setChrome();
     this.resize();
     this.fit();
@@ -182,6 +190,13 @@ export class Viewer {
   setHighlight(s: { bodies?: string[]; faces?: string[]; sets?: string[] }): void {
     this.highlightedBodies = new Set(s.bodies ?? []);
     this.highlightedFaces = new Set([...(s.faces ?? []), ...(s.sets ?? [])]);
+    this.paint();
+    this.render();
+  }
+
+  setHover(s: { bodies: string[]; faces: string[]; sets: string[] }): void {
+    this.hoveredBodies = new Set(s.bodies);
+    this.hoveredFaces = new Set([...s.faces, ...s.sets]);
     this.paint();
     this.render();
   }
@@ -355,6 +370,8 @@ export class Viewer {
         (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
         (bodyName !== null && this.highlightedBodies.has(bodyName)) ||
         this.matchesSet(s, t, this.highlightedFaces);
+      const preview = (bodyName !== null && this.hoveredBodies.has(bodyName)) ||
+        (faceName !== null && this.hoveredFaces.has(faceName)) || this.matchesSet(s, t, this.hoveredFaces);
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
@@ -368,6 +385,7 @@ export class Viewer {
           c.setScalar(grey).lerp(bodyTint(s.triBody[t]!), 0.14);
         }
         if (selected) c.lerp(HIGHLIGHT, 0.28);
+        if (preview) c.lerp(HIGHLIGHT, 0.18);
         if (hot) c.lerp(HIGHLIGHT, 0.45);
         if (this.dim) c.multiplyScalar(0.42);
         colour.setXYZ(vertex, c.r, c.g, c.b);
@@ -383,6 +401,8 @@ export class Viewer {
         const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName));
         const hot = (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
           (bodyName !== null && this.highlightedBodies.has(bodyName));
+        const preview = (bodyName !== null && this.hoveredBodies.has(bodyName)) ||
+          (faceName !== null && this.hoveredFaces.has(faceName));
         for (let k = 0; k < 2; k++) {
           const node = s.edges?.[edge * 2 + k];
           if (this.mode === 'results' && this.field) {
@@ -394,6 +414,7 @@ export class Viewer {
             c.set(0xbac3d0);
           }
           if (selected) c.lerp(HIGHLIGHT, 0.28);
+          if (preview) c.lerp(HIGHLIGHT, 0.18);
           if (hot) c.lerp(HIGHLIGHT, 0.45);
           if (this.dim) c.multiplyScalar(0.42);
           outlineColour.setXYZ(i * 2 + k, c.r, c.g, c.b);
@@ -746,6 +767,7 @@ export class Viewer {
     cancelAnimationFrame(this.frame);
     this.canvas.removeEventListener('click', this.click);
     this.canvas.removeEventListener('pointermove', this.pointerMove);
+    this.canvas.removeEventListener('pointerleave', this.pointerLeave);
     this.pickCb = null;
     this.controls.dispose();
     this.disposeSurface();

@@ -28,6 +28,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.toggle': { layer: 'mesh' },
   'view.setVisible': { bodies: ['beam'], on: false },
   'view.highlight': { faces: ['beam.top'] },
+  'view.hover': { sets: ['beam.top'] },
   'view.setTheme': { theme: 'dark' },
   'view.animate': { step: 'modes', mode: 1, playing: true },
   'view.playTransient': { step: 'heat', playing: false, sample: { kind: 'frame', index: 0 } },
@@ -211,10 +212,16 @@ describe('Registry', () => {
     expect(host.view.showField).toHaveBeenCalledWith({ field: '' });
     await registry.dispatch({ cmd: 'view.highlight', bodies: ['beam'] });
     expect(host.view.highlight).toHaveBeenCalledWith({ bodies: ['beam'] });
+    await registry.dispatch({ cmd: 'view.hover', load: 'gravity' });
+    expect(host.view.hover).toHaveBeenCalledWith({ load: 'gravity' });
+    await registry.dispatch({ cmd: 'view.hover' });
+    expect(host.view.hover).toHaveBeenLastCalledWith({});
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'selection.set', refs: ['load:p'] });
     expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
+    await registry.dispatch({ cmd: 'selection.set', load: 'p', refs: ['load:p'] });
+    expect(host.selection.set).toHaveBeenCalledWith({ load: 'p', refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
     await registry.dispatch({ cmd: 'script.setEditing', editing: true });

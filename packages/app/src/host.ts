@@ -1,9 +1,11 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
 
 import { z } from 'zod';
+import type { Command } from '@femlab/registry';
+import { loadTargets } from './loadTargets';
 import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
@@ -170,6 +172,13 @@ export function makeHostContext(
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
       highlight: (s) => viewer.current?.setHighlight(s),
+      hover: async (s) => {
+        const commit = store.beginHover();
+        const target = s.load
+          ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store.state.model)
+          : s;
+        commit({ bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
@@ -216,10 +225,14 @@ export function makeHostContext(
     selection: {
       set: async (s) => {
         invalidateDefinition(store);
-        store.select(s);
-        const ref = s.refs?.[0];
+        const { load, ...targets } = s;
+        store.select(targets);
+        const ref = load ? refOf('load', load) : s.refs?.[0];
         const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
-        if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
+        if (item?.cmd === 'form.edit') {
+          const definition = await editDefinition(store, transport, item.args as DefinitionTarget);
+          if (definition && load) store.select({ ...targets, ...loadTargets(definition, store.state.model) });
+        }
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },
       clear: () => {
@@ -410,6 +423,8 @@ export async function openExample(name: string, session: SessionHostServices) {
 }
 
 type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+type DefinitionCommand = Command;
+
 const definitionRequests = new WeakMap<Store, number>();
 
 function invalidateDefinition(store: Store): number {
@@ -419,14 +434,15 @@ function invalidateDefinition(store: Store): number {
 }
 
 /** Journal selection and form.edit share one request fence and the complete engine definition. */
-async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<void> {
+async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<DefinitionCommand | undefined> {
   const request = invalidateDefinition(store);
   const previousForm = store.state.form;
   const revision = store.state.revision;
-  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: DefinitionCommand };
   if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
   const { cmd, ...args } = command;
   store.openForm(cmd, args, false, target);
+  return command;
 }
 
 /**
@@ -478,7 +494,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.edit',
       execution: 'sessionView',
-      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Returns that Command only when this request opened the form; a superseded request returns no value. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
       run: (input) => editDefinition(store, transport, input as DefinitionTarget),
