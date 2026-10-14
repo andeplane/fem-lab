@@ -22,7 +22,7 @@ const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const int = z.number().int();
 const none = z.object({});
 
-export const CameraState = z.object({ position: vec3, target: vec3, up: vec3.optional() });
+export const CameraState = z.object({ position: vec3, target: vec3, up: vec3.optional(), zoom: z.number().positive().optional().describe('Dimensionless lens zoom, including orthographic orbit zoom. Omit to keep the current zoom.') });
 export const ViewPreset = z.enum(['iso', 'front', 'back', 'left', 'right', 'top', 'bottom']);
 export const Projection = z.enum(['perspective', 'orthographic']);
 export const FieldChoice = z.union([
@@ -431,7 +431,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setComparisonVisible', 'sessionView', 'Show or hide named Bodies only in one comparison pane identified by its retained Result id. Names belong to that solved surface, including stale Results. Other panes, the current Model and the Journal are unchanged; scientific difference coverage continues to describe the full target Mesh.', ComparisonVisibilityInput, (input, ctx) => comparisonHost(ctx).visible(input)),
   def('view.pickComparison', 'sessionView', 'Pick the nearest visible retained surface entity at a unit-bearing world point, explicitly scoped to a pane and Result id. The readout uses that solve’s scientific field (or engine difference) and reports missing coverage as null. This never selects an editable object or spends a Properties pick target in the current Model.', ComparisonPickInput, (input, ctx) => comparisonHost(ctx).pick(input)),
   def('view.fit', 'sessionView', 'Frame the camera on the whole mesh, or on the current selection when there is one. Use it after adding geometry or when the model has drifted out of view.', none, (_, ctx) => ctx.view.fit()),
-  def('view.setCamera', 'sessionView', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
+  def('view.setCamera', 'sessionView', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up` and dimensionless lens `zoom`. Comparison panes share this camera. Use `view.preset` for the standard views; this is for a reproducible screenshot angle and scale.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
   def('view.preset', 'sessionView', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
   def('view.setProjection', 'sessionView', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
   def('view.showField', 'sessionView', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),

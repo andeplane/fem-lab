@@ -12,6 +12,14 @@ const left = { resultId: 'solve-before', field: 'displacement', component: 0 };
 const right = { resultId: 'solve-after', field: 'temperature' };
 const at = [{ value: 100, unit: 'mm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }];
 
+it('makes synchronized lens zoom reproducible through the existing camera Command', async () => {
+  const { registry, host } = setup();
+  const camera = { position: [1, 2, 3], target: [0, 0, 0], zoom: 2.5 };
+  await registry.dispatch({ cmd: 'view.setCamera', ...camera });
+  expect(host.view.setCamera).toHaveBeenCalledWith(camera);
+  await expect(registry.dispatch({ cmd: 'view.setCamera', ...camera, zoom: 0 })).rejects.toMatchObject({ code: 'schema' });
+});
+
 it('exposes independent retained identities and an explicit difference target through the real registry', async () => {
   const { registry, host, transport } = setup();
   for (const configuration of [
