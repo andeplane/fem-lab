@@ -5411,6 +5411,45 @@
         "x-returns": "Converted"
       },
       {
+        "description": "Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per\nsource coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary\nportable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT\n(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit\nSURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming\nBody. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized\nuppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive\nkeyword spellings, 256-character physical lines and comma keyword continuation.\nRejects abbreviations, quoted labels, repeated SURFACE names and every unsupported\nkeyword/parameter, including analysis and material intent. Bounds: 250000 nodes,\n250000 elements and 1000000 expanded membership declarations before deduplication.\nNo paths, includes, file I/O or active Model mutation. Input and serialized response\nare each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is\nchecked conversion, not publication approval:\nhosts must prepare the Commands through Candidate, enforce the exact serialized\nModel-file limit and publish atomically before replacing the active document.",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/$defs/AbaqusImportMode"
+          },
+          "unitLength": {
+            "$ref": "#/$defs/Q_length"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.convertAbaqus"
+          }
+        },
+        "required": [
+          "query",
+          "text",
+          "name",
+          "body",
+          "mode",
+          "unitLength",
+          "sha256"
+        ],
+        "x-execution": "modelRead",
+        "x-returns": "AbaqusConversion"
+      },
+      {
         "description": "Primary-source material data with dimensions, grade, condition, temperature and a source\nfor every reported property. With no `name`, lists the stable catalogue. With a canonical\nid, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:\nnever infer them before material.add. Copy the entry's `materialAddSource` into that\nCommand's `source` so the Journal preserves provenance.",
         "type": "object",
         "properties": {
@@ -10506,6 +10545,13 @@
           }
         ]
       },
+      "AbaqusImportMode": {
+        "description": "The strict mesh converter never discards physics from a model deck.",
+        "type": "string",
+        "enum": [
+          "mesh"
+        ]
+      },
       "ReportSection": {
         "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
         "oneOf": [
@@ -10616,6 +10662,9 @@
       },
       {
         "$ref": "#/$defs/Converted"
+      },
+      {
+        "$ref": "#/$defs/AbaqusConversion"
       },
       {
         "$ref": "#/$defs/MaterialLibrary"
@@ -18397,6 +18446,167 @@
         "required": [
           "value",
           "unit"
+        ]
+      },
+      "AbaqusConversion": {
+        "description": "Checked portable conversion. Publication requires the host's exact Candidate preparation\nand serialized Model-file limit; receiving this response never changes the active Model.",
+        "type": "object",
+        "properties": {
+          "report": {
+            "$ref": "#/$defs/AbaqusConversionReport"
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Command"
+            }
+          }
+        },
+        "required": [
+          "report",
+          "commands"
+        ]
+      },
+      "AbaqusConversionReport": {
+        "description": "Source metadata and physical bounds; unused nodes remain authored source data but do not\ncontribute to these bounds or receive fabricated finite-element DOFs/Result values.",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "$ref": "#/$defs/AbaqusImportMode"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "conversionVersion": {
+            "type": "string"
+          },
+          "inputBytes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "body": {
+            "type": "string"
+          },
+          "unitLength": {
+            "description": "Metres per source coordinate, as an explicit SI Quantity.",
+            "$ref": "#/$defs/Q_length"
+          },
+          "sourceNodes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "activeNodes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "sourceElements": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "elementKind": {
+            "$ref": "#/$defs/ImportedElementKind"
+          },
+          "analysisConfigured": {
+            "description": "Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.",
+            "type": "boolean"
+          },
+          "bbox": {
+            "description": "Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 6,
+            "maxItems": 6
+          },
+          "sourceLabels": {
+            "$ref": "#/$defs/SourceLabels"
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/AbaqusSetMapping"
+            }
+          },
+          "headings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preprint": {
+            "description": "All authored ECHO/MODEL/HISTORY/CONTACT YES/NO flags, without implied execution.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "mode",
+          "sha256",
+          "conversionVersion",
+          "inputBytes",
+          "body",
+          "unitLength",
+          "sourceNodes",
+          "activeNodes",
+          "sourceElements",
+          "elementKind",
+          "analysisConfigured",
+          "bbox",
+          "sourceLabels",
+          "sets",
+          "headings",
+          "preprint"
+        ]
+      },
+      "AbaqusImportMode": {
+        "description": "The strict mesh converter never discards physics from a model deck.",
+        "type": "string",
+        "enum": [
+          "mesh"
+        ]
+      },
+      "AbaqusSetMapping": {
+        "description": "One authored Abaqus Set and its exact, namespace-qualified FEM Lab name.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/AbaqusSetKind"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "target",
+          "count"
+        ]
+      },
+      "AbaqusSetKind": {
+        "type": "string",
+        "enum": [
+          "node",
+          "element",
+          "face"
         ]
       },
       "MaterialLibrary": {
@@ -33222,6 +33432,45 @@
             "x-returns": "Converted"
           },
           {
+            "description": "Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per\nsource coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary\nportable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT\n(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit\nSURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming\nBody. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized\nuppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive\nkeyword spellings, 256-character physical lines and comma keyword continuation.\nRejects abbreviations, quoted labels, repeated SURFACE names and every unsupported\nkeyword/parameter, including analysis and material intent. Bounds: 250000 nodes,\n250000 elements and 1000000 expanded membership declarations before deduplication.\nNo paths, includes, file I/O or active Model mutation. Input and serialized response\nare each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is\nchecked conversion, not publication approval:\nhosts must prepare the Commands through Candidate, enforce the exact serialized\nModel-file limit and publish atomically before replacing the active document.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/$defs/AbaqusImportMode"
+              },
+              "unitLength": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "query": {
+                "type": "string",
+                "const": "query.convertAbaqus"
+              }
+            },
+            "required": [
+              "query",
+              "text",
+              "name",
+              "body",
+              "mode",
+              "unitLength",
+              "sha256"
+            ],
+            "x-execution": "modelRead",
+            "x-returns": "AbaqusConversion"
+          },
+          {
             "description": "Primary-source material data with dimensions, grade, condition, temperature and a source\nfor every reported property. With no `name`, lists the stable catalogue. With a canonical\nid, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:\nnever infer them before material.add. Copy the entry's `materialAddSource` into that\nCommand's `source` so the Journal preserves provenance.",
             "type": "object",
             "properties": {
@@ -38317,6 +38566,13 @@
           }
         ]
       },
+      "AbaqusImportMode": {
+        "description": "The strict mesh converter never discards physics from a model deck.",
+        "type": "string",
+        "enum": [
+          "mesh"
+        ]
+      },
       "ReportSection": {
         "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
         "oneOf": [
@@ -39491,6 +39747,9 @@
           },
           {
             "$ref": "#/$defs/Converted"
+          },
+          {
+            "$ref": "#/$defs/AbaqusConversion"
           },
           {
             "$ref": "#/$defs/MaterialLibrary"
@@ -47272,6 +47531,167 @@
         "required": [
           "value",
           "unit"
+        ]
+      },
+      "AbaqusConversion": {
+        "description": "Checked portable conversion. Publication requires the host's exact Candidate preparation\nand serialized Model-file limit; receiving this response never changes the active Model.",
+        "type": "object",
+        "properties": {
+          "report": {
+            "$ref": "#/$defs/AbaqusConversionReport"
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Command"
+            }
+          }
+        },
+        "required": [
+          "report",
+          "commands"
+        ]
+      },
+      "AbaqusConversionReport": {
+        "description": "Source metadata and physical bounds; unused nodes remain authored source data but do not\ncontribute to these bounds or receive fabricated finite-element DOFs/Result values.",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "$ref": "#/$defs/AbaqusImportMode"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "conversionVersion": {
+            "type": "string"
+          },
+          "inputBytes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "body": {
+            "type": "string"
+          },
+          "unitLength": {
+            "description": "Metres per source coordinate, as an explicit SI Quantity.",
+            "$ref": "#/$defs/Q_length"
+          },
+          "sourceNodes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "activeNodes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "sourceElements": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "elementKind": {
+            "$ref": "#/$defs/ImportedElementKind"
+          },
+          "analysisConfigured": {
+            "description": "Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.",
+            "type": "boolean"
+          },
+          "bbox": {
+            "description": "Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 6,
+            "maxItems": 6
+          },
+          "sourceLabels": {
+            "$ref": "#/$defs/SourceLabels"
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/AbaqusSetMapping"
+            }
+          },
+          "headings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preprint": {
+            "description": "All authored ECHO/MODEL/HISTORY/CONTACT YES/NO flags, without implied execution.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "mode",
+          "sha256",
+          "conversionVersion",
+          "inputBytes",
+          "body",
+          "unitLength",
+          "sourceNodes",
+          "activeNodes",
+          "sourceElements",
+          "elementKind",
+          "analysisConfigured",
+          "bbox",
+          "sourceLabels",
+          "sets",
+          "headings",
+          "preprint"
+        ]
+      },
+      "AbaqusImportMode": {
+        "description": "The strict mesh converter never discards physics from a model deck.",
+        "type": "string",
+        "enum": [
+          "mesh"
+        ]
+      },
+      "AbaqusSetMapping": {
+        "description": "One authored Abaqus Set and its exact, namespace-qualified FEM Lab name.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/AbaqusSetKind"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "kind",
+          "source",
+          "target",
+          "count"
+        ]
+      },
+      "AbaqusSetKind": {
+        "type": "string",
+        "enum": [
+          "node",
+          "element",
+          "face"
         ]
       },
       "MaterialLibrary": {

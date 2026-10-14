@@ -153,7 +153,7 @@ must appear in the tool description and error report. See
 | `*NODE` | Positive labels, x/y/z, optional `NSET`, `SYSTEM=R` or absent; omitted y/z = 0 | Same; global rectangular coordinates only | [NODE](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-node.htm) |
 | `*ELEMENT` | `TYPE=C3D4` or `C3D8`, optional `ELSET`; exact arity | Same; preserve standard full integration | [ELEMENT](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-element.htm), [solid element types/order](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEELMRefMap/simaelm-r-3delem.htm) |
 | `*NSET`, `*ELSET` | Sorted explicit label lists, `GENERATE` with positive integral increment (default 1), previously defined same-kind Set references; repeated definitions append | Same; referenced Sets capture membership at that record, not future additions. NSET from `ELSET` is supported with no data lines. | [NSET](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-nset.htm), [ELSET](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-elset.htm), [Node definition](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEMODRefMap/simamod-c-node.htm) |
-| `*SURFACE` | `TYPE=ELEMENT`, `NAME`; source element or previously defined ELSET plus valid explicit `S1…S4`/`S1…S6` | Same; membership retained even if no imported Load uses it | [SURFACE](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-surface.htm) |
+| `*SURFACE` | `TYPE=ELEMENT`, `NAME`; source element or previously defined ELSET plus valid explicit `S1…S4`/`S1…S6`; repeated surface names are rejected in the first slice | Same; membership retained even if no imported Load uses it | [SURFACE](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-surface.htm) |
 | `*PREPRINT` | Recognize `ECHO`, `MODEL`, `HISTORY`, `CONTACT` with YES/NO as presentation-only metadata; report no solver listing produced | Same | [PREPRINT](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-preprint.htm) |
 | `*MATERIAL`, `*ELASTIC` | Reject | Exactly one material, `NAME`; isotropic `TYPE` or absent; one E/ν record. No temperature/dependency columns or property tables. | [ELASTIC](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-elastic.htm) |
 | `*SOLID SECTION` | Reject | Exactly one homogeneous `ELSET`/`MATERIAL` association covering every element once; empty/default attribute line only for supported 3D solids | [SOLID SECTION](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEKEYRefMap/simakey-r-solidsection.htm) |
@@ -184,6 +184,17 @@ Suggested initial bounds, enforced in hosts and Rust before allocation: 16 MiB i
 before range expansion or allocation. Reject input whose resulting `femlab/1` snapshot plus
 Journal exceeds the current 16 MiB Model-file limit, rather than creating an unsavable Model.
 These are product bounds, not promises about available browser memory or solver feasibility.
+The parser counts expanded declarations before deduplication, so repeated labels and prior
+Set captures also consume the membership budget; accepted final membership remains sorted
+and unique.
+
+The #502 read-only mesh conversion Query also checks the actual serialized response against
+a 16 MiB response bound using a counting writer, without allocating a second response copy.
+This is a stricter output limit for the conversion report and Commands, not an estimate of
+the final Model/Journal size or permission to publish. #504 must always prepare those
+Commands through the existing Candidate path and check the exact serialized Model file
+before atomic publication. Current document conflicts and lifecycle checks remain Candidate
+authoritative. The conversion Query never constructs a second approximate Model.
 
 Check duplicate/invalid labels (1…999999999), missing connectivity references, unsupported
 arity, nonfinite coordinates, repeated local nodes, positive Jacobians at the element's

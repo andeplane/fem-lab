@@ -5412,6 +5412,45 @@ const queries = {
       "x-returns": "Converted"
     },
     {
+      "description": "Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per\nsource coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary\nportable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT\n(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit\nSURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming\nBody. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized\nuppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive\nkeyword spellings, 256-character physical lines and comma keyword continuation.\nRejects abbreviations, quoted labels, repeated SURFACE names and every unsupported\nkeyword/parameter, including analysis and material intent. Bounds: 250000 nodes,\n250000 elements and 1000000 expanded membership declarations before deduplication.\nNo paths, includes, file I/O or active Model mutation. Input and serialized response\nare each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is\nchecked conversion, not publication approval:\nhosts must prepare the Commands through Candidate, enforce the exact serialized\nModel-file limit and publish atomically before replacing the active document.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/AbaqusImportMode"
+        },
+        "unitLength": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "const": "query.convertAbaqus"
+        }
+      },
+      "required": [
+        "query",
+        "text",
+        "name",
+        "body",
+        "mode",
+        "unitLength",
+        "sha256"
+      ],
+      "x-execution": "modelRead",
+      "x-returns": "AbaqusConversion"
+    },
+    {
       "description": "Primary-source material data with dimensions, grade, condition, temperature and a source\nfor every reported property. With no `name`, lists the stable catalogue. With a canonical\nid, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:\nnever infer them before material.add. Copy the entry's `materialAddSource` into that\nCommand's `source` so the Journal preserves provenance.",
       "type": "object",
       "properties": {
@@ -5699,6 +5738,13 @@ const queries = {
     "PluginKind": commands.$defs["PluginKind"],
     "PluginLanguage": commands.$defs["PluginLanguage"],
     "PluginSource": commands.$defs["PluginSource"],
+    "AbaqusImportMode": {
+  "description": "The strict mesh converter never discards physics from a model deck.",
+  "type": "string",
+  "enum": [
+    "mesh"
+  ]
+},
     "ReportSection": {
   "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
   "oneOf": [

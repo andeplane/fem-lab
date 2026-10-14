@@ -1,0 +1,35 @@
+*heading
+Hand-authored 1000 x 2000 x 3000 brick; use unitLength=1 mm.
+*node, nset=all
+29, 0, 2000, 3000
+1, 0, 0, 0
+21, 1000, 0, 3000
+9, 1000, 2000, 0
+17, 0, 0, 3000
+5, 1000, 0, 0
+25, 1000, 2000, 3000
+13, 0, 2000, 0
+*element, type=C3D8,
+** Comments are allowed between keyword continuation records.
+elset=all
+100, 1, 5, 9, 13, 17, 21, 25, 29
+*nset, nset=base, generate
+1, 13, 4
+*nset, nset=one, generate
+1, 1
+*elset, elset=copy, generate
+100, 100,
+*nset, nset=from_elements, elset=copy
+*surface, name=bottom, type=element
+all, s1
+*surface, name=top, type=element
+copy, s2
+*surface, name=front, type=element
+100, s3
+*surface, name=right, type=element
+100, s4
+*surface, name=back, type=element
+100, s5
+*surface, name=left, type=element
+100, s6
+*preprint, echo=no

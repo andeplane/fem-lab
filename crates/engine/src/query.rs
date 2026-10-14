@@ -3,6 +3,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::command::{Command, Field, ObjectKind};
 use crate::error::Warning;
@@ -252,6 +253,34 @@ pub enum Query {
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
+
+    /// Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per
+    /// source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
+    /// portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
+    /// (standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
+    /// SURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming
+    /// Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized
+    /// uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
+    /// keyword spellings, 256-character physical lines and comma keyword continuation.
+    /// Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
+    /// keyword/parameter, including analysis and material intent. Bounds: 250000 nodes,
+    /// 250000 elements and 1000000 expanded membership declarations before deduplication.
+    /// No paths, includes, file I/O or active Model mutation. Input and serialized response
+    /// are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
+    /// checked conversion, not publication approval:
+    /// hosts must prepare the Commands through Candidate, enforce the exact serialized
+    /// Model-file limit and publish atomically before replacing the active document.
+    #[serde(rename = "query.convertAbaqus", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "AbaqusConversion"))]
+    ConvertAbaqus {
+        text: String,
+        name: String,
+        body: String,
+        mode: AbaqusImportMode,
+        unit_length: Q<Length>,
+        sha256: String,
+    },
 
     /// Primary-source material data with dimensions, grade, condition, temperature and a source
     /// for every reported property. With no `name`, lists the stable catalogue. With a canonical
@@ -983,6 +1012,66 @@ pub struct Converted {
     pub unit: String,
 }
 
+/// The strict mesh converter never discards physics from a model deck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AbaqusImportMode {
+    Mesh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AbaqusSetKind {
+    Node,
+    Element,
+    Face,
+}
+
+/// One authored Abaqus Set and its exact, namespace-qualified FEM Lab name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusSetMapping {
+    pub kind: AbaqusSetKind,
+    pub source: String,
+    pub target: String,
+    pub count: u32,
+}
+
+/// Source metadata and physical bounds; unused nodes remain authored source data but do not
+/// contribute to these bounds or receive fabricated finite-element DOFs/Result values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusConversionReport {
+    pub mode: AbaqusImportMode,
+    pub sha256: String,
+    pub conversion_version: String,
+    pub input_bytes: u32,
+    pub body: String,
+    /// Metres per source coordinate, as an explicit SI Quantity.
+    pub unit_length: Q<Length>,
+    pub source_nodes: u32,
+    pub active_nodes: u32,
+    pub source_elements: u32,
+    pub element_kind: crate::command::ImportedElementKind,
+    /// Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.
+    pub analysis_configured: bool,
+    /// Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.
+    pub bbox: [Q<Length>; 6],
+    pub source_labels: crate::imported::SourceLabels,
+    pub sets: Vec<AbaqusSetMapping>,
+    pub headings: Vec<String>,
+    /// All authored ECHO/MODEL/HISTORY/CONTACT YES/NO flags, without implied execution.
+    pub preprint: Vec<BTreeMap<String, bool>>,
+}
+
+/// Checked portable conversion. Publication requires the host's exact Candidate preparation
+/// and serialized Model-file limit; receiving this response never changes the active Model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AbaqusConversion {
+    pub report: AbaqusConversionReport,
+    pub commands: Vec<Command>,
+}
+
 /// One `@`-mentionable object.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1043,6 +1132,7 @@ pub enum QueryResult {
     JournalDiff(JournalDiff),
     Script(ScriptText),
     Converted(Converted),
+    AbaqusConversion(AbaqusConversion),
     MaterialLibrary(MaterialLibrary),
     Objects(ObjectList),
     Capabilities(Capabilities),

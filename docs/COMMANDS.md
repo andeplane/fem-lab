@@ -4486,6 +4486,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 - [query.capabilities](#queries-query-capabilities)
 - [query.convert](#queries-query-convert)
+- [query.convertAbaqus](#queries-query-convertAbaqus)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
 - [query.difference](#queries-query-difference)
@@ -4534,6 +4535,39 @@ Returns: `Converted`.
 | quantity | yes | <code>{"$ref":"#/$defs/Quantity"}</code> |  |
 | to | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.convert"}</code> |  |
+
+<a id="queries-query-convertAbaqus"></a>
+
+### query.convertAbaqus
+
+Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per
+source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
+portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
+(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
+SURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming
+Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized
+uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
+keyword spellings, 256-character physical lines and comma keyword continuation.
+Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
+keyword/parameter, including analysis and material intent. Bounds: 250000 nodes,
+250000 elements and 1000000 expanded membership declarations before deduplication.
+No paths, includes, file I/O or active Model mutation. Input and serialized response
+are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
+checked conversion, not publication approval:
+hosts must prepare the Commands through Candidate, enforce the exact serialized
+Model-file limit and publish atomically before replacing the active document.
+
+Returns: `AbaqusConversion`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| text | yes | <code>{"type":"string"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> |  |
+| body | yes | <code>{"type":"string"}</code> |  |
+| mode | yes | <code>{"$ref":"#/$defs/AbaqusImportMode"}</code> |  |
+| unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> |  |
+| sha256 | yes | <code>{"type":"string"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.convertAbaqus"}</code> |  |
 
 <a id="queries-query-cost"></a>
 
@@ -4889,6 +4923,21 @@ Returns: `ResultSurface`.
 ### Queries definitions
 
 Expand a definition to inspect its complete schema. Definition names are local to this section.
+
+<details>
+<summary>AbaqusImportMode</summary>
+
+```json
+{
+  "description": "The strict mesh converter never discards physics from a model deck.",
+  "type": "string",
+  "enum": [
+    "mesh"
+  ]
+}
+```
+
+</details>
 
 <details>
 <summary>AmplitudeSpec</summary>
