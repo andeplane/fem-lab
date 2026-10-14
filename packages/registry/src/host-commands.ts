@@ -15,6 +15,7 @@ import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
 import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
 import {EMPTY_ACCOUNT,type AccountServices} from './account-types';
+import { ComparisonConfig, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, type ResultComparisonHost } from './result-comparison';
 export { MAX_MODEL_FILE_BYTES } from './model-file';
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -143,6 +144,8 @@ export interface AutosaveVersion {
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
+  /** Retained Result presentation is host-owned; headless hosts report unsupported explicitly. */
+  resultComparison?: ResultComparisonHost;
   /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
   abaqus: { capture(): {
     io: AbaqusIo;
@@ -417,7 +420,16 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | 
   return { filename: out.filename, mime: out.mime, data: out.bytes };
 }
 
+function comparisonHost(ctx: HostContext): ResultComparisonHost {
+  if (!ctx.resultComparison) throw new FemError('unsupported', 'this host has no Result comparison workspace', 'view.compareResults', 'open the browser app to compare retained Results');
+  return ctx.resultComparison;
+}
+
 export const HOST_COMMANDS: HostDef[] = [
+  def('view.compareResults', 'sessionView', 'Configure two explicit immutable Result ids and fields. sideBySide draws their own retained surfaces with shared cameras and independent legends; difference draws engine left minus right on the required target side and reports interpolation/coverage. single restores the normal Result workflow. Model and Journal are unchanged; frames/playback are separate.', ComparisonConfig, (input, ctx) => comparisonHost(ctx).configure(input)),
+  def('view.setComparisonLegend', 'sessionView', 'Set one explicitly identified comparison pane’s colormap or physical range. Bounds carry units; auto follows available data. Difference ranges describe difference amounts, so temperature conversion removes origin offsets. An obsolete pane/result id is refused; other panes and scientific fields are unchanged.', ComparisonLegendInput, (input, ctx) => comparisonHost(ctx).legend(input)),
+  def('view.setComparisonVisible', 'sessionView', 'Show or hide named Bodies only in one comparison pane identified by its retained Result id. Names belong to that solved surface, including stale Results. Other panes, the current Model and the Journal are unchanged; scientific difference coverage continues to describe the full target Mesh.', ComparisonVisibilityInput, (input, ctx) => comparisonHost(ctx).visible(input)),
+  def('view.pickComparison', 'sessionView', 'Pick the nearest visible retained surface entity at a unit-bearing world point, explicitly scoped to a pane and Result id. The readout uses that solve’s scientific field (or engine difference) and reports missing coverage as null. This never selects an editable object or spends a Properties pick target in the current Model.', ComparisonPickInput, (input, ctx) => comparisonHost(ctx).pick(input)),
   def('view.fit', 'sessionView', 'Frame the camera on the whole mesh, or on the current selection when there is one. Use it after adding geometry or when the model has drifted out of view.', none, (_, ctx) => ctx.view.fit()),
   def('view.setCamera', 'sessionView', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
   def('view.preset', 'sessionView', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
@@ -573,6 +585,7 @@ export const HOST_COMMANDS: HostDef[] = [
 
 export const HOST_QUERIES: HostDef[] = [
   def('query.account','control','Read the current host account/login and allowance state, excluding credentials and payment customer IDs. Not exposed to Assistant tools or generated scripts.',none,(_input,ctx)=>ctx.account?.state()??EMPTY_ACCOUNT,false),
+  def('query.resultComparison', 'modelRead', 'Read comparison configuration, retained catalogue, independently selected Result summaries and physical legends, pane visibility/picks, stale/current state, interpolation coverage, loading and structured errors. This is host view state; ordinary scientific fields and surfaces remain engine Queries. No Model or Journal mutation.', none, (_, ctx) => comparisonHost(ctx).state()),
   def('query.validateScript', 'workspace', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
   def('query.screenshot', 'modelRead', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. A single dimension preserves the current aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
   def('query.view', 'modelRead', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
