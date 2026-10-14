@@ -404,11 +404,14 @@ const MESH: Blocker = { code: 'W-1200', text: 'No mesh. Pick a size and element;
  * Engine warnings → the design's blockers, in W-code order so the banner always names the next
  * missing thing. An engine warning with no mapping keeps its own code rather than disappearing.
  */
-export function blockers(warnings: { code: string; text: string; where?: string | null }[], hasMesh: boolean, hasBodies: boolean, steps: readonly Pick<ModelSummary['steps'][number], 'name' | 'procedure'>[] = []): Blocker[] {
+type ModelWarning = ModelSummary['warnings'][number] & { step?: string | null };
+type SolveStep = Pick<ModelSummary['steps'][number], 'name' | 'procedure'> & { after?: string | null };
+
+export function blockers(warnings: readonly ModelWarning[], hasMesh: boolean, hasBodies: boolean, steps: readonly SolveStep[] = []): Blocker[] {
   const mapped = warnings.map((w) => {
     const m = WCODES[w.code];
     if (w.code === 'model.unloaded') {
-      const affected = steps.filter(s => w.where === `step '${s.name}'`);
+      const affected = steps.filter(s => w.step === s.name);
       const active = affected.length > 0 ? affected : steps;
       const heat = active.length > 0 && active.every(s => s.procedure === 'heat-steady' || s.procedure === 'heat-transient');
       const fix = heat ? 'load.heatFlux' : m!.fix;
@@ -420,4 +423,17 @@ export function blockers(warnings: { code: string; text: string; where?: string 
   });
   if (hasBodies && !hasMesh) mapped.push(MESH);
   return mapped.sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/** Solve only uses its target and predecessor chain; unscoped/unknown warnings stay global. */
+export function solveBlockers(model: (Pick<ModelSummary, 'meshSettings' | 'bodies'> & { warnings: readonly ModelWarning[]; steps: readonly SolveStep[] }) | null, target: string): Blocker[] {
+  const steps = model?.steps ?? [];
+  const required = new Set<string>();
+  for (let name: string | null | undefined = target; name && !required.has(name);) {
+    required.add(name);
+    name = steps.find(step => step.name === name)?.after;
+  }
+  const warnings = (model?.warnings ?? []).filter((warning: ModelWarning) =>
+    !warning.step || !steps.some(step => step.name === warning.step) || required.has(warning.step));
+  return blockers(warnings, Boolean(model?.meshSettings), (model?.bodies.length ?? 0) > 0, steps);
 }
