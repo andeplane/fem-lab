@@ -53,6 +53,7 @@ async function mount(input: Record<string, unknown>) {
   const draw = () => render(<><ModelTree s={store.state} dispatch={dispatch} /><SchemaForm s={store.state} store={store} dispatch={dispatch} query={query} defs={defs} variants={variants} /></>, root);
   const unsubscribe = store.subscribe(draw); draw();
   const row = [...root.querySelectorAll<HTMLButtonElement>('.row-main')].find(el => el.querySelector('.name')?.textContent === 'editable')!;
+  expect(row.title).toBe('Edit editable');
   expect(row).toBeDefined(); row.click(); await last;
   await waitFor(() => store.state.form?.values['name'] === 'editable' ? true : null, 'lossless editable form');
   return { root, store, engine, sent, done: () => last, close: () => { unsubscribe(); render(null, root); engine.free(); } };
@@ -82,7 +83,7 @@ describe('editing Model tree objects', () => {
       const material = JSON.parse(app.engine.export_file()).model.materials[0];
       expect(material.e).toBe(199876543219); expect(material.alpha).toBe(1.23456789e-5); expect(material.source).toBe('keep this');
       // Reopen the current structured definition, then use the real stepper.
-      app.root.querySelector<HTMLButtonElement>('.row-main[title="form.edit — editable"]')!.click(); await app.done();
+      app.root.querySelector<HTMLButtonElement>('.row-main[title="Edit editable"]')!.click(); await app.done();
       app.root.querySelector<HTMLButtonElement>('[data-field="E"] button[title="+10 %"]')!.click(); await app.done();
       expect(app.store.state.form!.values['E']).toBe('219864000000 Pa');
       app.root.querySelector<HTMLButtonElement>('.apply')!.click(); await app.done();
