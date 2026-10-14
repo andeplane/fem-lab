@@ -44,6 +44,38 @@ function setup() {
 }
 
 describe('session workspace using the checked WASM runtime', () => {
+  it.each(['initiating', 'independent'] as const)('checks original replacement admission after the %s producer edits and a read refreshes the lease', async writerKind => {
+    const { workspace, workers, publications } = setup();
+    const active = await workspace.start();
+    const initiating = active.transport;
+    const admission = initiating.stamp;
+    const writer = writerKind === 'initiating' ? initiating : await initiating.fork();
+    await writer.dispatch(body);
+    const before = await writer.snapshot();
+    await initiating.query({ query: 'query.model' });
+    expect(initiating.stamp.stateVersion).not.toBe(admission.stateVersion);
+    await expect(initiating.replaceWith({ kind: 'commands', commands: [fresh] }, admission)).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(workspace.active).toBe(active);
+    expect(await initiating.snapshot()).toEqual(before);
+    expect(workers).toHaveLength(1); // no candidate or resource/persistence claim
+    expect(publications).toHaveLength(1);
+    expect(active.resources.dispose).not.toHaveBeenCalled();
+    initiating.channel.close();
+  });
+
+  it('keeps unchanged-state reads valid and lets sequential replacements capture their own advanced admission', async () => {
+    const { workspace } = setup();
+    const initiating = (await workspace.start()).transport;
+    const first = initiating.stamp;
+    await initiating.query({ query: 'query.model' });
+    const next = await initiating.replaceWith({ kind: 'commands', commands: [fresh, body] }, first);
+    const second = next.stamp;
+    await next.snapshot();
+    const final = await next.replaceWith({ kind: 'commands', commands: [{ ...fresh, name: 'second' }] }, second);
+    expect((await final.snapshot()).model.name).toBe('second');
+    final.channel.close();
+  });
+
   it('rejects an oversized prepared file before project persistence and keeps the old producer usable', async () => {
     const build = vi.fn(async (_transport: SessionTransport, snapshot: DocumentSnapshot) => ({
       file: structuredClone(snapshot.file), dispose: vi.fn(),

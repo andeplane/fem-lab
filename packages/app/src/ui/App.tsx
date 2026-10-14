@@ -15,6 +15,7 @@ import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
+import { ImportAbaqus, AbaqusImportReport } from './ImportAbaqus';
 import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
@@ -79,7 +80,7 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   else if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
   else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
   else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
-  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects', 'abaqus', 'abaqusReport']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
 }
 
 const doc = schema as unknown as EngineSchema;
@@ -143,14 +144,18 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.open" class="tbutton" args={{ picker: true }} title="Open a femlab/1 file">
         Open
       </Cmd>
+      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton file-action" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp" label="Import Abaqus .inp">
+        <span class="file-action-label" aria-hidden="true">Import .inp</span><span class="file-action-icon" aria-hidden="true">⇥</span>
+      </Cmd>
+      {s.abaqusReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'abaqusReport', open: true }} title="View this import’s source units, counts and Set mappings" label="Abaqus report"><span class="file-action-label" aria-hidden="true">Abaqus report</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
       <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.compare" class="tbutton" args={{ picker: true }} title="Compare a saved femlab/1 file without opening it">
         Compare
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
-        Save as file
+      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton file-action" title="Download the Model and its Journal as a femlab/1 file" label="Save as file">
+        <span class="file-action-label" aria-hidden="true">Save as file</span><span class="file-action-icon" aria-hidden="true">↓</span>
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share
@@ -712,7 +717,7 @@ function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
                 <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
-              <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <SchemaForm s={s.form?.cmd === 'file.importAbaqus' ? { ...s, form: null } : s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
               <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
@@ -720,12 +725,14 @@ function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps
       ) : (
         <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <Start s={s} dispatch={dispatch} />
-          {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+          {s.form && s.form.cmd !== 'file.importAbaqus' ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
         </div>
       )}
       <Examples s={s} dispatch={dispatch} />
       <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
+      <ImportAbaqus s={s} dispatch={dispatch} />
+      <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {/* The tour's stops are shell regions, so it waits for the shell. */}
