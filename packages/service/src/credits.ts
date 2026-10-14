@@ -16,7 +16,8 @@ const tariffs: Record<string, Tariff> = {
   'gpt-5.4-mini': { input: 30n, cached: 3n, output: 180n },
   'gpt-6-astra': { input: 400n, cached: 40n, write: 500n, output: 2000n, longContext: true },
 };
-function tariff(model: string): Tariff {
+function tariff(model: string, version: string): Tariff {
+  if (version !== TARIFF_VERSION) throw new Error('Unknown tariff version.');
   const found = tariffs[model];
   if (!found) throw new ServiceFailure(400, 'model-unavailable', 'This model is not available for hosted AI.', 'model', 'ai.setModel');
   return found;
@@ -26,16 +27,16 @@ function count(value: number): bigint {
   return BigInt(value);
 }
 /** Input excludes cache reads, but includes writes. Output includes provider reasoning. */
-export function usageCharge(model: string, usage: Usage): bigint {
-  const rate = tariff(model), input = count(usage.input), output = count(usage.output), cached = count(usage.cacheRead), written = count(usage.cacheWrite ?? 0);
+export function usageCharge(model: string, usage: Usage, version: string = TARIFF_VERSION): bigint {
+  const rate = tariff(model, version), input = count(usage.input), output = count(usage.output), cached = count(usage.cacheRead), written = count(usage.cacheWrite ?? 0);
   if (written > input || (written > 0n && rate.write === undefined)) throw new Error('Provider reported unsupported cache writes.');
   const long = rate.longContext && input + cached > 272_000n;
   const inputCharge = (input - written) * rate.input + cached * rate.cached + written * (rate.write ?? rate.input);
   return inputCharge * (long ? 2n : 1n) + output * rate.output * (long ? 3n : 2n) / 2n;
 }
 /** Uncached or cache-write input, whichever costs more, plus the entire reasoning/output ceiling. */
-export function maximumCharge(model: string, inputTokens: number, maxOutput: number): bigint {
-  const rate = tariff(model), input = count(inputTokens), output = count(maxOutput);
+export function maximumCharge(model: string, inputTokens: number, maxOutput: number, version: string = TARIFF_VERSION): bigint {
+  const rate = tariff(model, version), input = count(inputTokens), output = count(maxOutput);
   const long = rate.longContext && input > 272_000n;
   const inputRate = rate.write && rate.write > rate.input ? rate.write : rate.input;
   return input * inputRate * (long ? 2n : 1n) + output * rate.output * (long ? 3n : 2n) / 2n;

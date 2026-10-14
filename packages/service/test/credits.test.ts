@@ -33,6 +33,7 @@ describe('integer token tariffs', () => {
     expect(() => maximumCharge('invented', 10, 10)).toThrow();
     expect(() => usageCharge('gpt-5.4-mini', { input: 1, cacheRead: 0, cacheWrite: 1, output: 0 })).toThrow();
     expect(() => usageCharge('gpt-6-astra', { input: 1, cacheRead: 0, cacheWrite: 2, output: 0 })).toThrow();
+    expect(() => maximumCharge('gpt-6-astra', 10, 10, 'unreviewed.v2')).toThrow('Unknown tariff');
   });
   it('uses UTC calendar months, including leap days and year rollover', () => {
     expect(calendarPeriod(new Date('2028-02-29T23:59:59Z'))).toEqual({ key: '2028-02', start: new Date('2028-02-01T00:00:00Z'), end: new Date('2028-03-01T00:00:00Z') });
