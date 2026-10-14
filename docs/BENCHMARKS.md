@@ -2161,3 +2161,38 @@ the unit cube at one labelled vertex. Its exact normalized Sylvester minors
 are `1/4,255/4096,127/8192`, but one face-separator quotient is `(1-r)/16`.
 This nonstrict quotient demonstrates a reachable conservative proof failure:
 the valid pair is explicitly inconclusive, never silently accepted or called invalid.
+
+### Original linear-cell query measurements (#523)
+
+The hand-authored Hex8 pair fills `0<=x<=2`, `0<=y,z<=1`, with shared
+bilinear face `x=1+yz/4`. Original Jacobian integration gives exact left volume
+`17/16 m³`, right volume `15/16 m³`, and total `2 m³`, checked at 1, 2, 4 and
+8 subdivisions per transverse axis. A Tet4 with unit coordinate-axis edges
+retains volume `1/6 m³`; its diagonal face has area `sqrt(3)/2 m²`. Planar
+Hex8 and Quad4 measures retain their unit-box and shoelace values.
+
+For `x=1+a*y*z` on the unit square, let `r=sqrt(1+2a²)`. The independent
+analytic area is
+
+`A=[r+(a²+3)/a*asinh(a/sqrt(1+a²))-atan(a²/r)/a²]/3`.
+
+At `a=1/4`, this is `1.0205395019733228 m²`. Both element owners of the
+same face must return the same measurement to `2e-14 m²`, and the geometric
+Hex8 face metric agrees with the physical pressure/traction quadrature to
+that tolerance. Two-point tensor quadrature measures the original bilinear
+surface numerically; it does not give its exact curved area at one mesh size.
+At 1, 2, 4 and 8 subdivisions, absolute area errors are approximately
+`4.65e-6`, `2.85e-7`, `1.77e-8` and `1.11e-9 m²`; the observed refinement
+order must lie in `[3.8,4.2]`, consistent with the smooth two-point Gauss rule.
+
+The public registry independently builds the same bilinear Shell4 surface,
+checks both top/bottom `query.set.measure` owners and the implicit Body area,
+and verifies exact query/replay agreement at one and four threads.
+`tools/test-original-measures-replay.mjs` gate checks the same Commands,
+Queries and per-entry hashes in native execution at one/four threads and WASM.
+The centroid remains the average of corner-node coordinates. These changes
+cover original linear 3D faces and Tet4/Hex8 volumes; original quadratic
+query metrics remain separately tracked in [#524](https://github.com/andeplane/fem-lab/issues/524).
+Shell `pressureArea` has a separate pre-existing query defect, tracked in
+[#525](https://github.com/andeplane/fem-lab/issues/525); its physical Shell4
+load normalization is not changed by this measurement fix.

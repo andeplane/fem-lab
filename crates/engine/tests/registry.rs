@@ -12872,3 +12872,54 @@ fn a_frictionless_contact_is_reported_by_query_result_and_carries_a_pressure_fie
         ErrorCode::NotFound
     );
 }
+
+#[test]
+fn original_bilinear_query_areas_converge_and_replay_independently_of_owner_and_threads() {
+    // Exact original surface x=1+y*z/4, not either diagonal triangle skin.
+    // Its analytic area is1.0205395019733228m². Tensor two-point quadrature
+    // converges at order4 for this smooth surface under uniform subdivision.
+    let a = 0.25;
+    let r = libm::sqrt(1.0 + 2.0 * a * a);
+    let exact =
+        (r + (a * a + 3.0) / a * libm::asinh(a / libm::sqrt(1.0 + a * a)) - libm::atan(a * a / r) / (a * a)) / 3.0;
+    let mut thread_values = Vec::new();
+    for threads in [1, 4] {
+        let mut values = Vec::new();
+        let mut previous_error = None;
+        for n in [1, 2, 4, 8] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            ok(&mut e, r#"{"cmd":"model.new","name":"original-bilinear-measure"}"#);
+            ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+            let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"surface","body":"warped",
+                "patches":[{"corners":[["1 m","0 m","0 m"],["1 m","1 m","0 m"],
+                    ["1.25 m","1 m","1 m"],["1 m","0 m","1 m"]],"n":[n,n]}]}});
+            ok(&mut e, &command.to_string());
+            let before = e.model_hash();
+            let top = set_info(&mut e, "warped.top");
+            let bottom = set_info(&mut e, "warped.bottom");
+            assert_eq!(top.measure.unit, "m^2");
+            assert_eq!(top.count, (n * n) as u32);
+            assert!((top.measure.value - bottom.measure.value).abs() < 2e-14);
+            let model = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+            let bodies = model.get("bodies").unwrap();
+            let area = bodies[0]["measure"]["value"].as_f64().unwrap();
+            assert!((area - top.measure.value).abs() < 2e-14);
+            let error = (top.measure.value - exact).abs();
+            assert!(error < 5e-6);
+            if let Some(previous) = previous_error {
+                let order = libm::log(previous / error) / libm::log(2.0);
+                assert!((3.8..4.2).contains(&order), "observed query area order {order}");
+            }
+            previous_error = Some(error);
+            assert_eq!(e.model_hash(), before);
+            let file = e.export_file();
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&file.journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), before);
+            assert_eq!(set_info(&mut replayed, "warped.top").measure, top.measure);
+            values.push(top.measure.value);
+        }
+        thread_values.push(values);
+    }
+    assert_eq!(thread_values[0], thread_values[1]);
+}

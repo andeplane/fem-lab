@@ -4627,7 +4627,11 @@ Returns: `ScriptText`.
 ### query.set
 
 What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
-and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+and corner-node centroid. Tet4/Hex8 volumes integrate the original Jacobian exactly
+up to roundoff. Linear 3D face areas use original shape/tangent quadrature; curved
+bilinear area is numerical and converges under refinement, not an exact skin measure.
+Quadratic-element measures still use corner geometry pending #524.
+Face Sets also report pressureArea from the load boundary quadrature,
 including thickness or radial weighting (plane strain: one metre of depth). Pressure
 times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
 
