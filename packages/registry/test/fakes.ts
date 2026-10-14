@@ -52,6 +52,7 @@ const REPLIES: Record<string, unknown> = {
   'query.script': { text: 'fem.model.new({ name: "beam" })' },
   'query.model': { name: 'beam', revision: 10, meshSettings: {}, warnings: [] },
   'query.result': RESULT,
+  'query.results': { limit: 8, records: [] },
   'query.path': PATH,
 };
 

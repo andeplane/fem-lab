@@ -2,6 +2,7 @@
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
 import type { AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import { parseRef, refOf } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
@@ -318,14 +319,14 @@ const merge = (mode: 'replace' | 'add' | 'remove', cur: string[], next: string[]
 
 /** `refs` is what `@selection` expands to; `face:` for faces and Sets alike (both are Sets). */
 export function refsOf(s: Omit<Selection, 'refs'>): string[] {
-  return [...s.bodies.map((n) => `body:${n}`), ...s.faces.map((n) => `face:${n}`), ...s.sets.map((n) => `set:${n}`)];
+  return [...s.bodies.map((n) => refOf('body', n)), ...s.faces.map((n) => refOf('face', n)), ...s.sets.map((n) => refOf('set', n))];
 }
 
 export function selectionReducer(cur: Selection, input: { refs?: string[]; bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
   const mode = input.mode ?? 'replace';
   const supplied = [...(input.refs ?? []), ...refsOf({ bodies: input.bodies ?? [], faces: input.faces ?? [], sets: input.sets ?? [] })];
-  const refs = merge(mode, cur.refs, supplied);
-  const names = (kind: string) => refs.filter((ref) => ref.startsWith(`${kind}:`)).map((ref) => ref.slice(kind.length + 1));
+  const refs = merge(mode, cur.refs, supplied.map(ref => parseRef(ref)?.ref ?? ref));
+  const names = (kind: string) => refs.map(parseRef).filter(chip => chip?.kind === kind).map(chip => chip!.name);
   return { bodies: names('body'), faces: names('face'), sets: names('set'), refs };
 }
 

@@ -6,7 +6,7 @@ export { decodeBulk, type EngineTransport, type ImportAck, type Progress, type S
 export { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, HOST_COMMANDS, HOST_QUERIES, EXPORT_FORMATS, AnimationCaptureOptions, extremesCsv, reactionsCsv, pathCsv, dataUrlBytes, type AiProvider, type ExportFormatRow, type HostContext, type Selection, type FolderInfo, type ScriptResult, type ProjectMeta, type OpenProject, type ProjectSaveReceipt, type AutosaveState, type AutosaveVersion } from './host-commands';
 export { toToolDefinitions, toolNameFor, commandNameFor, inlineDefs, stripDiscriminator, TOOL_NAME, RUN_SCRIPT, type ToolDefinition } from './tools';
 export { makeFemProxy, type Dispatch, type QueryFn } from './script-api';
-export { parseMentions, refOf, MENTION_KINDS, type MentionKind, type Chip } from './mentions';
+export { parseMentions, parseRef, refOf, MENTION_KINDS, type MentionKind, type Chip } from './mentions';
 export { parseSkill, mergeSkills, type Skill } from './skills';
 export { normalisePath, assertInside } from './project-paths';
 export type { ScriptDiagnostic, ScriptValidation, ScriptDeclarations } from './script-validation-types';

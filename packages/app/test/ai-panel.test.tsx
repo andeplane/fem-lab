@@ -23,7 +23,7 @@ import { fakeDir } from './project-fake';
 
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
-  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : q.query === 'query.results' ? { limit: 8, records: [] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
   const viewer = { current: null };
   const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}));
@@ -316,6 +316,41 @@ describe('the assistant drawer', () => {
     entry.click();
     await tick();
     expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+  });
+  it('drains buffered quoted targets unchanged, deduplicates equivalent names and keeps decoded chip labels on reopen', async () => {
+    chatBridge.pendingMentions = ['body:"beam"', 'file:"notes and \\"checks\\".md"'];
+    const { root, registry, store } = await mount();
+    const refs = () => [...root.querySelectorAll('.token')].map(token => token.getAttribute('data-ref'));
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(root.querySelectorAll('.token')[1]!.textContent).toContain('@file:notes and "checks".md');
+    await registry.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root); await paint();
+    render(<AssistantPanel registry={registry} store={store} />, root); await paint();
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
+  it('drops unsent chips when replacing their owning registry, while retaining the editable draft', async () => {
+    const previous = await mount();
+    await previous.registry.dispatch({ cmd: 'chat.insertMention', ref: 'result:id:result-1' });
+    await type(previous.root, 'Compare this solve');
+    expect(previous.root.querySelector('.token')!.getAttribute('data-ref')).toBe('result:id:result-1');
+    const next = await mount();
+    render(null, next.root);
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root); await paint();
+    expect(previous.root.querySelectorAll('.token')).toHaveLength(0);
+    expect(previous.root.querySelector('textarea')!.value).toBe('Compare this solve');
+  });
+  it.each(['@result:id:result-1', '@result:"id:result-1"'])('clears a typed immutable target on registry replacement: %s', async target => {
+    const previous = await mount();
+    await type(previous.root, `Inspect ${target}`);
+    const next = await mount();
+    render(null, next.root);
+    chatBridge.pendingMentions = ['result:id:result-1'];
+    chatBridge.pendingDraft = `Inspect ${target}`;
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root); await paint();
+    expect(previous.root.querySelector('textarea')!.value).toBe('');
+    expect(previous.root.querySelectorAll('.token')).toHaveLength(0);
+    expect(chatBridge.pendingMentions).toEqual([]);
   });
 
   it('expands @selection into one token per selected object', async () => {

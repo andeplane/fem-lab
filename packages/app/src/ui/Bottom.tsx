@@ -1,7 +1,7 @@
 // The bottom panel of docs/design/README.md: Journal, Script, Results, Checks, Console. The
 // Journal is the Model (ADR 0003), so its rows carry the line number, the Command, its arguments,
 // who issued it and when, with the undo boundary drawn under the solve that produced a Result.
-import type { JournalEntry, ModelSummary, ObjectRef, ResultSummary } from '@femlab/registry';
+import { MENTION_KINDS, refOf, type JournalEntry, type MentionKind, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { useEffect, useLayoutEffect } from 'preact/hooks';
 import type { Store, Tab, UiState } from '../store';
 import { TABS } from '../store';
@@ -42,23 +42,24 @@ export function journalTarget(cmd: Record<string, unknown>, model: ModelSummary 
     if (typeof name !== 'string') return null;
     const object = objects.find((item) => item.kind === kind && item.name === name);
     if (!object) return null;
-    if (kind === 'body') return { ref: object.ref, highlight: { bodies: [name] } };
-    if (kind === 'set') return { ref: object.ref, highlight: model.sets.some((set) => set.name === name && set.kind === 'face') ? { sets: [name] } : null };
+    const ref = MENTION_KINDS.includes(object.kind as MentionKind) ? refOf(object.kind as MentionKind, name) : object.ref;
+    if (kind === 'body') return { ref, highlight: { bodies: [name] } };
+    if (kind === 'set') return { ref, highlight: model.sets.some((set) => set.name === name && set.kind === 'face') ? { sets: [name] } : null };
     if (kind === 'material') {
       const material = model.materials.find((item) => item.name === name);
       const bodies = liveBodies(material?.assignedTo, model);
-      return { ref: object.ref, highlight: material && bodies.length > 0 ? { bodies } : null };
+      return { ref, highlight: material && bodies.length > 0 ? { bodies } : null };
     }
     if (kind === 'constraint') {
       const constraint = model.constraints.find((item) => item.name === name);
-      return { ref: object.ref, highlight: constraint ? { sets: [constraint.on] } : null };
+      return { ref, highlight: constraint ? { sets: [constraint.on] } : null };
     }
     if (kind === 'load') {
       const load = model.loads.find((item) => item.name === name);
       const bodies = liveBodies(cmd.bodies, model);
-      return { ref: object.ref, highlight: load?.on ? { sets: [load.on] } : bodies.length > 0 ? { bodies } : null };
+      return { ref, highlight: load?.on ? { sets: [load.on] } : bodies.length > 0 ? { bodies } : null };
     }
-    return { ref: object.ref, highlight: null };
+    return { ref, highlight: null };
   };
 
   if (cmd.cmd === 'model.rename') return named(String(cmd.kind ?? ''), cmd.to);

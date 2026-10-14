@@ -2,6 +2,7 @@
 // with a glyph, a mono name and a one-line summary in display units, the `@` reference button and
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
+import { refOf } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
@@ -16,6 +17,8 @@ export interface TreeItem {
   cmd: string;
   args: Record<string, unknown>;
   kind: string;
+  /** The supported context target, independent of the row's display caption. */
+  ref: string;
   glyph: string;
   glyphClass: string;
   name: string;
@@ -146,6 +149,7 @@ export function resultItems(s: UiState): TreeItem[] {
       args: showFieldArgs(c) as Record<string, unknown>,
       run: true,
       kind: 'result',
+      ref: refOf('result', `id:${r.resultId}`),
       glyph: '◧',
       glyphClass: s.fieldKey === c.key ? 'glyph green' : 'glyph low',
       name: c.label,
@@ -187,6 +191,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
           args: { kind: 'body', name: b.name },
           run: true,
           kind: 'body',
+          ref: refOf('body', b.name),
           glyph: '◈',
           glyphClass: 'glyph low',
           name: b.name,
@@ -199,6 +204,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
           args: { kind: 'set', name: f.name },
           run: true,
           kind: 'set',
+          ref: refOf('set', f.name),
           glyph: '▣',
           glyphClass: 'glyph cyan',
           name: f.name,
@@ -219,6 +225,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
           args: { kind: 'material', name: x.name },
           run: true,
           kind: 'material',
+          ref: refOf('material', x.name),
           glyph: '●',
           glyphClass: 'glyph mat',
           name: x.name,
@@ -239,6 +246,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
               cmd: 'mesh.set',
               args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
               kind: 'mesh',
+              ref: refOf('mesh', 'mesh'),
               glyph: '▦',
               glyphClass: 'glyph low',
               name: 'mesh',
@@ -261,6 +269,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         args: { kind: 'constraint', name: x.name },
         run: true,
         kind: 'constraint',
+        ref: refOf('constraint', x.name),
         glyph: '△',
         glyphClass: 'glyph cyan',
         name: x.name,
@@ -278,6 +287,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         args: { kind: 'constraint', name: x.name },
         run: true,
         kind: 'constraint',
+        ref: refOf('constraint', x.name),
         glyph: '⋈',
         glyphClass: 'glyph cyan',
         name: x.name,
@@ -295,6 +305,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         args: { kind: 'load', name: x.name },
         run: true,
         kind: 'load',
+        ref: refOf('load', x.name),
         glyph: x.kind === 'gravity' ? '→' : '↓',
         glyphClass: 'glyph load',
         name: x.name,
@@ -312,6 +323,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         args: { kind: 'step', name: x.name },
         run: true,
         kind: 'step',
+        ref: refOf('step', x.name),
         glyph: '▶',
         glyphClass: x.solved ? 'glyph green' : 'glyph low',
         name: x.name,
@@ -531,9 +543,10 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           dispatch={dispatch}
                           cmd="chat.insertMention"
                           class="at"
-                          title={`reference @${item.kind}:${item.name} in chat`}
+                          title={`Reference ${item.name} in chat`}
+                          args={{ ref: item.ref }}
                           onRun={() => {
-                            const ref = `${item.kind}:${item.name}`;
+                            const ref = item.ref;
                             void dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }).catch(() => undefined));
                           }}
                         >
