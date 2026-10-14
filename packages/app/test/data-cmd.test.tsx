@@ -2,7 +2,7 @@ import { treeGroups } from '../src/ui/Tree';
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, parseMentions, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
@@ -72,6 +72,7 @@ const journal = (...commands: Record<string, unknown>[]): JournalDump =>
 
 const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
   ({
+    resultId: `r${producingSeq}`,
     step,
     revision: producingSeq + 1,
     stale,
@@ -185,8 +186,14 @@ describe('the shell', () => {
     const current = model();
     current.bodies[0]!.bbox = [{ value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 1000, unit: 'mm' }, { value: 100, unit: 'mm' }, { value: 100, unit: 'mm' }];
     current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
+    current.connections = [{ name: 'tie', kind: 'bonded', master: 'beam.xmin', slave: 'beam.xmax', summary: 'bonded' }];
     current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
     const solved = { ...result('static', false, 1), frequencies: [{ value: 83, unit: 'Hz' }] };
+    const targets = new Map([
+      ['beam', 'body:beam'], ['tip', 'set:tip'], ['steel', 'material:steel'],
+      ['mesh', 'mesh:mesh'], ['fix', 'constraint:fix'], ['tie', 'constraint:tie'], ['p', 'load:p'],
+      ['static', 'step:static'], ['mode 1', `result:id:${solved.resultId}`],
+    ]);
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
       const { root, store, commands } = mount({ tab, model: current, result: solved, panels: { palette: true, examples: true } });
@@ -200,15 +207,17 @@ describe('the shell', () => {
       expect(controls.length, tab).toBeGreaterThan(0);
       expect(controls.some((button) => button.closest('.props')), tab).toBe(true);
       for (const control of controls) {
-        const ref = control.closest('.props') ? 'load:p' : control.title.match(/reference @(.+) in chat/)?.[1];
+        const name = control.closest('.row')?.querySelector('.name')?.textContent?.trim() ?? '';
+        const ref = control.closest('.props') ? 'load:p' : targets.get(name);
         expect(ref, `${tab}: ${control.outerHTML}`).toBeDefined();
         commands.length = 0;
         await act(async () => control.click());
         expect(commands, `${tab}: ${control.outerHTML}`).toEqual([{ cmd: 'chat.insertMention', ref }]);
+        expect(parseMentions(`@${ref}`).chips.map((chip) => chip.ref), `${tab}: ${ref}`).toEqual([ref]);
         referenced.add(ref!);
       }
     }
-    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'load:p', 'material:steel', 'mesh:mesh', 'result:mode 1', 'set:tip', 'step:static']);
+    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'constraint:tie', 'load:p', 'material:steel', 'mesh:mesh', 'result:id:r1', 'set:tip', 'step:static']);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
