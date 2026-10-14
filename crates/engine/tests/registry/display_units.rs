@@ -663,3 +663,48 @@ fn checked_display_contact_total_remains_checked_after_finite_reaction_component
     rejected_read(&mut e, json!({"query":"query.result"}));
     assert_eq!(read(&mut e, json!({"query":"query.result","resultId":id}))["contacts"][0], contact);
 }
+
+#[test]
+fn checked_display_undamped_resonance_preserves_modal_results_before_publication() {
+    // Ask the public modal capability for its disclosed frequency, then prepare an
+    // identical physical Model with that frequency as an exact sweep endpoint.
+    let mut probe = engine();
+    super::harmonic_bar(&mut probe, r#", "fStart":"1 Hz", "fStop":"2 Hz", "points":3, "dampingRatio":0"#);
+    command(&mut probe, json!({"cmd":"solve.run","step":"modes","solver":"cpu-direct"}));
+    let disclosed = read(&mut probe, json!({"query":"query.result","step":"modes"}));
+    let hz = disclosed["frequencies"][0]["value"].as_f64().unwrap();
+    assert!(hz.is_finite() && hz > 0.0);
+    let mut e = engine();
+    super::harmonic_bar(
+        &mut e,
+        &format!(
+            r#", "fStart":{{"value":{hz},"unit":"Hz"}}, "fStop":{{"value":{},"unit":"Hz"}}, "points":3, "dampingRatio":0"#,
+            2.0 * hz
+        ),
+    );
+    command(&mut e, json!({"cmd":"solve.run","step":"modes","solver":"cpu-direct"}));
+    let mode = read(&mut e, json!({"query":"query.result","step":"modes"}));
+    assert_eq!(mode["frequencies"][0]["value"], hz);
+    let id = mode["resultId"].as_str().unwrap();
+    let field = read(&mut e, json!({"query":"query.field","resultId":id,"field":"mode:1"}));
+    let values = field["values"].as_array().unwrap();
+    assert!(values.iter().all(|value| value.as_f64().unwrap().is_finite()));
+    // Uniform traction on this one bilinear end face gives 2500N at each end node.
+    // Root components are zero; the measured first-mode projection is nonzero.
+    let projection: f64 = values.chunks(3).map(|v| 2500.0 * v[0].as_f64().unwrap()).sum();
+    assert!(projection.abs() > 1.0);
+    // Independent oscillator law: Q/[(omega_k²-omega²)+i2*zeta*omega_k*omega].
+    // With Q!=0, exact omega=omega_k and zeta=0, no finite response exists. The
+    // other retained samples are off all disclosed modes, so their finite global
+    // peak does not certify the unbounded sample. Keep the sweep-row check.
+    for f in mode["frequencies"].as_array().unwrap() {
+        let other = f["value"].as_f64().unwrap();
+        assert_ne!(other, 1.5 * hz);
+        assert_ne!(other, 2.0 * hz);
+    }
+    rejected_command(&mut e, json!({"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}));
+    assert_eq!(read(&mut e, json!({"query":"query.result","step":"modes"})), mode);
+    assert_eq!(read(&mut e, json!({"query":"query.field","resultId":id,"field":"mode:1"})), field);
+    command(&mut e, json!({"cmd":"solve.run","step":"modes","solver":"cpu-direct"}));
+    assert_eq!(read(&mut e, json!({"query":"query.result","step":"modes"}))["resultId"], "result-2");
+}

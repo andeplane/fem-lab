@@ -2552,3 +2552,13 @@ force exceeds2.5N. A valid force unit with factor8.333e-309 has finite limit≈1
 so the current Result rejects specifically at checked contact output. The Model remains
 readable, failed reads preserve the full native state, and retained-ID contact output
 keeps its original N units. The formatter test and independent convergence test are separate.
+
+The public undamped-resonance rejection fixture asks the modal registry for a finite positive
+natural frequency, then solves the same physical bar with that exact disclosed frequency as
+a harmonic sweep endpoint, damping0 and finite nonzero modal force projection. Independent
+oscillator response `Q/[(ωk²-ω²)+i2ζωkω]` has no finite value at `ω=ωk`, `ζ=0`, `Q!=0`.
+Its other retained frequencies lie off every disclosed mode and give a finite global peak;
+that does not make the resonant sample readable. The checked sweep output rejects before
+publishing, preserving the full native file/hash/revision/catalogue and the original modal
+summary/field. The next valid modal solve is result-2, so rejection consumes no Result ID.
+This case credits the actual amplitude/publication path, not unproved frequency failures.
