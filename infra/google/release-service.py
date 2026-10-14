@@ -14,15 +14,26 @@ if status!='SUCCESS':raise RuntimeError('Build must be SUCCESS before release; c
 digest=json.loads(run('artifacts','docker','images','describe',image,'--format=json').stdout)['image_summary']['digest'];image=image.split(':')[0]+'@'+digest
 connection=f'{project}:{region}:{instance}'
 def version(name):return run('secrets','versions','list',name,'--filter=state:ENABLED','--sort-by=~createTime','--limit=1','--format=value(name)').stdout.strip().split('/')[-1]
+before=run('run','services','describe','femlab-api',f'--region={region}','--format=json',optional=True)
+previous=json.loads(before.stdout)['status'] if not before.returncode else None
+rollback={item['revisionName']:item['percent'] for item in previous['traffic'] if item.get('percent')} if previous else {}
+def ready(uri):
+ with urllib.request.urlopen(uri+'/ready',timeout=30) as response:
+  if response.status!=200:raise RuntimeError('API is not ready')
+rollback_ready=False
+if previous:
+ try:ready(previous['url']);rollback_ready=True
+ except Exception:pass
 common=f'PGHOST=/cloudsql/{connection}|PGDATABASE=femlab|FIREBASE_PROJECT_ID={project}|EXPORT_BUCKET={project}-exports|BILLING_ENABLED=false'
 origins=f'https://{project}.web.app,https://{project}.firebaseapp.com'
 if a.environment=='production':origins+=',https://femlab.app,https://www.femlab.app'
 api_env='^|^'+common+f'|PGUSER=femlab_api|APP_ORIGINS={origins}|APP_RETURN_ORIGIN=https://{project}.web.app'
 print(project+': releasing API '+manifest['revision'],flush=True)
-run('run','deploy','femlab-api',f'--image={image}',f'--region={region}',f'--service-account=femlab-api@{project}.iam.gserviceaccount.com','--execution-environment=gen2','--cpu=1','--memory=512Mi','--concurrency=8','--min-instances=0','--max-instances=2','--timeout=900s','--allow-unauthenticated',f'--set-cloudsql-instances={connection}',f'--set-env-vars={api_env}',f'--set-secrets=PGPASSWORD=database-api-password:{version("database-api-password")},OPENAI_API_KEY=openai-api-key:{version("openai-api-key")}','--startup-probe=httpGet.path=/ready,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=12')
-uri=run('run','services','describe','femlab-api',f'--region={region}','--format=value(status.url)').stdout.strip()
-with urllib.request.urlopen(uri+'/ready') as response:
- if response.status!=200:raise RuntimeError('API is not ready')
+revision='femlab-api-r'+manifest['buildId'].split('-')[0]
+run('run','deploy','femlab-api',f'--image={image}',f'--region={region}',f'--revision-suffix=r{manifest["buildId"].split("-")[0]}','--no-traffic','--tag=release-candidate',f'--service-account=femlab-api@{project}.iam.gserviceaccount.com','--execution-environment=gen2','--cpu=1','--memory=512Mi','--concurrency=8','--min-instances=0','--max-instances=2','--timeout=900s','--allow-unauthenticated',f'--set-cloudsql-instances={connection}',f'--set-env-vars={api_env}',f'--set-secrets=PGPASSWORD=database-api-password:{version("database-api-password")},OPENAI_API_KEY=openai-api-key:{version("openai-api-key")}','--startup-probe=httpGet.path=/ready,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=12')
+candidate=json.loads(run('run','services','describe','femlab-api',f'--region={region}','--format=json').stdout)['status']
+route=next(item for item in candidate['traffic'] if item.get('tag')=='release-candidate' and item['revisionName']==revision)
+ready(route['url']);uri=candidate['url']
 print(project+': releasing recovery job',flush=True)
 run('run','jobs','deploy','femlab-recover',f'--image={image}',f'--region={region}',f'--service-account=femlab-jobs@{project}.iam.gserviceaccount.com','--cpu=1','--memory=1Gi','--tasks=1','--max-retries=1','--task-timeout=900s','--command=node','--args=service/main.mjs,--recover',f'--set-cloudsql-instances={connection}',f'--set-env-vars=^|^{common}|PGUSER=femlab_jobs',f'--set-secrets=PGPASSWORD=database-jobs-password:{version("database-jobs-password")}')
 run('run','jobs','execute','femlab-recover',f'--region={region}','--wait')
@@ -31,5 +42,12 @@ run('secrets','remove-iam-policy-binding','database-migration-password',f'--memb
 run('run','jobs','add-iam-policy-binding','femlab-recover',f'--region={region}',f'--member=serviceAccount:femlab-scheduler@{project}.iam.gserviceaccount.com','--role=roles/run.invoker')
 name='femlab-usage-recovery';operation='update' if not run('scheduler','jobs','describe',name,f'--location={region}',optional=True).returncode else 'create'
 run('scheduler','jobs',operation,'http',name,f'--location={region}','--schedule=*/10 * * * *','--time-zone=UTC',f'--uri=https://run.googleapis.com/v2/projects/{project}/locations/{region}/jobs/femlab-recover:run','--http-method=POST',f'--oauth-service-account-email=femlab-scheduler@{project}.iam.gserviceaccount.com','--oauth-token-scope=https://www.googleapis.com/auth/cloud-platform')
-manifest.update(image=image,apiOrigin=uri);Path(f'/tmp/{project}-release-563.json').write_text(json.dumps(manifest,indent=2))
+run('run','services','update-traffic','femlab-api',f'--region={region}',f'--to-revisions={revision}=100')
+try:ready(uri)
+except Exception:
+ if rollback_ready and rollback:
+  run('run','services','update-traffic','femlab-api',f'--region={region}','--to-revisions='+','.join(f'{name}={weight}' for name,weight in rollback.items()))
+  ready(uri)
+ raise
+manifest.update(image=image,apiOrigin=uri,apiRevision=revision,rollbackRevisions=rollback if rollback_ready else {});Path(f'/tmp/{project}-release-563.json').write_text(json.dumps(manifest,indent=2))
 print(json.dumps({'project':project,'revision':manifest['revision'],'image':image,'apiOrigin':uri,'billing':'disabled'}),flush=True)

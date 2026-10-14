@@ -34,7 +34,7 @@ point-in-time recovery. Both are running with no authorized public networks.
 `femlab-api` uses Firebase Auth viewer and Cloud SQL client roles. It can read only
 its own OpenAI/database secrets. `femlab-jobs` uses its own restricted database credential and only the Firebase
 user-deletion permission. `femlab-migrate` owns the isolated migration credential.
-Both API and recovery database users are removed from `cloudsqlsuperuser` and receives explicit
+Both API and recovery database users are removed from `cloudsqlsuperuser` and receive explicit
 table permissions: no DDL, financial row updates/deletes or limit changes. New
 tables require an explicit privilege migration before deploying a route using them.
 
@@ -65,7 +65,9 @@ verified access to that Cloudflare zone. Stripe credentials are not available ye
 
 ## Deployed baseline (2026-10-15)
 
-Both environments run source `619c395ceab2b3c48d1971dd5f734168d36f46c8`.
+Both service environments run source `619c395ceab2b3c48d1971dd5f734168d36f46c8`.
+The browser release is `aa4455fe`, including the compact hosted tool catalogue and
+the account UI fixes. Firebase configuration and API origins are environment-specific.
 Service images are pinned by digest after successful Cloud Build; `/health` and
 `/ready` use public Cloud Run paths (the platform reserves some `*z` paths).
 Startup probes require the latest migration and configured inference/privacy seams.
@@ -90,8 +92,9 @@ Billing is explicitly disabled in both releases. The Stripe integration is imple
 and fixture-tested, but no live Stripe account, prices, webhook or portal is configured.
 Google login is hidden until its OAuth client is configured; email-link login is enabled.
 Domain ownership is awaiting confirmation, and the locked Mac currently prevents use
-of the existing Cloudflare console session. Deployed browser/LLM/export/deletion, long
-stream, rollback and restore evidence remains tracked in #557.
+of the existing Cloudflare console session. Custom Hosting domains and the HTTPS API
+load balancer are provisioned separately in #600/PR #601. Deployed browser/LLM/export/
+deletion, long-stream, rollback and restore evidence remains tracked in #557.
 
 ## Reproduce the release
 
@@ -110,8 +113,21 @@ python3 infra/google/deploy-hosting.py --environment staging --account <account>
 
 `deploy-service.py` submits an archive of the checkout's committed revision and records
 its build ID. `release-service.py` rejects incomplete builds, pins the resulting digest,
-checks readiness and executes recovery before updating Scheduler and removing legacy
-migration-secret access. Credentials are read through gcloud/Secret Manager and never
+deploys an immutable named candidate at zero traffic, probes its tagged readiness URL,
+executes recovery, and configures Scheduler before promoting API traffic. It records
+the previous healthy traffic revisions for rollback and restores them if the final
+readiness check fails. Migration-secret access is removed after recovery succeeds.
+Credentials are read through gcloud/Secret Manager and never
 printed. Deployment manifests in `/tmp` contain IDs, source hashes and public URLs only.
 The browser build includes public Firebase metadata, never supplier/database credentials.
 Repeat with `--environment production` for the isolated production project.
+
+The procedure has completed in both environments. An intentionally unhealthy staging
+candidate failed startup without receiving normal traffic; the healthy API stayed ready.
+After restoring the valid service template, traffic switched between the two healthy
+revisions of the current pinned image and returned to the release revision. This proves
+traffic rollback mechanics, not arbitrary old-code compatibility. The initial pre-health
+image returned 404 on public health and must not be used as a rollback target. Do not run
+financial database down-migrations; validate image/schema compatibility and paired browser
+behavior before each future release. Billing remains deliberately disabled in this baseline
+release script; live Stripe deployment configuration is a separate activation step.
