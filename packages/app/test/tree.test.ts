@@ -1,6 +1,8 @@
 // The Model tree is a pure reading of one `query.model` snapshot, so a fixture is enough:
 // the groups, their badges, the one-line summaries in display units, and the Command each row
 // puts back in the form (an edit is the create Command re-issued, brief §2.1).
+import schema from '../../registry/src/generated/engine.schema.json';
+import { humanise } from '../src/ui/schema';
 import type { ModelSummary } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import { Store, initialState, type UiState } from '../src/store';
@@ -56,6 +58,21 @@ describe('treeGroups', () => {
     }
     // Every group a person can add to offers the Command that adds to it.
     expect(treeGroups(state(null)).filter((g) => g.add).map((g) => g.add!.cmd)).toEqual(['geometry.addBox', 'material.add', 'mesh.set', 'constraint.fix', 'contact.add', 'load.pressure', 'step.add']);
+  });
+
+  it('describes both physics and every callable Load and Constraint kind without stale promises', () => {
+    const s = state(null);
+    expect(group(s, 'Materials').note).toBe('Assign Materials to Bodies. Each Step uses the mechanical or thermal properties it needs.');
+    expect(group(s, 'Steps').note).toBe('Choose a procedure and its active Constraints and Loads. Steps run in the order shown.');
+    expect(group(s, 'Loads').note).toBe('Available loads: pressure, traction, force, moment, gravity, temperature, convection, heat flux, radiation, heat source, torque. A Step chooses which are active.');
+    expect(group(s, 'Constraints').note).toBe('Available constraints: fix, pin, prescribe, symmetry, temperature, cyclic, couple. A Step chooses which are active.');
+    for (const prefix of ['load', 'constraint']) {
+      const note = group(s, prefix === 'load' ? 'Loads' : 'Constraints').note;
+      const commands = schema.commands.oneOf.map(variant => variant.properties.cmd.const);
+      for (const name of commands.filter(name => name.startsWith(`${prefix}.`) && name !== `${prefix}.remove`)) {
+        expect(note).toContain(humanise(name.slice(prefix.length + 1)).toLowerCase());
+      }
+    }
   });
 
   it('puts bodies and named faces in Geometry, with their glyphs and summaries', () => {

@@ -3,9 +3,11 @@
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import { useEffect, useRef, useState } from 'preact/hooks';
+import schema from '../../../registry/src/generated/runtime-schema';
 import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
+import { humanise } from './schema';
 
 export interface TreeItem {
   /** The Command a click puts in the Properties form, with the object read back as its arguments. */
@@ -90,6 +92,14 @@ const GROUP_OF: Record<string, string> = {
   'model.no-step': 'Steps',
   'load.no-density': 'Loads',
 };
+
+// Keep the available kinds in step with the callable engine schema; removal is an action,
+// not a kind a person can add. Units and targets are described by each kind's form.
+const kinds = (prefix: string): string => schema.commands.oneOf
+  .map(variant => variant.properties.cmd.const)
+  .filter(name => name.startsWith(`${prefix}.`) && name !== `${prefix}.remove`)
+  .map(name => humanise(name.slice(prefix.length + 1)).toLowerCase())
+  .join(', ');
 
 type Valued = { value: number; unit: string } | undefined;
 const q = (v: Valued | null | undefined): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
@@ -194,7 +204,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Materials',
-      'Nothing carries stiffness yet. Every Body needs a Material before a Step can start.',
+      'Assign Materials to Bodies. Each Step uses the mechanical or thermal properties it needs.',
       { what: 'material', cmd: 'material.add' },
       (m?.materials ?? []).map((x) => ({
         cmd: 'form.edit',
@@ -234,7 +244,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Constraints',
-      'Fix, symmetry or a prescribed displacement on a named face. Without one the body floats.',
+      `Available constraints: ${kinds('constraint')}. A Step chooses which are active.`,
       { what: 'constraint', cmd: 'constraint.fix' },
       (m?.constraints ?? []).map((x) => ({
         cmd: 'form.edit',
@@ -268,7 +278,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Loads',
-      'Pressure, traction, total force, gravity or temperature on a named face — each with its total.',
+      `Available loads: ${kinds('load')}. A Step chooses which are active.`,
       { what: 'load', cmd: 'load.pressure' },
       (m?.loads ?? []).map((x) => ({
         cmd: 'form.edit',
@@ -285,7 +295,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Steps',
-      'Static now, modal and transient later. A Step says which Constraints and Loads are active.',
+      'Choose a procedure and its active Constraints and Loads. Steps run in the order shown.',
       { what: 'step', cmd: 'step.add' },
       (m?.steps ?? []).map((x) => ({
         cmd: 'form.edit',
@@ -453,7 +463,7 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           cmd={item.run ? item.cmd : 'form.open'}
                           class="row-main"
                           args={item.run ? item.args : { command: item.cmd, args: item.args }}
-                          title={`${item.cmd} — ${item.name}`}
+                          title={`${item.kind === 'result' ? 'Show' : 'Edit'} ${item.name}`}
                         >
                           <span class={item.glyphClass}>{item.glyph}</span>
                           <span class="row-text">
@@ -552,7 +562,7 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                         class="chip-add"
                         args={{ command: group.add.cmd }}
                         pressed={adding === group.label}
-                        title={group.add.menu ? `choose what to add to ${group.label}` : `fill in ${group.add.cmd}`}
+                        title={group.add.menu ? `choose what to add to ${group.label}` : `Add ${group.add.what}`}
                         {...(group.add.menu ? { onRun: () => setAdding(adding === group.label ? null : group.label) } : {})}
                       >
                         + add {group.add.what}
