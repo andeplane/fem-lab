@@ -2437,3 +2437,33 @@ rejects without replacing the previous static Result or its catalogue.
 Buckling skips this static-only recovery in the shared postprocessor and retains
 its existing preload/force/buckling-factor contract. Legacy formatting behavior
 outside the new ledger is tracked separately by #580.
+
+
+### Checked display conversion (#580, inseparable unit grouping #582)
+
+The public Model/report regression authors a finite `1e308 Pa` modulus, then selects `mPa`.
+The mathematically required display magnitude is `1e311`, beyond f64: both reads reject
+with `unit.display` instead of relabelling the SI value, preserving Model, Journal, hash and
+revision. Returning to Pa reports the original `1e308 Pa` value. Unit-level force/moment
+and area/volume checks cover the same finite-SI/output-overflow boundary.
+
+The actual `units::format` output at seventeen significant digits is parsed back through
+Quantity conversion in the property test; it is not checked against a second formatter.
+Ordinary conversion tolerance is `1e-12 * abs(SI value)` for a representable generated
+domain: source magnitudes from `1e-6` to `1e6` with both signs and twenty-four unit symbols.
+Zero has an explicit exact round-trip check; an absolute floor cannot certify a lost tiny value. Offset temperature conversion retains the independent 20 °C = 293.15 K
+oracle. Finite numeric conversion overflow is rejected; the separate nonzero-underflow
+policy remains tracked by #583.
+
+A public unit cube with valid composite Length `m*s/s` must report volume `1 (m*s/s)*(m*s/s)*(m*s/s)`
+and face area `1 (m*s/s)*(m*s/s)`; both labels independently parse to the correct physical
+dimension. Grouping whole operands is required before repeated multiplication or torque
+multiplication, so checked conversion does not newly reject a valid selected unit.
+
+
+For torque operands, independently valid composite force `N*Gm^30/m^30` has factor
+`1e270`; composite length `Gm^5/nm^5*nm^35/m^34` has factor `1e-225`. Their product
+factor is `1e45`, so `1 N m` must display approximately `1e-45` in the grouped unit.
+Unparenthesized concatenation overflows an intermediate multiplication before cancellation.
+The relative tolerance `1e-8` admits the factor's unavoidable subnormal decimal rounding
+from `nm^35`; parsing back must recover `1 N m` to `1e-14`.

@@ -9,7 +9,7 @@ use femlab_engine::model::{Axial, Model};
 use femlab_engine::post::convergence::richardson;
 use femlab_engine::query::{AssumedMaterialProperty, Output, Query, QueryResult, Valued};
 use femlab_engine::report::ReportSection;
-use femlab_engine::units::{Quantity, Q};
+use femlab_engine::units::{Dim, Quantity, Q};
 use femlab_engine::{Command, Engine, Error, ErrorCode, Host, NoClock, Progress};
 
 struct Clock(f64);
@@ -14191,3 +14191,135 @@ fn original_bilinear_query_areas_converge_and_replay_independently_of_owner_and_
 
 #[path = "registry/quadratic_measures.rs"]
 mod quadratic_measures;
+
+/// #580: a Model read cannot silently label SI as the selected smaller stress unit.
+#[test]
+fn display_unit_overflow_rejects_model_and_report_without_mutating_the_journal() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"large finite material"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"finite","E":"1e308 Pa","nu":0}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"mPa"}}"#);
+    let file = e.export_file();
+    let hash = e.model_hash();
+    let revision = e.revision();
+    for query in [Query::Model {}, Query::Report { step: None, include: None }] {
+        let error = e.query(query).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert!(error.cause.contains("mPa"));
+        assert!(error.suggestion.as_deref().unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+    }
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"Pa"}}"#);
+    let summary = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(summary["materials"][0]["E"], serde_json::json!({"value":1e308,"unit":"Pa"}));
+}
+
+/// #582 is inseparable from validating the complete derived display-unit dimension.
+#[test]
+fn composite_length_units_keep_public_body_and_set_measures_dimensionally_correct() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"composite length"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m*s/s"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"box","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let file = e.export_file();
+    let model = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(model["bodies"][0]["measure"], serde_json::json!({"value":1.0,"unit":"(m*s/s)*(m*s/s)*(m*s/s)"}));
+    let face = set_info(&mut e, "box.xmax");
+    assert_eq!(face.measure.unit, "(m*s/s)*(m*s/s)");
+    assert!((face.measure.value - 1.0).abs() < 1e-14);
+    assert_eq!(femlab_engine::units::parse_unit(&face.measure.unit).unwrap().dim, femlab_engine::units::Area::DIM);
+    assert_eq!(e.export_file(), file);
+}
+
+/// A real lazy mapped mesh fails while formatting the nearest empty-Set diagnostic.
+/// That unit failure must not become an omitted Body or omitted Mesh report section.
+#[test]
+fn mapped_empty_set_display_errors_survive_optional_geometry_and_report_paths() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"mapped display boundary"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"plate","blocks":[{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"outside","where":{"kind":"bbox","min":["2 m","0 m","0 m"],"max":["3 m","1 m","1 m"]}}"#,
+    );
+    // A genuine unbuildable implicit Mesh retains the existing optional-body behavior.
+    let before = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(before["bodies"], serde_json::json!([]));
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::SetEmpty);
+    // The geometry remains a unit square. The length factor 10^-315 is finite/nonzero,
+    // but its ordinary nearest-boundary coordinates cannot fit in that display unit.
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"nm^35/m^34"}}"#);
+    let file = e.export_file();
+    let hash = e.model_hash();
+    for query in [Query::Mesh {}, Query::Model {}, Query::Report { step: None, include: None }] {
+        let error = e.query(query).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert!(error.cause.contains("nm^35/m^34"));
+        // Context annotation is public error behavior; machine classification survives it.
+        assert_eq!(error.at("mesher.namedSets.outside").code, ErrorCode::UnitDisplay);
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+    }
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::SetEmpty);
+}
+
+/// The complete display summary is checked before any Result catalogue/sequence mutation.
+#[test]
+fn failed_candidate_summary_preserves_readable_result_and_consumes_no_result_identity() {
+    let mut e = engine();
+    for command in [
+        r#"{"cmd":"model.new","name":"display publication shaft"}"#,
+        r#"{"cmd":"geometry.addLine","name":"shaft","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"divisions":3,"kind":"beam"}"#,
+        r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#,
+        r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#,
+        r#"{"cmd":"section.add","name":"round","shape":{"kind":"circle","radius":"50 mm"}}"#,
+        r#"{"cmd":"section.assign","section":"round","bodies":["shaft"]}"#,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#,
+        r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"shaft"}}"#,
+        r#"{"cmd":"constraint.fix","name":"held","on":"whole"}"#,
+        r#"{"cmd":"load.force","name":"tip","on":"shaft.p1","total":["1000 N","0 N","0 N"]}"#,
+        r#"{"cmd":"step.add","name":"axial","procedure":"static","constraints":["held"],"loads":["tip"]}"#,
+        r#"{"cmd":"solve.run","step":"axial","solver":"cpu-direct"}"#,
+        r#"{"cmd":"constraint.fix","name":"held","on":"shaft.p0"}"#,
+        r#"{"cmd":"model.setUnits","units":{"stress":"Pa*nm^34/m^34"}}"#,
+    ] {
+        ok(&mut e, command);
+    }
+    // The previous fully held shaft has exactly zero elastic stress and is still readable.
+    let selected = e.query(Query::Result { step: Some("axial".into()), result_id: None }).unwrap();
+    let catalogue = e.query(Query::Results {}).unwrap();
+    let file = e.export_file();
+    let revision = e.revision();
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"axial","solver":"cpu-direct"}"#);
+    assert_eq!(error.code, ErrorCode::UnitDisplay);
+    assert!(error.cause.contains("stress/pressure"));
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+    assert_eq!(e.query(Query::Result { step: Some("axial".into()), result_id: None }).unwrap(), selected);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"Pa"}}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"axial","solver":"cpu-direct"}"#);
+    let summary =
+        serde_json::to_value(e.query(Query::Result { step: Some("axial".into()), result_id: None }).unwrap()).unwrap();
+    assert_eq!(summary["resultId"], "result-2");
+    // Independent axial bar and conservation answers: FL/(EA), sigma=F/A, root=-F.
+    let area = std::f64::consts::PI * 0.05_f64.powi(2);
+    let displacement = probe_at(&mut e, "axial", Field::Displacement, Some(0), ["1 m", "0 m", "0 m"]);
+    assert!((displacement - 1000.0 / (2e11 * area)).abs() < 1e-16);
+    assert!((summary["reactions"][0]["total"][0]["value"].as_f64().unwrap() + 1000.0).abs() < 1e-8);
+    let stress = summary["extremes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["field"] == "stress" && row["component"] == 0)
+        .unwrap();
+    assert!((stress["max"]["value"].as_f64().unwrap() - 1000.0 / area).abs() < 1e-6);
+}
