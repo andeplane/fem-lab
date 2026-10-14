@@ -66,3 +66,29 @@ it('does not rebind admission queued behind another request’s replacement', as
   expect(await next.query({ query: 'query.model' })).toMatchObject({ name: 'next' });
   await next.release(); await a.release();
 });
+
+it('publishes converted Commands as one checked Candidate and preserves the live Journal on failure', async () => {
+  const engine = loadEngine(here);
+  const initiating = await engine.acquire();
+  await initiating.dispatch({ cmd: 'model.new', name: 'original' });
+  await initiating.dispatch(body);
+  const before = await initiating.modelFile();
+  await expect(initiating.replaceCommands([
+    { cmd: 'model.new', name: 'invalid import' },
+    { cmd: 'geometry.addBox', name: 'bad', size: ['0 m', '1 m', '1 m'] },
+  ])).rejects.toMatchObject({ code: 'schema' });
+  expect(await initiating.modelFile()).toEqual(before);
+
+  const delayedRead = await engine.acquire();
+  await initiating.replaceCommands([{ cmd: 'model.new', name: 'imported' }, body]);
+  await expect(delayedRead.replaceCommands([{ cmd: 'model.new', name: 'late import' }])).rejects.toMatchObject({ code: 'session.expired' });
+  await initiating.dispatch({ ...body, name: 'follow-up' });
+  expect(await initiating.query({ query: 'query.model' })).toMatchObject({ name: 'imported', bodies: [{ name: 'shared' }, { name: 'follow-up' }] });
+  const imported = await initiating.modelFile();
+  const cancelled = await engine.acquire();
+  const posted = cancelled.replaceCommands([{ cmd: 'model.new', name: 'cancelled import' }]);
+  const rejected = expect(posted).rejects.toMatchObject({ code: 'cancelled' });
+  await cancelled.release(); await rejected;
+  expect(await initiating.modelFile()).toEqual(imported);
+  await delayedRead.release(); await initiating.release();
+});

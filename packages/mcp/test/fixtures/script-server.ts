@@ -8,6 +8,7 @@ import type { EngineHandle } from '../../src/engine';
 let started!: () => void;
 const scriptStarted = new Promise<void>((resolve) => { started = resolve; });
 const engine: EngineHandle = {
+  replaceCommands: async () => undefined,
   release: async () => undefined,
   dispatch: async () => null,
   query: async () => { started(); return { name: 'still alive' }; },
