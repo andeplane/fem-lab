@@ -195,10 +195,12 @@ the final Model/Journal size or permission to publish. #504 must always prepare 
 Commands through the existing Candidate path and check the exact serialized Model file
 before atomic publication. Current document conflicts and lifecycle checks remain Candidate
 authoritative. The conversion Query never constructs a second approximate Model.
-The authoritative prepared-file fence is tracked by [#536](https://github.com/andeplane/fem-lab/issues/536):
-the existing Candidate path does not yet enforce that final bound. It must count the actual
-persisted pretty-printed JSON, including its final newline and UTF-8 bytes, before any
-SessionOwner publication. #504 cannot pass its publication gate until this fence lands.
+The authoritative prepared-file fence from [#536](https://github.com/andeplane/fem-lab/issues/536)
+runs in `Candidate.finish`: it snapshots once, encodes through the injected host encoder and
+checks the actual UTF-8 payload against the host limit before any SessionOwner publication.
+Whitespace and any final newline count. Native output retains those checked bytes; JavaScript
+hosts share the encoder with their real save path. #504 must supply that exact save policy and
+the 16 MiB limit when preparing the conversion Commands.
 
 Check duplicate/invalid labels (1…999999999), missing connectivity references, unsupported
 arity, nonfinite coordinates, repeated local nodes, positive Jacobians at the element's
