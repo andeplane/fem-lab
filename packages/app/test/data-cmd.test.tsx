@@ -190,7 +190,8 @@ describe('the shell', () => {
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
       const { root, store, commands } = mount({ tab, model: current, result: solved, panels: { palette: true, examples: true } });
-      store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' }, false, { kind: 'load', name: 'p' });
+      // An unapplied name edit must keep the reference on the existing object.
+      store.openForm('load.pressure', { name: 'draft-pressure', on: 'beam.top', value: '2.4 MPa' }, false, { kind: 'load', name: 'p' });
       await afterEffects();
       // Discover controls by the wording a person sees, independently of data-cmd. A copy
       // handler retaining the right label or metadata must fail this behavioral check.
