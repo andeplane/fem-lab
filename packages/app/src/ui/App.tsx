@@ -20,7 +20,7 @@ import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
-import { blockers, type Defs, shapeKinds, solveBlockers } from './schema';
+import { type Defs, shapeKinds, solveBlockers } from './schema';
 
 export type { Dispatch } from './cmd';
 
@@ -196,7 +196,7 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       </div>
     );
   }
-  const b = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? [])[0];
+  const b = solveBlockers(s.model, s.model?.steps[0]?.name ?? '')[0];
   if (!b) return null;
   return (
     <div class="banner">

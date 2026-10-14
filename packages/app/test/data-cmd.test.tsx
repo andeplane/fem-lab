@@ -392,17 +392,19 @@ describe('the shell', () => {
       ],
       warnings: [{ code: 'model.unconstrained', text: 'later has no supports', where: "step 'later'", step: 'later' }],
     } as unknown as ModelSummary;
-    const { root, commands } = mount({ model: m, tab: 'results' });
+    const { root, commands, store } = mount({ model: m, tab: 'results' });
     const top = root.querySelector<HTMLButtonElement>('button.solve')!;
     const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]')!;
     expect(top.disabled).toBe(false);
     expect(fallback.disabled).toBe(false);
-    // Warnings stay in the Model-wide banner even when they do not block this action.
-    expect(root.querySelector('.banner')?.textContent).toContain('W-1300');
+    expect(root.querySelector('.banner')).toBeNull();
     await act(async () => { top.click(); fallback.click(); });
     expect(commands.filter(command => command.cmd === 'solve.run')).toEqual([
       { cmd: 'solve.run', step: 'free' }, { cmd: 'solve.run', step: 'free' },
     ]);
+    // The complete warning list stays inspectable even when this target is ready.
+    act(() => store.set({ tab: 'checks' }));
+    expect(root.querySelector('.bottom-body .check-row')?.textContent).toContain('W-1300');
   });
 
   it('keeps a target/predecessor blocker on Solve and does not offer an enabled Results fallback', () => {
