@@ -789,6 +789,14 @@ the cold one to 1e-9. A volumetric source in a slab held at both faces is checke
 own closed form `T = T_s + q(Lx − x²)/2k` in the same commit, which is the oracle for
 `load.heatSource`.
 
+The selected-free-mesher diagnostic regression (#526) retains unrelated unassigned sheets
+and a 3D Body while solving a 1 m square conductor of thickness 2 mm at two mesh sizes.
+It checks `T(x)=x/L` between 0 K and 1 K and the independent 0.02 W end power at
+`k=10 W/(m K)`. Its mechanical companion uses the same geometry with `E=1 GPa`,
+`nu=0` and a 1 N traction resultant: `ux(L)=FL/(EA)=5e-7 m` and the support carries −1 N.
+Native and Chromium paths preserve active missing-material/dimension diagnostics while
+unused geometry leaves Solve enabled and the Result current.
+
 **Thermal-only Materials (#493).** The registry's E1 steady profile and independent VTU reader,
 plus the Tet4/Tet10 profile at three mesh sizes, run with conductivity alone, without `E` or
 `nu`. The retained transient uniform-source Benchmark (`T(t) = t` for `q = rho cp = 6` in SI)

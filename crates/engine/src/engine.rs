@@ -414,7 +414,9 @@ impl Engine {
                 where_: Some(format!("body '{body}'")),
             });
         }
-        for b in &m.bodies {
+        // A one-Body mesher ignores the other geometry definitions. Whole-Model meshers
+        // (and a Model without mesh settings yet) still require every Body to be valid.
+        for b in m.bodies.iter().filter(|body| selected_body.is_none_or(|selected| body.name == selected)) {
             if m.material_of_body(&b.name).is_none() {
                 w.push(Warning {
                     step: None,
