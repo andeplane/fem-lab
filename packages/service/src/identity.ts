@@ -8,7 +8,7 @@ export interface IdentityAdmin { verifyIdToken(token: string, checkRevoked: bool
 export interface Identity { uid: string; email: string }
 
 /** The real adapter is Firebase Admin: signature/key rotation, expiry, revocation and disabled-user checks. */
-export function identityVerifier(admin: IdentityAdmin, projectId: string, now: () => Date) {
+export function identityVerifier(admin: IdentityAdmin, projectId: string, now: () => Date, options?: {maxAuthenticationAge:number}) {
   return async (authorization: string | undefined): Promise<Identity> => {
     const match = /^Bearer ([^\s]{1,10000})$/.exec(authorization ?? '');
     if (!match) throw new ServiceFailure(401, 'login-required', 'Sign in to use hosted AI.', 'identity', 'account.signIn');
@@ -20,6 +20,7 @@ export function identityVerifier(admin: IdentityAdmin, projectId: string, now: (
       !claims.uid || claims.uid.length > 128 || claims.exp <= seconds || claims.auth_time > seconds) {
       throw new ServiceFailure(401, 'invalid-identity', 'Your session is no longer valid. Sign in again.', 'identity', 'account.signIn');
     }
+    if(options && seconds - claims.auth_time > options.maxAuthenticationAge) throw new ServiceFailure(401,'recent-login-required','Sign out and sign in again before deleting your account.','identity','account.signIn');
     if (claims.email_verified !== true || !claims.email) {
       throw new ServiceFailure(403, 'email-verification-required', 'Verify your email before using hosted AI.', 'identity', 'account.signIn');
     }

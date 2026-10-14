@@ -56,7 +56,7 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
     const result=await db.query(`INSERT INTO billing_leases(customer_id,owner,expires_at) VALUES($1,$2,$3)
       ON CONFLICT(customer_id) DO UPDATE SET owner=EXCLUDED.owner,expires_at=EXCLUDED.expires_at WHERE billing_leases.expires_at <= $4 RETURNING owner`,[key,id,new Date(now().getTime()+120000),now()]);
     if(!result.rows.length)throw new ServiceFailure(409,'billing-operation-pending','A billing action is already running. Try again shortly.','billing');
-    try{return await operation();}finally{await db.query('DELETE FROM billing_leases WHERE customer_id=$1 AND owner=$2',[key,id]);}
+    try{if((await db.query('SELECT status FROM accounts WHERE id=$1',[accountId])).rows[0]?.status!=='active')throw new ServiceFailure(403,'account-inactive','This account is being deleted.','account');return await operation();}finally{await db.query('DELETE FROM billing_leases WHERE customer_id=$1 AND owner=$2',[key,id]);}
   }
   async function subscription(customerId:string) {
     const subscriptions=(await payments.subscriptions(customerId)).filter(row=>!['canceled','incomplete_expired'].includes(row.status));
