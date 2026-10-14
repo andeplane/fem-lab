@@ -7796,12 +7796,12 @@ export interface NamedSet {
 export interface Material {
   name: string;
   /**
-   * Isotropic stiffness; `None` exactly when `orthotropic` is given.
+   * Isotropic stiffness; absent for orthotropic and heat-only Materials.
    */
   e?: number | null;
   nu?: number | null;
   /**
-   * Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+   * Orthotropic stiffness in the material axes; absent for isotropic and heat-only Materials.
    */
   orthotropic?: ModelFile_Orthotropic | null;
   /**
@@ -8280,12 +8280,12 @@ export interface DocumentSnapshot_NamedSet {
 export interface DocumentSnapshot_Material {
   name: string;
   /**
-   * Isotropic stiffness; `None` exactly when `orthotropic` is given.
+   * Isotropic stiffness; absent for orthotropic and heat-only Materials.
    */
   e?: number | null;
   nu?: number | null;
   /**
-   * Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+   * Orthotropic stiffness in the material axes; absent for isotropic and heat-only Materials.
    */
   orthotropic?: DocumentSnapshot_Orthotropic | null;
   /**

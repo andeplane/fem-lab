@@ -242,12 +242,12 @@ impl Hardening {
 #[serde(rename_all = "camelCase")]
 pub struct Material {
     pub name: String,
-    /// Isotropic stiffness; `None` exactly when `orthotropic` is given.
+    /// Isotropic stiffness; absent for orthotropic and heat-only Materials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nu: Option<f64>,
-    /// Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+    /// Orthotropic stiffness in the material axes; absent for isotropic and heat-only Materials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orthotropic: Option<Orthotropic>,
     /// Where the material axes point; `None` means they are the global axes.

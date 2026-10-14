@@ -778,6 +778,23 @@ the cold one to 1e-9. A volumetric source in a slab held at both faces is checke
 own closed form `T = T_s + q(Lx − x²)/2k` in the same commit, which is the oracle for
 `load.heatSource`.
 
+**Thermal-only Materials (#493).** The registry's E1 steady profile and independent VTU reader,
+plus the Tet4/Tet10 profile at three mesh sizes, run with conductivity alone, without `E` or
+`nu`. The retained transient uniform-source Benchmark (`T(t) = t` for `q = rho cp = 6` in SI)
+likewise omits elastic stiffness at both orders and two mesh sizes. Its existing full-solve
+native (1 and 4 threads) versus wasm replay fixture carries only `k`, `rho` and `cp`, and
+continues to gate exact Journal hashes and analytical temperatures at every retained frame.
+The NAFEMS T3 registry companion strips elastic stiffness from the established fixture and
+checks decreasing error against the same 36.60 °C reference at t = 32 s for 10, 20 and 40
+longitudinal cells, retaining E3's 0.5 K tolerance on the finest mesh and an observed
+temperature convergence rate above 1.8 over the finest pair. Registry
+tests also reject incomplete or invalid thermal-only definitions and mechanical use, including
+a conductor referenced by a laminate ply, before elastic assembly.
+Known expansion and yield properties may remain stored on a thermal-only Material: their
+presence leaves the steady heat profile unchanged and does not supply mechanical stiffness.
+A rotated anisotropic conductor independently retains `Delta T = q L/k2` when a 90° rotation
+puts material axis 2 along the heated bar, preserving the existing orthotropic heat path.
+
 The registry's E1 VTU export is also read, unmodified, by the independent `vtkio` reader.
 Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
 in metres; the B1 export checks point-field tuple counts and mesh topology through the same
