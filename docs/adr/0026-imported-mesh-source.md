@@ -21,6 +21,11 @@ connectivity is never sorted or welded. Dense indices exist only in the derived 
 Unused source nodes survive in the authoritative source and exact source NSET memberships.
 They have no finite-element DOFs: the derived Mesh maps participating labels only and reports
 retained unused labels separately. Results cannot fabricate a zero displacement for them.
+The active source-label map covers the derived node prefix. Ordinary auxiliary point-mass
+nodes may follow that prefix, with their own named point Sets and no fabricated source
+labels. The imported Body's bounds and volume cover its participating element geometry;
+the complete derived Mesh bounds also include such auxiliary points. Unused authored
+coordinates affect only their exact source NSET bounds, never physical Body/Mesh framing.
 query.set reports the authored labels/count/extent, including unused members; a support or
 load targeting any unused member is explicitly unsupported. This derivation is reported,
 never an undocumented cleanup of authored data. Tet4 and standard full-integration Hex8 are

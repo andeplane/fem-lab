@@ -1955,18 +1955,13 @@ impl Engine {
             crate::model::MesherSettings::Imported(source) => Some(source),
             _ => None,
         };
-        let new_names = new_source.map(|s| s.set_names()).unwrap_or_default();
         let usable_names = new_source.map(|s| s.nonempty_set_names()).unwrap_or_default();
-        for name in &new_names {
-            if self.model.sets.iter().any(|s| s.name == *name) || self.model.points.iter().any(|p| p.name == *name) {
-                return Err(Error::new(
-                    ErrorCode::NameTaken,
-                    format!("imported Set '{name}' shadows an existing object"),
-                )
-                .at("mesher")
-                .suggest("mesh.set with distinct source Set or Body names"));
-            }
-        }
+        // Every source-owned Set is qualified with an ASCII dot. All public
+        // creation/rename/duplicate paths for user Sets and point masses call
+        // check_name, which rejects dots; production file open reconstructs
+        // those Commands through Candidate::file. These namespaces therefore
+        // cannot shadow each other in a valid Model. Only source references
+        // need a replacement guard; no invalid private snapshot is admitted.
         if let Some(MeshSettings { mesher: crate::model::MesherSettings::Imported(old), .. }) = &self.model.mesh {
             for name in old.set_names().difference(&usable_names) {
                 let users = set_users(&self.model, name);

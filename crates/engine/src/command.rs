@@ -661,19 +661,6 @@ pub struct SurfacePatchSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSpec {
-    /// An immutable authored finite-element mesh, with positive source labels and exact
-    /// memberships. Coordinates carry length units; connectivity is in source node labels,
-    /// never dense indices. Unused authored nodes and exact memberships survive in the Model,
-    /// with explicit unused-label reporting; only participating nodes have FE DOFs/Results.
-    /// Loads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard
-    /// full integration. Requires solid3d,
-    /// order 1, formulation full and no simplices/refinement; sweeping and size studies are
-    /// unsupported. Original cell maps and contacts require a conservative exact certificate;
-    /// uncertified geometry returns unsupported, without claiming invalidity or simplifying
-    /// warped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.
-    /// Coincident labelled nodes remain distinct. Replace the whole checked
-    /// source with mesh.set; named source Sets belong to the mesher and cannot be edited alone.
-    Imported(ImportedMeshSpec),
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
     Lattice {
@@ -741,6 +728,19 @@ pub enum MesherSpec {
         body: Option<String>,
         patches: Vec<SurfacePatchSpec>,
     },
+    /// An immutable authored finite-element mesh, with positive source labels and exact
+    /// memberships. Coordinates carry length units; connectivity is in source node labels,
+    /// never dense indices. Unused authored nodes and exact memberships survive in the Model,
+    /// with explicit unused-label reporting; only participating nodes have FE DOFs/Results.
+    /// Loads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard
+    /// full integration. Requires solid3d,
+    /// order 1, formulation full and no simplices/refinement; sweeping and size studies are
+    /// unsupported. Original cell maps and contacts require a conservative exact certificate;
+    /// uncertified geometry returns unsupported, without claiming invalidity or simplifying
+    /// warped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.
+    /// Coincident labelled nodes remain distinct. Replace the whole checked
+    /// source with mesh.set; named source Sets belong to the mesher and cannot be edited alone.
+    Imported(ImportedMeshSpec),
 }
 
 /// An authored finite-element source; I/O and parsing belong to hosts/converters.

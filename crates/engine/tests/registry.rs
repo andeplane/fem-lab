@@ -12956,6 +12956,115 @@ fn imported_source_preserves_labels_memberships_identity_and_replay() {
 }
 
 #[test]
+fn imported_far_unused_labels_keep_authored_extents_out_of_physical_bounds() {
+    let mut source: serde_json::Value = serde_json::from_str(IMPORTED_TET).unwrap();
+    source["mesher"]["nodes"][4]["at"] = serde_json::json!(["1000000 m", "-2000000 m", "3000000 m"]);
+    source["mesher"]["nodeSets"]["FAR"] = serde_json::json!([999]);
+    for threads in [1, 4] {
+        let mut e = Engine::new(None, Box::new(NoClock), threads);
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+        ok(&mut e, &source.to_string());
+        let physical = body_row(&mut e, 0);
+        assert_eq!(physical.bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+        assert_eq!(physical.measure.unit, "m^3");
+        assert!((physical.measure.value - 1. / 6.).abs() < 1e-15);
+        let summary = mesh_summary(&mut e);
+        assert_eq!(summary.nodes, 4);
+        assert_eq!(summary.bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+        let far = set_info(&mut e, "part.nset_FAR");
+        assert_eq!(far.count, 1);
+        assert_eq!(far.source_node_labels, Some(vec![999]));
+        assert_eq!(far.unused_source_node_labels, [999]);
+        assert_eq!(far.bbox.clone().map(|v| v.value), [1e6, -2e6, 3e6, 1e6, -2e6, 3e6]);
+        assert_eq!(far.centroid.clone().map(|v| v.value), [1e6, -2e6, 3e6]);
+        let file = e.export_file();
+        let stored = serde_json::to_value(&file).unwrap();
+        assert_eq!(stored["model"]["mesh"]["mesher"]["nodes"].as_array().unwrap().len(), 5);
+        assert_eq!(stored["model"]["mesh"]["mesher"]["nodes"][4]["at"], serde_json::json!([1e6, -2e6, 3e6]));
+        let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+        pollster::block_on(replayed.replay(&file.journal.entries, true, true)).unwrap();
+        assert_eq!(replayed.model_hash(), e.model_hash());
+        assert_eq!(body_row(&mut replayed, 0), physical);
+        assert_eq!(set_info(&mut replayed, "part.nset_FAR"), far);
+
+        // Auxiliary points have their own identity after the authored active prefix.
+        ok(&mut e, r#"{"cmd":"geometry.addMass","name":"lug","at":["2 m","-3 m","4 m"],"mass":"1 kg"}"#);
+        let built = e.mesh().unwrap().clone();
+        assert_eq!(built.mesh.n_nodes(), 5);
+        assert_eq!(built.source_labels.nodes, [10, 77, 88, 301]);
+        assert_eq!(built.source_labels.unused_nodes, [999]);
+        assert_eq!(built.mesh.elem_nodes(0), [0, 1, 2, 3]);
+        assert_eq!(built.sets["lug"].nodes, [4]);
+        assert_eq!(built.mesh.node(4), [2., -3., 4.]);
+        assert_eq!(body_row(&mut e, 0), physical);
+        assert_eq!(mesh_summary(&mut e).bbox.clone().map(|v| v.value), [0., -3., 0., 2., 1., 4.]);
+        let lug = set_info(&mut e, "lug");
+        assert_eq!(lug.count, 1);
+        assert_eq!(lug.source_node_labels, None);
+        assert!(lug.unused_source_node_labels.is_empty());
+        assert_eq!(set_info(&mut e, "part.nset_FAR"), far);
+        let file = e.export_file();
+        let mut reopened = Engine::new(None, Box::new(NoClock), threads);
+        reopened.import_file(file.clone()).unwrap();
+        assert_eq!(reopened.export_file(), file);
+        assert_eq!(reopened.mesh().unwrap(), &built);
+    }
+}
+
+#[test]
+fn imported_finite_coordinates_with_unrepresentable_jacobians_fail_atomically() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let before = e.export_file();
+    for tetrahedra in [false, true] {
+        for scale in [1e150, 1e-150] {
+            let mut source = imported_bar_source(1, tetrahedra);
+            for node in source["mesher"]["nodes"].as_array_mut().unwrap() {
+                for q in node["at"].as_array_mut().unwrap() {
+                    let value: f64 = q.as_str().unwrap().split_whitespace().next().unwrap().parse().unwrap();
+                    *q = serde_json::json!(format!("{} m", value * scale));
+                }
+            }
+            let error = err(&mut e, &source.to_string());
+            assert_eq!(error.code, ErrorCode::MeshFailed);
+            assert!(error.where_.unwrap().starts_with("mesher.elements["));
+            assert!(error.cause.contains("nonfinite Jacobian"));
+            assert_eq!(e.export_file(), before);
+        }
+    }
+}
+
+#[test]
+fn imported_corner_inversion_is_rejected_even_when_full_gauss_points_are_positive() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let before = e.export_file();
+    // F=(s,s*t+r/8,t/8+s*r), detJ=s²-1/64. Both Gauss
+    // abscissae exceed 1/8, but the whole s=0 corner face is inverted.
+    let mut source = imported_bar_source(1, false);
+    for node in source["mesher"]["nodes"].as_array_mut().unwrap() {
+        let values: Vec<f64> = node["at"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q.as_str().unwrap().split_whitespace().next().unwrap().parse().unwrap())
+            .collect();
+        let [s, t, r] = [values[0], 10. * values[1], 10. * values[2]];
+        node["at"] =
+            serde_json::json!([format!("{s} m"), format!("{} m", s * t + r / 8.), format!("{} m", t / 8. + s * r)]);
+    }
+    for s in [(1. - 1. / 3f64.sqrt()) / 2., (1. + 1. / 3f64.sqrt()) / 2.] {
+        assert!(s * s - 1. / 64. > 0.);
+    }
+    assert_eq!(0. - 1. / 64., -1. / 64.);
+    let error = err(&mut e, &source.to_string());
+    assert_eq!(error.code, ErrorCode::MeshFailed);
+    assert_eq!(error.where_.as_deref(), Some("mesher.elements[401]"));
+    assert_eq!(error.cause, "imported element has an inverted or degenerate corner Jacobian");
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
 fn imported_source_replacement_undo_redo_restores_exact_authored_data() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);
@@ -13346,6 +13455,7 @@ fn imported_unused_coincident_labels_survive_without_unsolved_or_fabricated_dofs
 #[test]
 fn imported_source_accepts_original_warped_hexes_and_reports_certificate_failures_atomically() {
     let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
     ok(&mut e, IMPORTED_TET);
     let before = e.export_file();
     let reference = [
@@ -13400,14 +13510,143 @@ fn imported_source_accepts_original_warped_hexes_and_reports_certificate_failure
             .enumerate()
             .map(|(i, p)| serde_json::json!({"label":labels(i),"at":p.map(|v|format!("{v} m"))}))
             .collect();
-        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"imported","body":"part","nodes":nodes,"elements":[{"label":409,"kind":"hex8","nodes":([0,4,5,1,3,7,6,2].map(labels))},{"label":819,"kind":"hex8","nodes":([4,8,9,5,7,11,10,6].map(labels))}],"surfaces":{"INTERFACE":[{"element":409,"face":4},{"element":819,"face":6}]}}});
+        let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"imported","body":"part","nodes":nodes,"elements":[{"label":409,"kind":"hex8","nodes":([0,4,5,1,3,7,6,2].map(labels))},{"label":819,"kind":"hex8","nodes":([4,8,9,5,7,11,10,6].map(labels))}],"elementSets":{"LEFT":[409],"RIGHT":[819],"ALL":[409,819]},"surfaces":{"LEFT":[{"element":409,"face":4}],"RIGHT":[{"element":819,"face":6}],"INTERFACE":[{"element":409,"face":4},{"element":819,"face":6}]}}});
         ok(&mut e, &command.to_string());
         let mesh = e.mesh().unwrap();
         assert_eq!(mesh.mesh.n_elems(), 2);
         assert_eq!(mesh.mesh.n_nodes(), 12);
         assert_eq!(mesh.sets["part.surface_INTERFACE"].faces.len(), 2);
         assert_eq!(mesh.source_labels.elements, [409, 819]);
+        let a = height - 1.;
+        let body = body_row(&mut e, 0);
+        assert_eq!(body.bbox.clone().map(|v| v.value), [0., 0., 0., 2., 1., 1.]);
+        assert_eq!(body.measure.unit, "m^3");
+        assert!((body.measure.value - 2.).abs() < 1e-14);
+        let left_volume = set_info(&mut e, "part.elset_LEFT");
+        let right_volume = set_info(&mut e, "part.elset_RIGHT");
+        assert!((left_volume.measure.value - (1. + a / 4.)).abs() < 1e-14);
+        assert!((right_volume.measure.value - (1. - a / 4.)).abs() < 1e-14);
+        assert!((set_info(&mut e, "part.elset_ALL").measure.value - 2.).abs() < 1e-14);
+        let left_face = set_info(&mut e, "part.surface_LEFT");
+        let right_face = set_info(&mut e, "part.surface_RIGHT");
+        let r = libm::sqrt(1. + 2. * a * a);
+        let exact_area =
+            (r + (a * a + 3.) / a * libm::asinh(a / libm::sqrt(1. + a * a)) - libm::atan(a * a / r) / (a * a)) / 3.;
+        assert!((left_face.measure.value - exact_area).abs() < 1e-5);
+        assert!((left_face.measure.value - right_face.measure.value).abs() < 2e-14);
+        assert!((left_face.pressure_area.as_ref().unwrap().value - left_face.measure.value).abs() < 2e-14);
+        assert!((right_face.pressure_area.as_ref().unwrap().value - right_face.measure.value).abs() < 2e-14);
+        assert!(
+            (set_info(&mut e, "part.surface_INTERFACE").measure.value - 2. * left_face.measure.value).abs() < 2e-14
+        );
+        let file = e.export_file();
+        let mut replayed = engine();
+        pollster::block_on(replayed.replay(&file.journal.entries, true, true)).unwrap();
+        assert_eq!(replayed.model_hash(), e.model_hash());
+        assert_eq!(body_row(&mut replayed, 0), body);
+        assert_eq!(set_info(&mut replayed, "part.elset_LEFT"), left_volume);
+        assert_eq!(set_info(&mut replayed, "part.elset_RIGHT"), right_volume);
+        assert_eq!(set_info(&mut replayed, "part.surface_LEFT"), left_face);
+        assert_eq!(set_info(&mut replayed, "part.surface_RIGHT"), right_face);
     }
+}
+
+#[test]
+fn imported_original_body_and_set_measures_converge_with_transverse_refinement() {
+    // The source is an independent Cartesian partition of the two exact maps
+    // Fleft=(s*(1+y*z/4),y,z), Fright=(1+y*z/4+s*(1-y*z/4),y,z).
+    // Their exact volumes are 17/16 and 15/16; the common face is x=1+y*z/4.
+    let a: f64 = 0.25;
+    let r = libm::sqrt(1. + 2. * a * a);
+    let exact_area =
+        (r + (a * a + 3.) / a * libm::asinh(a / libm::sqrt(1. + a * a)) - libm::atan(a * a / r) / (a * a)) / 3.;
+    let mut thread_values = Vec::new();
+    for threads in [1, 4] {
+        let mut values = Vec::new();
+        let mut previous_error = None;
+        for n in [1usize, 2, 4, 8] {
+            let label = |plane: usize, y: usize, z: usize| 101 + 13 * (plane * (n + 1) * (n + 1) + y * (n + 1) + z);
+            let mut nodes = Vec::new();
+            for plane in 0..3 {
+                for y in 0..=n {
+                    for z in 0..=n {
+                        let yy = y as f64 / n as f64;
+                        let zz = z as f64 / n as f64;
+                        let x = if plane == 1 { 1. + a * yy * zz } else { plane as f64 };
+                        nodes.push(serde_json::json!({"label":label(plane,y,z),"at":[format!("{x} m"),format!("{yy} m"),format!("{zz} m")]}));
+                    }
+                }
+            }
+            nodes.push(serde_json::json!({"label":999999,"at":["1000000 m","1000000 m","1000000 m"]}));
+            let mut elements = Vec::new();
+            let mut left_elements = Vec::new();
+            let mut right_elements = Vec::new();
+            let mut left_faces = Vec::new();
+            let mut right_faces = Vec::new();
+            for plane in 0..2 {
+                for y in 0..n {
+                    for z in 0..n {
+                        let element = 401 + 17 * ((plane * n + y) * n + z);
+                        let conn = [
+                            label(plane, y, z),
+                            label(plane + 1, y, z),
+                            label(plane + 1, y + 1, z),
+                            label(plane, y + 1, z),
+                            label(plane, y, z + 1),
+                            label(plane + 1, y, z + 1),
+                            label(plane + 1, y + 1, z + 1),
+                            label(plane, y + 1, z + 1),
+                        ];
+                        elements.push(serde_json::json!({"label":element,"kind":"hex8","nodes":conn}));
+                        if plane == 0 {
+                            left_elements.push(element);
+                            left_faces.push(serde_json::json!({"element":element,"face":4}));
+                        } else {
+                            right_elements.push(element);
+                            right_faces.push(serde_json::json!({"element":element,"face":6}));
+                        }
+                    }
+                }
+            }
+            nodes.reverse();
+            elements.reverse();
+            let command = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"imported","body":"part",
+                "nodes":nodes,"elements":elements,"nodeSets":{"FAR":[999999]},
+                "elementSets":{"LEFT":left_elements,"RIGHT":right_elements},
+                "surfaces":{"LEFT":left_faces,"RIGHT":right_faces}}});
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+            ok(&mut e, &command.to_string());
+            let before = e.model_hash();
+            let body = body_row(&mut e, 0);
+            assert_eq!(body.bbox.clone().map(|v| v.value), [0., 0., 0., 2., 1., 1.]);
+            assert!((body.measure.value - 2.).abs() < 2e-14);
+            assert!((set_info(&mut e, "part.elset_LEFT").measure.value - 17. / 16.).abs() < 2e-14);
+            assert!((set_info(&mut e, "part.elset_RIGHT").measure.value - 15. / 16.).abs() < 2e-14);
+            let left = set_info(&mut e, "part.surface_LEFT");
+            let right = set_info(&mut e, "part.surface_RIGHT");
+            assert_eq!(left.count, (n * n) as u32);
+            assert!((left.measure.value - right.measure.value).abs() < 2e-14);
+            assert!((left.pressure_area.as_ref().unwrap().value - left.measure.value).abs() < 2e-14);
+            let error = (left.measure.value - exact_area).abs();
+            assert!(error < 5e-6);
+            if let Some(previous) = previous_error {
+                let order = libm::log(previous / error) / libm::log(2.);
+                assert!((3.8..4.2).contains(&order), "source face query convergence {order}");
+            }
+            previous_error = Some(error);
+            assert_eq!(e.model_hash(), before);
+            let file = e.export_file();
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&file.journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), before);
+            assert_eq!(set_info(&mut replayed, "part.surface_LEFT"), left);
+            assert_eq!(set_info(&mut replayed, "part.surface_RIGHT"), right);
+            values.push((before, left.measure.value));
+        }
+        thread_values.push(values);
+    }
+    assert_eq!(thread_values[0], thread_values[1]);
 }
 
 #[test]

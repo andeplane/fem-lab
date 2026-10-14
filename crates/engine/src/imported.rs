@@ -43,7 +43,8 @@ pub struct ImportedMesh {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceLabels {
-    /// Participating source labels in dense FE node order; Results use only these nodes.
+    /// Participating authored labels in dense FE node order, forming the derived node
+    /// prefix. Ordinary auxiliary nodes may follow without authored source labels.
     pub nodes: Vec<u32>,
     pub elements: Vec<u32>,
     /// Retained in the Model source, with no FE DOF or fabricated Result value.
@@ -382,7 +383,7 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
         }
     }
     let quality = femlab_geometry::quality(mesh, 1);
-    if !(quality.min_det_j_ratio > 0.0) {
+    if quality.min_det_j_ratio.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return Err(Error::new(
             ErrorCode::MeshFailed,
             "imported element has an inverted or degenerate corner Jacobian",
@@ -442,4 +443,37 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod input_policy_tests {
+    use super::*;
+
+    #[test]
+    fn authored_input_limits_accept_the_boundary_and_reject_the_next_entity() {
+        // Literal policy boundaries from the public schema doc, independent of
+        // allocation or the particular malformed geometry that follows them.
+        bounds(250_000, 250_000, 1_000_000).unwrap();
+        for (nodes, elements, memberships) in
+            [(0, 1, 0), (1, 0, 0), (250_001, 1, 0), (1, 250_001, 0), (1, 1, 1_000_001)]
+        {
+            assert_eq!(bounds(nodes, elements, memberships).unwrap_err().code, ErrorCode::Schema);
+        }
+    }
+
+    #[test]
+    fn source_label_and_set_name_boundaries_follow_the_declared_grammar() {
+        for value in [1, 999_999_999] {
+            label(value, "label").unwrap();
+        }
+        for value in [0, 1_000_000_000] {
+            assert_eq!(label(value, "label").unwrap_err().code, ErrorCode::Schema);
+        }
+        for value in ["ROOT", "NODES_1-A", &"A".repeat(80)] {
+            source_name(value, "name").unwrap();
+        }
+        for value in ["", "1ROOT", "root", "A.B", "A+B", "Ä", &"A".repeat(81)] {
+            assert_eq!(source_name(value, "name").unwrap_err().code, ErrorCode::Schema);
+        }
+    }
 }

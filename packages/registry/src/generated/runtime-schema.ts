@@ -3399,88 +3399,6 @@ const commands = {
       "description": "The mesher and its settings.",
       "oneOf": [
         {
-          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.",
-          "type": "object",
-          "properties": {
-            "body": {
-              "type": "string"
-            },
-            "nodes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ImportedNodeSpec"
-              }
-            },
-            "elements": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/ImportedElement"
-              }
-            },
-            "nodeSets": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "uint32",
-                  "minimum": 0
-                }
-              }
-            },
-            "elementSets": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "array",
-                "items": {
-                  "type": "integer",
-                  "format": "uint32",
-                  "minimum": 0
-                }
-              }
-            },
-            "surfaces": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/ImportedFace"
-                }
-              }
-            },
-            "nodeTargets": {
-              "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
-              "type": "array",
-              "items": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              }
-            },
-            "provenance": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ImportedProvenance"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "kind": {
-              "type": "string",
-              "const": "imported"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "kind",
-            "body",
-            "nodes",
-            "elements"
-          ]
-        },
-        {
           "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
           "type": "object",
           "properties": {
@@ -3630,6 +3548,88 @@ const commands = {
           "required": [
             "kind",
             "patches"
+          ]
+        },
+        {
+          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.",
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "nodes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ImportedNodeSpec"
+              }
+            },
+            "elements": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ImportedElement"
+              }
+            },
+            "nodeSets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              }
+            },
+            "elementSets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              }
+            },
+            "surfaces": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ImportedFace"
+                }
+              }
+            },
+            "nodeTargets": {
+              "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "provenance": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ImportedProvenance"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "imported"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "body",
+            "nodes",
+            "elements"
           ]
         }
       ]

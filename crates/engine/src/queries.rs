@@ -133,7 +133,20 @@ impl Engine {
         let name = self.model.implicit_body()?.to_string();
         self.mesh().ok()?;
         let built = self.mesh.as_ref().expect("built above");
-        let (lo, hi) = built.mesh.bbox();
+        let imported =
+            matches!(self.model.mesh.as_ref().map(|m| &m.mesher), Some(crate::model::MesherSettings::Imported(_)));
+        let (lo, hi) = if imported {
+            // The imported Body is its element-participating authored prefix.
+            // Appended point-mass nodes belong to their own Model points, and
+            // unused source coordinates remain solely in the persistent source.
+            let coordinates = &built.mesh.coords[..3 * built.source_labels.nodes.len()];
+            let lo = std::array::from_fn(|k| coordinates.chunks_exact(3).map(|p| p[k]).fold(f64::INFINITY, f64::min));
+            let hi =
+                std::array::from_fn(|k| coordinates.chunks_exact(3).map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max));
+            (lo, hi)
+        } else {
+            built.mesh.bbox()
+        };
         let dim = if built.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
             2
         } else {
@@ -141,8 +154,6 @@ impl Engine {
         };
         let measure: f64 = (0..built.mesh.n_elems() as u32).map(|e| elem_measure(&built.mesh, e)).sum();
         let prefix = format!("{name}.");
-        let imported =
-            matches!(self.model.mesh.as_ref().map(|m| &m.mesher), Some(crate::model::MesherSettings::Imported(_)));
         let faces = built
             .sets
             .iter()

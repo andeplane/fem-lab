@@ -1863,26 +1863,6 @@ export type Axis = "x" | "y" | "z";
  */
 export type MesherSpec =
   | {
-      body: string;
-      nodes: ImportedNodeSpec[];
-      elements: ImportedElement[];
-      nodeSets?: {
-        [k: string]: number[] | undefined;
-      };
-      elementSets?: {
-        [k: string]: number[] | undefined;
-      };
-      surfaces?: {
-        [k: string]: ImportedFace[] | undefined;
-      };
-      /**
-       * Allocate <body>.node_<label> targets only for requested numeric node references.
-       */
-      nodeTargets?: number[];
-      provenance?: ImportedProvenance | null;
-      kind: "imported";
-    }
-  | {
       size: LatticeSize;
       /**
        * Optional positive element lengths keyed by existing Body name. Each entry overrides
@@ -1947,11 +1927,27 @@ export type MesherSpec =
       body?: string | null;
       patches: SurfacePatchSpec[];
       kind: "surface";
+    }
+  | {
+      body: string;
+      nodes: ImportedNodeSpec[];
+      elements: ImportedElement[];
+      nodeSets?: {
+        [k: string]: number[] | undefined;
+      };
+      elementSets?: {
+        [k: string]: number[] | undefined;
+      };
+      surfaces?: {
+        [k: string]: ImportedFace[] | undefined;
+      };
+      /**
+       * Allocate <body>.node_<label> targets only for requested numeric node references.
+       */
+      nodeTargets?: number[];
+      provenance?: ImportedProvenance | null;
+      kind: "imported";
     };
-/**
- * Only the explicitly supported standard, first-order 3D solids.
- */
-export type ImportedElementKind = "tet4" | "hex8";
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
  */
@@ -2162,6 +2158,10 @@ export type SurfaceProjectionSpec =
           };
       kind: "cylinder";
     };
+/**
+ * Only the explicitly supported standard, first-order 3D solids.
+ */
+export type ImportedElementKind = "tet4" | "hex8";
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
@@ -6034,66 +6034,6 @@ export interface ShellPlySpec {
       )
     | null;
 }
-export interface ImportedNodeSpec {
-  /**
-   * Positive original node label, at most 999999999.
-   */
-  label: number;
-  /**
-   * @minItems 3
-   * @maxItems 3
-   *
-   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-   */
-  at: [
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    ),
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    ),
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    )
-  ];
-}
-export interface ImportedElement {
-  label: number;
-  kind: ImportedElementKind;
-  /**
-   * Source node labels in Abaqus connectivity order, exactly four or eight.
-   */
-  nodes: number[];
-}
-export interface ImportedFace {
-  /**
-   * Original element label.
-   */
-  element: number;
-  /**
-   * Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
-   */
-  face: number;
-}
-export interface ImportedProvenance {
-  /**
-   * SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.
-   */
-  sha256: string;
-  conversionVersion: string;
-}
 /**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
@@ -6372,6 +6312,66 @@ export interface SurfacePatchSpec {
    */
   tags?: [string | null, string | null, string | null, string | null] | null;
   projection?: SurfaceProjectionSpec | null;
+}
+export interface ImportedNodeSpec {
+  /**
+   * Positive original node label, at most 999999999.
+   */
+  label: number;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  at: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+}
+export interface ImportedElement {
+  label: number;
+  kind: ImportedElementKind;
+  /**
+   * Source node labels in Abaqus connectivity order, exactly four or eight.
+   */
+  nodes: number[];
+}
+export interface ImportedFace {
+  /**
+   * Original element label.
+   */
+  element: number;
+  /**
+   * Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
+   */
+  face: number;
+}
+export interface ImportedProvenance {
+  /**
+   * SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.
+   */
+  sha256: string;
+  conversionVersion: string;
 }
 /**
  * Local maximum edge lengths applied after the chosen mesher. Bounds are world
@@ -7070,7 +7070,8 @@ export interface MeshSummary {
  */
 export interface SourceLabels {
   /**
-   * Participating source labels in dense FE node order; Results use only these nodes.
+   * Participating authored labels in dense FE node order, forming the derived node
+   * prefix. Ordinary auxiliary nodes may follow without authored source labels.
    */
   nodes: number[];
   elements: number[];

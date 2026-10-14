@@ -2202,6 +2202,24 @@ that skips solves), source mappings, authored Set counts and retained surface id
 across native one/four threads and WASM. Both hosts independently satisfy the axial
 closed forms above for every active displacement, stress sample and total reaction.
 
+`imported_original_body_and_set_measures_converge_with_transverse_refinement` authors
+the two exact Hex8 maps separated by `x=1+yz/4` directly at 1/2/4/8 transverse
+subdivisions. Physical Body volume remains `2 m³`; LEFT/RIGHT ELSET volumes are
+`17/16 m³` and `15/16 m³`. Both source face owners agree with each other and the
+physical pressure quadrature, while their area converges to the independent analytic
+value `1.0205395019733228 m²` at order `[3.8,4.2]`. Source save/replay and every
+reported value are identical at one/four threads. A retained unused label at
+`(1e6,1e6,1e6) m` never changes these physical bounds or measures.
+
+`imported_far_unused_labels_keep_authored_extents_out_of_physical_bounds` separates
+the unit Tet's `1/6 m³` and unit physical bounds from an unused authored node at
+`(1e6,-2e6,3e6) m`, whose exact NSET bounds, membership and coordinates survive
+save/replay. An ordinary auxiliary point at `(2,-3,4) m` appends after the four active
+source nodes, keeps its independent point Set and extends the complete derived Mesh
+bounds, while the imported Body retains its own extent. Finite coordinate scales
+`1e150` and `1e-150` give unrepresentable floating Jacobians and fail atomically with
+the original element label, even though exact positive scaling preserves cell validity.
+
 ### Original linear-cell query measurements (#523)
 
 The hand-authored Hex8 pair fills `0<=x<=2`, `0<=y,z<=1`, with shared
