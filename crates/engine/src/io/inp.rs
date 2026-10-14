@@ -70,11 +70,16 @@ fn abaqus_type(kind: ElementKind) -> &'static str {
     }
 }
 
-/// Writes `fields` as one Abaqus data record: at most 16 comma-separated values per line, wrapped
-/// onto further lines with no continuation marker (Abaqus's free-format reader does not need one).
-fn write_record(s: &mut String, fields: &[String]) {
-    for chunk in fields.chunks(16) {
+/// Writes at most 16 comma-separated values per line. Element connectivity is one logical
+/// record, so its intermediate lines end with a comma (Abaqus ELEMENT, 2025). Node and Set
+/// membership lines are independent data records and do not use continuation markers.
+fn write_record(s: &mut String, fields: &[String], continuation: bool) {
+    let mut chunks = fields.chunks(16).peekable();
+    while let Some(chunk) = chunks.next() {
         s.push_str(&chunk.join(", "));
+        if continuation && chunks.peek().is_some() {
+            s.push(',');
+        }
         s.push('\n');
     }
 }
@@ -89,7 +94,7 @@ pub fn write_inp(mesh: &Mesh, part_name: &str) -> Result<String, Error> {
 
     s.push_str("*NODE\n");
     for (n, c) in mesh.coords.chunks_exact(3).enumerate() {
-        write_record(&mut s, &[(n + 1).to_string(), c[0].to_string(), c[1].to_string(), c[2].to_string()]);
+        write_record(&mut s, &[(n + 1).to_string(), c[0].to_string(), c[1].to_string(), c[2].to_string()], false);
     }
 
     for (i, blk) in mesh.blocks.iter().enumerate() {
@@ -101,7 +106,7 @@ pub fn write_inp(mesh: &Mesh, part_name: &str) -> Result<String, Error> {
             let elem_id = blk.first_elem as usize + e + 1;
             let mut fields = vec![elem_id.to_string()];
             fields.extend(en.iter().map(|&n| (n + 1).to_string()));
-            write_record(&mut s, &fields);
+            write_record(&mut s, &fields, true);
         }
     }
 
@@ -109,14 +114,14 @@ pub fn write_inp(mesh: &Mesh, part_name: &str) -> Result<String, Error> {
         let name = label(name, &format!("node Set {name:?}"))?;
         s.push_str(&format!("*NSET, NSET={name}\n"));
         let fields: Vec<String> = set.iter().map(|&n| (n + 1).to_string()).collect();
-        write_record(&mut s, &fields);
+        write_record(&mut s, &fields, false);
     }
 
     for (name, set) in &mesh.elem_sets {
         let name = label(name, &format!("element Set {name:?}"))?;
         s.push_str(&format!("*ELSET, ELSET={name}\n"));
         let fields: Vec<String> = set.iter().map(|&e| (e + 1).to_string()).collect();
-        write_record(&mut s, &fields);
+        write_record(&mut s, &fields, false);
     }
 
     for (name, set) in &mesh.face_sets {
