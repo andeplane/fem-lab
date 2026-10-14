@@ -35,6 +35,18 @@ Missing configuration disables payment handling without disabling free AI. Sched
 recovery retries failed inbox items; failures emit an error event and fail the job.
 No live Stripe account or payment is configured by the fixtures in this repository.
 
+`POST /v1/billing/checkout` accepts only `{plan: "plus"|"pro"|"studio"}`.
+`POST /v1/billing/portal` accepts `{}`. Customer/price/return URLs are server-owned.
+`POST /v1/billing/plan` schedules a tier change at the next period; its durable
+operation is retried by recovery with the same Stripe idempotency key. It grants
+no current credits. Checkout repeats reuse one account-owned intent; active paid
+periods/subscriptions prevent another checkout. Redirect success grants nothing.
+
+Activation additionally requires `STRIPE_PORTAL_CONFIGURATION`, an HTTPS
+`APP_RETURN_ORIGIN`, matching key/test/live mode, and explicit `BILLING_ENABLED=true`.
+The default remains disabled. Configure seller identity, terms, tax/market settings
+and the Portal's cancellation/payment-method features before enabling paid checkout.
+
 The Node host is separate from the headless Rust engine. It shares provider blocks,
 completed tool/continuation events and versioned request schemas with the browser
 through `@femlab/ai`. OpenAI clients, identity, storage, clock and request IDs are

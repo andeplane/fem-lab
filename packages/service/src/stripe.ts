@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import type {BillingEnvelope,BillingGateway} from './billing';
+import type {Payments} from './checkout';
 
 const identity=(value:string|{id:string})=>typeof value==='string'?value:value.id;
 /** The SDK receives the raw webhook bytes and the host clock; public payloads contain no payment PII. */
@@ -31,6 +32,52 @@ export function stripeGateway(client:Stripe,webhookSecret:string):BillingGateway
     async chargeCustomer(id) {
       const charge=id.startsWith('dp_')?await client.charges.retrieve(identity((await client.disputes.retrieve(id)).charge)):await client.charges.retrieve(id);
       return charge.customer?identity(charge.customer):null;
+    },
+  };
+}
+
+/** Hosted Checkout/Portal only: card/payment credentials never pass through FEM Lab. */
+export function stripePayments(client:Stripe,portalConfiguration:string,projectId:string):Payments {
+  return {
+    async customer(account,key) {
+      const existing=await client.customers.search({query:`metadata['femlab_account_id']:'${account.id}' AND metadata['femlab_project']:'${projectId}'`,limit:2});
+      if(existing.data.length>1)throw new Error('Ambiguous payment customer.');
+      if(existing.data[0])return existing.data[0].id;
+      return (await client.customers.create({email:account.email,metadata:{femlab_account_id:account.id,femlab_project:projectId}},{idempotencyKey:key})).id;
+    },
+    async price(id) {
+      const price=await client.prices.retrieve(id);
+      return {id:price.id,active:price.active,currency:price.currency,amount:price.unit_amount,interval:price.recurring?.interval??null,intervalCount:price.recurring?.interval_count??null};
+    },
+    async subscriptions(customer) {
+      const result=[];
+      for await(const subscription of client.subscriptions.list({customer,status:'all',limit:100})) {
+        const item=subscription.items.data[0];
+        if(subscription.items.data.length!==1||item?.quantity!==1)throw new Error('Unsupported subscription items.');
+        result.push({id:subscription.id,customerId:identity(subscription.customer),status:subscription.status,priceId:item.price.id,start:item.current_period_start,end:item.current_period_end,scheduleId:subscription.schedule?identity(subscription.schedule):null});
+        if(result.length>100)throw new Error('Subscription count exceeds the supported limit.');
+      }
+      return result;
+    },
+    async checkout(input) {
+      const session=await client.checkout.sessions.create({mode:'subscription',customer:input.customer,client_reference_id:input.accountId,
+        line_items:[{price:input.price,quantity:1}],success_url:input.successUrl,cancel_url:input.cancelUrl,expires_at:input.expiresAt,
+        automatic_tax:{enabled:true},customer_update:{address:'auto'},billing_address_collection:'required',
+        consent_collection:{terms_of_service:'required'},allow_promotion_codes:false,
+        subscription_data:{metadata:{femlab_account_id:input.accountId,femlab_project:projectId}},
+      },{idempotencyKey:input.key});
+      return {id:session.id,url:session.url,expiresAt:session.expires_at,status:session.status};
+    },
+    async session(id) {const session=await client.checkout.sessions.retrieve(id);return {id:session.id,url:session.url,expiresAt:session.expires_at,status:session.status};},
+    async portal(customer,returnUrl) {return (await client.billingPortal.sessions.create({customer,return_url:returnUrl,configuration:portalConfiguration})).url;},
+    async schedule(subscription,price,key) {
+      const schedule=subscription.scheduleId?await client.subscriptionSchedules.retrieve(subscription.scheduleId):await client.subscriptionSchedules.create({from_subscription:subscription.id},{idempotencyKey:`femlab-schedule:${subscription.id}`});
+      if(schedule.subscription&&identity(schedule.subscription)!==subscription.id)throw new Error('Schedule subscription mismatch.');
+      await client.subscriptionSchedules.update(schedule.id,{end_behavior:'release',proration_behavior:'none',phases:[
+        {start_date:subscription.start,end_date:subscription.end,items:[{price:subscription.priceId,quantity:1}],proration_behavior:'none'},
+        {start_date:subscription.end,duration:{interval:'month',interval_count:1},items:[{price,quantity:1}],proration_behavior:'none'},
+      ]},{idempotencyKey:key});
+      return schedule.id;
     },
   };
 }
