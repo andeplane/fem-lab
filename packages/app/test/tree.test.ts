@@ -133,6 +133,25 @@ describe('treeGroups', () => {
     });
   });
 
+  it('shows conductivity and specific heat on a thermal material without mechanical placeholders', () => {
+    const s = state({ ...MODEL, materials: [{ name: 'slab', rho: v(7200, 'kg/m^3'), k: v(35, 'W/(m K)'), cp: v(440.5, 'J/(kg K)'), assignedTo: ['beam'] }] });
+    const item = group(s, 'Materials').items[0]!;
+    expect(item.summary).toBe('ρ 7200 kg/m^3 · k 35 W/(m K) · cp 440.5 J/(kg K) · on beam');
+    expect(item.properties?.map((property) => property.key)).toEqual(['rho', 'k', 'cp', 'assignment']);
+    expect(item.summary).not.toContain('undefined');
+    expect(item.summary).not.toContain('E ');
+  });
+
+  it('keeps expansion, plasticity, citation and material-axis properties visible in a fixed order', () => {
+    const s = state({ ...MODEL, materials: [{
+      name: 'combined', nu: 0, E: v(210_000, 'MPa'), rho: v(7850, 'kg/m^3'),
+      alpha: [v(1e-5, '1/K'), v(2e-5, '1/K'), v(3e-5, '1/K')],
+      k: [v(1, 'W/(m K)'), v(2, 'W/(m K)'), v(3, 'W/(m K)')], cp: v(460, 'J/(kg K)'),
+      orientation: { axis: [0, 0, 1], degrees: 30 }, yield: v(355, 'MPa'), plasticity: true, source: 'measured', assignedTo: [],
+    }] });
+    expect(group(s, 'Materials').items[0]!.summary).toBe('E 210000 MPa · ν 0 · axes 30° · ρ 7850 kg/m^3 · α [0.00001 1/K, 0.00002 1/K, 0.00003 1/K] · k [1 W/(m K), 2 W/(m K), 3 W/(m K)] · cp 460 J/(kg K) · yield 355 MPa · plasticity · source measured · on nothing');
+  });
+
   it('warns on Mesh when there are Bodies but no mesh settings, which no engine warning covers', () => {
     const s = state({ ...MODEL, meshSettings: null } as ModelSummary);
     expect(group(s, 'Mesh').badge).toBe('1 warning');

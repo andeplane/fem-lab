@@ -9,6 +9,7 @@ import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 import { humanise } from './schema';
 import { procedureSummary } from './procedures';
+import { materialProperties, type MaterialProperty } from './materialSummary';
 
 export interface TreeItem {
   /** The Command a click puts in the Properties form, with the object read back as its arguments. */
@@ -19,6 +20,8 @@ export interface TreeItem {
   glyphClass: string;
   name: string;
   summary: string;
+  /** Material properties wrap individually so all configured thermal data stays visible. */
+  properties?: MaterialProperty[];
   /** `selection.set` arguments for "select in viewer"; empty for objects the viewer cannot show. */
   select: Record<string, unknown>;
   /** The `*.remove` Command for this kind, if it has one. */
@@ -207,18 +210,22 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       'Materials',
       'Assign Materials to Bodies. Each Step uses the mechanical or thermal properties it needs.',
       { what: 'material', cmd: 'material.add' },
-      (m?.materials ?? []).map((x) => ({
-        cmd: 'form.edit',
-        args: { kind: 'material', name: x.name },
-        run: true,
-        kind: 'material',
-        glyph: '●',
-        glyphClass: 'glyph mat',
-        name: x.name,
-        summary: `${x.orthotropic ? `E1 ${q(x.orthotropic.E1)} · E2 ${q(x.orthotropic.E2)}` : `E ${q(x.E)} · ν ${x.nu}`}${x.orientation ? ` · axes ${Number(x.orientation.degrees.toPrecision(4))}°` : ''}${x.rho ? ` · ρ ${q(x.rho)}` : ''} · on ${x.assignedTo.join(', ') || 'nothing'}`,
-        select: { bodies: x.assignedTo },
-        remove: 'material.remove',
-      })),
+      (m?.materials ?? []).map((x) => {
+        const properties = [...materialProperties(x), { key: 'assignment', text: `on ${x.assignedTo.join(', ') || 'nothing'}` }];
+        return {
+          cmd: 'form.edit',
+          args: { kind: 'material', name: x.name },
+          run: true,
+          kind: 'material',
+          glyph: '●',
+          glyphClass: 'glyph mat',
+          name: x.name,
+          summary: properties.map((property) => property.text).join(' · '),
+          properties,
+          select: { bodies: x.assignedTo },
+          remove: 'material.remove',
+        };
+      }),
     ),
     group(
       'Mesh',
@@ -469,7 +476,9 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           <span class={item.glyphClass}>{item.glyph}</span>
                           <span class="row-text">
                             <span class="mono name">{item.name}</span>
-                            <span class="summary">{item.summary}</span>
+                            <span class={`summary${item.properties ? ' material-summary' : ''}`}>
+                              {item.properties ? item.properties.map((property, index) => <span class="material-property" key={property.key}>{index > 0 ? ' · ' : ''}{property.text}</span>) : item.summary}
+                            </span>
                           </span>
                         </Cmd>
                         {isStep && stepNames.length > 1 ? (

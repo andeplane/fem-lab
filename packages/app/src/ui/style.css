@@ -534,6 +534,15 @@ textarea:focus {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.row-text .material-summary {
+  display: flex;
+  flex-wrap: wrap;
+  overflow: visible;
+  white-space: normal;
+}
+.material-property {
+  overflow-wrap: anywhere;
+}
 .at {
   flex: none;
   padding: 4px 8px 0 2px;
