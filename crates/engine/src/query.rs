@@ -52,13 +52,18 @@ pub enum Query {
     Mesh {},
 
     /// What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
-    /// and corner-node centroid. Tet4/Hex8 volumes integrate the original Jacobian exactly
-    /// up to roundoff. Linear 3D face areas use original shape/tangent quadrature; curved
-    /// bilinear area is numerical and converges under refinement, not an exact skin measure.
-    /// Quadratic-element measures still use corner geometry pending #524.
+    /// and corner-node centroid. Solid volumes integrate every original shape node, including
+    /// Tet10/Hex20 midside nodes: tetrahedron degree3 and tensor degree5 per coordinate are
+    /// sufficient for their Jacobian determinants, up to f64 roundoff. Surface areas and edge
+    /// lengths use original tangents. Linear triangles and lines are exact up to roundoff;
+    /// bilinear faces use Gauss2. Curved norms are numerical, using Gauss3 for Quad8/Line3
+    /// and symmetric triangle degree5 for Tri6.
+    /// Curved area/length accuracy improves under refinement; no corner skin is substituted.
     /// Face Sets also report pressureArea from the load boundary quadrature,
     /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
-    /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+    /// times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+    /// the original midsurface area without requiring Material/Section; curved physical shell
+    /// loads use the Section's top/bottom offsets. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]

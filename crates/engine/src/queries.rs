@@ -1,6 +1,6 @@
 //! `Engine::query`: the read side of the registry.
 
-use femlab_geometry::{face_centroid_normal, Face, Mesh};
+use femlab_geometry::{Face, Mesh};
 
 use crate::command::{CoupleKind, Field, ObjectKind};
 use crate::engine::{display, Engine};
@@ -973,100 +973,90 @@ fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
     libm::sqrt((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2))
 }
 
-/// Geometric face measure. Linear 3D faces use their original shape/tangent
-/// quadrature, including bilinear Hex8/Shell4 patches. Curved area is numerical,
-/// not the area of a triangle skin. Quadratic corner metrics remain #524.
+/// Integrate the original face map, including every quadratic mid-edge node.
+/// Curved norms are non-polynomial: line3/quad8 use three-point Gauss, tri6 the
+/// symmetric degree5 triangle rule, with accuracy established under refinement.
 fn face_measure(mesh: &Mesh, f: Face) -> f64 {
-    let face_kind = mesh.kind_of(f.elem).face_kind();
-    if mesh.dim == 3 && face_kind.n_corners() > 2 && face_kind.n_nodes() == face_kind.n_corners() {
-        use crate::fem::shape::{face_dshape_of, face_rule_of};
-        let nodes: Vec<_> = mesh.face_nodes(f).collect();
-        let mut derivatives = vec![[0.0; 2]; face_kind.n_nodes()];
-        let rule = face_rule_of(face_kind);
-        let mut area = 0.0;
-        for (point, weight) in rule.points.iter().zip(rule.weights) {
-            face_dshape_of(face_kind, [point[0], point[1]], &mut derivatives);
-            let mut tangent = [[0.0; 3]; 2];
-            for (&node, derivative) in nodes.iter().zip(&derivatives) {
-                let position = mesh.node(node);
-                for axis in 0..2 {
-                    for (component, value) in position.iter().enumerate() {
-                        tangent[axis][component] += value * derivative[axis];
-                    }
+    use crate::fem::quadrature::TRI_7;
+    use crate::fem::shape::{face_dshape_of, face_rule_of};
+    use femlab_geometry::mesh::FaceKind;
+    let kind = mesh.kind_of(f.elem).face_kind();
+    let nodes: Vec<_> = mesh.face_nodes(f).collect();
+    if kind == FaceKind::Line2 {
+        return dist(mesh.node(nodes[0]), mesh.node(nodes[1]));
+    }
+    let mut derivatives = vec![[0.0; 2]; kind.n_nodes()];
+    let rule = if kind == FaceKind::Tri6 { TRI_7 } else { face_rule_of(kind) };
+    let mut measure = 0.0;
+    for (point, weight) in rule.points.iter().zip(rule.weights) {
+        face_dshape_of(kind, [point[0], point[1]], &mut derivatives);
+        let mut tangent = [[0.0; 3]; 2];
+        for (&node, derivative) in nodes.iter().zip(&derivatives) {
+            let position = mesh.node(node);
+            for axis in 0..2 {
+                for (component, value) in position.iter().enumerate() {
+                    tangent[axis][component] += value * derivative[axis];
                 }
             }
-            let [u, v] = tangent;
-            let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-            area += weight * libm::sqrt(cross.iter().map(|x| x * x).sum());
         }
-        return area;
+        let scale = if kind == FaceKind::Line3 {
+            libm::sqrt(tangent[0].iter().map(|x| x * x).sum())
+        } else {
+            cross_norm(tangent[0], tangent[1])
+        };
+        measure += weight * scale;
     }
-    let p: Vec<[f64; 3]> =
-        mesh.face_nodes(f).take(mesh.kind_of(f.elem).face_kind().n_corners()).map(|n| mesh.node(n)).collect();
-    if p.len() == 2 {
-        return dist(p[0], p[1]);
-    }
-    let mut area = 0.0;
-    for t in 1..p.len() - 1 {
-        let u = sub(p[t], p[0]);
-        let v = sub(p[t + 1], p[0]);
-        let c = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-        area += 0.5 * libm::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
-    }
-    area
+    measure
 }
 
-/// Volume of an element (area in 2D). Tet4/Hex8 integrate the original Jacobian,
-/// exactly for those polynomial maps up to f64 roundoff. Higher-order corner
-/// geometry and 2D shoelace metrics are retained explicitly for #524.
+fn cross_norm(u: [f64; 3], v: [f64; 3]) -> f64 {
+    let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    libm::sqrt(cross.iter().map(|x| x * x).sum())
+}
+
+/// Original volume (or intrinsic surface area), rather than a corner skin.
+/// Tet10 detJ is cubic and Hex20 detJ has degree at most5 per coordinate;
+/// the geometry rule and three-point tensor Gauss integrate those exactly.
 fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
+    use crate::fem::quadrature::{TET_27, TRI_7};
+    use crate::fem::shape::{dshape_of, rule_of};
+    use femlab_geometry::ElementKind;
     let kind = mesh.kind_of(e);
-    if kind.dim() == 3 && kind.n_nodes() == kind.n_corners() {
-        use crate::fem::shape::{dshape_of, rule_of};
-        let mut derivatives = vec![[0.0; 3]; kind.n_nodes()];
-        let rule = rule_of(kind);
-        let mut volume = 0.0;
-        for (&point, weight) in rule.points.iter().zip(rule.weights) {
-            dshape_of(kind, point, &mut derivatives);
-            let mut jacobian = [[0.0; 3]; 3];
-            for (&node, derivative) in mesh.elem_nodes(e).iter().zip(&derivatives) {
-                let position = mesh.node(node);
-                for (component, row) in jacobian.iter_mut().enumerate() {
-                    for axis in 0..3 {
-                        row[axis] += position[component] * derivative[axis];
-                    }
+    // Line Body measures come from their member lengths; their element Set
+    // volume is unchanged by this solid/surface geometry correction.
+    if kind.dim() == 1 {
+        return 0.0;
+    }
+    let rule = match kind {
+        ElementKind::Tet10 => TET_27,
+        ElementKind::Tri6 => TRI_7,
+        _ => rule_of(kind),
+    };
+    let mut derivatives = vec![[0.0; 3]; kind.n_nodes()];
+    let mut measure = 0.0;
+    for (&point, weight) in rule.points.iter().zip(rule.weights) {
+        dshape_of(kind, point, &mut derivatives);
+        let mut jacobian = [[0.0; 3]; 3];
+        for (&node, derivative) in mesh.elem_nodes(e).iter().zip(&derivatives) {
+            let position = mesh.node(node);
+            for (component, row) in jacobian.iter_mut().enumerate() {
+                for axis in 0..3 {
+                    row[axis] += position[component] * derivative[axis];
                 }
             }
+        }
+        let scale = if kind.dim() == 3 {
             let [a, b, c] = jacobian;
-            let determinant = a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
-                + a[2] * (b[0] * c[1] - b[1] * c[0]);
-            volume += weight * determinant;
-        }
-        return volume;
+            a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])
+        } else {
+            cross_norm(
+                [jacobian[0][0], jacobian[1][0], jacobian[2][0]],
+                [jacobian[0][1], jacobian[1][1], jacobian[2][1]],
+            )
+        };
+        measure += weight * scale;
     }
-    if kind == femlab_geometry::ElementKind::Shell4 {
-        return face_measure(mesh, Face { elem: e, local: 1 });
-    }
-    if mesh.dim == 2 {
-        let p: Vec<[f64; 3]> = mesh.elem_nodes(e).iter().take(kind.n_corners()).map(|&n| mesh.node(n)).collect();
-        let mut a = 0.0;
-        for (i, q) in p.iter().enumerate() {
-            let r = p[(i + 1) % p.len()];
-            a += q[0] * r[1] - r[0] * q[1];
-        }
-        return 0.5 * a.abs();
-    }
-    let mut v = 0.0;
-    for local in 0..kind.n_faces() as u8 {
-        let face = Face { elem: e, local };
-        let (c, n) = face_centroid_normal(mesh, face);
-        v += face_measure(mesh, face) * (c[0] * n[0] + c[1] * n[1] + c[2] * n[2]) / 3.0;
-    }
-    v
-}
-
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    measure
 }
 
 fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> String {
@@ -1184,7 +1174,7 @@ mod measure_tests {
             elem_sets: BTreeMap::new(),
             face_sets: BTreeMap::new(),
         };
-        assert_eq!(elem_measure(&sheet, 0), 6.0);
+        assert!((elem_measure(&sheet, 0) - 6.0).abs() < 3e-15);
         assert_eq!(face_measure(&sheet, Face { elem: 0, local: 0 }), 2.0);
         // A line face remains a length even when its containing mesh is embedded
         // in 3D. It has one tangent, so a two-tangent area cross product is wrong.
@@ -1199,5 +1189,54 @@ mod measure_tests {
         assert!((elem_measure(&planar, 0) - 1.0).abs() < 1e-15);
         assert!((elem_measure(&planar, 1) - 1.0).abs() < 1e-15);
         assert!((face_measure(&planar, Face { elem: 0, local: 3 }) - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn original_quadratic_tet_volume_integrates_the_cubic_jacobian() {
+        // The exact P2 map (u+a*u²,v+b*v²,w+c*w²), each coefficient1/4,
+        // has positive diagonal Jacobian. Its integral includes uvw/720.
+        let xi = [
+            [0., 0., 0.],
+            [1., 0., 0.],
+            [0., 1., 0.],
+            [0., 0., 1.],
+            [0.5, 0., 0.],
+            [0.5, 0.5, 0.],
+            [0., 0.5, 0.],
+            [0., 0., 0.5],
+            [0.5, 0., 0.5],
+            [0., 0.5, 0.5],
+        ];
+        let coords = xi.into_iter().flat_map(|p| p.map(|x| x + 0.25 * x * x)).collect();
+        let mesh = Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![ElementBlock { kind: ElementKind::Tet10, conn: (0..10).collect(), first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        let exact = 1.0 / 6.0 + 0.75 / 12.0 + 0.1875 / 30.0 + 0.015625 / 90.0;
+        assert!((elem_measure(&mesh, 0) - exact).abs() < 3e-15);
+    }
+
+    #[test]
+    fn original_quadratic_hex_volume_requires_more_than_two_tensor_points() {
+        // S2 map x=u(1+a*v²), y=v(1+b*u²), z=w(1+c*u²).
+        // detJ=(1+a*v²+b*u²-3ab*u²v²)(1+c*u²); u^4 needs degree4.
+        let coords = crate::fem::shape::node_xi(ElementKind::Hex20)
+            .into_iter()
+            .flat_map(|[u, v, w]| [u * (1.0 + 0.1 * v * v), v * (1.0 + 0.1 * u * u), w * (1.0 + 0.1 * u * u)])
+            .collect();
+        let mesh = Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![ElementBlock { kind: ElementKind::Hex20, conn: (0..20).collect(), first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        let exact = 8.0 * (1.0 + 0.3 / 3.0 + (0.01 - 0.03) / 9.0 + 0.009 / 5.0);
+        assert!((elem_measure(&mesh, 0) - exact).abs() < 3e-14);
     }
 }

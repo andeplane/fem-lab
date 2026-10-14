@@ -1767,6 +1767,39 @@ areas. Multiplying by pressure yields the scalar pressure-area integral, not the
 force on a curved boundary. Chromium checks the draft conversion (2.4 MPa × 0.105 m² =
 252 kN), edits and geometry changes without a load Command until Apply.
 
+Shell pressure-area Queries (#525) use the original Quad4 surface map, including both
+3D tangents, rather than interpreting Shell4's intrinsic dimension as a continuum edge.
+The public registry checks horizontal, vertical and oblique unit squares at 1, 2 and 4
+subdivisions per axis: each top/bottom Set reports **1 m²** before any Material or Section
+exists. The oblique square has orthonormal edges `(0.6,0.8,0)` and `(-0.48,0.36,0.8)`,
+so its independent outward unit normal is `(0.64,-0.48,0.6)`. Pressure **100 Pa** gives
+top applied force `-100 n N` and bottom `+100 n N`, checked componentwise to `1e-10 N`
+and balanced by support reactions to `1e-7 N`. Material/Section assignment and solves
+preserve the original query areas. Query-only reads preserve the saved Model and Journal.
+
+For the original bilinear surface `x=1+a*y*z`, `0<=y,z<=1`, the area is the independent
+analytic integral of `sqrt(1+a²(y²+z²))`. With `r=sqrt(1+2a²)`,
+
+`A=[r+(a²+3)/a*asinh(a/sqrt(1+a²))-atan(a²/r)/a²]/3`.
+
+At `a=1/4`, `A=1.0205395019733228 m²`. Both shell face owners agree to `2e-14 m²`;
+uniform 1, 2, 4 and 8 subdivisions converge with observed order in `[3.8,4.2]` and
+coarsest absolute error below `5e-6 m²`. Native one/four-thread execution and Journal
+replay give identical query areas. This is a numerical integral of the original surface,
+not a diagonal triangle area or an exact curved-area claim at one mesh size.
+
+Shell `pressureArea` remains a **material-free midsurface measure**. Physical Shell4 loads
+retain their Section offsets. A unit-radius, unit-length cylindrical patch through
+`theta=atan(3/4)` has midsurface chord area converging to `theta m²` at order two.
+With thickness 0.1 m, the actual top and bottom radii are 1.05 m and 0.95 m. Their
+100 Pa pressure resultants are exactly `(-63,-21,0) N` and `(57,19,0) N`, respectively,
+from `integral n dS=R_face(sin(theta),1-cos(theta),0)`. Tests at 1, 2, 4 and 8 arc
+subdivisions check these projected vector forces and reaction balance independently;
+they do not equate the resultant norm to pressure times scalar midsurface area.
+`tools/test-shell-pressure-area-replay.mjs` runs all these Commands and Queries through
+native execution at one/four threads and WASM, checking per-entry hashes, replay,
+analytic area/refinement and actual applied forces. Physical assembly is unchanged.
+
 ### Transformed Sheet free meshing (#230)
 
 A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°
@@ -2251,9 +2284,9 @@ Queries and per-entry hashes in native execution at one/four threads and WASM.
 The centroid remains the average of corner-node coordinates. These changes
 cover original linear 3D faces and Tet4/Hex8 volumes; original quadratic
 query metrics remain separately tracked in [#524](https://github.com/andeplane/fem-lab/issues/524).
-Shell `pressureArea` has a separate pre-existing query defect, tracked in
-[#525](https://github.com/andeplane/fem-lab/issues/525); its physical Shell4
-load normalization is not changed by this measurement fix.
+Shell `pressureArea` is corrected separately by
+[#525](https://github.com/andeplane/fem-lab/issues/525), described under Loaded boundary area
+above; physical Shell4 load normalization retains its Section offsets.
 
 ### Strict Abaqus linear-static conversion (#503)
 
@@ -2285,3 +2318,53 @@ rejection, and unsupported physics/options without active Model/Journal/Result m
 Native one/three-thread replay and native/WASM conversion/hash parity are separate
 checks. Only final linear equilibrium is imported; an Abaqus increment history is
 explicitly outside this supported slice.
+
+### Original quadratic-element query measurements (#524)
+
+Public Commands build a quarter annulus with radii `r=1 m`, `R=2 m`, quadratic
+mapped elements and `n=2,4,8` angular cells. `simplices:true` exercises Tri6; a
+`3 m` extrusion exercises Hex20 and Tet10. Neither tests nor hosts inject a
+private Mesh into an Engine, and this change adds no quadratic input reader.
+
+For one original P2 circular edge with half-angle `delta=pi/(4n)`, its coordinates
+in the centred frame are `x=R[1+(cos(delta)-1)t²]`, `y=R sin(delta)t`, `-1<=t<=1`.
+Green's theorem gives segment area `R² sin(delta)(4-cos(delta))/3`; subtracting
+the inner radius and summing gives original annulus area
+`A=n sin(delta)(4-cos(delta))`. Every original Quad8/Tri6 area and Hex20/Tet10
+volume sum must agree with `A` and `3A` to `3e-13` in SI. At `n=2`, the area is
+`2.3543606777341703 m²`, compared with the incorrect corner value
+`2.1213203435596424 m²`. Original quadratic geometry converges to the exact
+circular area `3pi/4` with observed order `[3.9,4.1]`.
+
+The exact original outer edge length is
+`L=2n sin(delta)[sqrt(1+k²)+asinh(k)/k]`, `k=2tan(delta/2)`.
+The public Line3 edge and Quad8/Tri6 cylindrical face measurements approach
+`L` and `3L` with each angular refinement reducing quadrature error by more
+than20 and relative error stays below `5e-6`; outer/inner measures retain their
+exact radius ratio. The coarse Hex20 face error is `4.4264e-5 m²`, reducing
+under refinement rather than being claimed exact. Three-point
+line/tensor Gauss and the positive symmetric degree5 triangle rule integrate
+the original map, but its norm is non-polynomial and is not claimed exact at
+one mesh size. Physical load quadrature is unchanged: plane-stress
+`pressureArea` still includes `2 mm` thickness and is distinct from geometric
+length. Separate #525 specifies the material-free Shell4 midsurface pressure-area semantics.
+
+Independent pure geometry regressions check a Tet10 map
+`(u+u²/4,v+v²/4,w+w²/4)`. Its positive diagonal Jacobian has total degree3;
+its exact volume is `1/6+0.75/12+0.1875/30+0.015625/90`, including the cubic
+moment `integral(uvw)=1/720`. The positive 27-point collapsed three-point
+Gauss rule integrates this degree exactly. For a Hex20 S2 map
+`x=u(1+0.1v²)`, `y=v(1+0.1u²)`, `z=w(1+0.1u²)`, its positive determinant
+contains `u^4`, and the exact volume is
+`8[1+0.3/3+(0.01-0.03)/9+0.009/5]`. Two-point tensor Gauss is insufficient;
+three points integrate every Hex20 determinant, whose maximum degree is5
+per coordinate. Rule tests verify positive weights and independent simplex
+monomial moments through triangle degree5 and tetrahedron degree3.
+
+Public query results, Model hashes and saved Journals are compared at one
+and four native threads and against WASM, with exact replay identity.
+Existing #523 linear volume/area and order4 bilinear-area regressions remain
+valid up to f64 roundoff, as does every physical stiffness, mass, pressure and
+traction rule. Straight-sided quadratic Quad8/Tri6 rectangles retain area
+`6 m²`, their Hex20/Tet10 extrusions retain volume `24 m³`, and side length/area
+and physical pressure area agree with the independent `3 m` / `12 m²` values.
