@@ -91,7 +91,7 @@ export class SessionChannel {
   }
 }
 
-export type Replace = (origin: SessionTransport, source: ReplacementSource) => Promise<SessionTransport>;
+export type Replace = (origin: SessionTransport, source: ReplacementSource, admission?: Stamp) => Promise<SessionTransport>;
 /** One revocable producer. Only its own successful explicit replacement can advance it. */
 export class SessionTransport implements EngineTransport {
   private sequence = 0n;
@@ -100,8 +100,8 @@ export class SessionTransport implements EngineTransport {
   private sink: ((p: Progress) => void) | undefined;
   constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace, private readonly recover: (origin: SessionTransport) => Promise<void> = async origin => origin.release()) {}
   onReplacement(listener: (next: SessionTransport) => void): void { this.replacementListener = listener; }
-  async replaceWith(source: ReplacementSource): Promise<SessionTransport> {
-    return this.replace(this, source);
+  async replaceWith(source: ReplacementSource, admission?: Stamp): Promise<SessionTransport> {
+    return this.replace(this, source, admission === undefined ? undefined : structuredClone(admission));
   }
   /** Called at the activation commit, before the previous endpoint is revoked. */
   adopted(next: SessionTransport): void { this.replacementListener?.(next); }
@@ -189,8 +189,11 @@ export class SessionTransport implements EngineTransport {
   async gpuSelfTest(n: number): Promise<number> {
     return this.ordered(async () => this.accept(await this.channel.request({ op: 'gpuSelfTest', context: this.context(), n })) as number);
   }
-  async reserve(): Promise<string> {
-    return this.ordered(async () => this.accept(await this.channel.request({ op: 'reserve', context: this.context(), expectedVersion: this.stamp.stateVersion })) as string);
+  async reserve(admission?: Stamp): Promise<string> {
+    return this.ordered(async () => {
+      if (admission && !sameSession(admission.session, this.stamp.session)) throw expired();
+      return this.accept(await this.channel.request({ op: 'reserve', context: this.context(), expectedVersion: admission?.stateVersion ?? this.stamp.stateVersion })) as string;
+    });
   }
   async prepare(source: ReplacementSource, options: SessionOptions): Promise<DocumentSnapshot> {
     const reply = await this.channel.request({ op: 'prepare', context: this.context(), expectedVersion: this.stamp.stateVersion, source, options });
