@@ -38,13 +38,14 @@ describe('solve input blockers', () => {
       { name: 'prestress', procedure: 'static' },
       { name: 'unrelated', procedure: 'heat-steady' },
     ], [
-      { code: 'model.unconstrained', text: 'prestress needs supports', step: 'prestress' },
+      { code: 'model.unconstrained', text: 'prestress needs supports', step: 'prestress', where: "step 'prestress'" },
       { code: 'material.missing-property', text: 'modal needs rho', step: 'modal' },
       { code: 'material.missing-property', text: 'unrelated needs k', step: 'unrelated' },
     ]);
-    expect(solveBlockers(m, 'response').map(w => w.text)).toEqual([
-      'modal needs rho', 'Nothing holds the body — six rigid body modes.',
-    ]);
+    const required = solveBlockers(m, 'response');
+    expect(required).toHaveLength(2);
+    expect(required.find(w => w.code === 'material.missing-property')?.text).toBe('modal needs rho');
+    expect(required.find(w => w.code === 'W-1300')?.where).toBe("step 'prestress'");
     expect(solveBlockers(m, 'prestress').map(w => w.code)).toEqual(['W-1300']);
   });
 
