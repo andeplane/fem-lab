@@ -361,6 +361,7 @@ export class Store {
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
   private comparisonRequest = 0;
+  private hoverRequest = 0;
   private documentIdentity = {};
   private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
@@ -380,8 +381,9 @@ export class Store {
   set(patch: Partial<UiState>): void {
     // Targets belong to the displayed Model. A refresh/replacement must not retain an old
     // hover, including a name reused by a different document or a deleted Load.
-    if (patch.model && patch.model !== this.state.model && !('hover' in patch)) {
-      patch = { ...patch, hover: EMPTY_HOVER };
+    if (patch.model && patch.model !== this.state.model) {
+      this.hoverRequest++;
+      if (!('hover' in patch)) patch = { ...patch, hover: EMPTY_HOVER };
     }
     // A comparison belongs to the complete current Journal; do not draw an old tail while
     // refresh is waiting for the next query reply.
@@ -394,6 +396,18 @@ export class Store {
 
   setJournalDiffQuery(query: (base: Journal) => Promise<JournalDiff>): void {
     this.journalDiffQuery = query;
+  }
+
+  /** All UI/AI producers share this fence; leaving or replacing a Model expires old replies. */
+  beginHover(): (targets: UiState['hover']) => boolean {
+    const request = ++this.hoverRequest;
+    const model = this.state.model;
+    this.set({ hover: EMPTY_HOVER });
+    return targets => {
+      if (request !== this.hoverRequest || model !== this.state.model) return false;
+      this.set({ hover: targets });
+      return true;
+    };
   }
 
   /** A reply may draw only while its request, current Journal and baseline selection still match. */

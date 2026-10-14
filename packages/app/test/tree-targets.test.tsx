@@ -76,7 +76,7 @@ describe('Constraint and Load targets in the Model tree', () => {
     app.row(name!).click();
     await waitFor(() => app.store.state.form?.target?.name === name, 'target edit form');
     expect(app.sent.slice(0, 2)).toEqual([
-      { cmd: 'selection.set', sets: [target] }, { cmd: 'form.edit', kind, name },
+      { cmd: 'form.edit', kind, name }, { cmd: 'selection.set', sets: [target] },
     ]);
     expect(app.store.state.selection.sets).toEqual([target]);
     expect(app.store.state.form?.values['on']).toBe(target);
@@ -142,7 +142,7 @@ describe('Constraint and Load targets in the Model tree', () => {
     expect(app.store.state.hover).toEqual({ bodies: [], faces: [], sets: [] });
   });
 
-  it('does not reopen an older Load when its delayed selection finishes after a newer tree click', async () => {
+  it('does not select an older Load when its delayed definition finishes after a newer tree click', async () => {
     const app = await mount();
     let release: ((reply: Awaited<ReturnType<EngineTransport['query']>>) => void) | undefined;
     app.transport.query = vi.fn<EngineTransport['query']>(async query => {
@@ -158,6 +158,43 @@ describe('Constraint and Load targets in the Model tree', () => {
     await Promise.all(app.running);
     expect(app.store.state.form?.target?.name).toBe('cold');
     expect(app.store.state.selection.sets).toEqual(['left.xmin']);
-    expect(app.sent.filter(command => command.cmd === 'form.edit')).toEqual([{ cmd: 'form.edit', kind: 'constraint', name: 'cold' }]);
+    expect(app.sent.filter(command => command.cmd === 'selection.set')).toEqual([{ cmd: 'selection.set', sets: ['left.xmin'] }]);
+  });
+
+  it('shares the hover fence across independent UI and AI HostContexts', async () => {
+    const app = await mount();
+    const pending: Array<(reply: Awaited<ReturnType<EngineTransport['query']>>) => void> = [];
+    app.transport.query = vi.fn<EngineTransport['query']>(() => new Promise(resolve => pending.push(resolve)));
+    const ai = makeHostContext(app.store, app.transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/140' } }));
+    const oldAi = ai.view.hover({ load: 'heater' });
+    await app.context.view.hover({ sets: ['left.xmin'] });
+    pending.shift()!({ command: definitions[3]! }); await oldAi;
+    expect(app.store.state.hover.sets).toEqual(['left.xmin']);
+    const oldUi = app.context.view.hover({ load: 'heater' });
+    await ai.view.hover({});
+    pending.shift()!({ command: definitions[3]! }); await oldUi;
+    expect(app.store.state.hover).toEqual({ bodies: [], faces: [], sets: [] });
+  });
+
+  it('preserves a newer draft of the same Load while an older tree definition is pending', async () => {
+    const app = await mount();
+    await app.registry.dispatch({ cmd: 'selection.set', refs: ['load:heater'] });
+    const selection = app.store.state.selection;
+    let release: ((reply: Awaited<ReturnType<EngineTransport['query']>>) => void) | undefined;
+    let first = true;
+    app.transport.query = vi.fn<EngineTransport['query']>(async query => {
+      if (query.query !== 'query.definition') throw new Error(`unexpected ${query.query}`);
+      if (first) { first = false; return new Promise(resolve => { release = resolve; }); }
+      return { command: definitions[3]! };
+    });
+    app.row('heater').click();
+    await waitFor(() => release, 'pending old tree definition');
+    await app.registry.dispatch({ cmd: 'form.open', command: 'load.heatSource', args: { name: 'heater', bodies: ['left'], q: '9 W/m^3' } });
+    release!({ command: definitions[3]! });
+    await Promise.all(app.running); await Promise.all(app.running);
+    expect(app.store.state.form?.values).toMatchObject({ name: 'heater', bodies: ['left'], q: '9 W/m^3' });
+    expect(app.store.state.selection).toBe(selection);
+    expect(app.sent).toEqual([{ cmd: 'form.edit', kind: 'load', name: 'heater' }]);
+    expect(app.transport.dispatch).not.toHaveBeenCalled();
   });
 });

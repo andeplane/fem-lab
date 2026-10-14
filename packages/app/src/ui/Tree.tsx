@@ -533,7 +533,12 @@ export function ModelTree({ s, dispatch, shapes = [], hoverFrames = browserHover
                             const open = () => request === selectionRun.current
                               ? dispatch(item.run ? { cmd: item.cmd, ...item.args } : { cmd: 'form.open', command: item.cmd, args: item.args })
                               : undefined;
-                            if (showsTargets) void dispatch({ cmd: 'selection.set', ...item.select }).then(open).catch(() => undefined);
+                            // A superseded definition read returns no Command. It must not
+                            // start a fresh selection/edit after another form has taken over.
+                            if (showsTargets) void open()?.then(definition => {
+                              if (definition && request === selectionRun.current) return dispatch({ cmd: 'selection.set', ...item.select });
+                              return undefined;
+                            }).catch(() => undefined);
                             else void open()?.catch(() => undefined);
                           }}
                         >

@@ -14,7 +14,7 @@ import type { Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_HOVER, EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
+import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
@@ -126,7 +126,6 @@ export function makeHostContext(
   session: SessionHostServices = unboundSession,
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
 ): HostContext {
-  let hoverRequest = 0;
   const own = session.projects;
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
@@ -171,14 +170,11 @@ export function makeHostContext(
       },
       highlight: (s) => viewer.current?.setHighlight(s),
       hover: async (s) => {
-        const request = ++hoverRequest;
-        const model = store.state.model;
-        store.set({ hover: EMPTY_HOVER });
+        const commit = store.beginHover();
         const target = s.load
           ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store)
           : s;
-        if (request !== hoverRequest || model !== store.state.model) return;
-        store.set({ hover: { bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] } });
+        commit({ bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] });
       },
       setTheme: (t) => {
         store.set({ theme: t });
@@ -502,7 +498,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.edit',
       execution: 'sessionView',
-      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Returns that Command only when this request opened the form; a superseded request returns no value. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
       run: (input) => editDefinition(store, transport, input as DefinitionTarget),
