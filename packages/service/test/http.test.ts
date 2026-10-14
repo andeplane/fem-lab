@@ -20,6 +20,11 @@ describe('headless service host', () => {
     expect(response.headers.get('date')).toBe('Wed, 14 Oct 2026 12:00:00 GMT');
     expect(response.headers.get('cache-control')).toBe('no-store');
   });
+  it('exposes probe paths that Cloud Run does not reserve',async()=>{
+    const url=await host(async()=>true);
+    const health=await fetch(`${url}/health`);expect(health.status).toBe(200);expect(await health.json()).toMatchObject({status:'ok'});
+    const ready=await fetch(`${url}/ready`);expect(ready.status).toBe(200);expect(await ready.json()).toEqual({status:'ready'});
+  });
   it('requires explicit successful readiness, and tolerates dependency errors', async () => {
     for (const [ready, status] of [
       [async () => true, 200], [async () => false, 503],
