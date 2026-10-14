@@ -4443,6 +4443,126 @@ fn solved_thermal_chain() -> Engine {
     e
 }
 
+fn inherited_heat_bar(nx: u32, threads: usize) -> Engine {
+    let mut e = Engine::new(None, Box::new(NoClock), threads);
+    for command in [
+        r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#,
+        r#"{"cmd":"material.add","name":"solid","E":"1 GPa","nu":0.3,"alpha":"1e-5 1/K","k":"10 W/(m*K)","rho":"1000 kg/m^3"}"#,
+        r#"{"cmd":"material.assign","material":"solid","bodies":["bar"]}"#,
+        r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"293.15 K"}"#,
+        r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"393.15 K"}"#,
+        r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#,
+        r#"{"cmd":"step.add","name":"expand","procedure":"static","constraints":["root"],"loads":[],"after":"warm"}"#,
+    ] {
+        ok(&mut e, command);
+    }
+    ok(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":{nx},"ny":1,"nz":1}}}}}}"#));
+    e
+}
+
+fn unloaded_in(e: &Engine, step: &str) -> bool {
+    e.warnings().iter().any(|warning| warning.code == "model.unloaded" && warning.step.as_deref() == Some(step))
+}
+
+/// E9: integrate the exact linear conduction profile, without an explicit structural Load.
+/// u_x(L) = alpha * integral_0^L (100 x) dx = 0.0005 m for L = 1 m and alpha = 1e-5 /K.
+#[test]
+fn inherited_heat_drives_static_expansion_at_every_mesh_size() {
+    let mut fields = Vec::new();
+    for threads in [1, 2] {
+        let mut thread_fields = Vec::new();
+        for nx in [2, 4, 8] {
+            let mut e = inherited_heat_bar(nx, threads);
+            assert!(unloaded_in(&e, "expand"), "an unsolved predecessor has no field to consume");
+            ok(&mut e, r#"{"cmd":"solve.run","step":"warm","solver":"cpu-direct"}"#);
+            assert!(!unloaded_in(&e, "expand"), "the current temperature drives static equilibrium");
+            ok(&mut e, r#"{"cmd":"solve.run","step":"expand","solver":"cpu-direct"}"#);
+            let result = result_of(&mut e, Some("expand"));
+            assert!(!result.stale);
+            assert!(!result_of(&mut e, Some("warm")).stale);
+            let ux = result
+                .extremes
+                .iter()
+                .find(|extreme| extreme.field == "displacement" && extreme.component == 0)
+                .expect("ux extreme");
+            assert_eq!(ux.max.unit, "m");
+            assert!((ux.max.value - 0.0005).abs() <= 1e-12, "nx={nx}, threads={threads}: {ux:?}");
+            assert!(e.model().step("expand").unwrap().loads.is_empty());
+            assert!(!unloaded_in(&e, "expand"));
+            thread_fields.push(e.field(Some("expand"), Field::Displacement).expect("displacement").clone());
+        }
+        fields.push(thread_fields);
+    }
+    assert_eq!(fields[0], fields[1], "thread count must not change the displacement field");
+}
+
+#[test]
+fn inherited_temperature_drives_only_procedures_that_form_thermal_force() {
+    let mut e = inherited_heat_bar(2, 2);
+    for (name, procedure, extra) in [
+        ("nonlinear", "static-nonlinear", ""),
+        ("buckling", "buckling", ""),
+        ("explicit", "explicit", r#", "tEnd":"2 ms""#),
+        ("implicit", "implicit", r#", "dt":"1 ms", "tEnd":"2 ms""#),
+        ("harmonic", "harmonic", r#", "fStart":"1 Hz", "fStop":"2 Hz", "points":2"#),
+        (
+            "random",
+            "randomVibration",
+            r#", "psd":[{"frequency":"0 Hz","density":"1 s"},{"frequency":"2 Hz","density":"1 s"}]"#,
+        ),
+    ] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"{name}","procedure":"{procedure}","constraints":["root"],"loads":[],"after":"warm"{extra}}}"#
+            ),
+        );
+    }
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    for name in ["expand", "nonlinear", "buckling", "explicit", "implicit"] {
+        assert!(!unloaded_in(&e, name), "{name} consumes the current inherited temperature");
+    }
+    for name in ["harmonic", "random"] {
+        assert!(unloaded_in(&e, name), "{name} still needs forcing despite an inherited temperature");
+    }
+    ok(&mut e, r#"{"cmd":"model.setName","name":"same physical heat chain"}"#);
+    assert!(!unloaded_in(&e, "expand"), "a display name does not stale the thermal field");
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":1,"nz":1}}}"#);
+    assert!(unloaded_in(&e, "expand"), "a stale temperature must not count as a current driver");
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"expand"}"#).code, ErrorCode::ResultStale);
+}
+
+#[test]
+fn a_modal_predecessor_does_not_supply_static_or_frequency_response_forcing() {
+    let mut e = inherited_heat_bar(2, 2);
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":2}"#);
+    for (name, procedure, extra) in [
+        ("unforced-static", "static", ""),
+        ("unforced-harmonic", "harmonic", r#", "fStart":"1 Hz", "fStop":"2 Hz", "points":2"#),
+        (
+            "unforced-random",
+            "randomVibration",
+            r#", "dampingRatio":0.02, "psd":[{"frequency":"0 Hz","density":"1 s"},{"frequency":"2 Hz","density":"1 s"}]"#,
+        ),
+    ] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"{name}","procedure":"{procedure}","constraints":["root"],"loads":[],"after":"modes"{extra}}}"#
+            ),
+        );
+    }
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    for name in ["unforced-static", "unforced-harmonic", "unforced-random"] {
+        assert!(unloaded_in(&e, name), "a modal basis is not a driving load for {name}");
+        ok(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{name}"}}"#));
+        let displacement = e.field(Some(name), Field::Displacement).expect("zero response displacement");
+        assert!(displacement.data.iter().all(|value| *value == 0.0), "an unforced {name} returns zero response");
+        assert!(unloaded_in(&e, name), "a zero Result does not make an unloaded Step driven");
+    }
+}
+
 /// A display-name edit changes document identity, but keeps a solved predecessor usable.
 #[test]
 fn a_renamed_model_can_continue_its_current_thermal_result() {

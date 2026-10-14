@@ -382,6 +382,8 @@ impl Engine {
     pub fn warnings(&self) -> Vec<Warning> {
         let m = &self.model;
         let mut w = Vec::new();
+        // Compute at most once, and only when a chained procedure finds a thermal Result.
+        let mut current_result_hash = None;
         // The mapped mesher's implicit Body is geometry too: it answers "is there anything to
         // analyse yet", and it needs a material like any other Body.
         let implicit = m.implicit_body();
@@ -584,7 +586,23 @@ impl Engine {
                     });
                 }
             }
-            let inherited = transient && step.after.is_some();
+            // These procedures form a thermal force from a predecessor's temperature. Mirror
+            // solve_run's current-Result check: an arbitrary `after` or an unrelated field is
+            // not a thermal driver, and harmonic/random response still needs external forcing.
+            let thermal_strain =
+                matches!(
+                    step.procedure,
+                    Procedure::Static
+                        | Procedure::StaticNonlinear
+                        | Procedure::Buckling
+                        | Procedure::Explicit
+                        | Procedure::Implicit
+                ) && step.after.as_deref().and_then(|name| self.results.get(name)).is_some_and(|result| {
+                    result.result.fields.contains_key(&crate::command::Field::Temperature)
+                        && result.input_hash.as_str()
+                            == current_result_hash.get_or_insert_with(|| crate::hash::result_hash(m)).as_str()
+                });
+            let inherited = (transient && step.after.is_some()) || thermal_strain;
             let initial_heat = step.procedure == Procedure::HeatTransient && step.initial.unwrap_or(293.15) != 0.0;
             let motion = matches!(step.procedure, Procedure::Explicit | Procedure::Implicit)
                 && step
