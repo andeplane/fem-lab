@@ -5412,7 +5412,7 @@ const queries = {
       "x-returns": "Converted"
     },
     {
-      "description": "Check a bounded Abaqus text mesh deck using an explicit positive length Quantity per\nsource coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary\nportable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT\n(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit\nSURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming\nBody. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized\nuppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive\nkeyword spellings, 256-character physical lines and comma keyword continuation.\nRejects abbreviations, quoted labels, repeated SURFACE names and every unsupported\nkeyword/parameter, including analysis and material intent. Bounds: 250000 nodes,\n250000 elements and 1000000 expanded membership declarations before deduplication.\nNo paths, includes, file I/O or active Model mutation. Input and serialized response\nare each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is\nchecked conversion, not publication approval:\nhosts must prepare the Commands through Candidate, enforce the exact serialized\nModel-file limit and publish atomically before replacing the active document.",
+      "description": "Check a bounded Abaqus text deck using an explicit positive length Quantity per\nsource coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary\nportable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT\n(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit\nSURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming\nBody. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized\nuppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive\nkeyword spellings, 256-character physical lines and comma keyword continuation.\nRejects abbreviations, quoted labels, repeated SURFACE names and every unsupported\nkeyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.\nStatic mode additionally requires a positive force Quantity per source force and\nsupports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one\nSOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct\ndisplacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements\nscale by L, forces by F and modulus by F/L²; no units are inferred. Model-data\nBOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;\nnumeric targets get explicit singleton Sets. Conflicting prescribed values and\noverlapping CLOAD updates fail. Static accepts absent/default increment fields\nonly (zero also denotes the default in its first three fields), imports final\nlinear equilibrium without increment history, and never solves.\nDensity/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT\nrequests remain unsupported. Bounds: 250000 nodes,\n250000 elements and 1000000 expanded membership declarations before deduplication.\nNo paths, includes, file I/O or active Model mutation. Input and serialized response\nare each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is\nchecked conversion, not publication approval:\nhosts must prepare the Commands through Candidate, enforce the exact serialized\nModel-file limit and publish atomically before replacing the active document.",
       "type": "object",
       "properties": {
         "text": {
@@ -5429,6 +5429,17 @@ const queries = {
         },
         "unitLength": {
           "$ref": "#/$defs/Q_length"
+        },
+        "unitForce": {
+          "description": "Mandatory in static mode; absent in mesh mode. Positive force per source force.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_force"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "sha256": {
           "type": "string"
@@ -5739,10 +5750,11 @@ const queries = {
     "PluginLanguage": commands.$defs["PluginLanguage"],
     "PluginSource": commands.$defs["PluginSource"],
     "AbaqusImportMode": {
-  "description": "The strict mesh converter never discards physics from a model deck.",
+  "description": "The chosen strict subset; unsupported physics is rejected rather than discarded.",
   "type": "string",
   "enum": [
-    "mesh"
+    "mesh",
+    "static"
   ]
 },
     "ReportSection": {
