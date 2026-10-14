@@ -6030,6 +6030,98 @@ fn a_convergence_study_scales_every_mesher() {
 }
 
 #[test]
+fn gravity_density_warnings_belong_only_to_steps_that_consume_the_active_load() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"solid","E":"1 GPa","nu":0.3,"k":"10 W/(m*K)"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmin","value":"100 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"force","on":"bar.xmax","total":["1 N","0 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    let initial = e.warnings();
+    let global = initial.iter().find(|w| w.code == "load.no-density").unwrap();
+    assert_eq!(global.step, None);
+    assert_eq!(global.where_.as_deref(), Some("load 'g'"));
+    assert_eq!(global.text, "gravity 'g' skips body 'bar': its material has no density (rho)");
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["force"]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"), "an unused definition does not drive this Step");
+    ok(&mut e, r#"{"cmd":"step.add","name":"active","procedure":"static","constraints":["root"],"loads":["g"]}"#);
+    let warnings = e.warnings();
+    let density: Vec<_> = warnings.iter().filter(|w| w.code == "load.no-density").collect();
+    assert_eq!(density.len(), 1);
+    assert_eq!(density[0].step.as_deref(), Some("active"));
+    assert_eq!(
+        (density[0].text.as_str(), density[0].where_.as_deref()),
+        (global.text.as_str(), global.where_.as_deref())
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"active","procedure":"modal","constraints":["root"],"loads":["g"],"nModes":1}"#,
+    );
+    assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"), "modal analysis ignores its Loads");
+    ok(&mut e, r#"{"cmd":"step.add","name":"active","procedure":"heat-steady","constraints":["hot"],"loads":["g"]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"), "heat does not consume mechanical gravity");
+}
+
+#[test]
+fn gravity_density_requirements_follow_the_selected_mesher_body() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(&mut e, PLATE);
+    let mut other: serde_json::Value = serde_json::from_str(PLATE).unwrap();
+    other["name"] = serde_json::json!("other");
+    ok(&mut e, &other.to_string());
+    ok(&mut e, r#"{"cmd":"material.add","name":"used","E":"1 GPa","nu":0.3,"rho":"1000 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"unused","E":"1 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"used","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"unused","bodies":["other"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"2 m"}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"plate.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","-9.81 m/s^2","0 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["g"]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"));
+    ok(&mut e, r#"{"cmd":"material.add","name":"used","E":"1 GPa","nu":0.3}"#);
+    let warnings = e.warnings();
+    let density: Vec<_> = warnings.iter().filter(|w| w.code == "load.no-density").collect();
+    assert_eq!(density.len(), 1);
+    assert!(density[0].text.contains("body 'plate'"));
+    assert_eq!(density[0].step.as_deref(), Some("s"));
+    ok(&mut e, COOK);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"sheet.left"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"used","bodies":["sheet"]}"#);
+    let warnings = e.warnings();
+    let density: Vec<_> = warnings.iter().filter(|w| w.code == "load.no-density").collect();
+    assert_eq!(density.len(), 1);
+    assert!(density[0].text.contains("body 'sheet'"));
+    ok(&mut e, r#"{"cmd":"material.add","name":"used","E":"1 GPa","nu":0.3,"rho":"1000 kg/m^3"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"));
+}
+
+#[test]
+fn a_laminates_assigned_ply_mass_drives_gravity_without_a_body_material() {
+    let mut e = engine();
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[4,1],"tags":[null,"tip",null,"root"]}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"bottom","E":"200 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"top","E":"200 GPa","nu":0.3,"rho":"1000 kg/m^3"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"section.add","name":"stack","shape":{"kind":"laminate","plies":[{"material":"bottom","thickness":"1 mm"},{"material":"top","thickness":"1 mm"}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"section.assign","section":"stack","bodies":["skin"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["g"]}"#);
+    assert!(e.warnings().is_empty(), "{:?}", e.warnings());
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    // Only the top ply has mass: A rho t = 1 m² * 1000 kg/m³ * 0.001 m = 1 kg.
+    assert!((result(&mut e).applied_total[2].value + 9.81).abs() < 1e-10);
+}
+
+#[test]
 fn valid_free_body_benchmarks_have_no_support_or_load_warning() {
     for journal in [
         include_str!("../benches/journals/explicit-free-fall.json"),
@@ -11550,6 +11642,7 @@ fn a_linear_step_ignores_plasticity_with_a_warning_and_a_nonlinear_step_reports_
     ok(&mut e, r#"{"cmd":"solve.run","step":"linear"}"#);
     let r = result_of(&mut e, Some("linear"));
     let w = r.warnings.iter().find(|w| w.code == "material.plasticityIgnored").expect("the linear Step warns");
+    assert_eq!(w.step.as_deref(), Some("linear"), "retained warnings identify their solve Step");
     assert!(
         w.text.contains("'steel'") && w.text.contains("static-nonlinear") && w.text.contains("the static procedure"),
         "{}",

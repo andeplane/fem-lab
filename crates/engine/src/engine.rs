@@ -622,19 +622,42 @@ impl Engine {
         }
         for l in &m.loads {
             if let LoadKind::Gravity { .. } = l.kind {
-                for b in &m.bodies {
-                    let has_rho =
-                        b.material.as_deref().and_then(|n| m.material(n)).is_some_and(|mat| mat.rho.is_some());
-                    if !has_rho {
-                        w.push(Warning {
-                            step: None,
-                            code: "load.no-density".into(),
-                            text: format!(
-                                "gravity '{}' skips body '{}': its material has no density (rho)",
-                                l.name, b.name
-                            ),
-                            where_: Some(format!("load '{}'", l.name)),
-                        });
+                // Modal analysis ignores forcing, and heat ignores mechanical Loads. An
+                // unused gravity definition is not an input requirement for any Step.
+                let owners = m
+                    .steps
+                    .iter()
+                    .filter(|step| {
+                        let requirements = step.procedure.requirements();
+                        step.loads.contains(&l.name) && requirements.driven && load_drives(l, requirements.heat)
+                    })
+                    .map(|step| Some(step.name.as_str()));
+                for owner in owners.chain(std::iter::once(None).filter(|_| m.steps.is_empty())) {
+                    for body in m
+                        .bodies
+                        .iter()
+                        .map(|body| body.name.as_str())
+                        .chain(implicit)
+                        .filter(|body| selected_body.is_none_or(|selected| *body == selected))
+                    {
+                        let materials = m.material_of_body(body).into_iter().chain(
+                            m.section_of_body(body)
+                                .into_iter()
+                                .flat_map(|section| section.plies.iter().map(|ply| ply.material.as_str())),
+                        );
+                        let has_rho =
+                            materials.filter_map(|name| m.material(name)).any(|material| material.rho.is_some());
+                        if !has_rho {
+                            w.push(Warning {
+                                step: owner.map(str::to_owned),
+                                code: "load.no-density".into(),
+                                text: format!(
+                                    "gravity '{}' skips body '{}': its material has no density (rho)",
+                                    l.name, body
+                                ),
+                                where_: Some(format!("load '{}'", l.name)),
+                            });
+                        }
                     }
                 }
             }
