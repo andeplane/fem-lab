@@ -310,7 +310,8 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         glyphClass: 'glyph load',
         name: x.name,
         summary: `${x.summary}${x.on ? ` on ${x.on}` : ''}`,
-        select: x.on ? { sets: [x.on] } : {},
+        // Body/global loads need their exact saved definition, absent from ModelSummary.
+        select: x.on ? { sets: [x.on] } : { refs: [`load:${x.name}`] },
         remove: 'load.remove',
       })),
     ),
@@ -380,7 +381,43 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
   );
 }
 
-export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[] }) {
+export interface HoverFrames {
+  request(callback: () => void): number;
+  cancel(handle: number): void;
+}
+const browserHoverFrames: HoverFrames = {
+  request: callback => requestAnimationFrame(callback),
+  cancel: handle => cancelAnimationFrame(handle),
+};
+
+export function ModelTree({ s, dispatch, shapes = [], hoverFrames = browserHoverFrames }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[]; hoverFrames?: HoverFrames }) {
+  const selectionRun = useRef(0);
+  const hovered = useRef<string | null>(null);
+  const pendingHover = useRef<Record<string, unknown> | null>(null);
+  const hoverFrame = useRef<number | null>(null);
+  const preview = (item: TreeItem | null) => {
+    hovered.current = item ? `${item.kind}:${item.name}` : null;
+    pendingHover.current = item ? item.select['refs'] ? { load: item.name } : item.select : {};
+    if (hoverFrame.current !== null) return;
+    hoverFrame.current = hoverFrames.request(() => {
+      hoverFrame.current = null;
+      const target = pendingHover.current;
+      pendingHover.current = null;
+      if (target) void dispatch({ cmd: 'view.hover', ...target }).catch(() => undefined);
+    });
+  };
+  const leave = (item: TreeItem) => {
+    if (hovered.current === `${item.kind}:${item.name}`) preview(null);
+  };
+  useEffect(() => () => {
+    selectionRun.current++;
+    const active = hovered.current !== null || hoverFrame.current !== null;
+    if (hoverFrame.current !== null) hoverFrames.cancel(hoverFrame.current);
+    hovered.current = null;
+    pendingHover.current = null;
+    hoverFrame.current = null;
+    if (active) void dispatch({ cmd: 'view.hover' }).catch(() => undefined);
+  }, [s.model, dispatch, hoverFrames]);
   const dragSource = useRef<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ target: string; edge: DropEdge } | null>(null);
@@ -437,6 +474,7 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                     const menuPanel = `tree.menu.${itemKey}`;
                     const visible = !s.hiddenBodies.includes(item.name);
                     const isStep = group.label === 'Steps';
+                    const showsTargets = item.kind === 'constraint' || item.kind === 'load';
                     const dropEdge = drop?.target === item.name ? drop.edge : null;
                     const classes = [
                       'row',
@@ -453,6 +491,8 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                         data-cmd={isStep ? 'step.reorder' : undefined}
                         data-step={isStep ? item.name : undefined}
                         title={isStep ? `Drag ${item.name} to change the Step run order` : undefined}
+                        onMouseEnter={showsTargets ? () => preview(item) : undefined}
+                        onMouseLeave={showsTargets ? () => leave(item) : undefined}
                         onDragStart={isStep ? (e) => {
                           if (!e.dataTransfer) return;
                           dragSource.current = item.name;
@@ -486,6 +526,16 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           class="row-main"
                           args={item.run ? item.args : { command: item.cmd, args: item.args }}
                           title={`${item.kind === 'result' ? 'Show' : 'Edit'} ${item.name}`}
+                          onFocus={showsTargets ? () => preview(item) : undefined}
+                          onBlur={showsTargets ? () => leave(item) : undefined}
+                          onRun={() => {
+                            const request = ++selectionRun.current;
+                            const open = () => request === selectionRun.current
+                              ? dispatch(item.run ? { cmd: item.cmd, ...item.args } : { cmd: 'form.open', command: item.cmd, args: item.args })
+                              : undefined;
+                            if (showsTargets) void dispatch({ cmd: 'selection.set', ...item.select }).then(open).catch(() => undefined);
+                            else void open()?.catch(() => undefined);
+                          }}
                         >
                           <span class={item.glyphClass}>{item.glyph}</span>
                           <span class="row-text">

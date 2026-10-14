@@ -364,7 +364,7 @@ describe('the deformation bar', () => {
     const { root, store } = mount({ result: modal, fieldKey: 'mode:2', phase: 0.25 });
     // App's selection effect calls setSelection on every render, so a fake without it throws
     // after the assertions pass — which vitest reports as an unhandled error and a failed run.
-    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn(), setSelection: vi.fn() } };
+    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn(), setSelection: vi.fn(), setHover: vi.fn() } };
     const dispatch = vi.fn(async () => { throw new Error('rejected'); });
     render(<App store={store} dispatch={dispatch} viewer={viewer as never} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
     const phase = root.querySelector<HTMLInputElement>('input.phase')!;

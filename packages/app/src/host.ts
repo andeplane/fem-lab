@@ -4,6 +4,7 @@
 import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
 
 import { z } from 'zod';
+import type { Command } from '@femlab/registry';
 import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
@@ -13,7 +14,7 @@ import type { Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
+import { EMPTY_HOVER, EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
@@ -125,6 +126,7 @@ export function makeHostContext(
   session: SessionHostServices = unboundSession,
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
 ): HostContext {
+  let hoverRequest = 0;
   const own = session.projects;
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
@@ -168,6 +170,16 @@ export function makeHostContext(
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
       highlight: (s) => viewer.current?.setHighlight(s),
+      hover: async (s) => {
+        const request = ++hoverRequest;
+        const model = store.state.model;
+        store.set({ hover: EMPTY_HOVER });
+        const target = s.load
+          ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store)
+          : s;
+        if (request !== hoverRequest || model !== store.state.model) return;
+        store.set({ hover: { bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] } });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
@@ -217,7 +229,10 @@ export function makeHostContext(
         store.select(s);
         const ref = s.refs?.[0];
         const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
-        if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
+        if (item?.cmd === 'form.edit') {
+          const definition = await editDefinition(store, transport, item.args as DefinitionTarget);
+          if (definition && item.kind === 'load') store.select({ ...s, ...loadTargets(definition, store) });
+        }
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },
       clear: () => {
@@ -408,6 +423,16 @@ export async function openExample(name: string, session: SessionHostServices) {
 }
 
 type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+type DefinitionCommand = Command;
+
+/** Read exact targets from the engine definition, never the unit-formatted display summary. */
+function loadTargets(command: DefinitionCommand, store: Store): Partial<Pick<Selection, 'bodies' | 'faces' | 'sets'>> {
+  if ('on' in command && typeof command.on === 'string') return { sets: [command.on] };
+  if ('bodies' in command) return { bodies: command.bodies };
+  if (command.cmd === 'load.gravity') return { bodies: store.state.model?.bodies.map(body => body.name) ?? [] };
+  const connection = command.cmd === 'contact.thermal' ? store.state.model?.connections.find(item => item.name === command.of) : undefined;
+  return connection ? { sets: [connection.master, connection.slave] } : {};
+}
 const definitionRequests = new WeakMap<Store, number>();
 
 function invalidateDefinition(store: Store): number {
@@ -417,14 +442,15 @@ function invalidateDefinition(store: Store): number {
 }
 
 /** Journal selection and form.edit share one request fence and the complete engine definition. */
-async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<void> {
+async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<DefinitionCommand | undefined> {
   const request = invalidateDefinition(store);
   const previousForm = store.state.form;
   const revision = store.state.revision;
-  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: DefinitionCommand };
   if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
   const { cmd, ...args } = command;
   store.openForm(cmd, args, false, target);
+  return command;
 }
 
 /**

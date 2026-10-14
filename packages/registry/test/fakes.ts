@@ -91,6 +91,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       toggle: vi.fn(),
       setVisible: vi.fn(),
       highlight: vi.fn(),
+      hover: vi.fn(),
       setTheme: vi.fn(),
       animate: vi.fn(),
       playTransient: vi.fn(),

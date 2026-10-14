@@ -109,6 +109,8 @@ export interface UiState {
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
   selection: Selection;
+  /** Tree/AI hover is view state, independent of persistent selection and Journal highlighting. */
+  hover: Pick<Selection, 'bodies' | 'faces' | 'sets'>;
   pickTarget: 'face' | 'body' | 'off';
   viewMode: ViewMode;
   colormap: ColormapName;
@@ -221,6 +223,7 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 }
 
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
+export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] };
 
 export const initialState: UiState = {
   assistantVerifications: [],
@@ -242,6 +245,7 @@ export const initialState: UiState = {
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
+  hover: EMPTY_HOVER,
   pickTarget: 'face',
   viewMode: 'geometry',
   colormap: 'viridis',
@@ -374,6 +378,11 @@ export class Store {
   }
 
   set(patch: Partial<UiState>): void {
+    // Targets belong to the displayed Model. A refresh/replacement must not retain an old
+    // hover, including a name reused by a different document or a deleted Load.
+    if (patch.model && patch.model !== this.state.model && !('hover' in patch)) {
+      patch = { ...patch, hover: EMPTY_HOVER };
+    }
     // A comparison belongs to the complete current Journal; do not draw an old tail while
     // refresh is waiting for the next query reply.
     if (patch.journal && patch.journal !== this.state.journal && !('journalComparison' in patch)) {

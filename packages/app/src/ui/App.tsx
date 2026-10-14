@@ -509,6 +509,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       }
       viewer.current = v;
       v.setSelection(store.state.selection);
+      v.setHover(store.state.hover);
       viewer.onReady?.();
       v.onPick((p) => {
         const frame = store.state.transient?.frame;
@@ -536,6 +537,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
   }, [viewer, dispatch, store]);
 
   useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
+  useEffect(() => viewer.current?.setHover(s.hover), [viewer, s.hover]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
