@@ -445,11 +445,34 @@ Mocked provider/payment tests do not establish live account access or paid opera
 
 ## Delivery sequence
 
-Each row is a separately owned, approximately one-day implementation slice with
-its own green PR. Split a row further before starting if it exceeds a day. None
-is claimed by this planning change. Expect roughly 12–16 engineering days including
-integration repairs and staging verification; vendor setup/review can add calendar
-time. This is an estimate, not a delivery commitment.
+All implementation is written by AI. Each row is a separately owned, verifiable
+slice with its own green PR; split by scope and acceptance evidence. None is claimed
+by this planning change.
+
+Estimate **12–24 hours of active AI execution and verification** for the full
+backend in this plan, assuming one AI worker, the present provider/registry seams,
+ready vendor accounts/credentials, and the proposed feature scope. This is an
+unmeasured planning range, not a conversion from another staffing model or a
+delivery commitment. Re-estimate from observed progress after the first working
+login → reserved completion → usage receipt path, provisionally **3–6 AI hours**
+within that total.
+
+| Work | Issues | Active AI time, including focused checks |
+| --- | --- | ---: |
+| Service contract, ADR and account identity | #546, #547 | 1–2 hours |
+| Credit ledger, reservations and failure recovery | #548, #549 | 2–4 hours |
+| Streaming endpoint and hosted Assistant integration | #550, #554 | 2–4 hours |
+| Subscription lifecycle, Checkout and Portal | #551, #552 | 1.5–3 hours |
+| Account UI, privacy, export and deletion | #553, #555 | 1.5–3 hours |
+| Deployment, integration repair and live launch verification | #556, #557 | 4–8 hours |
+| **Total** | | **12–24 hours** |
+
+This is active AI time, not a promised end-to-end elapsed duration. CI queue/runtime,
+DNS/email propagation, missing access, vendor approvals and other external waiting
+are reported separately. The estimate includes verification work and interpreting
+its results; it excludes passive waiting for those dependencies. Additional AI
+workers could reduce elapsed time after the contract is settled, but no parallel
+speedup is assumed in these estimates.
 
 1. [#546](https://github.com/andeplane/fem-lab/issues/546) — Service/ADR and shared contract: supersede ADR 0006, settle vocabulary, extract
    provider seam, Node scaffold, injected boundaries and versioned schema tests.
