@@ -8,6 +8,7 @@
 import { FemError, type FrameResult, type FramesResult, type ResultSummary, type Ack, type Warning } from '@femlab/registry';
 import { choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
+import type { AppSurface } from './surface';
 import type { Store, ViewMode } from './store';
 import type { EngineTransport } from '@femlab/registry';
 import { TransientPlayback, type PlaybackClock, type TransientInput } from './transient';
@@ -110,6 +111,7 @@ export class ResultsView {
       this.viewer.current?.setField(null, [0, 1]);
       this.viewer.current?.setDeformed(null, 0);
       this.viewer.current?.setSurface({ ...surface, source: 'mesh' });
+      this.surfaceInstalled(surface);
       this.viewer.current?.animate(false);
       this.viewer.current?.setDim(false);
       this.viewer.current?.setMode('results');
@@ -237,6 +239,7 @@ export class ResultsView {
     v.setDeformed(null, 0);
     v.setDim(false);
     v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    this.surfaceInstalled(surface);
     v.setMode(this.store.state.viewMode);
     this.store.set({ playing: false });
   }
@@ -269,6 +272,7 @@ export class ResultsView {
     v.setField(null, [0, 1]);
     v.setDeformed(null, 0);
     v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    this.surfaceInstalled(surface);
     v.setMode(this.store.state.viewMode);
     v.setDim(result.stale);
     v.setField(values, range, scalar.per);
@@ -278,6 +282,10 @@ export class ResultsView {
     // The one code path: the field and the deformation are pushed by the same function, in the
     // same order, every time — so every field shows the same shape at the same scale (#42).
     this.setDeformScale(this.requested);
+  }
+
+  private surfaceInstalled(surface: Pick<AppSurface, 'positions' | 'indices' | 'edges'>): void {
+    if (surface.positions.length && (surface.indices.length || surface.edges?.length)) this.viewer.onSurface?.();
   }
 
   /** The array the viewer colours by, in display units, and the range and unit for the legend. */
