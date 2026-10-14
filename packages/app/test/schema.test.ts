@@ -289,11 +289,11 @@ describe('blockers', () => {
     ]);
   });
   it('offers a heat load for an undriven heat Step, including in a mixed Model', () => {
-    const warning = { code: 'model.unloaded', text: 'No heat load or prescribed temperature.', where: "step 'warmup'" };
+    const warning = { code: 'model.unloaded', text: 'No heat load or prescribed temperature.', where: "step 'warmup'", step: 'warmup' };
     const steps = [{ name: 'warmup', procedure: 'heat-transient' }, { name: 'bend', procedure: 'static' }] as const;
     expect(blockers([warning], true, true, steps)[0]).toMatchObject({ code: 'W-1400', text: warning.text, fixCmd: 'load.heatFlux' });
-    expect(blockers([{ ...warning, where: "step 'bend'" }], true, true, steps)[0]).toMatchObject({ fixCmd: 'load.pressure' });
-    expect(blockers([{ ...warning, where: null }], true, true, [steps[0]])[0]).toMatchObject({ fixCmd: 'load.heatFlux' });
+    expect(blockers([{ ...warning, where: "step 'bend'", step: 'bend' }], true, true, steps)[0]).toMatchObject({ fixCmd: 'load.pressure' });
+    expect(blockers([{ ...warning, where: null, step: null }], true, true, [steps[0]])[0]).toMatchObject({ fixCmd: 'load.heatFlux' });
   });
 
   it('maps the engine\'s warning names onto the design\'s W-codes, in order', () => {
@@ -306,7 +306,7 @@ describe('blockers', () => {
       true,
     );
     expect(list.map((b) => b.code)).toEqual(['W-1101', 'W-1500']);
-    expect(list[0]).toMatchObject({ fixCmd: 'material.assign', where: "body 'beam'" });
+    expect(list[0]).toMatchObject({ text: "Body 'beam' has no material", fixCmd: 'material.assign', where: "body 'beam'" });
   });
 
   it('adds W-1200 when there are bodies but no mesh settings, and nothing when there are no bodies', () => {

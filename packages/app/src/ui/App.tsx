@@ -20,7 +20,7 @@ import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
-import { blockers, type Defs, shapeKinds } from './schema';
+import { type Defs, shapeKinds, solveBlockers } from './schema';
 
 export type { Dispatch } from './cmd';
 
@@ -93,8 +93,8 @@ const SI = { length: 'm', force: 'N', stress: 'Pa' };
 
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const dirty = useMemo(() => unsaved(s), [s.journal, s.savedJournal]);
-  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? []);
   const step = s.model?.steps[0]?.name ?? '';
+  const list = solveBlockers(s.model, step);
   // Design state 7: while an error card stands, Solve is disabled and carries the same code.
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
@@ -196,7 +196,7 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       </div>
     );
   }
-  const b = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? [])[0];
+  const b = solveBlockers(s.model, s.model?.steps[0]?.name ?? '')[0];
   if (!b) return null;
   return (
     <div class="banner">
@@ -539,6 +539,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
+  const reSolveBlocker = solveBlockers(s.model, s.result?.step ?? '')[0];
   return (
     <div class="viewer">
       <canvas ref={canvas} />
@@ -584,7 +585,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             Result is stale — Model changed after revision {s.result!.revision}.
             {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
           </span>
-          <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
+          <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }} disabled={Boolean(reSolveBlocker) || !s.ready || s.solving !== null || s.lastError !== null} title={reSolveBlocker ? `${reSolveBlocker.code} ${reSolveBlocker.text}` : undefined}>
             Re-solve
           </Cmd>
         </div>

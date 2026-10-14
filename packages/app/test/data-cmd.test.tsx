@@ -383,6 +383,67 @@ describe('the shell', () => {
     expect(solve.title).toContain('W-1200');
   });
 
+  it('dispatches the valid first Step from both Solve actions while later-Step warnings remain visible', async () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'free', procedure: 'modal', constraints: [], loads: [], solved: false },
+        { name: 'later', procedure: 'static', constraints: [], loads: [], solved: false },
+      ],
+      warnings: [{ code: 'model.unconstrained', text: 'later has no supports', where: "step 'later'", step: 'later' }],
+    } as unknown as ModelSummary;
+    const { root, commands, store } = mount({ model: m, tab: 'results' });
+    const top = root.querySelector<HTMLButtonElement>('button.solve')!;
+    const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]')!;
+    expect(top.disabled).toBe(false);
+    expect(fallback.disabled).toBe(false);
+    expect(root.querySelector('.banner')).toBeNull();
+    await act(async () => { top.click(); fallback.click(); });
+    expect(commands.filter(command => command.cmd === 'solve.run')).toEqual([
+      { cmd: 'solve.run', step: 'free' }, { cmd: 'solve.run', step: 'free' },
+    ]);
+    // The complete warning list stays inspectable even when this target is ready.
+    act(() => store.set({ tab: 'checks' }));
+    expect(root.querySelector('.bottom-body .check-row')?.textContent).toContain('W-1300');
+  });
+
+  it('keeps a target/predecessor blocker on Solve and does not offer an enabled Results fallback', () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'response', procedure: 'harmonic', after: 'modal', constraints: [], loads: [], solved: false },
+        { name: 'modal', procedure: 'modal', constraints: [], loads: [], solved: false },
+      ],
+      warnings: [{ code: 'material.missing-property', text: 'modal has no mass', where: "step 'modal'", step: 'modal' }],
+    } as unknown as ModelSummary;
+    const { root } = mount({ model: m, tab: 'results' });
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.title).toContain('modal has no mass');
+    // An unmapped warning still blocks; it cannot accidentally fall through to an enabled solve.
+    const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]');
+    expect(fallback?.disabled ?? true).toBe(true);
+    if (fallback) expect(fallback.title).toContain('W-1103');
+  });
+
+  it('scopes stale Result re-solve to that Result Step rather than the first Step', async () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'unfinished', procedure: 'static', constraints: [], loads: [], solved: false },
+        { name: 'free', procedure: 'modal', constraints: [], loads: [], solved: true },
+      ],
+      warnings: [{ code: 'model.unconstrained', text: 'unfinished has no supports', step: 'unfinished' }],
+    } as unknown as ModelSummary;
+    const { root, commands, store } = mount({ model: m, result: result('free', true, 1), viewMode: 'results' });
+    const reSolve = root.querySelector<HTMLButtonElement>('.stale-banner button')!;
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.disabled).toBe(true);
+    expect(reSolve.disabled).toBe(false);
+    await act(async () => reSolve.click());
+    expect(commands.at(-1)).toEqual({ cmd: 'solve.run', step: 'free' });
+    act(() => store.set({ model: { ...m, warnings: [{ code: 'model.unconstrained', text: 'free is blocked', step: 'free' }] } as unknown as ModelSummary }));
+    expect(reSolve.disabled).toBe(true);
+  });
+
   it('starts on the Journal tab and shows the Command lines', () => {
     const { root } = mount();
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');

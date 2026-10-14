@@ -10,7 +10,7 @@ import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
-import { blockers } from './schema';
+import { blockers, solveBlockers } from './schema';
 
 const Theory = lazy(() => import('./Theory').then((module) => module.Theory));
 
@@ -505,7 +505,8 @@ function ResultHeader({ s }: { s: UiState }) {
 }
 
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
-  const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? [])[0];
+  const step = s.model?.steps[0]?.name ?? '';
+  const next = solveBlockers(s.model, step)[0];
   if (!s.result) {
     return (
       <div class="checks">
@@ -515,7 +516,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
             {next.fixLabel}
           </Cmd>
         ) : (
-          <Cmd dispatch={dispatch} cmd="solve.run" class="chip-add" args={{ step: s.model?.steps[0]?.name ?? '' }}>
+          <Cmd dispatch={dispatch} cmd="solve.run" class="chip-add" args={{ step }} disabled={Boolean(next) || !s.ready || step === '' || s.solving !== null || s.lastError !== null} title={next ? `${next.code} ${next.text}` : undefined}>
             solve.run
           </Cmd>
         )}

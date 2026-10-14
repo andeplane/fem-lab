@@ -389,7 +389,7 @@ export interface Blocker {
 const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.empty': { code: 'W-1000', text: 'Nothing to analyse yet. Add the first body.', fix: 'geometry.addBox' },
   'model.ill-posed': { code: 'W-1002', text: 'A Body and the idealisation disagree on dimension.', fix: 'model.setIdealisation' },
-  'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
+  'model.no-material': { code: 'W-1101', text: 'A Body has no material assignment.', fix: 'material.assign' },
   'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
   'model.unconstrained': { code: 'W-1300', text: 'No active mechanical support.', fix: 'constraint.fix' },
   'model.no-temperature-reference': { code: 'W-1301', text: 'Steady heat needs a temperature reference.', fix: 'constraint.temperature' },
@@ -400,24 +400,40 @@ const WCODES: Record<string, { code: string; text: string; fix: string }> = {
 };
 const MESH: Blocker = { code: 'W-1200', text: 'No mesh. Pick a size and element; counts and cost show before you solve.', fixLabel: 'mesh.set', fixCmd: 'mesh.set', where: null };
 
+type ModelWarning = ModelSummary['warnings'][number];
+type SolveStep = Pick<ModelSummary['steps'][number], 'name' | 'procedure' | 'after'>;
+
 /**
  * Engine warnings → the design's blockers, in W-code order so the banner always names the next
  * missing thing. An engine warning with no mapping keeps its own code rather than disappearing.
  */
-export function blockers(warnings: { code: string; text: string; where?: string | null }[], hasMesh: boolean, hasBodies: boolean, steps: readonly Pick<ModelSummary['steps'][number], 'name' | 'procedure'>[] = []): Blocker[] {
+export function blockers(warnings: readonly ModelWarning[], hasMesh: boolean, hasBodies: boolean, steps: readonly SolveStep[] = []): Blocker[] {
   const mapped = warnings.map((w) => {
     const m = WCODES[w.code];
     if (w.code === 'model.unloaded') {
-      const affected = steps.filter(s => w.where === `step '${s.name}'`);
+      const affected = steps.filter(s => w.step === s.name);
       const active = affected.length > 0 ? affected : steps;
       const heat = active.length > 0 && active.every(s => s.procedure === 'heat-steady' || s.procedure === 'heat-transient');
       const fix = heat ? 'load.heatFlux' : m!.fix;
       return { code: m!.code, text: w.text, fixLabel: fix, fixCmd: fix, where: w.where ?? null };
     }
     return m
-      ? { code: m.code, text: ['model.unconstrained', 'model.no-temperature-reference', 'material.missing-property'].includes(w.code) ? w.text : m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
+      ? { code: m.code, text: ['model.no-material', 'model.unconstrained', 'model.no-temperature-reference', 'material.missing-property'].includes(w.code) ? w.text : m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
       : { code: w.code, text: w.text, fixLabel: '', fixCmd: '', where: w.where ?? null };
   });
   if (hasBodies && !hasMesh) mapped.push(MESH);
   return mapped.sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/** Solve only uses its target and predecessor chain; unscoped/unknown warnings stay global. */
+export function solveBlockers(model: (Pick<ModelSummary, 'meshSettings' | 'bodies'> & { warnings: readonly ModelWarning[]; steps: readonly SolveStep[] }) | null, target: string): Blocker[] {
+  const steps = model?.steps ?? [];
+  const required = new Set<string>();
+  for (let name: string | null | undefined = target; name && !required.has(name);) {
+    required.add(name);
+    name = steps.find(step => step.name === name)?.after;
+  }
+  const warnings = (model?.warnings ?? []).filter((warning: ModelWarning) =>
+    !warning.step || !steps.some(step => step.name === warning.step) || required.has(warning.step));
+  return blockers(warnings, Boolean(model?.meshSettings), (model?.bodies.length ?? 0) > 0, steps);
 }
