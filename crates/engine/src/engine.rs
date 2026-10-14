@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{RegionPredicate, Shape, Solid};
 
-use crate::command::{Command, ContactKind, DataEncoding, ExportFormat, IdealisationSpec, MeshFormat, ObjectKind};
+use crate::command::{
+    Command, ContactKind, DataEncoding, ExportFormat, IdealisationSpec, MeshFormat, ObjectKind, Procedure,
+};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
@@ -16,6 +18,15 @@ use crate::model::{
 use crate::par::Pool;
 use crate::query::{Ack, Output};
 use crate::units::{Dimension, Q};
+
+/// Only a prescribed value in the Step's own physical field can drive its solution.
+fn constraint_drives(constraint: &Constraint, heat: bool) -> bool {
+    match &constraint.kind {
+        ConstraintKind::Temperature { value } => heat && *value != 0.0,
+        ConstraintKind::Prescribe { value, .. } => !heat && *value != 0.0,
+        _ => false,
+    }
+}
 
 /// A borrowed rendering input exposes no model mutator or active-engine pointer.
 pub enum RenderView<'a> {
@@ -417,12 +428,49 @@ impl Engine {
                 });
             }
         }
-        if m.loads.is_empty() && has_geometry {
+        if has_geometry
+            && m.steps.is_empty()
+            && m.loads.is_empty()
+            && !m.constraints.iter().any(|c| constraint_drives(c, false) || constraint_drives(c, true))
+        {
             w.push(Warning {
                 code: "model.unloaded".into(),
-                text: "no loads yet (load.pressure, load.traction, load.gravity …)".into(),
+                text: "no driving load or nonzero prescribed value; add a load or prescribed boundary condition".into(),
                 where_: None,
             });
+        }
+        for step in m.steps.iter().filter(|_| has_geometry) {
+            let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
+            // Modal analysis has no forcing. Transients may inherit a field, start warm or
+            // start in motion, so absent Loads never imply zero output.
+            let transient =
+                matches!(step.procedure, Procedure::HeatTransient | Procedure::Explicit | Procedure::Implicit);
+            let inherited = transient && step.after.is_some();
+            let initial_heat = step.procedure == Procedure::HeatTransient && step.initial.unwrap_or(293.15) != 0.0;
+            let motion = matches!(step.procedure, Procedure::Explicit | Procedure::Implicit)
+                && step
+                    .initial_velocity
+                    .as_ref()
+                    .is_some_and(|velocities| velocities.iter().any(|v| v.value.iter().any(|x| *x != 0.0)));
+            let prescribed =
+                m.constraints.iter().any(|c| step.constraints.contains(&c.name) && constraint_drives(c, heat));
+            if step.procedure != Procedure::Modal
+                && !inherited
+                && !initial_heat
+                && step.loads.is_empty()
+                && !motion
+                && !prescribed
+            {
+                w.push(Warning {
+                    code: "model.unloaded".into(),
+                    text: if heat {
+                        "no heat load or nonzero prescribed temperature in this Step; use load.heatFlux or constraint.temperature"
+                    } else {
+                        "no driving load or nonzero prescribed displacement in this Step; use a load or constraint.prescribe"
+                    }.into(),
+                    where_: Some(format!("step '{}'", step.name)),
+                });
+            }
         }
         if m.steps.is_empty() && has_geometry {
             w.push(Warning {

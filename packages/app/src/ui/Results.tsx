@@ -505,7 +505,7 @@ function ResultHeader({ s }: { s: UiState }) {
 }
 
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
-  const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
+  const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? [])[0];
   if (!s.result) {
     return (
       <div class="checks">
@@ -548,7 +548,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
 const bytes = (n: number): string => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(0)} MB` : `${(n / 1e3).toFixed(0)} kB`);
 
 export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
-  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
+  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? []);
   const [mesh, setMesh] = useState<MeshSummary | null>(null);
   const [cost, setCost] = useState<CostEstimate | null>(null);
   const step = s.model?.steps[0]?.name ?? '';

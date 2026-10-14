@@ -1,7 +1,7 @@
 // The Properties panel is generated from `engine.schema.json`, so this file is the reading of
 // that schema: one Command variant in, a list of typed fields out (design §Properties, brief
 // §5.3). Everything here is pure so `test/schema.test.ts` can walk every Command in the schema.
-import type { JsonSchema } from '@femlab/registry';
+import type { JsonSchema, ModelSummary } from '@femlab/registry';
 
 export type Defs = Record<string, unknown>;
 
@@ -392,7 +392,7 @@ const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
   'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
   'model.unconstrained': { code: 'W-1300', text: 'Nothing holds the body — six rigid body modes.', fix: 'constraint.fix' },
-  'model.unloaded': { code: 'W-1400', text: 'No load. A solve would return zeros.', fix: 'load.pressure' },
+  'model.unloaded': { code: 'W-1400', text: 'No driving load or prescribed value.', fix: 'load.pressure' },
   'model.no-step': { code: 'W-1500', text: 'No Step. A Step says what to solve.', fix: 'step.add' },
   'load.no-density': { code: 'W-2210', text: 'Gravity skips a body whose material has no density.', fix: 'material.add' },
 };
@@ -402,9 +402,16 @@ const MESH: Blocker = { code: 'W-1200', text: 'No mesh. Pick a size and element;
  * Engine warnings → the design's blockers, in W-code order so the banner always names the next
  * missing thing. An engine warning with no mapping keeps its own code rather than disappearing.
  */
-export function blockers(warnings: { code: string; text: string; where?: string | null }[], hasMesh: boolean, hasBodies: boolean): Blocker[] {
+export function blockers(warnings: { code: string; text: string; where?: string | null }[], hasMesh: boolean, hasBodies: boolean, steps: readonly Pick<ModelSummary['steps'][number], 'name' | 'procedure'>[] = []): Blocker[] {
   const mapped = warnings.map((w) => {
     const m = WCODES[w.code];
+    if (w.code === 'model.unloaded') {
+      const affected = steps.filter(s => w.where === `step '${s.name}'`);
+      const active = affected.length > 0 ? affected : steps;
+      const heat = active.length > 0 && active.every(s => s.procedure === 'heat-steady' || s.procedure === 'heat-transient');
+      const fix = heat ? 'load.heatFlux' : m!.fix;
+      return { code: m!.code, text: w.text, fixLabel: fix, fixCmd: fix, where: w.where ?? null };
+    }
     return m
       ? { code: m.code, text: m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
       : { code: w.code, text: w.text, fixLabel: '', fixCmd: '', where: w.where ?? null };

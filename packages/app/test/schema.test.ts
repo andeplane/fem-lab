@@ -203,6 +203,14 @@ describe('shapeKinds and missingRequired', () => {
 });
 
 describe('blockers', () => {
+  it('offers a heat load for an undriven heat Step, including in a mixed Model', () => {
+    const warning = { code: 'model.unloaded', text: 'No heat load or prescribed temperature.', where: "step 'warmup'" };
+    const steps = [{ name: 'warmup', procedure: 'heat-transient' }, { name: 'bend', procedure: 'static' }] as const;
+    expect(blockers([warning], true, true, steps)[0]).toMatchObject({ code: 'W-1400', text: warning.text, fixCmd: 'load.heatFlux' });
+    expect(blockers([{ ...warning, where: "step 'bend'" }], true, true, steps)[0]).toMatchObject({ fixCmd: 'load.pressure' });
+    expect(blockers([{ ...warning, where: null }], true, true, [steps[0]])[0]).toMatchObject({ fixCmd: 'load.heatFlux' });
+  });
+
   it('maps the engine\'s warning names onto the design\'s W-codes, in order', () => {
     const list = blockers(
       [

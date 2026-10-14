@@ -6023,6 +6023,98 @@ fn a_convergence_study_scales_every_mesher() {
 }
 
 #[test]
+fn prescribed_values_drive_only_the_steps_that_use_them() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.prescribe","name":"move","on":"bar.xmax","dof":"ux","value":"1 mm"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warmup","procedure":"heat-transient","dt":"1 s","tEnd":"2 s","constraints":["hot","cold"],"loads":[]}"#,
+    );
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    ok(&mut e, r#"{"cmd":"load.force","name":"unused","on":"bar.xmax","total":["1 N","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"undriven","procedure":"heat-steady","constraints":["cold","move"],"loads":[]}"#,
+    );
+    let warnings = e.warnings();
+    let unloaded: Vec<_> = warnings.iter().filter(|w| w.code == "model.unloaded").collect();
+    assert_eq!(unloaded.len(), 1);
+    assert_eq!(unloaded[0].where_.as_deref(), Some("step 'undriven'"));
+    assert!(unloaded[0].text.contains("load.heatFlux"));
+    ok(&mut e, r#"{"cmd":"step.remove","name":"undriven"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"displaced","procedure":"static","constraints":["move"],"loads":[]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    ok(&mut e, r#"{"cmd":"step.add","name":"undriven","procedure":"static","constraints":["hot"],"loads":[]}"#);
+    let warnings = e.warnings();
+    let unloaded: Vec<_> = warnings.iter().filter(|w| w.code == "model.unloaded").collect();
+    assert_eq!(unloaded.len(), 1);
+    assert_eq!(unloaded[0].where_.as_deref(), Some("step 'undriven'"));
+    ok(&mut e, r#"{"cmd":"constraint.prescribe","name":"move","on":"bar.xmax","dof":"ux","value":"0 mm"}"#);
+    assert_eq!(e.warnings().iter().filter(|w| w.code == "model.unloaded").count(), 2);
+    ok(&mut e, r#"{"cmd":"step.add","name":"undriven","procedure":"static","constraints":[],"loads":["unused"]}"#);
+    assert_eq!(e.warnings().iter().filter(|w| w.code == "model.unloaded").count(), 1);
+}
+
+#[test]
+fn unloaded_warning_does_not_claim_modal_or_inherited_dynamic_results_are_zero() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":1}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    for procedure in ["explicit", "implicit"] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"motion","procedure":"{procedure}","constraints":["root"],"loads":[],"dt":"1 ms","tEnd":"2 ms","initialVelocity":[{{"on":"bar.xmax","value":["1 m/s","0 m/s","0 m/s"]}}]}}"#
+            ),
+        );
+        assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"motion","procedure":"{procedure}","constraints":["root"],"loads":[],"dt":"1 ms","tEnd":"2 ms","initialVelocity":[{{"on":"bar.xmax","value":["0 m/s","0 m/s","0 m/s"]}}]}}"#
+            ),
+        );
+        assert!(e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"motion","procedure":"explicit","constraints":["root"],"loads":[],"tEnd":"2 ms","initialVelocity":[{"on":"bar.xmax","value":["1 m/s","0 m/s","0 m/s"]}]}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"continued","procedure":"implicit","constraints":["root"],"loads":[],"dt":"1 ms","tEnd":"2 ms","after":"motion"}"#,
+    );
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+}
+
+#[test]
+fn transient_heat_initial_temperature_is_a_driver_even_without_loads() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warmup","procedure":"heat-transient","dt":"1 s","tEnd":"2 s","initial":"0 K","constraints":["cold"],"loads":[]}"#,
+    );
+    assert!(e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warmup","procedure":"heat-transient","dt":"1 s","tEnd":"2 s","initial":"100 K","constraints":["cold"],"loads":[]}"#,
+    );
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warmup","procedure":"heat-transient","dt":"1 s","tEnd":"2 s","constraints":["cold"],"loads":[]}"#,
+    );
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unloaded"));
+}
+
+#[test]
 fn mapped_body_warns_until_a_constraint_targets_its_sets() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"supports"}"#);
