@@ -1821,6 +1821,8 @@ pub enum Command {
     /// Uniform pressure on a face Set, positive into the surface (a negative value pulls).
     /// Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
     /// force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
+    /// Shell pressureArea measures the original midsurface; physical curved shell face loads
+    /// include the Section's top/bottom offsets.
     #[serde(rename = "load.pressure", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     LoadPressure { name: String, on: SetRef, value: Q<Stress> },

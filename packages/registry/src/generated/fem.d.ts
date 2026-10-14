@@ -356,6 +356,8 @@ export interface Fem {
      * Uniform pressure on a face Set, positive into the surface (a negative value pulls).
      * Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
      * force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
+     * Shell pressureArea measures the original midsurface; physical curved shell face loads
+     * include the Section's top/bottom offsets.
      */
     pressure(args: Omit<Extract<Command, { cmd: 'load.pressure' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -617,7 +619,9 @@ export interface Fem {
      * Quadratic-element measures still use corner geometry pending #524.
      * Face Sets also report pressureArea from the load boundary quadrature,
      * including thickness or radial weighting (plane strain: one metre of depth). Pressure
-     * times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+     * times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+     * the original midsurface area without requiring Material/Section; curved physical shell
+     * loads use the Section's top/bottom offsets. Builds the Mesh if needed.
      */
     set(args: Omit<Extract<Query, { query: 'query.set' }>, 'query'>): Promise<SetInfo>;
     /**

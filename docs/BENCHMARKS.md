@@ -1767,6 +1767,39 @@ areas. Multiplying by pressure yields the scalar pressure-area integral, not the
 force on a curved boundary. Chromium checks the draft conversion (2.4 MPa × 0.105 m² =
 252 kN), edits and geometry changes without a load Command until Apply.
 
+Shell pressure-area Queries (#525) use the original Quad4 surface map, including both
+3D tangents, rather than interpreting Shell4's intrinsic dimension as a continuum edge.
+The public registry checks horizontal, vertical and oblique unit squares at 1, 2 and 4
+subdivisions per axis: each top/bottom Set reports **1 m²** before any Material or Section
+exists. The oblique square has orthonormal edges `(0.6,0.8,0)` and `(-0.48,0.36,0.8)`,
+so its independent outward unit normal is `(0.64,-0.48,0.6)`. Pressure **100 Pa** gives
+top applied force `-100 n N` and bottom `+100 n N`, checked componentwise to `1e-10 N`
+and balanced by support reactions to `1e-7 N`. Material/Section assignment and solves
+preserve the original query areas. Query-only reads preserve the saved Model and Journal.
+
+For the original bilinear surface `x=1+a*y*z`, `0<=y,z<=1`, the area is the independent
+analytic integral of `sqrt(1+a²(y²+z²))`. With `r=sqrt(1+2a²)`,
+
+`A=[r+(a²+3)/a*asinh(a/sqrt(1+a²))-atan(a²/r)/a²]/3`.
+
+At `a=1/4`, `A=1.0205395019733228 m²`. Both shell face owners agree to `2e-14 m²`;
+uniform 1, 2, 4 and 8 subdivisions converge with observed order in `[3.8,4.2]` and
+coarsest absolute error below `5e-6 m²`. Native one/four-thread execution and Journal
+replay give identical query areas. This is a numerical integral of the original surface,
+not a diagonal triangle area or an exact curved-area claim at one mesh size.
+
+Shell `pressureArea` remains a **material-free midsurface measure**. Physical Shell4 loads
+retain their Section offsets. A unit-radius, unit-length cylindrical patch through
+`theta=atan(3/4)` has midsurface chord area converging to `theta m²` at order two.
+With thickness 0.1 m, the actual top and bottom radii are 1.05 m and 0.95 m. Their
+100 Pa pressure resultants are exactly `(-63,-21,0) N` and `(57,19,0) N`, respectively,
+from `integral n dS=R_face(sin(theta),1-cos(theta),0)`. Tests at 1, 2, 4 and 8 arc
+subdivisions check these projected vector forces and reaction balance independently;
+they do not equate the resultant norm to pressure times scalar midsurface area.
+`tools/test-shell-pressure-area-replay.mjs` runs all these Commands and Queries through
+native execution at one/four threads and WASM, checking per-entry hashes, replay,
+analytic area/refinement and actual applied forces. Physical assembly is unchanged.
+
 ### Transformed Sheet free meshing (#230)
 
 A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°
@@ -2251,9 +2284,9 @@ Queries and per-entry hashes in native execution at one/four threads and WASM.
 The centroid remains the average of corner-node coordinates. These changes
 cover original linear 3D faces and Tet4/Hex8 volumes; original quadratic
 query metrics remain separately tracked in [#524](https://github.com/andeplane/fem-lab/issues/524).
-Shell `pressureArea` has a separate pre-existing query defect, tracked in
-[#525](https://github.com/andeplane/fem-lab/issues/525); its physical Shell4
-load normalization is not changed by this measurement fix.
+Shell `pressureArea` is corrected separately by
+[#525](https://github.com/andeplane/fem-lab/issues/525), described under Loaded boundary area
+above; physical Shell4 load normalization retains its Section offsets.
 
 ### Strict Abaqus linear-static conversion (#503)
 

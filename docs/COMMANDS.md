@@ -591,6 +591,8 @@ Model's torque unit ("5 kN m").
 Uniform pressure on a face Set, positive into the surface (a negative value pulls).
 Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
 force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
+Shell pressureArea measures the original midsurface; physical curved shell face loads
+include the Section's top/bottom offsets.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -4906,7 +4908,9 @@ bilinear area is numerical and converges under refinement, not an exact skin mea
 Quadratic-element measures still use corner geometry pending #524.
 Face Sets also report pressureArea from the load boundary quadrature,
 including thickness or radial weighting (plane strain: one metre of depth). Pressure
-times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+the original midsurface area without requiring Material/Section; curved physical shell
+loads use the Section's top/bottom offsets. Builds the Mesh if needed.
 
 Returns: `SetInfo`.
 
@@ -6146,7 +6150,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
+      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.\nShell pressureArea measures the original midsurface; physical curved shell face loads\ninclude the Section's top/bottom offsets.",
       "type": "object",
       "properties": {
         "name": {

@@ -58,7 +58,9 @@ pub enum Query {
     /// Quadratic-element measures still use corner geometry pending #524.
     /// Face Sets also report pressureArea from the load boundary quadrature,
     /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
-    /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+    /// times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+    /// the original midsurface area without requiring Material/Section; curved physical shell
+    /// loads use the Section's top/bottom offsets. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]
