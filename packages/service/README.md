@@ -14,6 +14,13 @@ For real database tests set `TEST_DATABASE_URL` to a disposable Postgres 17 data
 The tests create isolated schemas and remove only those schemas; CI runs them against
 its own Postgres service. Without that variable these integration tests are skipped.
 
+Account reads add the current UTC monthly free grant idempotently and report balance,
+plan, model allowlist and output ceiling. Grants expire without rollover. Paid grants
+will be admitted only from the verified billing lifecycle, never from a client plan ID.
+Tariff `2026-10-14.v1` stores 30 integer subcredits per public credit, including cache
+writes once and reasoning inside total output. Financial grants/debits are immutable
+database rows. Reservation/settlement admission follows in #549.
+
 The Node host is separate from the headless Rust engine. It shares provider blocks,
 completed tool/continuation events and versioned request schemas with the browser
 through `@femlab/ai`. OpenAI clients, identity, storage, clock and request IDs are
