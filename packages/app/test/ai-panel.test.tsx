@@ -72,6 +72,7 @@ describe('the assistant drawer', () => {
     document.body.innerHTML = '';
     chatBridge.pending = null;
     chatBridge.pendingDraft = null;
+    chatBridge.pendingMentions = [];
     localStorage.clear();
     sessionStorage.clear();
   });
@@ -612,6 +613,48 @@ describe('the assistant drawer', () => {
     render(null, root);
     chatBridge.send('after the drawer closed');
     expect(chatBridge.pending).toBe('after the drawer closed');
+  });
+
+  it('keeps references made before mount and inserts each chip once', async () => {
+    chatBridge.insertMention('body:beam');
+    chatBridge.insertMention('material:steel');
+    chatBridge.insertMention('body:beam');
+    const { root, store } = await mount({ panels: { assistant: false } });
+    await tick();
+    expect(store.state.panels['assistant']).toBe(true);
+    expect([...root.querySelectorAll('.tokens .token')].map(chip => chip.textContent))
+      .toEqual(['@body:beam×', '@material:steel×']);
+    expect(chatBridge.pendingMentions).toEqual([]);
+    await type(root, 'check these');
+    expect(root.querySelectorAll('.tokens .token')).toHaveLength(2);
+  });
+
+  it('opens a collapsed drawer when inserting a reference', async () => {
+    const { root, store, registry } = await mount({ panels: { assistant: false } });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root);
+    await paint();
+    chatBridge.insertMention('body:beam');
+    await tick();
+    expect(store.state.panels['assistant']).toBe(true);
+    expect(root.querySelector('.tokens .token')?.textContent).toContain('@body:beam');
+  });
+
+  it('buffers references after unmount for the next drawer', async () => {
+    const { root } = await mount();
+    render(null, root);
+    chatBridge.insertMention('body:beam');
+    const next = await mount();
+    await tick();
+    expect(next.root.querySelector('.tokens .token')?.textContent).toContain('@body:beam');
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
+
+  it('discards buffered references when chat is cleared before mount', async () => {
+    chatBridge.insertMention('body:beam');
+    chatBridge.clear();
+    const { root } = await mount();
+    await tick();
+    expect(root.querySelectorAll('.tokens .token')).toHaveLength(0);
   });
 });
 
