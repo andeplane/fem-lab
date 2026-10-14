@@ -1,6 +1,7 @@
 export type * from './generated/engine';
 export type { Fem } from './generated/fem';
 export { FemError, nearest, type ErrorCode } from './error';
+export {EMPTY_ACCOUNT,type AccountInfo,type AccountState,type AccountPlan,type AccountServices} from './account-types';
 export { ABAQUS_ACCEPT, MAX_ABAQUS_BYTES, readAbaqus, type AbaqusFile, type AbaqusIo, type AbaqusInput, type AbaqusText } from './abaqus-import';
 export { Registry, type CommandDef, type QueryDef, type HostDef, type EngineSchema, type JsonSchema, type Provider, type RegistryOptions } from './registry';
 export { decodeBulk, type EngineTransport, type ImportAck, type Progress, type Surface, type FieldData, type ResultSelector, type ExportSpec, type ExportedFile, type Op, type Req, type Res, type BufferSpec, type Dtype } from './transport';

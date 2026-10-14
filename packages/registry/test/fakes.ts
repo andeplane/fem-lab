@@ -1,3 +1,4 @@
+import { EMPTY_ACCOUNT } from '../src/account-types';
 import { vi } from 'vitest';
 import type { AbaqusConversion, Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
 import type { FolderInfo, HostContext, OpenProject, ProjectMeta } from '../src/host-commands';
@@ -83,6 +84,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
   let open: ProjectMeta | null = PROJECT;
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
   return {
+    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
     transport,
     abaqus: { capture: vi.fn(() => ({
       io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },

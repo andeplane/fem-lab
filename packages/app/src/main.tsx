@@ -1,3 +1,5 @@
+import { AccountController } from './account/controller';
+import { firebaseAuth } from './account/firebase';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
@@ -34,6 +36,7 @@ const root = document.getElementById('app')!;
 const host = readHostCaps();
 const engineOptions = { gpu: false, threads: host.threads };
 const repository = new ProjectRepository(typeof indexedDB === 'undefined' ? memoryAtomicProjects() : indexedDbAtomicProjects(indexedDB), () => crypto.randomUUID());
+export const accounts = new AccountController(__FIREBASE_CONFIG__ && __AI_API_ORIGIN__ ? { auth: firebaseAuth(__FIREBASE_CONFIG__, location, sessionStorage, () => history.replaceState(null, '', location.pathname + location.hash)), fetch: (...args) => fetch(...args), origin: __AI_API_ORIGIN__, googleEnabled: __GOOGLE_SIGN_IN__, beforeLeave: async () => { await displayed?.prepareToLeave(); }, navigate: url => { location.assign(url); } } : null);
 const bundles = new WeakMap<object, Bundle>();
 const scriptJobs = new Set<{ runner: ScriptHost; producer: Producer }>();
 const nextMeta = (name: string): ProjectMeta => ({ id: crypto.randomUUID(), name, at: Date.now(), createdAt: Date.now(), commands: 0, hash: null, thumbnail: null });
@@ -60,8 +63,10 @@ class Bundle {
   private version: string | null = null;
   private fitAfterOpen = false;
   private initialCamera: CameraState | undefined;
+  private detachAccount = () => {};
   disposed = false;
   constructor(readonly transport: SessionTransport) {
+    this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
     this.results = new ResultsView(this.store, transport, this.viewer, { now: () => performance.now(), schedule: (cb, ms) => setTimeout(cb, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) });
     this.viewer.onReady = () => {
@@ -195,6 +200,7 @@ class Bundle {
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
+    this.detachAccount();
     this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.results.invalidateTransient();
@@ -251,7 +257,7 @@ class Producer {
           replace: async (commands, abaqusReport) => { await transport.replaceWith({ kind: 'commands', commands, abaqusReport }, admitted); },
         };
       },
-    }, bundle.capture);
+    }, bundle.capture, undefined, accounts.services);
     ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());
       try {
@@ -380,6 +386,7 @@ function bootStage(message: string, progress: number): void {
   if (status) status.textContent = message;
   if (bar) bar.style.width = `${progress}%`;
 }
+void accounts.initialize();
 void boot().catch(error => {
   const message = error instanceof Error ? error.message : String(error);
   if (root.querySelector('.boot')) {

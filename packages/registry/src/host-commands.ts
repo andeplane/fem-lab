@@ -14,6 +14,7 @@ import type { HostDef } from './registry';
 import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
 import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
+import {EMPTY_ACCOUNT,type AccountServices} from './account-types';
 export { MAX_MODEL_FILE_BYTES } from './model-file';
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -240,6 +241,7 @@ export interface HostContext {
   /** Hosts replay bundled example Journals and hydrate their presentation after a complete open. */
   examples: { open(name: string): Promise<{ name: string; commands: number }> };
   ai: { setKey(key: string | null, provider: AiProvider): void; setModel(model: string): void };
+  account?:AccountServices;
   env: { webgpu: boolean; crossOriginIsolated: boolean; threads: number; userAgent: string; engine: 'local' | 'remote' };
 }
 
@@ -253,6 +255,11 @@ const def = <S extends z.ZodType>(name: string, execution: ExecutionPolicy, desc
 });
 
 const MAX_TEXT = 2 * 1024 * 1024;
+const account=(ctx:HostContext):AccountServices=>{
+  if(!ctx.account)throw new FemError('unsupported','Accounts are unavailable in this host','account','use the browser account control');
+  return ctx.account;
+};
+const paidPlan=z.enum(['plus','pro','studio']);
 
 /** Write a saved or exported file where the person asked, defaulting to the open folder. */
 async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, name: string, mime: string, data: string | Uint8Array): Promise<{ name: string; to: 'download' | 'folder' }> {
@@ -552,9 +559,20 @@ export const HOST_COMMANDS: HostDef[] = [
   def('solve.cancel', 'control', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
   def('ai.setKey', 'workspace', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'workspace', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
+  def('account.open','control','Open the optional login, AI allowance and subscription panel. Host view state only; never journaled or exposed as an Assistant tool.',none,(_input,ctx)=>ctx.panels.toggle('account',true),false),
+  def('account.signIn','control','Sign in for hosted AI with Google redirect or an email link. Requires an explicit user action; no password, token or provider key is accepted.',z.strictObject({method:z.enum(['google','email']),email:z.email().optional()}),({method,email},ctx)=>account(ctx).signIn(method,email),false),
+  def('account.signOut','control','Sign out this tab session and stop its hosted Assistant access. Local models remain available anonymously.',none,(_input,ctx)=>account(ctx).signOut(),false),
+  def('account.refresh','control','Refresh the verified account allowance and billing status from the service. Cannot select another account.',none,(_input,ctx)=>account(ctx).refresh(),false),
+  def('account.checkout','control','Open hosted checkout for a supported monthly plan. The server owns prices/customer identity; this Command does not grant credits or complete payment.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).checkout(plan),false),
+  def('account.portal','control','Open subscription/payment management for the signed-in account only. Requires an explicit user action; never an Assistant tool.',none,(_input,ctx)=>account(ctx).portal(),false),
+  def('account.changePlan','control','Schedule a supported paid plan for the next billing period. Current credits stay unchanged; the next paid invoice grants the new allowance.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).changePlan(plan),false),
+  def('account.export','control','Request a private export of account, allowance and billing records. Local models and chat are not uploaded or included.',none,(_input,ctx)=>account(ctx).exportData(),false),
+  def('account.delete','control','Request account deletion after explicit DELETE confirmation. Renewal must be canceled before identity removal; local model files remain in this browser.',z.strictObject({confirm:z.literal('DELETE')}),({confirm},ctx)=>account(ctx).deleteAccount(confirm),false),
+  def('ai.acceptDisclosure','control','Acknowledge that hosted Assistant messages, selected model/project context, tool results and images go through FEM Lab to the provider. This tab/account consent is never journaled.',none,(_input,ctx)=>account(ctx).acceptDisclosure(),false),
 ];
 
 export const HOST_QUERIES: HostDef[] = [
+  def('query.account','control','Read the current host account/login and allowance state, excluding credentials and payment customer IDs. Not exposed to Assistant tools or generated scripts.',none,(_input,ctx)=>ctx.account?.state()??EMPTY_ACCOUNT,false),
   def('query.validateScript', 'workspace', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
   def('query.screenshot', 'modelRead', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. A single dimension preserves the current aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
   def('query.view', 'modelRead', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
