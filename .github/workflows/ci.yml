@@ -290,6 +290,8 @@ jobs:
           FEMLAB_AI_MODE: hosted
         run: xvfb-run -a npx playwright test e2e/hosted-account.spec.ts --project=cpu
         working-directory: packages/app
+      # Preserve the generated thumbnails in the downloaded production artifact.
+      - run: cp -R packages/app/dist/examples/thumbnails packages/app/public/examples/
       # Existing supplier wire fixtures use the explicit local development host.
       - run: npm run build -w packages/app
       - name: chromium, cpu path

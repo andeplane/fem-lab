@@ -12,3 +12,12 @@ it('rejects an account switch before any further event is exposed',async()=>{con
 it('uses a forced token only after HTTP 401, with the same idempotency key',async()=>{const f=fixture([{type:'receipt',receipt},{type:'chat',event:{type:'done',stopReason:'stop'}}]);f.fetch.mockResolvedValueOnce(new Response('{}',{status:401}));await collect(f);expect(f.env.token).toHaveBeenCalledWith(true);expect(f.fetch.mock.calls.map(call=>(call[1]!.headers as Record<string,string>)['Idempotency-Key'])).toEqual(['turn-1:0','turn-1:0'])});
 it('never redispatches an accepted duplicate and retains its usage receipt',async()=>{const f=fixture([]);f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({id:'r',state:'settled',receipt}),{headers:{'content-type':'application/json'}}));expect((await collect(f))[0]).toMatchObject({type:'error',message:expect.stringContaining('already accepted')});expect(f.env.request).toHaveBeenCalledWith('r');expect(f.env.receipt).toHaveBeenCalledWith(receipt);expect(f.fetch).toHaveBeenCalledTimes(1)});
 it('surfaces quota errors and aborts a stalled reader',async()=>{const f=fixture([]);f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({cause:'No AI credits available.'}),{status:429}));expect((await collect(f))[0]).toEqual({type:'error',message:'No AI credits available.'});const controller=new AbortController(),cancel=vi.fn();f.fetch.mockResolvedValueOnce(new Response(new ReadableStream({cancel}),{headers:{'content-type':'text/event-stream'}}));const result=collect(f,{...req,signal:controller.signal});await vi.waitFor(()=>expect(f.fetch).toHaveBeenCalledTimes(2));controller.abort();await result;expect(cancel).toHaveBeenCalled()});
+
+it('keeps engineering capabilities available through scripts without paying for every expanded function schema',async()=>{
+  const {Registry,toToolDefinitions}=await import('@femlab/registry');const {hostedTools}=await import('../src/ai/hosted');
+  const {default:schema}=await import('../../registry/src/generated/runtime-schema');
+  const registry=new Registry({schema:schema as never,host:{} as never});const tools=hostedTools(registry),names=tools.map(t=>t.name);
+  expect(names).toContain('run_script');expect(names).toContain('validate_script');expect(names).toContain('query_model');
+  expect(names).not.toContain('geometry_addBox');expect(names).not.toContain('account_checkout');expect(names).not.toContain('query_account');
+  for(const tool of toToolDefinitions(registry).filter(t=>t.name.startsWith('query_')))expect(names).toContain(tool.name);
+});
