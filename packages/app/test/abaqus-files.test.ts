@@ -4,6 +4,10 @@ import { readAbaqus } from '@femlab/registry';
 import { browserAbaqusIo } from '../src/abaqus-files';
 import { ProjectFolder } from '../src/ai/project';
 import { fakeDir } from './project-fake';
+import { Store } from '../src/store';
+import { makeHostContext } from '../src/host';
+import { fakeTransport } from '../../registry/test/fakes';
+import { readHostCaps } from '../src/capabilities';
 
 const crypto = webcrypto as unknown as Pick<Crypto, 'subtle'>;
 const picker = (file: File | null) => {
@@ -45,6 +49,17 @@ it('captures the folder and a File snapshot, with scoped traversal and a clear m
   expect(new TextDecoder().decode(await source.read())).toBe('*NODE\r\n1,0,0,0\r\n');
   await expect(io.read('../bar.inp')).rejects.toMatchObject({ code: 'file.scope' });
   await expect(browserAbaqusIo(document, crypto, null).read('bar.inp')).rejects.toMatchObject({ code: 'file.scope' });
+});
+
+it('admits the currently opened folder before a read and keeps that authority if the folder changes', async () => {
+  const store = new Store();
+  const host = makeHostContext(store, fakeTransport(), { current: null }, readHostCaps({}));
+  const folder = await ProjectFolder.fromHandle(fakeDir({ 'bar.inp': 'admitted folder' }));
+  store.set({ folder });
+  const captured = host.abaqus.capture();
+  store.set({ folder: await ProjectFolder.fromHandle(fakeDir({ 'bar.inp': 'different folder' })) });
+  expect(new TextDecoder().decode(await (await captured.io.read('bar.inp')).read())).toBe('admitted folder');
+  expect(new TextDecoder().decode(await (await host.abaqus.capture().io.read('bar.inp')).read())).toBe('different folder');
 });
 
 it('rejects .odb and oversized Files before arrayBuffer allocates their contents', async () => {

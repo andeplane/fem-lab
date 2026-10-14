@@ -9,6 +9,7 @@ let started!: () => void;
 const scriptStarted = new Promise<void>((resolve) => { started = resolve; });
 const engine: EngineHandle = {
   replaceCommands: async () => undefined,
+  captureImport: function () { return { query: query => this.query(query), replaceCommands: commands => this.replaceCommands(commands) }; },
   release: async () => undefined,
   dispatch: async () => null,
   query: async () => { started(); return { name: 'still alive' }; },

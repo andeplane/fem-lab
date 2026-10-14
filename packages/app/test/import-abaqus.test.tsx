@@ -2,7 +2,8 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { afterEach, expect, it, vi } from 'vitest';
 import { initialState, Store } from '../src/store';
-import { ImportAbaqus } from '../src/ui/ImportAbaqus';
+import { AbaqusImportReport, ImportAbaqus } from '../src/ui/ImportAbaqus';
+import { ABAQUS_CONVERSION } from '../../registry/test/fakes';
 
 const root = document.createElement('div');
 afterEach(() => act(() => render(null, root)));
@@ -67,4 +68,30 @@ it('renders only the requested import dialog and documents the first supported s
   expect(root.textContent).toContain('PART, ASSEMBLY, INSTANCE');
   expect(root.textContent).toContain('OUTPUT');
   expect(root.textContent).toContain('.odb or .cae');
+});
+
+it('shows structured Quantity proposals and the exact published static report without a second approval', () => {
+  const store = new Store();
+  store.set({ panels: { abaqus: true }, form: { cmd: 'file.importAbaqus', values: { name: 'new', body: 'bar', picker: true, mode: 'static', unitLength: { value: 1, unit: 'mm' }, unitForce: { value: 1, unit: 'N' } }, initial: {} } });
+  const dispatch = formDispatch(store);
+  draw(store, dispatch);
+  expect(input('One source length unit').value).toBe('1 mm');
+  expect(input('One source force unit').value).toBe('1 N');
+  store.set({ panels: { abaqusReport: true }, abaqusReport: { ...ABAQUS_CONVERSION.report, mode: 'static', sourceNodes: 5, sourceLabels: { nodes: [1, 2, 3, 4, 9999], elements: [1], unusedNodes: [9999] }, unitForce: { value: 1, unit: 'N' }, sets: [{ kind: 'node', source: 'ROOT', target: 'bar.nset_ROOT', count: 3 }], headings: ['independent fixture'], preprint: [{ echo: false }], analysisConfigured: true, analysis: { material: 'STEEL', sectionElset: 'bar.elset_SOLID', step: 'AXIAL', constraints: ['abaqus_boundary_1'], loads: ['abaqus_cload_1'], finalEquilibriumOnly: true } } });
+  act(() => render(<AbaqusImportReport s={store.state} dispatch={dispatch} />, root));
+  expect(root.textContent).toContain('0.001 m');
+  expect(root.textContent).toContain('1 N');
+  expect(root.textContent).toContain('STEEL');
+  expect(root.textContent).toContain('AXIAL');
+  expect(root.textContent).toContain('bar.nset_ROOT');
+  expect(root.textContent).toContain('9999');
+  expect(root.textContent).toContain('physically unanalysed');
+  expect(root.textContent).toContain('echo=NO');
+  expect(root.textContent).toContain('not solved');
+  expect(root.textContent).toContain('increment history is not reproduced');
+  expect(root.querySelectorAll('button')).toHaveLength(1);
+  click('Close Abaqus import report');
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'panel.toggle', panel: 'abaqusReport', open: false });
+  act(() => render(<AbaqusImportReport s={initialState} dispatch={dispatch} />, root));
+  expect(root.innerHTML).toBe('');
 });

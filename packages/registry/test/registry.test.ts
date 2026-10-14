@@ -49,6 +49,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'skill.invoke': { name: 'beam-theory-check', args: 'beam' },
   'clipboard.copy': { what: { kind: 'text', text: 'plain' } },
   'file.open': { json: JSON.stringify(MODEL_FILE) },
+  'file.importAbaqus': { text: '*NODE', name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 mm' },
   'geometry.importFile': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },

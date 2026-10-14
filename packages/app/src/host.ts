@@ -21,6 +21,8 @@ import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
 import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
+import type { AbaqusConversion, AbaqusConversionReport, AbaqusIo } from '@femlab/registry';
+import { browserAbaqusIo } from './abaqus-files';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -106,11 +108,12 @@ export interface SessionHostServices {
   projects: Projects;
   active(): Promise<void>;
   replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
+  importAbaqus(commands: Command[], report: AbaqusConversionReport): Promise<void>;
 }
 
 const missingSession = (): never => { throw new FemError('session.expired', 'this host has no captured project session'); };
 const unboundSession: SessionHostServices = {
-  active: missingSession, replay: missingSession,
+  active: missingSession, replay: missingSession, importAbaqus: missingSession,
   projects: { prime: missingSession, list: missingSession, current: missingSession, new: missingSession,
     open: missingSession, rename: missingSession, delete: missingSession, save: missingSession,
     setEnabled: missingSession, enabled: missingSession, flush: missingSession },
@@ -129,6 +132,7 @@ export function makeHostContext(
   _refresh: () => Promise<void> = async () => undefined,
   session: SessionHostServices = unboundSession,
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
+  abaqusIo?: AbaqusIo,
 ): HostContext {
   const own = session.projects;
   const v = (): Viewer => {
@@ -137,6 +141,7 @@ export function makeHostContext(
   };
   return {
     transport,
+    abaqus: { capture: () => ({ io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder), convert: async query => await transport.query(query) as AbaqusConversion, replace: (commands, report) => session.importAbaqus(commands, report) }) },
     view: {
       fit: () => v().fit(),
       setCamera: (c) => v().setCamera(c as CameraState),
@@ -533,6 +538,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       run: (input) => {
         const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
         store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);
+        if (command === 'file.importAbaqus') store.togglePanel('abaqus', true);
       },
     },
     {

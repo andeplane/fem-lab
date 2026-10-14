@@ -92,6 +92,7 @@ class Bundle {
       if (source.kind !== 'commands' || source.commands.length !== 1 || source.commands[0]?.cmd !== 'model.new') this.store.markOpened(snapshot.file.journal);
     }
     if (source?.benchmark) this.store.set({ benchmark: { ...source.benchmark, ...benchmarkProvenance(snapshot.model, snapshot.journal, snapshot.model.revision) } });
+    if (source?.abaqusReport) this.store.set({ abaqusReport: structuredClone(source.abaqusReport), panels: { ...this.store.state.panels, abaqusReport: true }, viewMode: 'mesh' });
     await this.primeProjects();
   }
   private publishSnapshot(snapshot: DocumentSnapshot): boolean {
@@ -243,6 +244,7 @@ class Producer {
     const ctx = makeHostContext(bundle.store, transport, bundle.viewer, host, bundle.validation, bundle.results, undefined, undefined, undefined, () => bundle.refresh(), {
       projects: bundle.projectApi(transport), active: () => transport.assertActive(),
       replay: async (commands, benchmark) => { await transport.replaceWith({ kind: 'commands', commands: commands as Command[], ...(benchmark ? { benchmark } : {}) }); },
+      importAbaqus: async (commands, abaqusReport) => { await transport.replaceWith({ kind: 'commands', commands, abaqusReport }); },
     }, bundle.capture);
     ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());

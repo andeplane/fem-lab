@@ -22,6 +22,13 @@ byte for byte.
 - **`export_file { format, path, step? }`** — writes `vtu`, `msh`, `inp`, `stl`, `report` (the
   Markdown calculation note), `script` or `journal` into the `--project` folder. Paths are
   relative to that folder; `..`, absolute paths and symlinks out of it are refused.
+- **`file_importAbaqus { name, body, mode, unitLength, unitForce?, text? | path? }`** — converts
+  a supported flat C3D4/C3D8 `.inp` deck into a new unsolved Model through checked portable
+  Commands. Choose `mesh` or `static`; static requires explicit Force units as well as Length
+  units. A path is scoped to `--project`; inline text needs no folder. The Node host has no
+  picker. Returns exact counts, SI bounds and named object mappings. `.odb`, `.cae`, unsupported
+  content, stale reads and failed validation preserve the current Model. See the
+  [supported import slice](../../docs/plans/500-abaqus-import.md).
 
 Validation has a separate worker and deadline: 10 s by default, configurable up to 30 s for
 `validate_script`, with a 64,000-character source limit. `run_script` first validates with the
@@ -48,6 +55,9 @@ Scripts may invoke the host's `fem.export.file` Command, which uses the same pro
 policy as `export_file`; runtime isolation does not strengthen that host capability's path
 checks. Nested `fem.script.run` calls are refused. The registry remains responsible for
 validating all Commands and Queries.
+`await fem.file.importAbaqus({ text, name: 'bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' })`
+uses the same import Command; solve the returned Step explicitly afterwards. The imported
+Journal replays without the original deck.
 
 The deadline includes worker startup and pending engine calls. At expiry the host closes the
 RPC gate and terminates the worker, including synchronous loops and pending timers. No new

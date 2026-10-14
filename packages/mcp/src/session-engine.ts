@@ -44,6 +44,19 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
           if (!consumed) { candidate?.free(); owner.abandon_replacement(ticket); }
         }
       };
+      const checkedReplace = (input: Record<string, unknown>[], captured?: () => void): Promise<void> => {
+        const commands = structuredClone(input);
+        return ordered(async () => { captured?.(); await replaceCommands(commands); });
+      };
+      const checkedQuery = (input: Record<string, unknown>, captured?: () => void): Promise<unknown> => {
+        const query = structuredClone(input);
+        return ordered(() => {
+          captured?.();
+          const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as { stamp: Stamp; value: unknown };
+          lease = { ...lease, stamp: reply.stamp };
+          return reply.value;
+        });
+      };
       const handle: EngineHandle = {
         dispatch: input => {
           const cmd = structuredClone(input);
@@ -58,17 +71,12 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
             return reply.ack;
           });
         },
-        replaceCommands: input => {
-          const commands = structuredClone(input);
-          return ordered(async () => { await replaceCommands(commands); });
-        },
-        query: input => {
-          const query = structuredClone(input);
-          return ordered(() => {
-            const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as { stamp: Stamp; value: unknown };
-            lease = { ...lease, stamp: reply.stamp };
-            return reply.value;
-          });
+        replaceCommands: input => checkedReplace(input),
+        query: input => checkedQuery(input),
+        captureImport: () => {
+          const admitted = JSON.stringify(context().session);
+          const active = () => { if (JSON.stringify(lease.stamp.session) !== admitted) throw new FemError('session.expired', 'this import belongs to a previous project'); };
+          return { query: input => checkedQuery(input, active), replaceCommands: input => checkedReplace(input, active) };
         },
         modelFile: () => ordered(() => {
           const snapshot = JSON.parse(owner.snapshot(JSON.stringify(context()))) as DocumentSnapshot;

@@ -25,6 +25,8 @@ import {
   type EngineTransport,
   type HostContext,
   type HostDef,
+  type AbaqusConversion,
+  type AbaqusIo,
 } from '@femlab/registry';
 import { constants } from 'node:fs';
 import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
@@ -34,6 +36,7 @@ import engineSchema from '../../registry/src/generated/engine.schema.json' with 
 import type { EngineHandle, EngineProvider } from './engine';
 import { runScript, type ScriptDeps } from './script';
 import { nodeScriptValidator } from './script-validation';
+import { nodeAbaqusIo } from './abaqus-files';
 
 export const SCHEMA = engineSchema as unknown as EngineSchema;
 export const SERVER_NAME = 'femlab';
@@ -49,6 +52,8 @@ export interface ServerDeps {
   validator?: Pick<ScriptValidator, 'validate'>;
   /** Absolute path of the folder `export.file` may write into; without one it refuses. */
   project?: string | undefined;
+  /** Optional I/O injection for a scoped host; production binds the configured project folder. */
+  abaqusIo?: AbaqusIo;
 }
 
 /** One MCP tool as the protocol spells it (`inputSchema`, not Anthropic's `input_schema`). */
@@ -140,7 +145,7 @@ export function createRegistry(deps: ServerDeps): Registry {
   // The public registry can describe tools without a lease. Every invocation must acquire
   // one, and nested script calls use the private registry bound to that same request.
   const unavailable = (): never => { throw new FemError('session.expired', 'no request lease'); };
-  const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, replaceCommands: unavailable, modelFile: unavailable, release: unavailable } });
+  const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, replaceCommands: unavailable, captureImport: unavailable, modelFile: unavailable, release: unavailable } });
   const request = async <T>(run: (scoped: Registry) => Promise<T>): Promise<T> => {
     const engine = await deps.engine.acquire();
     try { return await run(scopedRegistry({ ...deps, engine })); }
@@ -154,8 +159,13 @@ export function createRegistry(deps: ServerDeps): Registry {
 function scopedRegistry(deps: ScopedDeps): Registry {
   let registry: Registry;
   const validator = deps.validator ?? nodeScriptValidator();
+  const abaqus: HostContext['abaqus'] = { capture: () => {
+    const engine = deps.engine.captureImport();
+    return { io: deps.abaqusIo ?? nodeAbaqusIo(deps.project), convert: async query => await engine.query(query) as AbaqusConversion, replace: commands => engine.replaceCommands(commands) };
+  } };
   const host = {
     transport: deps.engine as unknown as EngineTransport,
+    abaqus,
     script: {
       validate: (code: string, timeoutMs?: number) => validator.validate(code, timeoutMs),
       run: (code: string, timeoutMs?: number) =>
@@ -172,7 +182,7 @@ function scopedRegistry(deps: ScopedDeps): Registry {
     ...d,
     description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
   }));
-  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
+  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, ...HOST_COMMANDS.filter(d => d.name === 'file.importAbaqus'), exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
   return registry;
 }
 
