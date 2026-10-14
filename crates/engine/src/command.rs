@@ -661,6 +661,19 @@ pub struct SurfacePatchSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSpec {
+    /// An immutable authored finite-element mesh, with positive source labels and exact
+    /// memberships. Coordinates carry length units; connectivity is in source node labels,
+    /// never dense indices. Unused authored nodes and exact memberships survive in the Model,
+    /// with explicit unused-label reporting; only participating nodes have FE DOFs/Results.
+    /// Loads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard
+    /// full integration. Requires solid3d,
+    /// order 1, formulation full and no simplices/refinement; sweeping and size studies are
+    /// unsupported. Original cell maps and contacts require a conservative exact certificate;
+    /// uncertified geometry returns unsupported, without claiming invalidity or simplifying
+    /// warped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.
+    /// Coincident labelled nodes remain distinct. Replace the whole checked
+    /// source with mesh.set; named source Sets belong to the mesher and cannot be edited alone.
+    Imported(ImportedMeshSpec),
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
     Lattice {
@@ -728,6 +741,77 @@ pub enum MesherSpec {
         body: Option<String>,
         patches: Vec<SurfacePatchSpec>,
     },
+}
+
+/// An authored finite-element source; I/O and parsing belong to hosts/converters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedMeshSpec {
+    pub body: String,
+    pub nodes: Vec<ImportedNodeSpec>,
+    pub elements: Vec<ImportedElement>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub node_sets: BTreeMap<String, Vec<u32>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub element_sets: BTreeMap<String, Vec<u32>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, Vec<ImportedFace>>,
+    /// Allocate <body>.node_<label> targets only for requested numeric node references.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_targets: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ImportedProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedNodeSpec {
+    /// Positive original node label, at most 999999999.
+    pub label: u32,
+    pub at: [Q<Length>; 3],
+}
+
+/// Only the explicitly supported standard, first-order 3D solids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportedElementKind {
+    Tet4,
+    Hex8,
+}
+
+impl ImportedElementKind {
+    pub fn geometry(self) -> femlab_geometry::ElementKind {
+        match self {
+            Self::Tet4 => femlab_geometry::ElementKind::Tet4,
+            Self::Hex8 => femlab_geometry::ElementKind::Hex8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedElement {
+    pub label: u32,
+    pub kind: ImportedElementKind,
+    /// Source node labels in Abaqus connectivity order, exactly four or eight.
+    pub nodes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedFace {
+    /// Original element label.
+    pub element: u32,
+    /// Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
+    pub face: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedProvenance {
+    /// SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.
+    pub sha256: String,
+    pub conversion_version: String,
 }
 
 /// Local maximum edge lengths applied after the chosen mesher. Bounds are world
@@ -1570,7 +1654,9 @@ pub enum Command {
     /// geometry: the selected mesher still determines the boundary approximation, and the `tet`
     /// mesher is the one that meshes a curved solid freely. `formulation` has no effect when
     /// `simplices` is true, or under the `tet` mesher, because simplex elements have no
-    /// incompatible modes.
+    /// incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
+    /// default to full integration, and require order 1, solid3d, no simplex split/refinement.
+    /// Removing or emptying a referenced imported Set fails without mutation.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     MeshSet {

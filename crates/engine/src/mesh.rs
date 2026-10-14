@@ -64,6 +64,8 @@ impl ResolvedSet {
 /// The Mesh plus everything derived with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltMesh {
+    /// Authored labels in dense array order; empty for geometric meshers.
+    pub source_labels: crate::imported::SourceLabels,
     /// Analytic shell directors per element; empty for other meshers.
     pub directors: Vec<[[f64; 3]; 4]>,
     pub mesh: Mesh,
@@ -92,7 +94,33 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let mut directors = Vec::new();
+    let mut source_labels = crate::imported::SourceLabels::default();
     let (mut mesh, body_of_block, mut body_faces) = match &settings.mesher {
+        MesherSettings::Imported(source) => {
+            if settings.order != 1
+                || settings.formulation != crate::command::Formulation::Full
+                || settings.simplices
+                || settings.refinement.is_some()
+                || !model.bodies.is_empty()
+            {
+                return Err(Error::new(
+                    ErrorCode::Unsupported,
+                    "imported sources require an unchanged first-order, full-integration source as the only Body",
+                )
+                .at("mesher")
+                .suggest("mesh.set with order 1, formulation full and no split/refinement"));
+            }
+            let (part, labels) = crate::imported::build(source)?;
+            source_labels = labels;
+            if dim != 3 {
+                return Err(Error::new(ErrorCode::Unsupported, "imported sources require solid3d idealisation")
+                    .at("mesher")
+                    .suggest("model.setIdealisation with solid3d"));
+            }
+            let faces = part.boundary_faces();
+            let blocks = part.blocks.len();
+            (part, vec![source.body.clone(); blocks], BTreeMap::from([(source.body.clone(), faces)]))
+        }
         MesherSettings::Surface { body, patches } => {
             if quadratic || settings.simplices {
                 return Err(Error::new(
@@ -162,6 +190,18 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
             elems: Vec::new(),
         });
     }
+    for (name, elems) in &mesh.elem_sets {
+        if name == "all" {
+            continue;
+        }
+        let mut nodes: Vec<_> = elems.iter().flat_map(|&e| mesh.elem_nodes(e).iter().copied()).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        sets.insert(
+            name.clone(),
+            ResolvedSet { kind: SetKind::Element, faces: Vec::new(), nodes, elems: elems.clone() },
+        );
+    }
     for named in &model.sets {
         let (resolved, probe) = match &named.source {
             SetSource::Face { of, where_ } => {
@@ -213,7 +253,7 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         );
         points.push(node);
     }
-    Ok(BuiltMesh { mesh, body_of_block, sets, points, directors })
+    Ok(BuiltMesh { mesh, body_of_block, sets, points, directors, source_labels })
 }
 
 /// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces
@@ -226,14 +266,15 @@ type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
 /// swept mesh is the base's.
 fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
     match m {
-        MesherSettings::Surface { .. } | MesherSettings::Lattice { .. } | MesherSettings::Tet { .. } => {
-            Err(Error::new(
-                ErrorCode::MeshFailed,
-                "a sweep needs a 2D base mesher; lattice and tet mesh whole Bodies, and surface meshes 3D shells",
-            )
-            .at("mesher.base")
-            .suggest("mesh.set with a mapped base"))
-        }
+        MesherSettings::Imported(_)
+        | MesherSettings::Surface { .. }
+        | MesherSettings::Lattice { .. }
+        | MesherSettings::Tet { .. } => Err(Error::new(
+            ErrorCode::MeshFailed,
+            "a sweep needs a 2D base mesher; lattice and tet mesh whole Bodies, and surface meshes 3D shells",
+        )
+        .at("mesher.base")
+        .suggest("mesh.set with a mapped base")),
         MesherSettings::Mapped { body, blocks } => {
             let kind = if quadratic { ElementKind::Quad8 } else { ElementKind::Quad4 };
             let part = mapped(blocks, kind).map_err(|e| {
@@ -455,6 +496,7 @@ fn positive_size(q: &Q<Length>, at: &str) -> Result<f64, Error> {
 /// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.
 pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
     match spec {
+        MesherSpec::Imported(spec) => crate::imported::source(spec).map(MesherSettings::Imported),
         MesherSpec::Surface { body, patches } => Ok(MesherSettings::Surface {
             body: body.clone().unwrap_or_else(|| "shell".into()),
             patches: patches.iter().enumerate().map(|(i, p)| surface_patch(p, i)).collect::<Result<_, _>>()?,
@@ -509,7 +551,13 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
             Ok(MesherSettings::Free { of: of.clone(), size: s, refine: boxes })
         }
         MesherSpec::Sweep { base, sweep } => {
-            Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })
+            let base = mesher_settings(base)?;
+            if matches!(base, MesherSettings::Imported(_)) {
+                return Err(Error::new(ErrorCode::Unsupported, "an imported source cannot be swept")
+                    .at("mesher.base")
+                    .suggest("mesh.set with the original imported source"));
+            }
+            Ok(MesherSettings::Sweep { base: Box::new(base), sweep: sweep_settings(sweep)? })
         }
         MesherSpec::Tet(crate::command::TetSpec { size, max_elements }) => {
             let s = size.si().map_err(|e| e.at("mesher.size"))?;
@@ -540,6 +588,7 @@ const DEFAULT_MAX_ELEMENTS: u32 = 500_000;
 pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
     let k = |n: usize| ((n as f64 * h0 / h).round() as usize).max(1);
     match m {
+        MesherSettings::Imported(source) => MesherSettings::Imported(source.clone()),
         MesherSettings::Surface { body, patches } => MesherSettings::Surface {
             body: body.clone(),
             patches: patches.iter().map(|p| femlab_geometry::SurfacePatch { n: p.n.map(k), ..p.clone() }).collect(),

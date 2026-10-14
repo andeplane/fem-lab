@@ -16,6 +16,7 @@ pub mod fem;
 mod frames;
 pub mod gpu;
 pub mod hash;
+pub mod imported;
 pub mod io;
 pub mod journal;
 mod material_library;

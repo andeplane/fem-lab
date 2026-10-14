@@ -102,6 +102,19 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
     let missing = || Error::not_found(kind.label(), name, &m.names(kind)).suggest("query.objects");
     Ok(match kind {
         ObjectKind::Body => {
+            if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
+                &m.mesh
+            {
+                if source.body == name {
+                    return Ok(Command::MeshSet {
+                        mesher: MesherSpec::Imported(crate::imported::spec(source)),
+                        order: Some(1),
+                        formulation: Some(Formulation::Full),
+                        simplices: Some(false),
+                        refinement: None,
+                    });
+                }
+            }
             let b = m.body(name).ok_or_else(missing)?;
             match &b.shape {
                 Shape::Polyline { points, members, divisions, beam } => Command::GeometryAddLine {
@@ -203,6 +216,18 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
             }
         }
         ObjectKind::Set => {
+            if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
+                &m.mesh
+            {
+                if source.set_names().contains(name) {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "imported Sets are immutable mesher-owned memberships",
+                    )
+                    .at("name")
+                    .suggest("query.definition of the owning Body, then mesh.set with a replacement source"));
+                }
+            }
             let x = m.sets.iter().find(|s| s.name == name).ok_or_else(missing)?;
             match &x.source {
                 SetSource::Face { of, where_ } => {

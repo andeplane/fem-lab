@@ -587,6 +587,8 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSettings {
+    /// Checked immutable source. Coordinates are SI, memberships retain original labels.
+    Imported(crate::imported::ImportedMesh),
     Surface {
         body: String,
         patches: Vec<femlab_geometry::SurfacePatch>,
@@ -632,7 +634,10 @@ impl MesherSettings {
     /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
     pub fn rename_body(&mut self, from: &str, to: &str) {
         match self {
-            Self::Surface { body, .. } | Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
+            Self::Imported(crate::imported::ImportedMesh { body, .. })
+            | Self::Surface { body, .. }
+            | Self::Mapped { body, .. }
+            | Self::Free { of: body, .. } => {
                 if body == from {
                     *body = to.into();
                 }
@@ -661,13 +666,18 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Surface { .. } | Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
+            Self::Imported(_)
+            | Self::Surface { .. }
+            | Self::Mapped { .. }
+            | Self::Lattice { .. }
+            | Self::Tet { .. } => None,
         }
     }
 
     /// The Body a mesher makes on its own, without a `geometry.add`: the mapped mesher's.
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
+            MesherSettings::Imported(source) => Some(&source.body),
             MesherSettings::Lattice { .. } => None,
             MesherSettings::Surface { body, .. } | MesherSettings::Mapped { body, .. } => Some(body),
             MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
@@ -873,6 +883,11 @@ impl Model {
     pub fn knows_set(&self, set: &str) -> bool {
         if self.sets.iter().any(|s| s.name == set) || self.points.iter().any(|p| p.name == set) {
             return true;
+        }
+        if let Some(MeshSettings { mesher: MesherSettings::Imported(source), .. }) = &self.mesh {
+            if set.starts_with(&format!("{}.", source.body)) {
+                return source.set_names().contains(set);
+            }
         }
         match set.rsplit_once('.') {
             Some((prefix, tag)) => !tag.is_empty() && self.set_prefixes().contains(prefix),

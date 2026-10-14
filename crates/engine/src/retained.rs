@@ -363,6 +363,7 @@ impl Engine {
             })
             .collect();
         Ok(crate::query::ResultSurface {
+            source_labels: if built.source_labels.nodes.is_empty() { None } else { Some(built.source_labels.clone()) },
             result_id: record.id.clone(),
             step: record.step.clone(),
             node_count: mesh.n_nodes(),
@@ -540,6 +541,10 @@ impl Engine {
 pub(crate) fn mesh_bytes(built: &BuiltMesh) -> u64 {
     let mesh = &built.mesh;
     let mesh_bytes = mesh.coords.len() * 8
+        + (built.source_labels.nodes.len()
+            + built.source_labels.elements.len()
+            + built.source_labels.unused_nodes.len())
+            * 4
         + std::mem::size_of_val(built.directors.as_slice())
         + mesh.blocks.iter().map(|b| b.conn.len() * 4).sum::<usize>()
         + mesh.node_sets.values().chain(mesh.elem_sets.values()).map(|s| s.len() * 4).sum::<usize>()
@@ -560,6 +565,7 @@ mod tests {
     fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
         let nodes = mesh.n_nodes();
         engine.mesh = Some(BuiltMesh {
+            source_labels: Default::default(),
             directors: Vec::new(),
             mesh,
             body_of_block: vec!["body".into()],

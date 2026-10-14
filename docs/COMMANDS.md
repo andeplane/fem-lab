@@ -340,9 +340,8 @@ else. It contributes to the mass matrix (so it changes modal frequencies) and to
 (m·g at that point), and has no stiffness whatever, so it must be attached to the model
 with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
 The point is also a node Set of the same name, so constraint.couple, constraint.fix,
-load.force and query.set target it by name. Re-issuing an existing point-mass name
-replaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes
-it. It carries no rotary inertia — a node has no rotations —
+load.force and query.set target it by name. Re-issuing with an existing name replaces
+it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
 so it models a compact mass, not a flywheel.
 
 | Argument | Required | Schema | Description |
@@ -392,7 +391,6 @@ of those) so constraints and loads can target it. Rules are re-evaluated after e
 remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
 implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
 Body's actual mesh boundary. Prefer the auto face names when one fits.
-Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -409,7 +407,6 @@ Name a node/element Set by a region rule (a box or a whole Body), for point-like
 constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
 use a box slightly larger than the points you mean. A whole-Body rule also accepts
 the implicit Body defined by a mapped or swept mapped mesher.
-Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -421,8 +418,7 @@ Reissuing replaces an existing named Set; a Body, cut or point-mass name is rese
 
 ### geometry.remove
 
-Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.
-Fails with in-use listing the constraints, loads
+Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
 (including temperature and volumetric heat sources), named selectors or free-mesher
 geometry references that still use a Body; remove or retarget those first. Removing
 a mapped or swept mapped Body clears its mesher and material association, preserving
@@ -706,18 +702,18 @@ with an existing name edits the material in place, so an omitted `orientation` o
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string","x-physics":"common"}</code> | Unique Material name; reusing a name replaces its full definition. |
-| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}],"x-physics":"stiffness"}</code> | Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness. |
-| nu | no | <code>{"type":["number","null"],"format":"double","x-physics":"stiffness"}</code> | Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness. |
-| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}],"x-physics":"anisotropy"}</code> | Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition. |
-| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}],"x-physics":"anisotropy"}</code> | Rotation of the Material axes from global axes; omitted means the global axes. |
-| rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}],"x-physics":"mass"}</code> | Mass density for gravity, inertia and transient heat capacity. |
-| alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}],"x-physics":"expansion"}</code> | Isotropic thermal expansion per temperature change; use this or orthotropic.alpha. |
-| k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}],"x-physics":"thermal"}</code> | Isotropic thermal conductivity for heat conduction; use this or orthotropic.k. |
-| cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}],"x-physics":"thermal"}</code> | Specific heat per unit mass for transient heat conduction; used with rho. |
-| yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}],"x-physics":"plasticity"}</code> | Initial yield stress for plasticity and the reported safety factor. |
-| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}],"x-physics":"plasticity"}</code> | J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu. |
-| source | no | <code>{"type":["string","null"],"x-physics":"common"}</code> | Source or reference for these property values, retained with the Material. |
+| name | yes | <code>{"type":"string"}</code> |  |
+| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
+| nu | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
+| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}]}</code> |  |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}]}</code> |  |
+| rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}]}</code> |  |
+| alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}]}</code> |  |
+| k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}]}</code> |  |
+| cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}]}</code> |  |
+| yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
+| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}]}</code> |  |
+| source | no | <code>{"type":["string","null"]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"material.add"}</code> |  |
 
 <a id="commands-material-assign"></a>
@@ -756,8 +752,6 @@ point data — displacement, reaction, stress and von Mises — so ParaView colo
 Result fields require the Model state they were solved on; `result.stale` means run
 `solve.run` on that Step again before exporting it with the current Mesh.
 `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
-`inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading
-returns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -772,9 +766,8 @@ returns `export.unavailable`. It writes no Materials, Constraints, Loads or Step
 Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
 `formulation: full` is the textbook linear element that locks in bending: keep the
-default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
-owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
-Keeping that name preserves its material;
+default incompatible modes or use order 2 when bending matters. Mapped geometry owns
+a Body name distinct from explicit geometry. Keeping that name preserves its material;
 changing/removing it requires no remaining Body references and clears its material.
 Use model.rename to change an implicit Body name while preserving its references.
 `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
@@ -782,7 +775,9 @@ Use model.rename to change an implicit Body name while preserving its references
 geometry: the selected mesher still determines the boundary approximation, and the `tet`
 mesher is the one that meshes a curved solid freely. `formulation` has no effect when
 `simplices` is true, or under the `tet` mesher, because simplex elements have no
-incompatible modes.
+incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
+default to full integration, and require order 1, solid3d, no simplex split/refinement.
+Removing or emptying a referenced imported Set fails without mutation.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -802,7 +797,6 @@ copy references the same Constraints and Loads. Useful for "the same load case b
 twice the pressure": duplicate, then re-issue the create Command with the new value.
 A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
 slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
-A Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -831,9 +825,7 @@ at the start, never to "reset" mid-way (use journal.undo for that).
 
 Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
 rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-already exists in that kind. Bodies and Sets also share the geometry namespace with
-cuts and point masses, so their new name cannot shadow any geometry owner.
-Mapped and swept mapped Bodies also rename their mesher
+already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
 geometry, named Face/Body-region selectors and material association.
 
 | Argument | Required | Schema | Description |
@@ -1801,6 +1793,146 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>ImportedElement</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "kind": {
+      "$ref": "#/$defs/ImportedElementKind"
+    },
+    "nodes": {
+      "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "kind",
+    "nodes"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedElementKind</summary>
+
+```json
+{
+  "description": "Only the explicitly supported standard, first-order 3D solids.",
+  "type": "string",
+  "enum": [
+    "tet4",
+    "hex8"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedFace</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "element": {
+      "description": "Original element label.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "face": {
+      "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "element",
+    "face"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedNodeSpec</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "description": "Positive original node label, at most 999999999.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "at": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "at"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedProvenance</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sha256": {
+      "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
+      "type": "string"
+    },
+    "conversionVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sha256",
+    "conversionVersion"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>InitialVelocitySpec</summary>
 
 ```json
@@ -1930,6 +2062,88 @@ Expand a definition to inspect its complete schema. Definition names are local t
 {
   "description": "The mesher and its settings.",
   "oneOf": [
+    {
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedNodeSpec"
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedElement"
+          }
+        },
+        "nodeSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "elementSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "surfaces": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ImportedFace"
+            }
+          }
+        },
+        "nodeTargets": {
+          "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportedProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "imported"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "body",
+        "nodes",
+        "elements"
+      ]
+    },
     {
       "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
       "type": "object",
@@ -2171,43 +2385,34 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "type": "object",
   "properties": {
     "E1": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "E2": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "E3": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "G12": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "G13": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "G23": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "nu12": {
       "type": "number",
-      "format": "double",
-      "x-physics": "stiffness"
+      "format": "double"
     },
     "nu13": {
       "type": "number",
-      "format": "double",
-      "x-physics": "stiffness"
+      "format": "double"
     },
     "nu23": {
       "type": "number",
-      "format": "double",
-      "x-physics": "stiffness"
+      "format": "double"
     },
     "alpha": {
       "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -2219,8 +2424,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_thermal_expansion"
       },
       "minItems": 3,
-      "maxItems": 3,
-      "x-physics": "expansion"
+      "maxItems": 3
     },
     "k": {
       "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -2232,8 +2436,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_conductivity"
       },
       "minItems": 3,
-      "maxItems": 3,
-      "x-physics": "thermal"
+      "maxItems": 3
     }
   },
   "additionalProperties": false,
@@ -2438,9 +2641,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "stress",
         "reactions"
-      ],
-      "x-material-physics": [
-        "stiffness"
       ]
     },
     {
@@ -2462,10 +2662,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "Cauchy stress",
         "reactions"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "plasticity"
       ]
     },
     {
@@ -2485,10 +2681,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "natural frequencies",
         "mode shapes"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -2507,9 +2699,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "load factors",
         "mode shapes"
-      ],
-      "x-material-physics": [
-        "stiffness"
       ]
     },
     {
@@ -2526,10 +2715,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "T",
         "reaction power"
-      ],
-      "x-material-physics": [
-        "thermal",
-        "mass"
       ]
     },
     {
@@ -2551,10 +2736,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "T",
         "reaction power",
         "stored-energy rate"
-      ],
-      "x-material-physics": [
-        "thermal",
-        "mass"
       ]
     },
     {
@@ -2577,10 +2758,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -2603,10 +2780,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -2627,10 +2800,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "amplitude",
         "phase",
         "frequency response"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -2650,10 +2819,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "1σ displacement",
         "1σ stress"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     }
   ]
@@ -4830,7 +4995,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Bodies and Sets also share the geometry namespace with\ncuts and point masses, so their new name cannot shadow any geometry owner.\nMapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
       "type": "object",
       "properties": {
         "kind": {
@@ -4856,7 +5021,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.\nA Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.",
+      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
       "type": "object",
       "properties": {
         "kind": {
@@ -5140,7 +5305,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
+      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
       "type": "object",
       "properties": {
         "name": {
@@ -5166,7 +5331,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
+      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
       "type": "object",
       "properties": {
         "name": {
@@ -5188,7 +5353,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.\nFails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
+      "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
       "type": "object",
       "properties": {
         "name": {
@@ -5206,7 +5371,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing an existing point-mass name\nreplaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes\nit. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
       "type": "object",
       "properties": {
         "name": {
@@ -5241,12 +5406,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
-          "description": "Unique Material name; reusing a name replaces its full definition.",
-          "type": "string",
-          "x-physics": "common"
+          "type": "string"
         },
         "E": {
-          "description": "Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -5254,20 +5416,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "stiffness"
+          ]
         },
         "nu": {
-          "description": "Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double",
-          "x-physics": "stiffness"
+          "format": "double"
         },
         "orthotropic": {
-          "description": "Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orthotropic"
@@ -5275,11 +5433,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "anisotropy"
+          ]
         },
         "orientation": {
-          "description": "Rotation of the Material axes from global axes; omitted means the global axes.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orientation"
@@ -5287,11 +5443,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "anisotropy"
+          ]
         },
         "rho": {
-          "description": "Mass density for gravity, inertia and transient heat capacity.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_density"
@@ -5299,11 +5453,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "mass"
+          ]
         },
         "alpha": {
-          "description": "Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_thermal_expansion"
@@ -5311,11 +5463,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "expansion"
+          ]
         },
         "k": {
-          "description": "Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_conductivity"
@@ -5323,11 +5473,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "thermal"
+          ]
         },
         "cp": {
-          "description": "Specific heat per unit mass for transient heat conduction; used with rho.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_specific_heat"
@@ -5335,11 +5483,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "thermal"
+          ]
         },
         "yield": {
-          "description": "Initial yield stress for plasticity and the reported safety factor.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -5347,11 +5493,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "plasticity"
+          ]
         },
         "plasticity": {
-          "description": "J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.",
           "anyOf": [
             {
               "$ref": "#/$defs/Plasticity"
@@ -5359,16 +5503,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ],
-          "x-physics": "plasticity"
+          ]
         },
         "source": {
-          "description": "Source or reference for these property values, retained with the Material.",
           "type": [
             "string",
             "null"
-          ],
-          "x-physics": "common"
+          ]
         },
         "cmd": {
           "type": "string",
@@ -5500,7 +5641,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -5554,7 +5695,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).\n`inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading\nreturns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.",
+      "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
       "type": "object",
       "properties": {
         "format": {
@@ -7544,6 +7685,146 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>ImportedElement</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "kind": {
+      "$ref": "#/$defs/ImportedElementKind"
+    },
+    "nodes": {
+      "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "kind",
+    "nodes"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedElementKind</summary>
+
+```json
+{
+  "description": "Only the explicitly supported standard, first-order 3D solids.",
+  "type": "string",
+  "enum": [
+    "tet4",
+    "hex8"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedFace</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "element": {
+      "description": "Original element label.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "face": {
+      "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "element",
+    "face"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedNodeSpec</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "description": "Positive original node label, at most 999999999.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "at": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "at"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedProvenance</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sha256": {
+      "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
+      "type": "string"
+    },
+    "conversionVersion": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sha256",
+    "conversionVersion"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>InitialVelocitySpec</summary>
 
 ```json
@@ -7726,6 +8007,88 @@ Expand a definition to inspect its complete schema. Definition names are local t
 {
   "description": "The mesher and its settings.",
   "oneOf": [
+    {
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedNodeSpec"
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedElement"
+          }
+        },
+        "nodeSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "elementSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "surfaces": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ImportedFace"
+            }
+          }
+        },
+        "nodeTargets": {
+          "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportedProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "imported"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "body",
+        "nodes",
+        "elements"
+      ]
+    },
     {
       "description": "Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering\nevery Body; exact for box geometry, stair-stepped for curved bodies.",
       "type": "object",
@@ -7967,43 +8330,34 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "type": "object",
   "properties": {
     "E1": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "E2": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "E3": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "G12": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "G13": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "G23": {
-      "$ref": "#/$defs/Q_stress",
-      "x-physics": "stiffness"
+      "$ref": "#/$defs/Q_stress"
     },
     "nu12": {
       "type": "number",
-      "format": "double",
-      "x-physics": "stiffness"
+      "format": "double"
     },
     "nu13": {
       "type": "number",
-      "format": "double",
-      "x-physics": "stiffness"
+      "format": "double"
     },
     "nu23": {
       "type": "number",
-      "format": "double",
-      "x-physics": "stiffness"
+      "format": "double"
     },
     "alpha": {
       "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -8015,8 +8369,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_thermal_expansion"
       },
       "minItems": 3,
-      "maxItems": 3,
-      "x-physics": "expansion"
+      "maxItems": 3
     },
     "k": {
       "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -8028,8 +8381,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_conductivity"
       },
       "minItems": 3,
-      "maxItems": 3,
-      "x-physics": "thermal"
+      "maxItems": 3
     }
   },
   "additionalProperties": false,
@@ -8234,9 +8586,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "stress",
         "reactions"
-      ],
-      "x-material-physics": [
-        "stiffness"
       ]
     },
     {
@@ -8258,10 +8607,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "u",
         "Cauchy stress",
         "reactions"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "plasticity"
       ]
     },
     {
@@ -8281,10 +8626,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "natural frequencies",
         "mode shapes"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -8303,9 +8644,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "load factors",
         "mode shapes"
-      ],
-      "x-material-physics": [
-        "stiffness"
       ]
     },
     {
@@ -8322,10 +8660,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "T",
         "reaction power"
-      ],
-      "x-material-physics": [
-        "thermal",
-        "mass"
       ]
     },
     {
@@ -8347,10 +8681,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "T",
         "reaction power",
         "stored-energy rate"
-      ],
-      "x-material-physics": [
-        "thermal",
-        "mass"
       ]
     },
     {
@@ -8373,10 +8703,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -8399,10 +8725,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "stress",
         "reactions",
         "time history"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -8423,10 +8745,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "amplitude",
         "phase",
         "frequency response"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     },
     {
@@ -8446,10 +8764,6 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-results": [
         "1σ displacement",
         "1σ stress"
-      ],
-      "x-material-physics": [
-        "stiffness",
-        "mass"
       ]
     }
   ]

@@ -141,7 +141,14 @@ impl Engine {
         };
         let measure: f64 = (0..built.mesh.n_elems() as u32).map(|e| elem_measure(&built.mesh, e)).sum();
         let prefix = format!("{name}.");
-        let faces = built.sets.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        let imported =
+            matches!(self.model.mesh.as_ref().map(|m| &m.mesher), Some(crate::model::MesherSettings::Imported(_)));
+        let faces = built
+            .sets
+            .iter()
+            .filter(|(k, s)| k.starts_with(&prefix) && (!imported || s.kind == crate::mesh::SetKind::Face))
+            .map(|(k, _)| k.clone())
+            .collect();
         let m = &self.model;
         Some(BodyRow {
             name,
@@ -287,7 +294,7 @@ impl Engine {
                     .collect(),
             })
             .collect();
-        let sets = m
+        let mut sets: Vec<SetRow> = m
             .sets
             .iter()
             .map(|s| match &s.source {
@@ -301,6 +308,22 @@ impl Engine {
                 }
             })
             .collect();
+        if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) = &m.mesh
+        {
+            if let Some(built) = &self.mesh {
+                sets.extend(built.sets.iter().filter(|(name, _)| !m.sets.iter().any(|s| &s.name == *name)).map(
+                    |(name, set)| SetRow {
+                        name: name.clone(),
+                        kind: set.kind.as_str().into(),
+                        summary: format!(
+                            "{} {}s (imported source)",
+                            source.node_members(name).map_or(set.count(), |labels| labels.len()),
+                            set.kind.as_str()
+                        ),
+                    },
+                ));
+            }
+        }
         let connections = m
             .constraints
             .iter()
@@ -526,6 +549,7 @@ impl Engine {
         }
         let q = femlab_geometry::quality(mesh, 10);
         Ok(MeshSummary {
+            source_labels: if built.source_labels.nodes.is_empty() { None } else { Some(built.source_labels.clone()) },
             nodes: mesh.n_nodes() as u32,
             elements: mesh.n_elems() as u32,
             element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
@@ -555,10 +579,53 @@ impl Engine {
 
     /// `query.set`: what a Set resolved to on the current Mesh.
     fn query_set(&mut self, name: &str) -> Result<SetInfo, Error> {
+        if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
+            &self.model.mesh
+        {
+            if let Some(labels) = source.node_members(name) {
+                if labels.is_empty() {
+                    return Err(Error::new(ErrorCode::SetEmpty, format!("source Set '{name}' has no members"))
+                        .at("name")
+                        .suggest("mesh.set with a nonempty imported Set"));
+                }
+                let mut lo = [f64::INFINITY; 3];
+                let mut hi = [f64::NEG_INFINITY; 3];
+                let mut centroid = [0.0; 3];
+                for &label in &labels {
+                    let node = source.nodes.binary_search_by_key(&label, |n| n.label).map_err(|_| {
+                        Error::schema(format!("source Set references missing node {label}")).at("mesher.nodeSets")
+                    })?;
+                    for k in 0..3 {
+                        let value = source.nodes[node].at[k];
+                        lo[k] = lo[k].min(value);
+                        hi[k] = hi[k].max(value);
+                        centroid[k] += value / labels.len() as f64;
+                    }
+                }
+                let participating = source.participating_labels();
+                let unused = labels.iter().filter(|label| !participating.contains(label)).copied().collect();
+                return Ok(SetInfo {
+                    count: labels.len() as u32,
+                    source_node_labels: Some(labels),
+                    unused_source_node_labels: unused,
+                    name: name.into(),
+                    kind: "node".into(),
+                    bbox: bbox6(&self.model, lo, hi),
+                    measure: display(&self.model, 0.0, Dimension([0, 0, 0, 0])),
+                    pressure_area: None,
+                    centroid: centroid.map(|value| display(&self.model, value, Length::DIM)),
+                });
+            }
+        }
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
         let known: Vec<&str> = built.sets.keys().map(String::as_str).collect();
         let set = built.sets.get(name).ok_or_else(|| Error::not_found("set", name, &known))?;
+        if set.count() == 0 {
+            return Err(Error::new(ErrorCode::SetEmpty, format!("set '{name}' has no members"))
+                .at("name")
+                .suggest("mesh.set with a nonempty imported Set"));
+        }
         let mesh = &built.mesh;
         let m = &self.model;
         let mut lo = [f64::INFINITY; 3];
@@ -581,6 +648,8 @@ impl Engine {
             crate::mesh::SetKind::Node => (0.0, 0),
         };
         Ok(SetInfo {
+            source_node_labels: None,
+            unused_source_node_labels: Vec::new(),
             name: name.to_string(),
             kind: set.kind.as_str().into(),
             count: set.count() as u32,
@@ -741,6 +810,25 @@ impl Engine {
                         b.material.as_deref().unwrap_or("none")
                     ),
                 });
+            }
+        }
+        if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) = &m.mesh
+        {
+            if want(ObjectKind::Body) {
+                objects.push(ObjectRef {
+                    ref_: format!("body:{}", source.body),
+                    kind: "body".into(),
+                    name: source.body.clone(),
+                    summary: "immutable imported mesh source".into(),
+                });
+            }
+            if want(ObjectKind::Set) {
+                objects.extend(source.set_names().iter().map(|name| ObjectRef {
+                    ref_: format!("set:{name}"),
+                    kind: "set".into(),
+                    name: name.clone(),
+                    summary: "immutable imported membership".into(),
+                }));
             }
         }
         if want(ObjectKind::Material) {

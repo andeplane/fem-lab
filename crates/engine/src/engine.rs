@@ -798,6 +798,20 @@ impl Engine {
                 Ok(Output::None)
             }
             Command::ModelSetIdealisation { idealisation } => {
+                if !matches!(idealisation, IdealisationSpec::Solid3d)
+                    && self
+                        .model
+                        .mesh
+                        .as_ref()
+                        .is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_)))
+                {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "an imported solid source requires solid3d idealisation",
+                    )
+                    .at("idealisation")
+                    .suggest("mesh.set with a different source before changing idealisation"));
+                }
                 self.model.idealisation = match idealisation {
                     IdealisationSpec::Solid3d => Idealisation::Solid3d,
                     IdealisationSpec::PlaneStress { thickness } => {
@@ -899,6 +913,7 @@ impl Engine {
                 self.add_body(name, shape)
             }
             Command::GeometryNameFace { name, of, where_ } => {
+                self.check_source_set_edit(name)?;
                 check_name(name)?;
                 self.check_geometry_name(name, GeometryOwner::Set)
                     .map_err(|e| e.at("name").suggest("geometry.nameFace with another name"))?;
@@ -908,6 +923,7 @@ impl Engine {
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
             }
             Command::GeometryNameRegion { name, where_ } => {
+                self.check_source_set_edit(name)?;
                 check_name(name)?;
                 self.check_geometry_name(name, GeometryOwner::Set)
                     .map_err(|e| e.at("name").suggest("geometry.nameRegion with another name"))?;
@@ -1127,6 +1143,34 @@ impl Engine {
                 if let crate::model::MesherSettings::Lattice { sizes, .. } = &settings {
                     crate::mesh::validate_body_sizes(&self.model, sizes)?;
                 }
+                let imported = matches!(settings, crate::model::MesherSettings::Imported(_));
+                let formulation = formulation.unwrap_or(if imported {
+                    crate::command::Formulation::Full
+                } else {
+                    crate::command::Formulation::default()
+                });
+                if imported
+                    && (order != 1
+                        || formulation != crate::command::Formulation::Full
+                        || simplices.unwrap_or(false)
+                        || refinement.is_some())
+                {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "imported sources require order 1, full integration and no split/refinement",
+                    )
+                    .at("mesher")
+                    .suggest("mesh.set with order 1, formulation full, simplices false and no refinement"));
+                }
+                if imported && (!self.model.bodies.is_empty() || self.model.idealisation.dim() != 3) {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "the imported mesher requires one implicit solid3d Body and no explicit Bodies",
+                    )
+                    .at("mesher")
+                    .suggest("model.new, then model.setIdealisation with solid3d and mesh.set"));
+                }
+                self.check_imported_sets(&settings)?;
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
@@ -1145,7 +1189,7 @@ impl Engine {
                 self.model.mesh = Some(MeshSettings {
                     mesher: settings,
                     order,
-                    formulation: formulation.unwrap_or_default(),
+                    formulation,
                     simplices: simplices.unwrap_or(false),
                     refinement: refinement.as_ref().map(crate::mesh::local_refinement).transpose()?,
                 });
@@ -1518,6 +1562,19 @@ impl Engine {
                         .load(l)
                         .ok_or_else(|| Error::not_found("load", l, &self.model.names(ObjectKind::Load)))?;
                 }
+                if self
+                    .model
+                    .mesh
+                    .as_ref()
+                    .is_some_and(|mesh| matches!(mesh.mesher, crate::model::MesherSettings::Imported(_)))
+                {
+                    if let Some(velocities) = initial_velocity {
+                        for (i, velocity) in velocities.iter().enumerate() {
+                            self.check_set(&velocity.on)
+                                .map_err(|error| error.at(format!("initialVelocity[{i}].on")))?;
+                        }
+                    }
+                }
                 let out = output.clone().unwrap_or_else(|| {
                     use crate::command::Field::*;
                     vec![Displacement, Stress, VonMises, Reaction]
@@ -1698,6 +1755,11 @@ impl Engine {
         check_name(name)?;
         self.check_geometry_name(name, GeometryOwner::Body)
             .map_err(|e| e.at("name").suggest("geometry.add with another name, or edit its existing owner"))?;
+        if self.model.mesh.as_ref().is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_))) {
+            return Err(Error::new(ErrorCode::Unsupported, "an imported source owns the only Body in this slice")
+                .at("name")
+                .suggest("mesh.set with another mesher before adding explicit geometry"));
+        }
         let dim = shape.dim();
         let old = self.model.body(name);
         let body = Body {
@@ -1784,6 +1846,15 @@ impl Engine {
                 users.push(format!("load '{}'", l.name));
             }
         }
+        for step in &m.steps {
+            if step
+                .initial_velocity
+                .as_ref()
+                .is_some_and(|velocities| velocities.iter().any(|v| set_refers_to(&v.on, name)))
+            {
+                users.push(format!("step '{}'", step.name));
+            }
+        }
         for s in &m.sets {
             let refers = match &s.source {
                 SetSource::Face { of, .. } => of == name,
@@ -1805,6 +1876,7 @@ impl Engine {
     }
 
     fn geometry_remove(&mut self, name: &str) -> Result<Output, Error> {
+        self.check_source_set_edit(name)?;
         let m = &self.model;
         if m.body(name).is_some() || m.implicit_body() == Some(name) {
             self.check_body_unused(name)?;
@@ -1866,8 +1938,68 @@ impl Engine {
         Err(Error::not_found("body, cut, set or point mass", name, &known))
     }
 
+    fn check_source_set_edit(&self, name: &str) -> Result<(), Error> {
+        if self.model.mesh.as_ref().is_some_and(|m| match &m.mesher {
+            crate::model::MesherSettings::Imported(s) => s.set_names().contains(name),
+            _ => false,
+        }) {
+            return Err(Error::new(ErrorCode::Unsupported, "imported Sets are immutable mesher-owned memberships")
+                .at("name")
+                .suggest("mesh.set with a replacement imported source"));
+        }
+        Ok(())
+    }
+
+    fn check_imported_sets(&self, settings: &crate::model::MesherSettings) -> Result<(), Error> {
+        let new_source = match settings {
+            crate::model::MesherSettings::Imported(source) => Some(source),
+            _ => None,
+        };
+        let new_names = new_source.map(|s| s.set_names()).unwrap_or_default();
+        let usable_names = new_source.map(|s| s.nonempty_set_names()).unwrap_or_default();
+        for name in &new_names {
+            if self.model.sets.iter().any(|s| s.name == *name) || self.model.points.iter().any(|p| p.name == *name) {
+                return Err(Error::new(
+                    ErrorCode::NameTaken,
+                    format!("imported Set '{name}' shadows an existing object"),
+                )
+                .at("mesher")
+                .suggest("mesh.set with distinct source Set or Body names"));
+            }
+        }
+        if let Some(MeshSettings { mesher: crate::model::MesherSettings::Imported(old), .. }) = &self.model.mesh {
+            for name in old.set_names().difference(&usable_names) {
+                let users = set_users(&self.model, name);
+                if !users.is_empty() {
+                    let users: Vec<_> = users.iter().map(String::as_str).collect();
+                    return Err(in_use("set", name, &users, "objects"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check_set(&self, set: &str) -> Result<(), Error> {
         if self.model.knows_set(set) {
+            if let Some(MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) = &self.model.mesh
+            {
+                if let Some(members) = source.node_members(set) {
+                    let participating = source.participating_labels();
+                    if members.iter().any(|label| !participating.contains(label)) {
+                        return Err(Error::new(
+                            ErrorCode::Unsupported,
+                            format!("imported Set '{set}' includes unused source nodes with no FE DOFs"),
+                        )
+                        .at("on")
+                        .suggest("mesh.set with a target Set containing participating source nodes only"));
+                    }
+                }
+                if source.set_names().contains(set) && !source.nonempty_set_names().contains(set) {
+                    return Err(Error::new(ErrorCode::SetEmpty, format!("imported Set '{set}' has no members"))
+                        .at("on")
+                        .suggest("mesh.set with a nonempty target Set"));
+                }
+            }
             return Ok(());
         }
         let mut known: Vec<String> = self.model.sets.iter().map(|s| s.name.clone()).collect();
@@ -1902,6 +2034,9 @@ impl Engine {
     }
 
     fn rename(&mut self, kind: ObjectKind, name: &str, to: &str) -> Result<Output, Error> {
+        if kind == ObjectKind::Set {
+            self.check_source_set_edit(name)?;
+        }
         check_name(to)?;
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
@@ -1962,6 +2097,13 @@ impl Engine {
                             }
                         }
                         LoadKind::Gravity { .. } | LoadKind::ThermalContact { .. } => {}
+                    }
+                }
+                for step in &mut m.steps {
+                    if let Some(velocities) = &mut step.initial_velocity {
+                        for velocity in velocities {
+                            velocity.on = rename_set_ref(&velocity.on, name, to);
+                        }
                     }
                 }
                 for s in &mut m.sets {
@@ -2102,6 +2244,9 @@ impl Engine {
     }
 
     fn duplicate(&mut self, kind: ObjectKind, name: &str, as_: &str) -> Result<Output, Error> {
+        if kind == ObjectKind::Set {
+            self.check_source_set_edit(name)?;
+        }
         check_name(as_)?;
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
@@ -2212,7 +2357,7 @@ fn check_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// The Constraints and Loads that name a Set by that exact name. A point mass owns a Set of its
+/// The Constraints, Loads and initial-velocity Steps that name a Set by that exact name. A point mass owns a Set of its
 /// own name, so removing either asks the same question and both ask it here.
 fn set_users(m: &Model, name: &str) -> Vec<String> {
     m.constraints
@@ -2220,6 +2365,14 @@ fn set_users(m: &Model, name: &str) -> Vec<String> {
         .filter(|c| c.sets().contains(&name))
         .map(|c| format!("constraint '{}'", c.name))
         .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
+        .chain(
+            m.steps
+                .iter()
+                .filter(|step| {
+                    step.initial_velocity.as_ref().is_some_and(|velocities| velocities.iter().any(|v| v.on == name))
+                })
+                .map(|step| format!("step '{}'", step.name)),
+        )
         .collect()
 }
 

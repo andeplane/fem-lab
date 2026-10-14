@@ -244,8 +244,11 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       m?.meshSettings
         ? [
             {
-              cmd: 'mesh.set',
-              args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
+              cmd: m.meshSettings.mesher.kind === 'imported' ? 'form.edit' : 'mesh.set',
+              args: m.meshSettings.mesher.kind === 'imported'
+                ? { kind: 'body', name: m.meshSettings.mesher.body }
+                : { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
+              run: m.meshSettings.mesher.kind === 'imported',
               kind: 'mesh',
               ref: refOf('mesh', 'mesh'),
               glyph: '▦',

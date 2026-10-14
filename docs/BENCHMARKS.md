@@ -2162,6 +2162,46 @@ are `1/4,255/4096,127/8192`, but one face-separator quotient is `(1-r)/16`.
 This nonstrict quotient demonstrates a reachable conservative proof failure:
 the valid pair is explicitly inconclusive, never silently accepted or called invalid.
 
+### Imported Tet4/Hex8 authored connectivity (#501)
+
+`imported_tet4_and_hex8_bars_match_closed_form_at_three_refinements` constructs source
+connectivity independently of every mesher/exporter. A 1 m × 0.1 m × 0.1 m axial bar has
+E = 200 GPa, ν = 0, a fixed root and a consistently integrated 1 kN end traction. The
+closed forms are tip displacement FL/(EA) = 5e-7 m, axial stress F/A = 1e5 Pa and root
+reaction -1000 N. Standard full-integration Hex8 and six positively oriented Tet4 per
+brick run at 2, 4 and 8 axial cells. Every tip node and every recovered stress sample is
+checked, with absolute tolerances 5e-18 m, 1e-6 Pa and 1e-8 N. This is an exact affine
+patch; no convergence-rate claim is attached. Sparse source labels and reversed source
+record order exercise dense mapping at every resolution. Tetrahedral end-face integration
+retains unequal diagonal-corner nodal weights rather than assuming an equal CLOAD split.
+
+`imported_source_preserves_labels_memberships_identity_and_replay` uses a hand-authored
+unit reference tetrahedron, independently documented in the fixture README, and checks
+Abaqus S1's outward -z normal. A separate coincident, unused source node survives exact source
+Sets, save/open and replay; the source Query reports its non-participation explicitly.
+`imported_unused_coincident_labels_survive_without_unsolved_or_fabricated_dofs` repeats a
+valid axial solve for both solid types while retaining an unused coincident label. It
+checks the analytical tip displacement, source save/replay, absence of an unassembled FE
+DOF or Result row, and structured rejection of inactive-only/mixed support and Load targets. NSET ALL, ELSET ALL and the synthetic all do
+not shadow one another. Malformed source and lifecycle tests verify that failed mutations
+leave the Model and Journal unchanged.
+
+`imported_source_accepts_original_warped_hexes_and_reports_certificate_failures_atomically`
+uses two original C3D8 maps separated by x = 1 + a yz, with a = 1/4 and 3/10. The
+left/right determinants are 1 + a yz and 1 - a yz, so both maps are injective and their
+interiors disjoint. It checks the typed source boundary and exact surface memberships.
+The negative-pocket map F = (s, (s-1/2)t + r/8, t/8 + (s-1/2)r) has determinant
+(s-1/2)^2 - 1/64, negative at s = 1/2 despite positive corners/two-point Gauss samples;
+publication fails with the original source element label and unchanged Model/Journal.
+A valid map F = (s + 10tr, t, r), det = 1, is explicitly unsupported when the sufficient
+certificate cannot prove it; failure of proof never becomes a false invalidity claim.
+
+`tools/test-imported-source-replay.mjs` repeats both axial sources at 2/4/8 cells with
+an unused coincident source label. It checks exact per-Command hashes (including replay
+that skips solves), source mappings, authored Set counts and retained surface identity
+across native one/four threads and WASM. Both hosts independently satisfy the axial
+closed forms above for every active displacement, stress sample and total reaction.
+
 ### Original linear-cell query measurements (#523)
 
 The hand-authored Hex8 pair fills `0<=x<=2`, `0<=y,z<=1`, with shared

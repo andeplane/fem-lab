@@ -1102,6 +1102,7 @@ impl Engine {
         recorded: Option<&[Vec<crate::command::SizeBoxSpec>]>,
         on_progress: OnProgress<'_>,
     ) -> Result<Output, Error> {
+        self.check_imported_study()?;
         let iterations = max_iterations.unwrap_or(8);
         let limit = max_elements.unwrap_or(100_000);
         let fraction = marking_fraction.unwrap_or(0.5);
@@ -1213,7 +1214,20 @@ impl Engine {
     }
 
     /// Mesh inputs shared by a running study and replay that omits its numerical work.
+    fn check_imported_study(&self) -> Result<(), Error> {
+        if self.model.mesh.as_ref().is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_))) {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "an imported source cannot be remeshed or refined by a study",
+            )
+            .at("mesher")
+            .suggest("mesh.set with a separately authored refined imported source"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn study_mesh(&self, sizes: &[Q<Length>]) -> Result<(MeshSettings, Vec<f64>), Error> {
+        self.check_imported_study()?;
         let settings = self.model.mesh.clone().ok_or_else(|| {
             Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
                 .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
