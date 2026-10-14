@@ -1,6 +1,6 @@
 // The MCP host with a fake engine: the tool list is the registry, every tool call routes to a
 // Command or a Query, `run_script` runs TypeScript, and `export_file` stays inside --project.
-import { RUN_SCRIPT, toolNameFor } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, RUN_SCRIPT, modelFileText, toolNameFor, type ModelFile } from '@femlab/registry';
 import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -145,6 +145,30 @@ describe('run_script on its own', () => {
 });
 
 describe('export_file', () => {
+  it('refuses an oversized model file including its final LF before touching existing files or directories', async () => {
+    const root = await scratch();
+    const engine = fakeEngine();
+    const file: ModelFile = {
+      format: 'femlab/1', engineVersion: '0', model: { name: '', idealisation: { kind: 'solid3d' } },
+      journal: { entries: [{ seq: 0, hashAfter: 'h', cmd: { cmd: 'model.new', name: 'beam' } }] },
+    };
+    const overhead = Buffer.byteLength(modelFileText(file));
+    file.model.name = 'x'.repeat(MAX_MODEL_FILE_BYTES - overhead);
+    expect(Buffer.byteLength(modelFileText(file))).toBe(MAX_MODEL_FILE_BYTES);
+    engine.modelFile = () => file;
+    const registry = createRegistry({ engine, project: root });
+    await writeFile(path.join(root, 'keep.femlab.json'), 'previous model');
+    await expect(callTool(registry, 'export_file', { format: 'journal', path: 'keep.femlab.json' })).rejects.toMatchObject({ code: 'schema', where: 'file' });
+    expect(await readFile(path.join(root, 'keep.femlab.json'), 'utf8')).toBe('previous model');
+    await expect(callTool(registry, 'export_file', { format: 'journal', path: 'new/model.femlab.json' })).rejects.toMatchObject({ code: 'schema' });
+    expect(await readdir(root)).toEqual(['keep.femlab.json']);
+    file.model.name = file.model.name.slice(0, -1);
+    const exact = await exportText(engine, 'journal');
+    expect(Buffer.byteLength(exact)).toBe(MAX_MODEL_FILE_BYTES);
+    expect(exact.endsWith('\n')).toBe(true);
+    expect(JSON.parse(exact)).toEqual(file);
+  });
+
   it('writes each format into the project folder and refuses to leave it', async () => {
     const root = await scratch();
     const engine = fakeEngine();
