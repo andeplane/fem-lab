@@ -25,6 +25,57 @@ fn version_prints_all_three() {
 }
 
 #[test]
+fn model_file_limit_refuses_before_export_overwrites_a_destination() {
+    const LIMIT: usize = 16 * 1024 * 1024;
+    let dir = scratch("file-byte-bound");
+    let source = dir.join("commands.json");
+    let commands = serde_json::json!([{
+        "cmd": "model.new", "name": format!("☃🚀\"\\{}", "x".repeat(LIMIT / 2))
+    }]);
+    let input = serde_json::to_vec(&commands).unwrap();
+    assert!(input.len() < LIMIT);
+    std::fs::write(&source, input).unwrap();
+    let output = dir.join("keep.femlab.json");
+    std::fs::write(&output, "previous Model file").unwrap();
+    femlab()
+        .args(["export", source.to_str().unwrap(), "--format", "journal", "--out", output.to_str().unwrap(), "--cpu"])
+        .assert()
+        .code(1)
+        .stderr(contains("16777216-byte host limit"));
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), "previous Model file");
+    femlab()
+        .args(["export", source.to_str().unwrap(), "--format", "journal", "--cpu"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(contains("16777216-byte host limit"));
+    let name = "quote \" slash \\ newline\n snow ☃ rocket 🚀";
+    std::fs::write(
+        &source,
+        serde_json::to_vec(&serde_json::json!([
+            { "cmd": "model.new", "name": name },
+            { "cmd": "material.add", "name": "large_modulus", "E": "1e20 Pa", "nu": 0.3 }
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    femlab()
+        .args(["export", source.to_str().unwrap(), "--format", "journal", "--out", output.to_str().unwrap(), "--cpu"])
+        .assert()
+        .success();
+    let bytes = std::fs::read(&output).unwrap();
+    let file: femlab_engine::ModelFile = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(file.model.name, name);
+    assert_eq!(bytes, (serde_json::to_string_pretty(&file).unwrap() + "\n").as_bytes());
+    assert!(bytes.len() < LIMIT);
+    femlab()
+        .args(["run", output.to_str().unwrap(), "--verify", "--hashes", "--skip-solves", "--cpu"])
+        .assert()
+        .success();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn run_replays_the_cantilever_journal_in_every_form() {
     let journal = engine_dir().join("benches").join("journals").join("cantilever.json");
     let out = femlab().args(["run", journal.to_str().unwrap(), "--verify"]).assert().success();

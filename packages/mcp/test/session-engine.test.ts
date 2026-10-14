@@ -1,10 +1,27 @@
 import { expect, it } from 'vitest';
+import { MAX_MODEL_FILE_BYTES } from '@femlab/registry';
 import { fileURLToPath } from 'node:url';
 import { loadEngine } from '../src/engine';
 import { createRegistry } from '../src/server';
 const here = fileURLToPath(new URL('../src', import.meta.url));
 const body = { cmd: 'geometry.addBox', name: 'shared', size: ['1 m', '1 m', '1 m'] };
 const remove = { cmd: 'geometry.remove', name: 'shared' };
+
+it('keeps the MCP Model and request lease after an oversized actual prepared ModelFile', async () => {
+  const engine = loadEngine(here);
+  const handle = await engine.acquire();
+  try {
+    await handle.dispatch({ cmd: 'model.new', name: 'old project' });
+    await handle.dispatch(body);
+    const before = await handle.modelFile();
+    const command = { cmd: 'model.new', name: `☃🚀"\\${'x'.repeat(MAX_MODEL_FILE_BYTES / 2)}` };
+    expect(Buffer.byteLength(JSON.stringify([command]))).toBeLessThan(MAX_MODEL_FILE_BYTES);
+    await expect(handle.dispatch(command)).rejects.toMatchObject({ code: 'schema', where: 'file' });
+    expect(await handle.modelFile()).toEqual(before);
+    await handle.dispatch(remove);
+    expect(await handle.query({ query: 'query.model' })).toMatchObject({ name: 'old project', bodies: [] });
+  } finally { await handle.release?.(); }
+});
 
 it('fences retained MCP request handles and cancelled queued work with the checked owner', async () => {
   const engine = loadEngine(here);

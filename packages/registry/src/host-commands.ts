@@ -12,6 +12,8 @@ import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
 import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
+import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
+export { MAX_MODEL_FILE_BYTES } from './model-file';
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const int = z.number().int();
@@ -255,7 +257,6 @@ async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, 
 }
 
 /** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
-export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
 /** A geometry file large enough for the engine's 500 000 triangle ceiling in binary STL. */
 export const MAX_GEOMETRY_FILE_BYTES = 32 * 1024 * 1024;
 /** What the geometry picker offers. */
@@ -368,7 +369,7 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | 
     return { filename: `${name}.ts`, mime: 'text/typescript', data: text };
   }
   if (spec.format === 'journal') {
-    return { filename: `${name}.femlab.json`, mime: 'application/json', data: JSON.stringify(await ctx.transport.exportFile(), null, 2) };
+    return { filename: `${name}.femlab.json`, mime: 'application/json', data: boundedModelFileText(await ctx.transport.exportFile()) };
   }
   if (spec.format === 'png') {
     const options = ScreenshotOptions.parse({
@@ -475,15 +476,15 @@ export const HOST_COMMANDS: HostDef[] = [
       ...(simplifyBelow === undefined ? {} : { simplifyBelow }),
     } as Command);
   }),
-  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. The complete saved pretty JSON must fit the 16 MiB UTF-8 file limit; refusal occurs before any file write or download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
     const completeSave = ctx.files.beginSave();
 
     const file = await ctx.transport.exportFile();
-    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
+    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', boundedModelFileText(file));
     completeSave(file.journal);
     return receipt;
   }),
-  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
     spec: z.union([
       AnimationCaptureOptions.extend({ format: z.literal('webm') }),
       z.looseObject({ format: z.string().refine((format) => format !== 'webm') }),

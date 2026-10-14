@@ -21,15 +21,29 @@ pub struct Candidate {
     ticket: ReplacementTicket,
 }
 
+/// A trusted host's exact persisted UTF-8 representation. Encode the supplied complete
+/// ModelFile faithfully, preserving Model, Journal, units and metadata. Do not replay a
+/// second Model, estimate its size, mutate inputs or perform I/O here. Hosts use this same
+/// encoding for saves; native writers can reuse PreparedCandidate::file_bytes directly.
+pub trait ModelFileEncoder {
+    fn encode(&mut self, file: &ModelFile) -> Result<String, Error>;
+}
+
 /// Only Candidate::finish constructs this type. The snapshot and engine cannot diverge.
 pub struct PreparedCandidate {
     pub(crate) engine: Engine,
     pub(crate) ticket: ReplacementTicket,
     pub(crate) snapshot: DocumentSnapshot,
+    file_text: String,
 }
 impl PreparedCandidate {
     pub fn snapshot(&self) -> &DocumentSnapshot {
         &self.snapshot
+    }
+
+    /// The exact validated UTF-8 file payload, including the host's whitespace and newline.
+    pub fn file_bytes(&self) -> &[u8] {
+        self.file_text.as_bytes()
     }
 }
 
@@ -98,11 +112,25 @@ impl Candidate {
         Ok(self)
     }
 
-    pub fn finish(mut self) -> Result<PreparedCandidate, Error> {
-        document_snapshot(&mut self.engine, self.ticket.target.clone()).map(|snapshot| PreparedCandidate {
-            engine: self.engine,
-            ticket: self.ticket,
-            snapshot,
+    /// Snapshot once, encode the actual file once and enforce the injected host byte budget
+    /// before making it committable. Equality is allowed. Any failure consumes the candidate;
+    /// the host abandons its ticket while the active owner and producer remain unchanged.
+    pub fn finish(
+        mut self,
+        encoder: &mut dyn ModelFileEncoder,
+        max_file_bytes: usize,
+    ) -> Result<PreparedCandidate, Error> {
+        document_snapshot(&mut self.engine, self.ticket.target.clone()).and_then(|snapshot| {
+            let file_text = encoder.encode(&snapshot.file)?;
+            if file_text.len() > max_file_bytes {
+                return Err(Error::schema(format!(
+                    "prepared Model file is {} UTF-8 bytes, exceeding the {max_file_bytes}-byte host limit",
+                    file_text.len()
+                ))
+                .at("file")
+                .suggest("reduce the Model or Journal before publication or file.save"));
+            }
+            Ok(PreparedCandidate { engine: self.engine, ticket: self.ticket, snapshot, file_text })
         })
     }
 }

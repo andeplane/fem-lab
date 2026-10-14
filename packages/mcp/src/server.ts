@@ -12,6 +12,8 @@ import {
   FemError,
   HOST_COMMANDS,
   HOST_QUERIES,
+  boundedModelFileText,
+  type ModelFile,
   type ScriptValidator,
   RUN_SCRIPT,
   type ScriptResult,
@@ -100,7 +102,7 @@ function linkError(p: string): FemError {
 
 /** The text of one export, from the engine or from the Journal. */
 export async function exportText(engine: EngineHandle, format: ExportFormat, step?: string): Promise<string> {
-  if (format === 'journal') return `${JSON.stringify(await engine.modelFile(), null, 2)}\n`;
+  if (format === 'journal') return boundedModelFileText(await engine.modelFile() as ModelFile, true);
   if (format === 'script') return ((await engine.query({ query: 'query.script' })) as { text: string }).text;
   const ack = (await engine.dispatch({ cmd: 'mesh.export', format, ...(step === undefined ? {} : { step }) })) as {
     output: { text: string };
@@ -114,7 +116,7 @@ function exportFileCommand(deps: ScopedDeps): HostDef {
     name: 'export.file',
     execution: 'modelWrite',
     description:
-      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
+      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. A model file must fit the 16 MiB UTF-8 limit including pretty formatting and its trailing newline; refusal occurs before any file write. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
     schema: z.object({ format: z.enum(EXPORT_FORMATS), path: z.string(), step: z.string().optional() }),
     tool: true,
     run: async ({ format, path: rel, step }) => {

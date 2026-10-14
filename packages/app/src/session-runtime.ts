@@ -1,6 +1,6 @@
 import { isBulkQuery, queryBulk, retainedFieldBulk, retainedSurfaceBulk } from './result-transfer';
 import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engine_wasm.js';
-import type { BufferSpec, DocumentSnapshot, ExecutionContext, Stamp } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, modelFileEncoder, type ModelFilePublicationPolicy, type BufferSpec, type DocumentSnapshot, type ExecutionContext, type Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 import { toStructured } from './engine-error';
 const json = JSON.stringify;
@@ -24,6 +24,7 @@ export class SessionRuntime {
   constructor(
     private readonly create: (options: SessionOptions, epoch: string) => Promise<SessionEngine>,
     private readonly candidate: (ticket: string, options: SessionOptions) => Promise<PreparedEngine>,
+    private readonly publication: ModelFilePublicationPolicy = { encode: modelFileEncoder(), maxBytes: MAX_MODEL_FILE_BYTES },
   ) {}
   private async handle(req: SessionRequest, progress: (phase: string, fraction: number, message: string) => boolean): Promise<unknown> {
 const need = (): SessionEngine => {
@@ -78,7 +79,7 @@ const need = (): SessionEngine => {
             break;
           case 'file': await candidate.file(json(source.file)); break;
         }
-        candidate.finish();
+        candidate.finish(this.publication.encode, this.publication.maxBytes);
         const consumed = candidate; candidate = undefined;
         return JSON.parse(need().commit_candidate(consumed)) as DocumentSnapshot;
       } catch (error) {
