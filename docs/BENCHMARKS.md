@@ -2377,3 +2377,63 @@ mesh orders1/2, the elements remain two-node lines; counts, bounds, source joint
 coordinates, member connectivity, individual edge lengths and replay are checked
 at native one/four threads. A disjoint unit cube adds exactly `1 m³` to a mixed
 region, independently of the lines, preserving the ambient-volume contract.
+
+### Linear static force and moment conservation (#445)
+
+B25 now checks both force and moment conservation for the pure torsion and pure
+end-bending Steps. The support carries the opposite 1 kN m couple; no applied
+force is manufactured. Public registry tests repeat each closed-form twist,
+rotation and deflection at 2, 4 and 8 beam divisions. They also check a transverse
+tip force plus an independent end couple, cancelling forces and moments, and a
+no-load prescribed fixed/guided displacement against the Timoshenko flexibility
+`δ/P = L³/(12EI) + L/(κGA)`. The latter checks the two raw support couples and
+the prescribed translation's force lever arm separately.
+
+Linear Cartesian static Results retain an SI wrench ledger about their first
+Mesh node, with `L` equal to the maximum retained node distance from that node.
+Each applied/support nodal moment is `r×F + C`, including rotational reactions.
+The injected Pool recovers fixed-size node chunks in parallel and combines them
+in index order; exact SI accounting is checked at one and four threads.
+Force normalization uses the maximum of the gross applied/support nodal-force
+magnitudes and gross nodal-moment magnitudes divided by `L`; moment normalization
+uses the analogous maximum with force magnitudes multiplied by `L`. Magnitudes
+are accumulated before Constraint grouping, so cancellation and first-owner
+assignment cannot erase the scale. Residual vectors remain unchanged. Exact
+zero actions and residuals yield zero; no dimensional epsilon is introduced.
+A zero-span force ledger uses force magnitudes only.
+
+Frame translation/rotation and geometric scaling, display units, retained stale
+Results and exact unloaded states are covered separately. Thermal conservation
+keeps its power semantics; dynamic, eigen, nonlinear and axisymmetric Results
+do not claim this linear Cartesian static angular diagnostic. Rotational
+prescriptions remain outside the existing Length-only `constraint.prescribe`
+contract. The report checks moment conservation independently of force balance.
+
+Bonded face interpolation ties translations at a projected master point and does
+not supply an offset rotational couple across a geometric gap. A separate
+statics oracle checks coincident faces and a 0.25 m gap under a 200 N transverse
+load: force equilibrium still holds, while the gap leaves a real 50 N m angular
+residual. The query and report expose this limitation rather than treating the
+force pass as complete equilibrium or modifying bonded mechanics.
+
+**Representability and publication (#445).** Public fully held shafts with opposing
+±1e307 N m actions retain finite 2e307 SI action scales and exact zero residuals.
+Opposing ±1e308 N m actions overflow those scales; a separate 100 m lever with a
+1e308 N transverse force overflows its applied moment. Both are structured solve
+failures before a Result is published, preserving the prior selected Result and
+the immediately preceding Model/Journal/revision. No saturation or epsilon is used.
+Changing the finite large Result's display units to mN/mm also fails clearly for
+selected result/report Queries, because the requested scale conversion overflows.
+Its retained-id Query remains exact in its original N/m context. A solve authored
+with those unrepresentable preferred units preserves its prior readable Result.
+The same publication check is shared by a convergence study with `restore:false`
+and an adaptive study. Independent fully held beam/tet4 cases have zero motion
+and finite opposing actions; unrepresentable preferred units reject before
+replacing the selected Result, changing its catalogue or advancing its sequence.
+A uniform transient-temperature predecessor retains three genuine frames; its
+fully held static continuation has zero motion and finite stress. Opposing
+±1e308 N forces overflow only the gross wrench scale at chained recovery, which
+rejects without replacing the previous static Result or its catalogue.
+Buckling skips this static-only recovery in the shared postprocessor and retains
+its existing preload/force/buckling-factor contract. Legacy formatting behavior
+outside the new ledger is tracked separately by #580.

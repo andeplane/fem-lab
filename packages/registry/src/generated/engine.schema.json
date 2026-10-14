@@ -17893,6 +17893,17 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "staticEquilibrium": {
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining\nstudy before Result publication. If later display units cannot represent the\nretained values, this Query returns a structured error; model.setUnits with\nforce N and length m restores readable SI quantities.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StaticEquilibrium"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "storagePower": {
             "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
             "anyOf": [
@@ -17956,7 +17967,7 @@
             }
           },
           "balance": {
-            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear\nCartesian static uses retained unaggregated nodal force/moment actions, with M/L\nconverting moments to force. Actual residuals and scales are in staticEquilibrium;\nno residual is snapped to zero. Other structural procedures retain their existing\nlargest-force scale. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
@@ -18045,6 +18056,104 @@
         ]
       },
       "ReactionRow": {
+        "type": "object",
+        "properties": {
+          "constraint": {
+            "type": "string"
+          },
+          "total": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "constraint",
+          "total"
+        ]
+      },
+      "StaticEquilibrium": {
+        "description": "Linear Cartesian static equilibrium, retained with the solved state in SI and displayed\nin the requested unit set. Moments use reference-configuration node coordinates.\nA passing force check alone is not moment conservation: translation-only bonded ties\nacross a gap can transfer a force without its offset couple, leaving a real angular\nresidual. This diagnostic exposes that model behavior without changing tie mechanics.",
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "First retained Mesh node: the origin used by all applied/support moments.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "characteristicLength": {
+            "description": "Maximum node distance from reference; independent of element length, covariant under\nrigid frame changes. A zero-span force-only ledger has no moment-derived force scale.",
+            "$ref": "#/$defs/Valued"
+          },
+          "forceResidual": {
+            "description": "Actual vector Σ applied forces + Σ support forces, never rounded away.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "forceScale": {
+            "description": "max(Σ|F_applied,node|, Σ|F_support,node|, Σ|M_applied,node|/L, Σ|M_support,node|/L).\nEach nodal moment includes its force lever arm plus rotational couple. Summing\nmagnitudes before Constraint grouping preserves scales for opposing actions.",
+            "$ref": "#/$defs/Valued"
+          },
+          "appliedMoment": {
+            "description": "Σ((x-reference)×F_applied + applied rotational couple).",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "reactionMoments": {
+            "description": "Each Constraint's support moment, including force lever arms and raw rotational\nreactions; DOFs shared by Constraints belong to the first owner, as for reactions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MomentReactionRow"
+            }
+          },
+          "momentResidual": {
+            "description": "Actual vector Σ applied moments + Σ support moments about reference.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "momentScale": {
+            "description": "max(Σ|M_applied,node|, Σ|M_support,node|, LΣ|F_applied,node|, LΣ|F_support,node|).",
+            "$ref": "#/$defs/Valued"
+          },
+          "momentBalance": {
+            "description": "|momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.\nThe report checks this separately from force balance at its conservation tolerance.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "reference",
+          "characteristicLength",
+          "forceResidual",
+          "forceScale",
+          "appliedMoment",
+          "reactionMoments",
+          "momentResidual",
+          "momentScale",
+          "momentBalance"
+        ]
+      },
+      "MomentReactionRow": {
+        "description": "One Constraint's support moment about the static equilibrium reference, in torque units.",
         "type": "object",
         "properties": {
           "constraint": {
@@ -20031,6 +20140,17 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "staticEquilibrium": {
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining\nstudy before Result publication. If later display units cannot represent the\nretained values, this Query returns a structured error; model.setUnits with\nforce N and length m restores readable SI quantities.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StaticEquilibrium"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "storagePower": {
             "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
             "anyOf": [
@@ -20094,7 +20214,7 @@
             }
           },
           "balance": {
-            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear\nCartesian static uses retained unaggregated nodal force/moment actions, with M/L\nconverting moments to force. Actual residuals and scales are in staticEquilibrium;\nno residual is snapped to zero. Other structural procedures retain their existing\nlargest-force scale. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
@@ -20200,6 +20320,104 @@
         ]
       },
       "ReactionRow": {
+        "type": "object",
+        "properties": {
+          "constraint": {
+            "type": "string"
+          },
+          "total": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "constraint",
+          "total"
+        ]
+      },
+      "StaticEquilibrium": {
+        "description": "Linear Cartesian static equilibrium, retained with the solved state in SI and displayed\nin the requested unit set. Moments use reference-configuration node coordinates.\nA passing force check alone is not moment conservation: translation-only bonded ties\nacross a gap can transfer a force without its offset couple, leaving a real angular\nresidual. This diagnostic exposes that model behavior without changing tie mechanics.",
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "First retained Mesh node: the origin used by all applied/support moments.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "characteristicLength": {
+            "description": "Maximum node distance from reference; independent of element length, covariant under\nrigid frame changes. A zero-span force-only ledger has no moment-derived force scale.",
+            "$ref": "#/$defs/Valued"
+          },
+          "forceResidual": {
+            "description": "Actual vector Σ applied forces + Σ support forces, never rounded away.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "forceScale": {
+            "description": "max(Σ|F_applied,node|, Σ|F_support,node|, Σ|M_applied,node|/L, Σ|M_support,node|/L).\nEach nodal moment includes its force lever arm plus rotational couple. Summing\nmagnitudes before Constraint grouping preserves scales for opposing actions.",
+            "$ref": "#/$defs/Valued"
+          },
+          "appliedMoment": {
+            "description": "Σ((x-reference)×F_applied + applied rotational couple).",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "reactionMoments": {
+            "description": "Each Constraint's support moment, including force lever arms and raw rotational\nreactions; DOFs shared by Constraints belong to the first owner, as for reactions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MomentReactionRow"
+            }
+          },
+          "momentResidual": {
+            "description": "Actual vector Σ applied moments + Σ support moments about reference.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "momentScale": {
+            "description": "max(Σ|M_applied,node|, Σ|M_support,node|, LΣ|F_applied,node|, LΣ|F_support,node|).",
+            "$ref": "#/$defs/Valued"
+          },
+          "momentBalance": {
+            "description": "|momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.\nThe report checks this separately from force balance at its conservation tolerance.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "reference",
+          "characteristicLength",
+          "forceResidual",
+          "forceScale",
+          "appliedMoment",
+          "reactionMoments",
+          "momentResidual",
+          "momentScale",
+          "momentBalance"
+        ]
+      },
+      "MomentReactionRow": {
+        "description": "One Constraint's support moment about the static equilibrium reference, in torque units.",
         "type": "object",
         "properties": {
           "constraint": {
@@ -40453,6 +40671,17 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "staticEquilibrium": {
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining\nstudy before Result publication. If later display units cannot represent the\nretained values, this Query returns a structured error; model.setUnits with\nforce N and length m restores readable SI quantities.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StaticEquilibrium"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "storagePower": {
             "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
             "anyOf": [
@@ -40516,7 +40745,7 @@
             }
           },
           "balance": {
-            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear\nCartesian static uses retained unaggregated nodal force/moment actions, with M/L\nconverting moments to force. Actual residuals and scales are in staticEquilibrium;\nno residual is snapped to zero. Other structural procedures retain their existing\nlargest-force scale. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
@@ -40622,6 +40851,104 @@
         ]
       },
       "ReactionRow": {
+        "type": "object",
+        "properties": {
+          "constraint": {
+            "type": "string"
+          },
+          "total": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "constraint",
+          "total"
+        ]
+      },
+      "StaticEquilibrium": {
+        "description": "Linear Cartesian static equilibrium, retained with the solved state in SI and displayed\nin the requested unit set. Moments use reference-configuration node coordinates.\nA passing force check alone is not moment conservation: translation-only bonded ties\nacross a gap can transfer a force without its offset couple, leaving a real angular\nresidual. This diagnostic exposes that model behavior without changing tie mechanics.",
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "First retained Mesh node: the origin used by all applied/support moments.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "characteristicLength": {
+            "description": "Maximum node distance from reference; independent of element length, covariant under\nrigid frame changes. A zero-span force-only ledger has no moment-derived force scale.",
+            "$ref": "#/$defs/Valued"
+          },
+          "forceResidual": {
+            "description": "Actual vector Σ applied forces + Σ support forces, never rounded away.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "forceScale": {
+            "description": "max(Σ|F_applied,node|, Σ|F_support,node|, Σ|M_applied,node|/L, Σ|M_support,node|/L).\nEach nodal moment includes its force lever arm plus rotational couple. Summing\nmagnitudes before Constraint grouping preserves scales for opposing actions.",
+            "$ref": "#/$defs/Valued"
+          },
+          "appliedMoment": {
+            "description": "Σ((x-reference)×F_applied + applied rotational couple).",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "reactionMoments": {
+            "description": "Each Constraint's support moment, including force lever arms and raw rotational\nreactions; DOFs shared by Constraints belong to the first owner, as for reactions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MomentReactionRow"
+            }
+          },
+          "momentResidual": {
+            "description": "Actual vector Σ applied moments + Σ support moments about reference.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "momentScale": {
+            "description": "max(Σ|M_applied,node|, Σ|M_support,node|, LΣ|F_applied,node|, LΣ|F_support,node|).",
+            "$ref": "#/$defs/Valued"
+          },
+          "momentBalance": {
+            "description": "|momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.\nThe report checks this separately from force balance at its conservation tolerance.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "reference",
+          "characteristicLength",
+          "forceResidual",
+          "forceScale",
+          "appliedMoment",
+          "reactionMoments",
+          "momentResidual",
+          "momentScale",
+          "momentBalance"
+        ]
+      },
+      "MomentReactionRow": {
+        "description": "One Constraint's support moment about the static equilibrium reference, in torque units.",
         "type": "object",
         "properties": {
           "constraint": {
@@ -47918,6 +48245,17 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "staticEquilibrium": {
+            "description": "Retained force and moment accounting for linear Cartesian static Results only.\nAbsent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A\nnonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining\nstudy before Result publication. If later display units cannot represent the\nretained values, this Query returns a structured error; model.setUnits with\nforce N and length m restores readable SI quantities.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StaticEquilibrium"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "storagePower": {
             "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
             "anyOf": [
@@ -47981,7 +48319,7 @@
             }
           },
           "balance": {
-            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear\nCartesian static uses retained unaggregated nodal force/moment actions, with M/L\nconverting moments to force. Actual residuals and scales are in staticEquilibrium;\nno residual is snapped to zero. Other structural procedures retain their existing\nlargest-force scale. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
@@ -48070,6 +48408,104 @@
         ]
       },
       "ReactionRow": {
+        "type": "object",
+        "properties": {
+          "constraint": {
+            "type": "string"
+          },
+          "total": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "constraint",
+          "total"
+        ]
+      },
+      "StaticEquilibrium": {
+        "description": "Linear Cartesian static equilibrium, retained with the solved state in SI and displayed\nin the requested unit set. Moments use reference-configuration node coordinates.\nA passing force check alone is not moment conservation: translation-only bonded ties\nacross a gap can transfer a force without its offset couple, leaving a real angular\nresidual. This diagnostic exposes that model behavior without changing tie mechanics.",
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "First retained Mesh node: the origin used by all applied/support moments.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "characteristicLength": {
+            "description": "Maximum node distance from reference; independent of element length, covariant under\nrigid frame changes. A zero-span force-only ledger has no moment-derived force scale.",
+            "$ref": "#/$defs/Valued"
+          },
+          "forceResidual": {
+            "description": "Actual vector Σ applied forces + Σ support forces, never rounded away.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "forceScale": {
+            "description": "max(Σ|F_applied,node|, Σ|F_support,node|, Σ|M_applied,node|/L, Σ|M_support,node|/L).\nEach nodal moment includes its force lever arm plus rotational couple. Summing\nmagnitudes before Constraint grouping preserves scales for opposing actions.",
+            "$ref": "#/$defs/Valued"
+          },
+          "appliedMoment": {
+            "description": "Σ((x-reference)×F_applied + applied rotational couple).",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "reactionMoments": {
+            "description": "Each Constraint's support moment, including force lever arms and raw rotational\nreactions; DOFs shared by Constraints belong to the first owner, as for reactions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MomentReactionRow"
+            }
+          },
+          "momentResidual": {
+            "description": "Actual vector Σ applied moments + Σ support moments about reference.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "momentScale": {
+            "description": "max(Σ|M_applied,node|, Σ|M_support,node|, LΣ|F_applied,node|, LΣ|F_support,node|).",
+            "$ref": "#/$defs/Valued"
+          },
+          "momentBalance": {
+            "description": "|momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.\nThe report checks this separately from force balance at its conservation tolerance.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "reference",
+          "characteristicLength",
+          "forceResidual",
+          "forceScale",
+          "appliedMoment",
+          "reactionMoments",
+          "momentResidual",
+          "momentScale",
+          "momentBalance"
+        ]
+      },
+      "MomentReactionRow": {
+        "description": "One Constraint's support moment about the static equilibrium reference, in torque units.",
         "type": "object",
         "properties": {
           "constraint": {

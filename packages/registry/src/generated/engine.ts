@@ -11576,6 +11576,15 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Retained force and moment accounting for linear Cartesian static Results only.
+   * Absent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A
+   * nonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining
+   * study before Result publication. If later display units cannot represent the
+   * retained values, this Query returns a structured error; model.setUnits with
+   * force N and length m restores readable SI quantities.
+   */
+  staticEquilibrium?: StaticEquilibrium | null;
+  /**
    * Thermal stored-energy rate in power display units (zero for steady heat). Transient
    * power totals/reactions use the last θ-method integration stage; the temperature field
    * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
@@ -11623,7 +11632,11 @@ export interface ResultSummary {
    */
   sweep?: SweepRow[];
   /**
-   * Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+   * Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear
+   * Cartesian static uses retained unaggregated nodal force/moment actions, with M/L
+   * converting moments to force. Actual residuals and scales are in staticEquilibrium;
+   * no residual is snapped to zero. Other structural procedures retain their existing
+   * largest-force scale. Thermal
    * conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
    * Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
    * Zero is perfect balance; values above 1e-9 fail the report's conservation check.
@@ -11669,6 +11682,88 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * Linear Cartesian static equilibrium, retained with the solved state in SI and displayed
+ * in the requested unit set. Moments use reference-configuration node coordinates.
+ * A passing force check alone is not moment conservation: translation-only bonded ties
+ * across a gap can transfer a force without its offset couple, leaving a real angular
+ * residual. This diagnostic exposes that model behavior without changing tie mechanics.
+ */
+export interface StaticEquilibrium {
+  /**
+   * First retained Mesh node: the origin used by all applied/support moments.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  reference: [Valued, Valued, Valued];
+  characteristicLength: Valued2;
+  /**
+   * Actual vector Σ applied forces + Σ support forces, never rounded away.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  forceResidual: [Valued, Valued, Valued];
+  forceScale: Valued3;
+  /**
+   * Σ((x-reference)×F_applied + applied rotational couple).
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  appliedMoment: [Valued, Valued, Valued];
+  /**
+   * Each Constraint's support moment, including force lever arms and raw rotational
+   * reactions; DOFs shared by Constraints belong to the first owner, as for reactions.
+   */
+  reactionMoments: MomentReactionRow[];
+  /**
+   * Actual vector Σ applied moments + Σ support moments about reference.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  momentResidual: [Valued, Valued, Valued];
+  momentScale: Valued4;
+  /**
+   * |momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.
+   * The report checks this separately from force balance at its conservation tolerance.
+   */
+  momentBalance: number;
+}
+/**
+ * A value with its display unit.
+ */
+export interface Valued2 {
+  value: number;
+  unit: string;
+}
+/**
+ * A value with its display unit.
+ */
+export interface Valued3 {
+  value: number;
+  unit: string;
+}
+/**
+ * One Constraint's support moment about the static equilibrium reference, in torque units.
+ */
+export interface MomentReactionRow {
+  constraint: string;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  total: [Valued, Valued, Valued];
+}
+/**
+ * A value with its display unit.
+ */
+export interface Valued4 {
+  value: number;
+  unit: string;
 }
 /**
  * One solver-used material assumption captured at solve time.

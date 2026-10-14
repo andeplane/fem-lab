@@ -260,7 +260,7 @@ pub async fn run(
             v
         })
         .collect();
-    let mut res = static_::post(p, s, opts, 1.0, 1.0, None, 1, pool, gpu, progress).await?;
+    let mut res = static_::post(p, s, opts, 1.0, 1.0, None, 1, false, pool, gpu, progress).await?;
     // The sweeps, not the one static right-hand side: they are what this procedure spent.
     res.solver.iterations = sweeps;
     res.modes = full.iter().map(|v| vector_field(v, dpn)).collect();

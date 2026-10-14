@@ -419,6 +419,28 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
         if power { &["Constraint", "Power", "Unit"] } else { &["Constraint", "Fx", "Fy", "Fz", "Unit"] };
     s += &table(headers, rows, "unreachable");
     s += &format!("{}\n\n", balance_line(r.balance, r.reaction_quantity));
+    if let Some(ledger) = &r.static_equilibrium {
+        s += &format!("Static force residual {} / scale {}. Moments are about retained reference {}, with characteristic length {}.\n\n",
+            q3(&ledger.force_residual), q(&ledger.force_scale), q3(&ledger.reference), q(&ledger.characteristic_length));
+        let mut rows: Vec<_> = ledger
+            .reaction_moments
+            .iter()
+            .map(|row| vec![format!("`{}`", row.constraint), q(&row.total[0]), q(&row.total[1]), q(&row.total[2])])
+            .collect();
+        rows.push(vec![
+            "**Σ applied**".into(),
+            q(&ledger.applied_moment[0]),
+            q(&ledger.applied_moment[1]),
+            q(&ledger.applied_moment[2]),
+        ]);
+        s += &table(&["Constraint", "Mx", "My", "Mz"], rows, "No support moment.");
+        s += &format!(
+            "Moment residual {} / scale {}. {}\n\n",
+            q3(&ledger.moment_residual),
+            q(&ledger.moment_scale),
+            moment_balance_line(ledger.moment_balance)
+        );
+    }
     if power && !r.history.is_empty() {
         s += "Thermal powers describe the last integration step; temperature extrema describe its endpoint.\n\n";
     }
@@ -458,10 +480,19 @@ fn balance_line(balance: f64, quantity: crate::units::ReactionQuantity) -> Strin
     let equation = if quantity == crate::units::ReactionQuantity::Power {
         "Thermal balance |net applied − removed − storage| / assembled power scale"
     } else {
-        "Reaction balance |Σ reactions + Σ applied| / max|F|"
+        "Reaction balance |Σ reactions + Σ applied| / force scale"
     };
     format!(
         "{equation} = {} — **{}** (tolerance {}).",
+        fmt_sig(balance, 3),
+        if balance <= BALANCE_TOL { "pass" } else { "fail" },
+        fmt_sig(BALANCE_TOL, 1)
+    )
+}
+
+fn moment_balance_line(balance: f64) -> String {
+    format!(
+        "Static moment balance |Σ support moments + Σ applied moments| / moment scale = {} — **{}** (tolerance {}).",
         fmt_sig(balance, 3),
         if balance <= BALANCE_TOL { "pass" } else { "fail" },
         fmt_sig(BALANCE_TOL, 1)
@@ -590,6 +621,9 @@ fn verification(model: &crate::model::Model, results: &[(ResultSummary, Option<S
           - the structure has no unconstrained rigid-body mode (a held temperature, for a heat Step).\n\n";
     for (r, _) in results {
         s += &format!("- Step `{}`: {}\n", r.step, balance_line(r.balance, r.reaction_quantity));
+        if let Some(ledger) = &r.static_equilibrium {
+            s += &format!("- Step `{}`: {}\n", r.step, moment_balance_line(ledger.moment_balance));
+        }
     }
     s += "\n";
     for (r, _) in results {
@@ -626,8 +660,10 @@ impl Engine {
             Some(name) => vec![self.stored(Some(name))?.0.to_string()],
             None => self.model.steps.iter().map(|s| s.name.clone()).filter(|n| self.results.contains_key(n)).collect(),
         };
-        let results: Vec<(ResultSummary, Option<StudyReport>)> =
-            names.iter().map(|n| (self.result_summary(n), self.studies.get(n).cloned())).collect();
+        let results: Vec<(ResultSummary, Option<StudyReport>)> = names
+            .iter()
+            .map(|n| self.result_summary(n).map(|summary| (summary, self.studies.get(n).cloned())))
+            .collect::<Result<_, _>>()?;
         let summary = self.query_model()?;
         let built = self.model.mesh.clone().and_then(|s| self.query_mesh().ok().map(|m| (m, s)));
         let cost = self.model.steps.first().map(|s| s.name.clone()).and_then(|n| self.query_cost(&n).ok());
@@ -696,6 +732,7 @@ mod tests {
         })).unwrap();
         let zero = Valued { value: 0.0, unit: "mm".into() };
         let result = ResultSummary {
+            static_equilibrium: None,
             result_id: "result-1".into(),
             reaction_quantity: crate::units::ReactionQuantity::Force,
             storage_power: None,
@@ -808,6 +845,8 @@ mod tests {
         assert!(
             balance_line(1e-3, crate::units::ReactionQuantity::Force).ends_with("= 0.001 — **fail** (tolerance 1e-9).")
         );
+        assert!(moment_balance_line(BALANCE_TOL).ends_with("**pass** (tolerance 1e-9)."));
+        assert!(moment_balance_line(1e-3).ends_with("= 0.001 — **fail** (tolerance 1e-9)."));
     }
 
     /// A study over sizes that do not converge has no rate and no limit; the table still says
