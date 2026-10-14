@@ -385,7 +385,11 @@ impl Analysis {
                     }
                     let expected = [Some(1.0), Some(1.0), Some(1e-5), None][index];
                     let actual = scalar(value, record.line, key, &format!("increment field {}", index + 1), 1.0)?;
-                    if Some(actual) != expected {
+                    // Abaqus uses zero as the default for initial/period/minimum. With
+                    // the only supported period and initial both 1, these resolve to
+                    // 1, 1 and 1e-5. A specified maximum remains unsupported.
+                    let zero_default = actual == 0.0 && index < 3;
+                    if !zero_default && Some(actual) != expected {
                         return Err(unsupported(
                             record.line,
                             key,

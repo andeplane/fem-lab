@@ -272,7 +272,8 @@ pub enum Query {
     /// BOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;
     /// numeric targets get explicit singleton Sets. Conflicting prescribed values and
     /// overlapping CLOAD updates fail. Static accepts absent/default increment fields
-    /// only, imports final linear equilibrium without increment history, and never solves.
+    /// only (zero also denotes the default in its first three fields), imports final
+    /// linear equilibrium without increment history, and never solves.
     /// Density/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT
     /// requests remain unsupported. Bounds: 250000 nodes,
     /// 250000 elements and 1000000 expanded membership declarations before deduplication.

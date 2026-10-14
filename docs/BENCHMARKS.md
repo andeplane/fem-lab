@@ -2269,6 +2269,7 @@ returns portable Commands and performs no solve or publication.
 | `abaqus_static_affine_prescribed_patch_matches_hooke_stress_and_reaction_conservation` | Both solid kinds at 2/4/8 cells in SI/mm/N, E = 200 GPa, ν = 0.25, prescribed engineering strain [1e-4, 2e-4, −1e-4, 0.5e-4, 0.7e-4, −0.3e-4]. Every stress component agrees with σ = λ tr(ε) I + 2με to 1e-5 Pa; each net reaction component is below 1e-5 N. |
 | `abaqus_static_set_loads_are_per_node_and_numeric_targets_are_reported_singletons` | Four-node CLOAD Set magnitudes [3, −5, 7] N plus a 10 N x force on one source node produce totals [22, −20, 28] N. Reactions balance each component to 1e-9 N. Only the numeric target receives a singleton Set. |
 | `abaqus_static_nonzero_step_displacements_and_equal_boundary_overlap_are_preserved` | Step-level 0.001 mm axial displacement is retained as 1e-6 m. σxx = Eδ/L = 2e5 Pa and the total root reaction is −EAδ/L = −2 kN (error < 1e-8 N); repeated/equal constraints do not double reactions. |
+| `abaqus_static_defaults_direct_targets_and_nonunit_force_scale_preserve_physics` | Absent, blank and documented zero/default STATIC fields all give the same final equilibrium. With `unitForce: 2 N`, direct source-node CLOADs total 2 kN and E scales to 400 GPa: δ = 5e-7 m, σxx = 2e5 Pa and total reaction −2 kN at the same axial tolerances. |
 
 The axial and affine patches lie exactly in the first-order finite-element spaces;
 all three refinements must reproduce the answer, rather than asserting an artificial
