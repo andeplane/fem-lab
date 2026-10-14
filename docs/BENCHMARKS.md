@@ -2368,3 +2368,12 @@ valid up to f64 roundoff, as does every physical stiffness, mass, pressure and
 traction rule. Straight-sided quadratic Quad8/Tri6 rectangles retain area
 `6 m²`, their Hex20/Tet10 extrusions retain volume `24 m³`, and side length/area
 and physical pressure area agree with the independent `3 m` / `12 m²` values.
+
+The public line-region preservation regression builds truss and beam Bodies with
+members from `(0,0,0)` to `(3,4,0)` to `(3,4,12) m`. Their independent lengths are
+`5 m` and `12 m`: the Body measure is `17 m`, while a region of these members has
+zero three-dimensional geometric volume (`0 m³`). At `1,2,4` subdivisions and
+mesh orders1/2, the elements remain two-node lines; counts, bounds, source joint
+coordinates, member connectivity, individual edge lengths and replay are checked
+at native one/four threads. A disjoint unit cube adds exactly `1 m³` to a mixed
+region, independently of the lines, preserving the ambient-volume contract.

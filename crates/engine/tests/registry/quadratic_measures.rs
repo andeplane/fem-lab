@@ -1,5 +1,5 @@
 //! Public original quadratic geometry: independent circular-segment formulas.
-use super::{ok, set_info, Engine, NoClock, Query};
+use super::{ok, set_info, Engine, NoClock, ObjectKind, Query};
 use serde_json::json;
 
 fn annulus(e: &mut Engine, n: usize, solid: bool, simplices: bool) {
@@ -152,6 +152,87 @@ fn original_affine_quadratic_cells_keep_exact_rectangular_measures_and_replay() 
                 assert_eq!(replay.model_hash(), e.model_hash());
                 assert_eq!(set_info(&mut replay, "whole"), whole);
                 assert_eq!(set_info(&mut replay, "rectangle.right"), side);
+            }
+        }
+    }
+}
+
+#[test]
+fn line_regions_preserve_zero_volume_member_geometry_and_mixed_solid_volume() {
+    // A line has zero 3D geometric volume; its Body reports length separately.
+    // The two independent member lengths are sqrt(3²+4²)=5 m and12 m.
+    for threads in [1, 4] {
+        for kind in ["truss", "beam"] {
+            for order in [1, 2] {
+                for divisions in [1, 2, 4] {
+                    let mut e = Engine::new(None, Box::new(NoClock), threads);
+                    ok(&mut e, r#"{"cmd":"model.new","name":"line-region-measures"}"#);
+                    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+                    let line = json!({"cmd":"geometry.addLine","name":"shaft",
+                        "points":[["0 m","0 m","0 m"],["3 m","4 m","0 m"],["3 m","4 m","12 m"]],
+                        "members":[[0,1],[1,2]],"divisions":divisions,"kind":kind});
+                    ok(&mut e, &line.to_string());
+                    ok(
+                        &mut e,
+                        &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"},"order":order}).to_string(),
+                    );
+                    ok(
+                        &mut e,
+                        r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"shaft"}}"#,
+                    );
+                    let before = e.export_file();
+                    let region = set_info(&mut e, "whole");
+                    assert_eq!(region.kind, "element");
+                    assert_eq!(region.count, 2 * divisions);
+                    assert_eq!(region.measure.value, 0.0);
+                    assert_eq!(region.measure.unit, "m^3");
+                    assert_eq!(region.pressure_area, None);
+                    assert_eq!(region.bbox.each_ref().map(|q| q.value), [0.0, 0.0, 0.0, 3.0, 4.0, 12.0]);
+                    let model = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+                    assert_eq!(model["bodies"][0]["measure"], json!({"value":17.0,"unit":"m"}));
+                    let mesh = serde_json::to_value(e.query(Query::Mesh {}).unwrap()).unwrap();
+                    assert_eq!(mesh["elementKind"], format!("{kind}2"));
+                    assert_eq!(mesh["elements"], 2 * divisions);
+                    assert_eq!(mesh["nodes"], 2 * divisions + 1);
+                    assert_eq!(mesh["bbox"], model["bodies"][0]["bbox"]);
+                    assert_eq!(mesh["minEdge"]["value"], 5.0 / divisions as f64);
+                    assert_eq!(mesh["maxEdge"]["value"], 12.0 / divisions as f64);
+                    let definition = serde_json::to_value(
+                        e.query(Query::Definition { kind: ObjectKind::Body, name: "shaft".into() }).unwrap(),
+                    )
+                    .unwrap();
+                    let command = &definition["command"];
+                    assert_eq!(command["members"], json!([[0, 1], [1, 2]]));
+                    assert_eq!(command["kind"], kind);
+                    assert_eq!(command["divisions"], divisions);
+                    for (point, expected) in
+                        command["points"].as_array().unwrap().iter().zip([[0., 0., 0.], [3., 4., 0.], [3., 4., 12.]])
+                    {
+                        for (coordinate, value) in point.as_array().unwrap().iter().zip(expected) {
+                            assert_eq!(coordinate, &json!({"value":value,"unit":"m"}));
+                        }
+                    }
+                    assert_eq!(e.export_file(), before);
+                    let mut replay = Engine::new(None, Box::new(NoClock), threads);
+                    pollster::block_on(replay.replay(&before.journal.entries, true, true)).unwrap();
+                    assert_eq!(replay.model_hash(), e.model_hash());
+                    assert_eq!(set_info(&mut replay, "whole"), region);
+                    // Adding a disjoint unit cube changes the whole-model volume by1 m³,
+                    // independently of the line's length, kind or subdivision/order.
+                    ok(
+                        &mut e,
+                        r#"{"cmd":"geometry.addBox","name":"cube","size":["1 m","1 m","1 m"],"at":["-2 m","0 m","0 m"]}"#,
+                    );
+                    ok(
+                        &mut e,
+                        r#"{"cmd":"geometry.nameRegion","name":"combined","where":{"kind":"bbox","min":["-3 m","-1 m","-1 m"],"max":["4 m","5 m","13 m"]}}"#,
+                    );
+                    let combined = set_info(&mut e, "combined");
+                    assert_eq!(combined.count, 1 + 2 * divisions);
+                    assert_eq!(combined.measure.unit, "m^3");
+                    assert!((combined.measure.value - 1.0).abs() < 3e-15);
+                    assert_eq!(set_info(&mut e, "whole").measure, region.measure);
+                }
             }
         }
     }
