@@ -6,10 +6,10 @@ import type { Viewer, CameraState } from '../src/viewer/viewer';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import { SessionRuntime } from '../src/session-runtime';
 
-const mounted = vi.hoisted(() => ({ props: null as ComponentProps<typeof App> | null, makeViewer: null as (() => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
+const mounted = vi.hoisted(() => ({ props: null as ComponentProps<typeof App> | null, makeViewer: null as ((props: ComponentProps<typeof App>) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
 vi.mock('preact', async original => ({ ...await original<typeof import('preact')>(), render: (node: VNode<ComponentProps<typeof App>>) => {
   mounted.props = node.props;
-  const viewer = mounted.makeViewer?.();
+  const viewer = mounted.makeViewer?.(node.props);
   if (viewer) {
     node.props.viewer.current = viewer;
     node.props.viewer.onReady?.();
@@ -35,11 +35,12 @@ class LocalWorker {
 }
 afterEach(() => { for (const worker of workers) worker.terminate(); mounted.makeViewer = null; mounted.afterReady = null; vi.unstubAllGlobals(); localStorage.clear(); });
 
-function drawing() {
+function drawing(onBounds: () => void) {
   let camera: CameraState = { position: [20,20,20], target: [0,0,0], up: [0,0,1] };
-  const surface = vi.fn<Viewer['setSurface']>();
+  const surface = vi.fn<Viewer['setSurface']>((installed) => { if (installed.indices.length || installed.edges?.length) onBounds(); });
   const viewer = {
-    hasSurface: true, setSurface: surface, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), animate: vi.fn(),
+    hasSurface: true,
+    setSurface: surface, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), animate: vi.fn(),
     getCamera: () => structuredClone(camera), setCamera: (next: CameraState) => { camera = structuredClone(next); },
     fit: vi.fn(() => {
       expect(surface.mock.lastCall?.[0].positions.length).toBeGreaterThan(0);
@@ -53,7 +54,7 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   document.body.innerHTML = '<div id="app"></div>';
   localStorage.setItem('femlab.autosave', 'off');
   const drawings: ReturnType<typeof drawing>[] = [];
-  mounted.makeViewer = () => { const next = drawing(); drawings.push(next); return next as unknown as Viewer; };
+  mounted.makeViewer = props => { const next = drawing(() => props.viewer.onBounds?.()); drawings.push(next); return next as unknown as Viewer; };
   vi.stubGlobal('Worker', LocalWorker);
   await import('../src/main');
   await vi.waitFor(() => expect(mounted.props?.store.state.ready).toBe(true));
@@ -95,7 +96,7 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   mounted.afterReady = null;
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
   expect(await window.fem.registry.query({ query: 'query.view' })).toEqual(custom);
-  reopened.viewer.onSurface?.();
+  reopened.viewer.onBounds?.();
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
   expect(await window.fem.registry.query({ query: 'query.view' })).toEqual(custom);
   await window.fem.dispatch({ cmd: 'project.delete', id: second.id });

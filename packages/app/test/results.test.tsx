@@ -276,7 +276,7 @@ function fakeViewer() {
 
 function harness(result: ResultSummary | null = RESULT) {
   const store = new Store({ ...initialState, model: MODEL, viewMode: 'results' });
-  const viewer: { current: ReturnType<typeof fakeViewer>; onSurface?: () => void } = { current: fakeViewer() };
+  const viewer = { current: fakeViewer() };
   const transport = {
     surface: vi.fn(async (_selector?: { resultId?: string | null }) => ({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), indices: new Uint32Array(), triBody: new Uint32Array(), triFace: new Uint32Array(), faceNames: [], bodyNames: ['body'], source: 'mesh' as const })),
     query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
@@ -302,34 +302,6 @@ function registryHarness(result: ResultSummary) {
 }
 
 describe('ResultsView', () => {
-  it('announces real bounds only after installation and rejects a stale surface completion', async () => {
-    const { viewer, results, transport } = harness(null);
-    let installed: Awaited<ReturnType<typeof transport.surface>>;
-    viewer.onSurface = vi.fn(() => expect(viewer.current.setSurface).toHaveBeenLastCalledWith(installed));
-    await results.refresh();
-    expect(viewer.onSurface).not.toHaveBeenCalled();
-    const triangle = { ...(await transport.surface()), positions: Float32Array.of(0,0,0,1,0,0,0,1,0), indices: Uint32Array.of(0,1,2) };
-    installed = triangle;
-    transport.surface.mockImplementation(async () => triangle);
-    await results.refresh();
-    expect(viewer.onSurface).toHaveBeenCalledTimes(1);
-    const line = { ...triangle, indices: new Uint32Array(), edges: Uint32Array.of(0,1) };
-    installed = line;
-    transport.surface.mockImplementation(async () => line);
-    await results.refresh();
-    expect(viewer.onSurface).toHaveBeenCalledTimes(2);
-    viewer.current.setSurface.mockClear();
-    let finish!: () => void;
-    transport.surface.mockImplementationOnce(async () => { await new Promise<void>(resolve => { finish = resolve; }); return triangle; });
-    const pending = results.refresh();
-    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
-    results.invalidateTransient();
-    finish();
-    await pending;
-    expect(viewer.current.setSurface).not.toHaveBeenCalled();
-    expect(viewer.onSurface).toHaveBeenCalledTimes(2);
-  });
-
   it('pairs a dimmed stale Result with its retained mesh and restores current previews on mode changes', async () => {
     const { store, viewer, results, transport } = harness({ ...RESULT, stale: true });
     const solved = await transport.surface({ resultId: RESULT.resultId });

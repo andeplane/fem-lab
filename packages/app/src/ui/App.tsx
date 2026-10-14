@@ -501,7 +501,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
       try {
-        v = new Viewer(el);
+        v = new Viewer(el, () => viewer.onBounds?.());
       } catch (e) {
         // No WebGL2 is a fact about the browser, not a crash: say so and keep the rest usable.
         setBroken(`This browser could not open a WebGL2 context: ${(e as Error).message}`);

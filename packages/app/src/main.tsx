@@ -68,7 +68,7 @@ class Bundle {
       if (this.fitAfterOpen) this.initialCamera = this.viewer.current?.getCamera();
       void this.refresh().catch(error => this.fail(error));
     };
-    this.viewer.onSurface = () => {
+    this.viewer.onBounds = () => {
       const dispatch = this.store.dispatch;
       if (!this.fitAfterOpen || this.disposed || !this.viewer.current || !dispatch) return;
       this.fitAfterOpen = false;
