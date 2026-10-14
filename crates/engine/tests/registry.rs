@@ -12877,6 +12877,24 @@ fn a_frictionless_contact_is_reported_by_query_result_and_carries_a_pressure_fie
 const IMPORTED_TET: &str = include_str!("fixtures/imported/sparse-tet.json");
 
 #[test]
+fn imported_model_resolves_authored_sets_without_inventing_geometry_faces() {
+    let mut e = engine();
+    ok(&mut e, IMPORTED_TET);
+    let model = e.export_file().model;
+    let mesher = &model.mesh.as_ref().unwrap().mesher;
+    assert_eq!(mesher.implicit_body(), Some("part"));
+    assert_eq!(mesher.source_body(), None);
+    for name in ["part.nset_COINCIDENT", "part.elset_ALL", "part.surface_BASE", "part.node_77"] {
+        assert!(model.knows_set(name), "authored Set {name} must resolve before meshing");
+    }
+    // An imported Body has exact authored memberships, so its name must not make arbitrary
+    // box-face tags or unrequested source-node targets resolve as geometric auto Sets.
+    for name in ["part.xmin", "part.nset_MISSING", "part.node_999", "part.node_123", "other.nset_ROOT"] {
+        assert!(!model.knows_set(name), "unauthored Set {name} must not resolve");
+    }
+}
+
+#[test]
 fn imported_source_preserves_labels_memberships_identity_and_replay() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);
