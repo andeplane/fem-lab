@@ -195,6 +195,10 @@ the final Model/Journal size or permission to publish. #504 must always prepare 
 Commands through the existing Candidate path and check the exact serialized Model file
 before atomic publication. Current document conflicts and lifecycle checks remain Candidate
 authoritative. The conversion Query never constructs a second approximate Model.
+The authoritative prepared-file fence is tracked by [#536](https://github.com/andeplane/fem-lab/issues/536):
+the existing Candidate path does not yet enforce that final bound. It must count the actual
+persisted pretty-printed JSON, including its final newline and UTF-8 bytes, before any
+SessionOwner publication. #504 cannot pass its publication gate until this fence lands.
 
 Check duplicate/invalid labels (1…999999999), missing connectivity references, unsupported
 arity, nonfinite coordinates, repeated local nodes, positive Jacobians at the element's
@@ -250,6 +254,7 @@ and the fuller main matrix remain separate evidence ([ADR 0022](../adr/0022-fast
 | [#502](https://github.com/andeplane/fem-lab/issues/502) | Strict mesh parser and schema-owned conversion Query | #501 | Independent text fixtures convert; unsupported model intent fails; native/WASM outputs agree. |
 | [#503](https://github.com/andeplane/fem-lab/issues/503) | Homogeneous small-displacement static-deck translation | #501, #502 | Imported independent supported decks solve with analytical displacement/stress/reactions at refinements; units and per-node CLOAD meaning verified. |
 | [#504](https://github.com/andeplane/fem-lab/issues/504) | Registry picker/inline host Command, Chromium flow and CLI | #502, #503 | Atomic file load, actual solve, save/reopen without source file and adverse session cases pass. Only then advertise supported `.inp` loading. |
+| [#536](https://github.com/andeplane/fem-lab/issues/536) | Exact prepared Model-file byte limit before publication | Required by #504 | Actual persisted JSON bytes, threshold boundaries and unchanged active state on rejection. |
 
 Each implementation issue links this plan and remains unclaimed until work begins. If an
 implementation grows beyond a day, split its remaining deliverables rather than widening a
