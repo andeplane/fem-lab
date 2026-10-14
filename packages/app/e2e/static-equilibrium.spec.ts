@@ -69,8 +69,10 @@ for (const divisions of [2, 4, 8]) {
     const shear = 200e9 / (2 * 1.3);
     const twist = 1000 / (shear * 2 * inertia);
     const slope = 1000 / (200e9 * inertia);
-    expect(sampled.twistAngle.value.unit).toBe('rad');
-    expect(sampled.bendSlope.value.unit).toBe('rad');
+    // The registry preserves its dimensionless "SI" display label for rotation probes.
+    // Numeric angles remain radians in the closed-form physics checks below.
+    expect(sampled.twistAngle.value.unit).toBe('SI');
+    expect(sampled.bendSlope.value.unit).toBe('SI');
     expect(sampled.bendDeflection.value.unit).toBe('mm');
     close(sampled.twistAngle.value.value, twist, twist * 1e-9);
     close(sampled.bendSlope.value.value, slope, slope * 1e-9);

@@ -70,8 +70,10 @@ function oracle(outputs) {
   const shear = 200e9 / (2 * 1.3);
   const twist = 1000 / (shear * 2 * inertia);
   const slope = 1000 / (200e9 * inertia);
-  assert.equal(outputs[2].value.unit, 'rad');
-  assert.equal(outputs[3].value.unit, 'rad');
+  // Rotation probes use the existing dimensionless display label "SI"; their numeric
+  // SI angles are radians, so the physical twist/slope oracles below are unchanged.
+  assert.equal(outputs[2].value.unit, 'SI');
+  assert.equal(outputs[3].value.unit, 'SI');
   assert.equal(outputs[4].value.unit, 'mm');
   close(outputs[2].value.value, twist, 1e-14, 1e-9);
   close(outputs[3].value.value, slope, 1e-14, 1e-9);
