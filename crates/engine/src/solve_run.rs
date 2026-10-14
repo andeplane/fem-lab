@@ -85,6 +85,7 @@ fn plasticity_ignored(model: &Model, p: &Problem<'_>, procedure: Procedure) -> O
     names.sort_unstable();
     names.dedup();
     (!names.is_empty()).then(|| Warning {
+        step: None,
         code: "material.plasticityIgnored".to_string(),
         text: format!(
             "the {} procedure has no Gauss-point history, so the plasticity of {} was not integrated and the \

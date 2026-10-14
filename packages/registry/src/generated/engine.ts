@@ -6810,6 +6810,11 @@ export interface SizeBox {
 export interface Warning {
   code: string;
   text: string;
+  /**
+   * Exact Step identity for a procedure-dependent warning. Omitted for global checks;
+   * hosts must use this identity rather than parse names from display text or `where`.
+   */
+  step?: string | null;
   where?: string | null;
 }
 /**

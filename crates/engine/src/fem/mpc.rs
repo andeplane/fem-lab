@@ -351,6 +351,7 @@ fn pair_sets<'p>(
     }
     if slave_set.nodes.len() < master_nodes.len() {
         warnings.push(Warning {
+            step: None,
             code: "contact.slave-coarser".into(),
             text: format!(
                 "contact '{name}' has {} nodes on the slave set '{slave}' against {} on the master '{master}'; \
@@ -525,6 +526,7 @@ fn bonded_rows(
     }
     if worst.0 > GAP_WARN * diag {
         warnings.push(Warning {
+            step: None,
             code: "contact.gap".into(),
             text: format!(
                 "contact '{name}' is not closed: node {} of '{slave}' sits {} m from '{master}' and is tied across \
