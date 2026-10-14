@@ -9,7 +9,7 @@ export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
   useDialogFocus(Boolean(s.panels['account']),ref);
   if(!s.panels['account'])return null;
   const usage=a.profile?.usage,billing=a.profile?.billing;
-  return <div class="modal-backdrop"><div ref={ref} class="modal account-panel" role="dialog" aria-modal="true" aria-labelledby="account-title">
+  return <div class="overlay wide"><div ref={ref} class="account-panel" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title">
     <div class="account-heading"><div><span class="eyebrow">FEM LAB ACCOUNT</span><h2 id="account-title">{a.uid?'Your AI allowance':'Sign in for AI'}</h2></div><Cmd dispatch={dispatch} cmd="panel.toggle" args={{panel:'account',open:false}} class="tbutton" label="Close account">×</Cmd></div>
     <p>Model, mesh and solve without signing in. An account gives you a small free Assistant allowance, refreshed each calendar month.</p>
     {!a.configured?<p role="status">Hosted accounts are not configured in this build.</p>:!a.uid?<div class="account-login">
