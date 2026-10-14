@@ -33,6 +33,12 @@ describe('Material physics presentation', () => {
     const chained = model(['heat-steady', 'static']);
     chained.steps[1] = { ...chained.steps[1]!, after: 'heat-steady' } as ModelSummary['steps'][number];
     expect(materialPhysicsFor(chained, {}, fields, defs)).toEqual(['thermal', 'mass', 'stiffness', 'expansion']);
+    const transientChained = model(['heat-transient', 'static']);
+    transientChained.steps[1] = { ...transientChained.steps[1]!, after: 'heat-transient' } as ModelSummary['steps'][number];
+    expect(materialPhysicsFor(transientChained, {}, fields, defs)).toEqual(['thermal', 'mass', 'stiffness', 'expansion']);
+    const heatContinuation = model(['heat-steady', 'heat-transient']);
+    heatContinuation.steps[1] = { ...heatContinuation.steps[1]!, after: 'heat-steady' } as ModelSummary['steps'][number];
+    expect(materialPhysicsFor(heatContinuation, {}, fields, defs)).toEqual(['thermal', 'mass']);
     expect(materialPhysicsFor(null, {}, fields, defs)).toEqual(['stiffness']);
     expect(materialPhysicsFor(model(['future']), {}, fields, {})).toEqual(['stiffness']);
   });

@@ -10,9 +10,10 @@ export function materialPhysicsFor(model: ModelSummary | null, values: Record<st
   const variants = (procedure['oneOf'] ?? []) as JsonSchema[];
   for (const step of model?.steps ?? []) {
     const metadata = variants.find(v => v['const'] === step.procedure);
-    for (const tag of (metadata?.['x-material-physics'] ?? []) as MaterialPhysics[]) selected.add(tag);
+    const stepPhysics = (metadata?.['x-material-physics'] ?? []) as MaterialPhysics[];
+    for (const tag of stepPhysics) selected.add(tag);
     const predecessor = 'after' in step ? model?.steps.find(source => source.name === step.after) : undefined;
-    if (predecessor?.procedure === 'heat-steady' || predecessor?.procedure === 'heat-transient') selected.add('expansion');
+    if (stepPhysics.includes('stiffness') && (predecessor?.procedure === 'heat-steady' || predecessor?.procedure === 'heat-transient')) selected.add('expansion');
     // Only active Loads affect a Step; an unused gravity/temperature definition does not.
     for (const load of model?.loads ?? []) {
       if (!step.loads.includes(load.name)) continue;
