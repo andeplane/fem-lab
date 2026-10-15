@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, stat, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, stat, rm, writeFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { verifyReusedWasm, type ReusedWasm } from './frozen-reuse';
@@ -61,9 +61,9 @@ export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm):
   }
 }
 
-async function fileHash(target: string | undefined): Promise<string> {
+async function fileHash(target: string | undefined, contentFor?: (file: string) => Promise<Buffer>): Promise<string> {
   if (!target) return 'not-built';
-  if ((await stat(target)).isFile()) return createHash('sha256').update(await readFile(target)).digest('hex');
+  if ((await stat(target)).isFile()) return createHash('sha256').update(await (contentFor ? contentFor(target) : readFile(target))).digest('hex');
   const files: string[] = [];
   const walk = async (directory: string): Promise<void> => {
     for (const name of (await readdir(directory)).sort()) {
@@ -75,17 +75,42 @@ async function fileHash(target: string | undefined): Promise<string> {
   await walk(target);
   const digest = createHash('sha256');
   for (const file of files) {
-    const contentHash = createHash('sha256').update(await readFile(file)).digest('hex');
+    const contentHash = createHash('sha256').update(await (contentFor ? contentFor(file) : readFile(file))).digest('hex');
     digest.update(path.relative(target, file)).update('\0').update(contentHash).update('\0');
   }
   return digest.digest('hex');
 }
 
-/** Include actual isolated externals and their resolution lock, not only the MCP package. */
+/** Normalize only verified local packed-package locations; raw lockfiles remain provenance. */
+async function runtimeLock(build: FrozenBuild, file: string): Promise<Buffer> {
+  const raw = await readFile(file);
+  const lock = JSON.parse(raw.toString()) as { packages?: Record<string, { resolved?: string; integrity?: string; dependencies?: Record<string, string> }> };
+  const local = lock.packages?.['node_modules/femlab-mcp'];
+  if (!local) throw new Error(`frozen runtime lock has no packed MCP package: ${file}`);
+  const tarball = await readFile(build.tarball);
+  const integrity = `sha512-${createHash('sha512').update(tarball).digest('base64')}`;
+  if (local.integrity !== integrity) throw new Error(`frozen runtime MCP tarball integrity mismatch: ${file}`);
+  const expected = await realpath(build.tarball);
+  const normalize = async (value: string | undefined): Promise<string> => {
+    if (!value?.startsWith('file:')) throw new Error(`frozen runtime MCP resolution is not local: ${file}`);
+    // npm lock paths are relative to the install root, including its hidden lock.
+    const target = path.resolve(path.dirname(build.lockfile), value.slice(5));
+    if (await realpath(target) !== expected) throw new Error(`frozen runtime MCP resolution differs from owned tarball: ${file}`);
+    return `file:sha256:${createHash('sha256').update(tarball).digest('hex')}`;
+  };
+  local.resolved = await normalize(local.resolved);
+  const rootDependencies = lock.packages?.['']?.dependencies;
+  if (rootDependencies?.['femlab-mcp'] !== undefined) rootDependencies['femlab-mcp'] = await normalize(rootDependencies['femlab-mcp']);
+  return Buffer.from(JSON.stringify(lock));
+}
+
+/** Include actual isolated externals and verified resolution metadata, independent of temp root. */
 export async function hashFrozenArtifacts(build: FrozenBuild | null) {
+  const dependencyContent = build ? (file: string) => file === path.join(build.dependencyDirectory, '.package-lock.json') ? runtimeLock(build, file) : readFile(file) : undefined;
   const [app, nodeWasm, mcpPackage, mcpTarball, mcpDependencies, mcpLock] = await Promise.all([
     fileHash(build?.appDirectory), fileHash(build?.nodeWasm), fileHash(build?.mcpPackageDirectory),
-    fileHash(build?.tarball), fileHash(build?.dependencyDirectory), fileHash(build?.lockfile),
+    fileHash(build?.tarball), fileHash(build?.dependencyDirectory, dependencyContent),
+    fileHash(build?.lockfile, build ? file => runtimeLock(build, file) : undefined),
   ]);
   return { app, nodeWasm, mcpPackage, mcpTarball, mcpDependencies, mcpLock };
 }
