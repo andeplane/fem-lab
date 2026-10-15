@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,18 +21,27 @@ const axial = (result: ResultSummary) => {
   expect(result.stale).toBe(false);
 };
 
-it('imports a scoped static deck through the actual converter, solves, exports and replays after the original file is deleted', async () => {
+it('imports a scoped nested include deck, solves, exports and replays after the whole submission is deleted', async () => {
   const project = await mkdtemp(path.join(tmpdir(), 'femlab-504-mcp-')); directories.push(project);
-  const source = path.join(project, 'bar.inp');
-  await copyFile(staticFixture, source);
-  const digest = createHash('sha256').update(await readFile(source)).digest('hex');
+  const source = path.join(project, 'submission');
+  const deck = await readFile(staticFixture, 'utf8');
+  const material = deck.indexOf('*MATERIAL');
+  expect(material).toBeGreaterThan(0);
+  const root = '** Independent MCP include smoke\n*INCLUDE,INPUT=Parts/Mesh.inc\n';
+  const mesh = deck.slice(0, material) + '*INCLUDE,INPUT=Material.inp\n';
+  const physics = deck.slice(material);
+  await mkdir(path.join(source, 'Parts'), { recursive: true });
+  await writeFile(path.join(source, 'Root.inp'), root);
+  await writeFile(path.join(source, 'Parts/Mesh.inc'), mesh);
+  await writeFile(path.join(source, 'Material.inp'), physics);
+  const digest = createHash('sha256').update(root).digest('hex');
   const registry = createRegistry({ engine: loadEngine(here), project });
-  const imported = await registry.dispatch({ cmd: 'file.importAbaqus', path: 'bar.inp', name: 'MCP imported bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' }) as { report: AbaqusConversionReport };
-  expect(imported.report).toMatchObject({ sha256: digest, sourceNodes: 12, activeNodes: 12, sourceElements: 2, analysisConfigured: true, unitLength: { value: 0.001, unit: 'm' }, unitForce: { value: 1, unit: 'N' }, analysis: { material: 'STEEL', step: 'AXIAL', finalEquilibriumOnly: true } });
+  const imported = await registry.dispatch({ cmd: 'file.importAbaqus', path: 'submission/Root.inp', name: 'MCP imported bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s' }) as { report: AbaqusConversionReport };
+  expect(imported.report).toMatchObject({ sha256: digest, inputBytes: Buffer.byteLength(root) + Buffer.byteLength(mesh) + Buffer.byteLength(physics), sourceNodes: 12, activeNodes: 12, sourceElements: 2, analysisConfigured: true, unitLength: { value: 0.001, unit: 'm' }, unitForce: { value: 1, unit: 'N' }, unitTime: { value: 1, unit: 's' }, analysis: { material: 'STEEL', step: 'AXIAL', finalEquilibriumOnly: true } });
   const model = await registry.query({ query: 'query.model' }) as ModelSummary;
   expect(model).toMatchObject({ name: 'MCP imported bar', steps: [{ name: 'AXIAL', solved: false }] });
   expect(await registry.query({ query: 'query.mesh' })).toMatchObject({ nodes: 12, elements: 2 });
-  await rm(source);
+  await rm(source, { recursive: true });
   await registry.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' });
   axial(await registry.query({ query: 'query.result', step: 'AXIAL' }) as ResultSummary);
   await registry.dispatch({ cmd: 'export.file', format: 'journal', path: 'bar.femlab.json' });
@@ -41,6 +50,15 @@ it('imports a scoped static deck through the actual converter, solves, exports a
   expect(text).not.toContain('*NODE');
   const file = JSON.parse(text) as ModelFile;
   expect(file.format).toBe('femlab/1');
+  const importedMesh = file.journal.entries.map(entry => entry.cmd).find(command => command.cmd === 'mesh.set');
+  if (importedMesh?.cmd !== 'mesh.set' || importedMesh.mesher.kind !== 'imported') throw new Error('imported mesh missing');
+  expect(importedMesh.mesher.provenance).toMatchObject({
+    sha256: digest, sourceName: 'Root.inp',
+    sourceFiles: {
+      'Parts/Mesh.inc': createHash('sha256').update(mesh).digest('hex'),
+      'Material.inp': createHash('sha256').update(physics).digest('hex'),
+    },
+  });
   const replay = await loadEngine(here).acquire();
   try {
     await replay.replaceCommands(file.journal.entries.map(entry => entry.cmd));
@@ -51,12 +69,12 @@ it('imports a scoped static deck through the actual converter, solves, exports a
   const before = await registry.query({ query: 'query.journal' }) as JournalDump;
   const result = await registry.query({ query: 'query.result', step: 'AXIAL' });
   for (const { overrides, expected } of [
-    { overrides: { text: '*PART,NAME=P\n' }, expected: { code: 'unsupported' } },
+    { overrides: { text: deck.replace('*STATIC', '*DYNAMIC') }, expected: { code: 'unsupported' } },
     { overrides: { unitForce: '1 kg' }, expected: { code: 'unit.dimension', where: 'unitForce' } },
     { overrides: { unitForce: '0 N' }, expected: { code: 'schema', where: 'unitForce' } },
     { overrides: { mode: 'mesh' }, expected: { code: 'schema', where: 'unitForce' } },
   ]) {
-    const command = { cmd: 'file.importAbaqus', text: await readFile(staticFixture, 'utf8'), name: 'rejected', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' };
+    const command = { cmd: 'file.importAbaqus', text: deck, name: 'rejected', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' };
     await expect(registry.dispatch({ ...command, ...overrides })).rejects.toMatchObject(expected);
     expect(await registry.query({ query: 'query.journal' })).toEqual(before);
     expect(await registry.query({ query: 'query.result', step: 'AXIAL' })).toEqual(result);

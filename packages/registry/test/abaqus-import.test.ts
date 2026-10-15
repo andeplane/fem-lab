@@ -45,7 +45,7 @@ describe('Abaqus host byte admission', () => {
       bytes.fill(0);
       return createHash('sha256').update(snapshot).digest('hex');
     });
-    expect(await readAbaqus({ picker: true }, host)).toEqual({ text: '*NODE\r\n1,0,0,0\r\n', sha256: createHash('sha256').update('*NODE\r\n1,0,0,0\r\n').digest('hex') });
+    expect(await readAbaqus({ picker: true }, host)).toEqual({ text: '*NODE\r\n1,0,0,0\r\n', sourceName: 'beam.inp', sha256: createHash('sha256').update('*NODE\r\n1,0,0,0\r\n').digest('hex') });
     expect(picked.read).toHaveBeenCalledTimes(1);
   });
 

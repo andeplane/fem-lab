@@ -45,6 +45,7 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
       seen.push(q);
       if (q['query'] === 'query.script') return Promise.resolve({ text: 'await fem.model.new({ name: "beam" });\n' });
       if (q['query'] === 'query.journal') return Promise.resolve({ entries: [], revision: 0 });
+      if (q['query'] === 'query.abaqusDependencies') return Promise.resolve({ missingFiles: [] });
       if (q['query'] === 'query.convertAbaqus') return Promise.resolve(ABAQUS_CONVERSION);
       return Promise.resolve(MODEL);
     },
@@ -93,7 +94,7 @@ it('offers one scoped Abaqus import tool and the same inline script Command; pic
   const registry = createRegistry({ engine, project });
   const args = { name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 cm' };
   expect(await callTool(registry, toolNameFor('file.importAbaqus'), { ...args, path: './source.inp' })).toEqual({ report: ABAQUS_CONVERSION.report });
-  expect(engine.seen).toEqual([{ query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+  expect(engine.seen).toEqual([{ query: 'query.abaqusDependencies', text, sourceName: 'source.inp' }, { query: 'query.convertAbaqus', ...args, text, sourceName: 'source.inp', sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
   engine.seen.length = 0;
   await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, picker: true })).rejects.toMatchObject({ code: 'unsupported' });
   await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, path: 'results.odb' })).rejects.toMatchObject({ code: 'unsupported' });
@@ -101,7 +102,31 @@ it('offers one scoped Abaqus import tool and the same inline script Command; pic
   const scripted = await registry.dispatch({ cmd: 'script.run', code: `return await fem.file.importAbaqus(${JSON.stringify({ ...args, text })});` }) as { result: unknown; error?: string };
   expect(scripted.error).toBeUndefined();
   expect(scripted.result).toEqual({ report: ABAQUS_CONVERSION.report });
-  expect(engine.seen).toEqual([{ query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+  expect(engine.seen).toEqual([{ query: 'query.abaqusDependencies', text }, { query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+});
+
+it('acquires included files relative to the submission folder and passes exact contents to the captured converter', async () => {
+  const project = await scratch();
+  await mkdir(path.join(project, 'submission/Parts'), { recursive: true });
+  const text = '*INCLUDE,INPUT=Parts/Mesh.inc\r\n';
+  const mesh = '*NODE\r\n1,0,0,0\r\n';
+  await writeFile(path.join(project, 'submission/Root.inp'), text);
+  await writeFile(path.join(project, 'submission/Parts/Mesh.inc'), mesh);
+  const engine = fakeEngine();
+  const original = engine.query;
+  engine.query = vi.fn(async query => {
+    if (query['query'] === 'query.abaqusDependencies') {
+      engine.seen.push(query);
+      return { missingFiles: query['sourceFiles'] ? [] : ['Parts/Mesh.inc'] };
+    }
+    return original(query);
+  });
+  const registry = createRegistry({ engine, project });
+  await registry.dispatch({ cmd: 'file.importAbaqus', name: 'imported', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', path: 'submission/Root.inp' });
+  const converted = engine.seen.find(item => (item as Record<string, unknown>)['query'] === 'query.convertAbaqus');
+  expect(converted).toMatchObject({ sourceName: 'Root.inp', sourceFiles: { 'Parts/Mesh.inc': mesh }, text, unitTime: '1 s' });
+  expect(JSON.stringify(converted)).not.toContain(project);
+  expect(engine.seen.slice(-ABAQUS_CONVERSION.commands.length)).toEqual(ABAQUS_CONVERSION.commands);
 });
 
 describe('calling a tool', () => {

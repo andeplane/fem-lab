@@ -39,6 +39,38 @@ it('resolves picker cancellation and an empty choice without reading another sou
   expect(await browserAbaqusIo(doc, crypto, null).pick()).toBeNull();
 });
 
+it('retains submission-relative include identities and reads only requested files from one folder selection', async () => {
+  const nodes = new File(['nodes'], 'Nodes.INC');
+  Object.defineProperty(nodes, 'webkitRelativePath', { value: 'submission/mesh/Nodes.INC' });
+  const material = new File(['material'], 'Steel.inc');
+  Object.defineProperty(material, 'webkitRelativePath', { value: 'submission/Steel.inc' });
+  const unrelated = new File(['private'], 'private.env');
+  Object.defineProperty(unrelated, 'webkitRelativePath', { value: 'submission/private.env' });
+  const unusedRead = vi.spyOn(unrelated, 'arrayBuffer');
+  const input = document.createElement('input');
+  Object.defineProperty(input, 'files', { value: [nodes, material, unrelated] });
+  input.click = vi.fn(() => input.dispatchEvent(new Event('change')));
+  const doc: Pick<Document, 'createElement'> = { createElement: vi.fn(() => input) as Document['createElement'] };
+  const io = browserAbaqusIo(doc, crypto, null);
+  const first = await io.pickIncludes!(['mesh/Nodes.INC']);
+  expect(input.webkitdirectory).toBe(true);
+  expect(first!.map(file => file.name)).toEqual(['mesh/Nodes.INC']);
+  expect(new TextDecoder().decode(await first![0]!.read())).toBe('nodes');
+  const next = await io.pickIncludes!(['Steel.inc', 'missing.inc']);
+  expect(next!.map(file => file.name)).toEqual(['Steel.inc']);
+  expect(input.click).toHaveBeenCalledTimes(1);
+  expect(unusedRead).not.toHaveBeenCalled();
+});
+
+it('returns include folder cancellation and empty selection without reading or publishing', async () => {
+  const empty = picker(null);
+  expect(await empty.io.pickIncludes!(['Nodes.inc'])).toBeNull();
+  const input = document.createElement('input');
+  input.click = () => input.dispatchEvent(new Event('cancel'));
+  const doc: Pick<Document, 'createElement'> = { createElement: () => input } as Pick<Document, 'createElement'>;
+  expect(await browserAbaqusIo(doc, crypto, null).pickIncludes!(['Nodes.inc'])).toBeNull();
+});
+
 it('captures the folder and a File snapshot, with scoped traversal and a clear missing-folder error', async () => {
   const files = { 'decks/bar.inp': '*NODE\r\n1,0,0,0\r\n' };
   const folder = await ProjectFolder.fromHandle(fakeDir(files));

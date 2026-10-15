@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
 import type { AbaqusConversion, AbaqusConversionReport, ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, Query, ResultSummary } from './generated/engine';
-import { AbaqusImport, readAbaqus, type AbaqusIo } from './abaqus-import';
+import { AbaqusImport, readAbaqusBundle, type AbaqusIo, type AbaqusDependencyQuery } from './abaqus-import';
 import { StepImport, type StepImportHost } from './step-import';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
@@ -148,6 +148,7 @@ export interface HostContext {
   /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
   abaqus: { capture(): {
     io: AbaqusIo;
+    dependencies: AbaqusDependencyQuery;
     convert(query: Extract<Query, { query: 'query.convertAbaqus' }>): Promise<AbaqusConversion>;
     replace(commands: Command[], report: AbaqusConversionReport): Promise<void>;
   } };
@@ -483,12 +484,12 @@ export const HOST_COMMANDS: HostDef[] = [
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
   }),
-  def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck (at most 16 MiB) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity; static additionally requires unitForce, while mesh refuses it. Source units are independent of display units. The supported slice is one flat C3D4/C3D8 Body with named Sets; static adds one isotropic elastic Material, translational constraints, CLOAD and one linear STATIC Step. PART/ASSEMBLY/INSTANCE, INCLUDE, OUTPUT, .odb and .cae are unsupported. Unsupported static content is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
+  def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck and its include files (at most 16 MiB total) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity. Static additionally requires unitForce; supply unitTime when density is present. Mesh mode refuses force and time units. Source units are independent of display units. Parts, transformed instances, named Sets, material regions and full-integration C3D4/C3D8/C3D10/C3D20 solids are retained. Static mode translates supported isotropic elastic regions, translational constraints, nodal forces, face pressures and named linear-static load cases. Normal output requests are recorded in the report. Include contents are supplied explicitly or read by the host from the submission folder; the engine performs no file I/O. Binary .odb/.cae databases require a text .inp export. Unsupported physical behavior is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
     const captured = ctx.abaqus.capture();
-    const source = await readAbaqus(how, captured.io);
+    const source = await readAbaqusBundle(how, captured.io, captured.dependencies);
     if (source === null) return { cancelled: true };
-    const { name, body, mode, unitLength, unitForce } = how;
-    const conversion = await captured.convert({ query: 'query.convertAbaqus', ...source, name, body, mode, unitLength, ...(unitForce === undefined ? {} : { unitForce }) });
+    const { name, body, mode, unitLength, unitForce, unitTime } = how;
+    const conversion = await captured.convert({ query: 'query.convertAbaqus', ...source, name, body, mode, unitLength, ...(unitForce === undefined ? {} : { unitForce }), ...(unitTime === undefined ? {} : { unitTime }) });
     await captured.replace(conversion.commands, conversion.report);
     return { report: conversion.report };
   }),
