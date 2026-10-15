@@ -16,3 +16,4 @@ export { normalisePath, assertInside } from './project-paths';
 export type { ScriptDiagnostic, ScriptValidation, ScriptDeclarations } from './script-validation-types';
 export { ComparisonConfig, ComparisonOperand, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, ComparisonPlaybackInput, type ComparisonPlaybackSpec, type ComparisonPlaybackPane, type ComparisonPlaybackState, type ComparisonConfiguration, type ComparisonOperandInput, type ComparisonPaneName, type ComparisonLegendSpec, type ComparisonVisibilitySpec, type ComparisonPickSpec, type ComparisonLegendState, type ComparisonPick, type ComparisonPaneState, type ResultComparisonState, type ResultComparisonHost } from './result-comparison';
 export { ScriptValidator, type ValidationWorker, type ValidationClock } from './script-validator-host';
+export {PUBLIC_CREDIT_UNIT,PUBLIC_PLAN_CREDITS,legacyCreditsToPublic,type PublicCreditUnit} from './credit-units';

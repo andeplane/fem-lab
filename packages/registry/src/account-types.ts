@@ -1,3 +1,4 @@
+import type {PublicCreditUnit} from './credit-units';
 /** Public host/account state. Tokens, provider keys and payment customer IDs are never included. */
 export type AccountPlan='free'|'plus'|'pro'|'studio';
 /** Declared use of a subscription, fixed for its lifetime. */
@@ -8,6 +9,8 @@ export interface FreeAllowance {
   credits:number;periodStartsAt:string;periodEndsAt:string;
 }
 export interface AccountInfo {
+  /** Applies to usage and freeAllowance; absent on legacy hosts using weighted-token credits. */
+  creditUnit?:PublicCreditUnit;
   id:string;email:string;createdAt:string;status:'active';billingAvailable?:boolean;
   usage?:{plan:AccountPlan;totalCredits:number;availableCredits:number;reservedCredits:number;periodEndsAt:string;models:string[];maxOutput:number;contextLimit:number;tariffVersion:string};
   freeAllowance?:FreeAllowance;

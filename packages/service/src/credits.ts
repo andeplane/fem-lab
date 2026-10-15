@@ -1,8 +1,15 @@
 import type { Usage } from '@femlab/ai';
 import { ServiceFailure } from './errors';
+import type {PublicCreditUnit} from '@femlab/registry';
 
-/** One public credit is 30 integer subcredits. Tariff v1 is fixed for every receipt. */
+/** One legacy weighted-token credit is 30 integer subcredits. Immutable tariff v1. */
 export const CREDIT_SCALE = 30n;
+/** Negotiated supplier-dollar credit: USD 0.001 = 40,000 existing integer subcredits. */
+export const PUBLIC_CREDIT_SCALE = 40_000n;
+/** Legacy balances retain integer truncation; negotiated balances preserve fractional usage. */
+export function balanceCredits(subcredits:bigint,unit?:PublicCreditUnit):number {
+  return unit?Number(subcredits)/Number(PUBLIC_CREDIT_SCALE):Number(subcredits/CREDIT_SCALE);
+}
 /** Approximately $5 at tariff v1; legacy one-time invitations remain 200,000 credits. */
 export const FREE_MONTHLY_CREDITS = 6_666_666;
 export const TARIFF_VERSION = '2026-10-14.v1';

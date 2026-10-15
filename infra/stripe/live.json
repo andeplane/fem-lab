@@ -16,7 +16,7 @@
       "product": "femlab_plus_2026_10",
       "price": "price_1UQmWyAAtmJJ65hf91LvyAFE",
       "amountUsdCents": 4900,
-      "credits": 10000000,
+      "credits": 7500,
       "purchaseUses": {
         "business": {
           "product": "femlab_plus_mp_business_2026_10",
@@ -34,7 +34,7 @@
       "product": "femlab_pro_2026_10",
       "price": "price_1UQmWzAAtmJJ65hfnlgp7daG",
       "amountUsdCents": 14900,
-      "credits": 16000000,
+      "credits": 12000,
       "purchaseUses": {
         "business": {
           "product": "femlab_pro_mp_business_2026_10",
@@ -52,7 +52,7 @@
       "product": "femlab_studio_2026_10",
       "price": "price_1UQmX1AAtmJJ65hfZVJOQV7T",
       "amountUsdCents": 49900,
-      "credits": 50000000,
+      "credits": 37500,
       "purchaseUses": {
         "business": {
           "product": "femlab_studio_mp_business_2026_10",
@@ -88,5 +88,6 @@
   "managedPaymentsAccountEnabled": true,
   "managedPaymentsEligibilityConfirmed": true,
   "managedPaymentsTermsAccepted": true,
-  "managedPaymentsCheckoutVerified": true
+  "managedPaymentsCheckoutVerified": true,
+  "creditUnit": "usd-milli-v1"
 }

@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import pg from 'pg';
 import {afterAll,beforeAll,beforeEach,describe,expect,it} from 'vitest';
-import {postgresAccounts,type Account} from '../src/accounts';
+import {postgresAccounts,type Account,type AccountResponse} from '../src/accounts';
 import {migrate} from '../src/migrations';
 import {creditLedger} from '../src/ledger';
 import {reservations} from '../src/reservations';
@@ -11,6 +11,9 @@ import {monthlyFreeAllowance} from '../src/free-allowance';
 import {canonicalFreeEmail,freeEmailFingerprint,manageFreeEligibility} from '../src/free-eligibility';
 import {CREDIT_SCALE,FREE_MONTHLY_CREDITS,supplierMicros} from '../src/credits';
 import {accountPrivacy} from '../src/privacy';
+import {serviceServer} from '../src/http';
+import {once} from 'node:events';
+import type {AddressInfo} from 'node:net';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('reviewed monthly free allowances on real PostgreSQL',()=>{
   const suffix=randomUUID().replaceAll('-',''),schema=`monthly_${suffix}`;
@@ -56,6 +59,33 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('reviewed monthly free allowance
     expect(supplierMicros(BigInt(grants[0]!.amount))).toBe(5_000_000n);expect(supplierMicros(BigInt(FREE_MONTHLY_CREDITS)*CREDIT_SCALE)).toBe(5_000_000n);
     expect((await creditLedger(db,now,randomUUID).balance(account.id)).availableCredits).toBe(0);
     await expect(reservations(db,now,randomUUID).prepare({accountId:account.id,key:randomUUID(),digest:'a'.repeat(64),turnId:'key-unavailable',round:0,model:'gpt-5.4-mini',maxOutput:1000})).rejects.toMatchObject({code:'credits-exhausted'});
+  });
+  it('negotiates precise account and claim amounts while preserving existing grants, tiny charges and legacy clients',async()=>{
+    const account=await owner();await manage('approve',account);const api=service(account);await api.claim(undefined,{});
+    const originalGrant=(await db.query('SELECT * FROM credit_grants')).rows[0];
+    // Independently priced: 112 uncached Mini input tokens cost $0.000084;
+    // one cached input token costs $0.000000075. Neither debit rounds to a whole credit.
+    for(const usage of [{input:112,cacheRead:0,output:0},{input:0,cacheRead:1,output:0}]){
+      const request=await prepare(account);await holds.reserve(account.id,request.id,112);await holds.dispatch(account.id,request.id);
+      await holds.settle(account.id,request.id,usage);await holds.settle(account.id,request.id,usage);
+    }
+    const server=serviceServer({now,newId:randomUUID,ready:async()=>true,freeAllowance:api,account:async(_header,unit)=>({...account,usage:await ledger.balance(account.id,unit),freeAllowance:await api.status(account.id)})});
+    server.listen(0,'127.0.0.1');await once(server,'listening');const url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try{
+      const legacy=await(await fetch(url+'/v1/account')).json() as AccountResponse;expect(legacy).not.toHaveProperty('creditUnit');
+      expect(legacy.usage).toMatchObject({totalCredits:6666666,availableCredits:6666553,reservedCredits:0});
+      const headers={'x-femlab-credit-unit':'usd-milli-v1'};
+      const scaled=await(await fetch(url+'/v1/account',{headers})).json();
+      expect(scaled).toMatchObject({creditUnit:'usd-milli-v1',usage:{totalCredits:4999.9995,availableCredits:4999.915425,reservedCredits:0},freeAllowance:{status:'claimed',credits:4999.9995}});
+      const claim=await(await fetch(url+'/v1/account/free-allowance',{method:'POST',headers:{...headers,'content-type':'application/json'},body:'{}'})).json();
+      expect(claim).toMatchObject({creditUnit:'usd-milli-v1',credits:4999.9995,replay:true});
+      const oldClaim=await(await fetch(url+'/v1/account/free-allowance',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).json();
+      expect(oldClaim).toMatchObject({credits:6666666,replay:true});expect(oldClaim).not.toHaveProperty('creditUnit');
+      expect((await db.query('SELECT * FROM credit_grants')).rows).toEqual([originalGrant]);
+      expect((await db.query("SELECT amount FROM credit_entries WHERE kind='usage' ORDER BY amount::bigint")).rows).toEqual([{amount:'-3360'},{amount:'-3'}]);
+      expect((await db.query('SELECT charged_subcredits FROM usage_receipts ORDER BY charged_subcredits')).rows).toEqual([{charged_subcredits:'3'},{charged_subcredits:'3360'}]);
+      expect((await db.query("SELECT * FROM ai_requests WHERE state=ANY($1)",[['reserved','dispatched','pending_reconciliation']])).rows).toHaveLength(0);
+    }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}
   });
   it('retains one-time invitations unchanged but never stacks or falls back after monthly review/revocation',async()=>{
     const account=await owner();await approveTrial(db,account.id,'old-invite',now,randomUUID);
