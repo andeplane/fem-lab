@@ -11,6 +11,7 @@ spec = importlib.util.spec_from_file_location('stripe_key_installer', ROOT / 'in
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 GATES = ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed')
+MANAGED_GATES = ('managedPaymentsAccountEnabled', 'managedPaymentsTermsAccepted', 'managedPaymentsEligibilityConfirmed')
 
 
 def resolve(environment, project, run, previous_enabled=False, activation='preserve', root=ROOT, verify=installer.validate_prices):
@@ -25,15 +26,24 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
     tax_mode = catalog.get('taxMode', 'pending')
     if tax_mode not in ('pending', 'automatic', 'not_collecting'):
         raise ValueError('Invalid Stripe tax mode.')
+    merchant_mode = catalog.get('merchantMode', 'pending')
+    if merchant_mode not in ('pending', 'direct', 'managed'):
+        raise ValueError('Invalid Stripe merchant mode.')
     enabled = activation == 'enabled' or (activation == 'preserve' and previous_enabled)
     if enabled:
+        if merchant_mode == 'pending':
+            raise ValueError('Billing activation requires an explicit merchantMode decision: direct or managed.')
         if tax_mode == 'pending':
             raise ValueError('Billing activation requires an explicit taxMode decision: automatic or not_collecting.')
+        if merchant_mode == 'managed' and tax_mode != 'automatic':
+            raise ValueError('Managed Payments requires taxMode=automatic.')
         gates = GATES + (('taxClassificationConfirmed',) if tax_mode == 'automatic' else ()) + (('stagingCheckoutVerified', 'webhookVerified') if mode == 'live' else ())
+        if merchant_mode == 'managed':
+            gates += MANAGED_GATES + (('managedPaymentsCheckoutVerified',) if mode == 'live' else ())
         missing = [gate for gate in gates if catalog.get(gate) is not True]
         if missing:
             raise ValueError('Billing activation requires recorded acceptance: ' + ', '.join(missing))
-        if tax_mode == 'automatic' and catalog.get('activeTaxRegistrationVerified') is not True:
+        if merchant_mode == 'direct' and tax_mode == 'automatic' and catalog.get('activeTaxRegistrationVerified') is not True:
             raise ValueError('Automatic tax activation requires activeTaxRegistrationVerified evidence.')
     versions = {}
     for secret in ('stripe-api-key', 'stripe-webhook-secret'):
@@ -46,7 +56,7 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
     if len(versions) != 2:
         if enabled:
             raise ValueError('Billing activation requires both Stripe runtime and webhook secrets.')
-        return {'env': {'BILLING_ENABLED': 'false', 'BILLING_TAX_MODE': tax_mode}, 'secrets': {}, 'mode': mode}
+        return {'env': {'BILLING_ENABLED': 'false', 'BILLING_TAX_MODE': tax_mode, 'BILLING_MERCHANT_MODE': merchant_mode}, 'secrets': {}, 'mode': mode}
     # This stdout remains in this process. Never include it in logs or release manifests.
     key = run('secrets', 'versions', 'access', versions['stripe-api-key'], '--secret=stripe-api-key').stdout.strip()
     try:
@@ -54,7 +64,7 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
         verify(key, mode, catalog)
     finally:
         key = ''
-    variables = {'BILLING_ENABLED': str(enabled).lower(), 'BILLING_MODE': mode, 'BILLING_TAX_MODE': tax_mode,
+    variables = {'BILLING_ENABLED': str(enabled).lower(), 'BILLING_MODE': mode, 'BILLING_TAX_MODE': tax_mode, 'BILLING_MERCHANT_MODE': merchant_mode,
                  'STRIPE_PORTAL_CONFIGURATION': catalog['portalConfiguration']}
     for plan in ('plus', 'pro', 'studio'):
         price = catalog['plans'][plan]['price']

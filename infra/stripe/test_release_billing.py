@@ -11,12 +11,17 @@ from unittest.mock import MagicMock, patch
 
 class ReleaseBillingTests(unittest.TestCase):
     def test_api_and_recovery_receive_same_pinned_billing_config(self):
+        for merchant_mode, tax_mode in (('direct', 'not_collecting'), ('managed', 'automatic')):
+            with self.subTest(merchant_mode=merchant_mode):
+                self.assert_billing_release(merchant_mode, tax_mode)
+
+    def assert_billing_release(self, merchant_mode, tax_mode):
         calls = []
         resolved = []
         output = {}
         manifest = {'buildId': 'abc12345-0000', 'image': 'europe-west3-docker.pkg.dev/femlab-app/femlab/service:commit', 'revision': 'commit'}
         binding = {'env': {'BILLING_ENABLED': 'true', 'BILLING_MODE': 'live',
-                           'BILLING_TAX_MODE': 'not_collecting',
+                           'BILLING_TAX_MODE': tax_mode, 'BILLING_MERCHANT_MODE': merchant_mode,
                            'STRIPE_PRICE_PLUS': 'price_plus', 'STRIPE_PRICE_PRO': 'price_pro',
                            'STRIPE_PRICE_STUDIO': 'price_studio', 'STRIPE_PORTAL_CONFIGURATION': 'bpc_portal'},
                    'secrets': {'STRIPE_SECRET_KEY': 'stripe-api-key:8', 'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:7'},
