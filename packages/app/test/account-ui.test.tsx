@@ -104,8 +104,9 @@ it.each([
   const s={...structuredClone(initialState),panels:{account:true},account:{...EMPTY_ACCOUNT,configured:true,status:'active' as const,uid:'a',email:'a@example.com',profile:{id:'a',email:'a@example.com',createdAt:'2026-10-14T00:00:00Z',status:'active' as const,billing:{available,status:null,cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null,...(mode?{merchantMode:mode}:{})}}}};
   const container=document.createElement('div');document.body.append(container);
   act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
-  expect(container.textContent).toContain('Seller and applicable tax are shown at checkout.');
-  expect(container.textContent?.includes('For new purchases, Hafreager kode & koblinger is the seller.')).toBe(mode==='direct');
+  expect(container.textContent).toContain('Hafreager kode & koblinger sells and provides FEM Lab subscriptions.');
+  expect(container.textContent?.includes('Stripe Managed Payments handles the transaction as merchant of record.')).toBe(mode==='managed');
+  expect(container.textContent).toContain('Checkout shows payment terms, applicable tax and total.');
   expect(container.textContent).not.toContain('Stripe is the seller');
   expect(container.textContent).toContain('USD list prices exclude applicable tax');
   for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(!available||mode!=='direct');
