@@ -7,12 +7,16 @@ import {postgresAccounts} from '../src/accounts';
 import {creditLedger} from '../src/ledger';
 import {migrate} from '../src/migrations';
 import {billingLifecycle,type BillingGateway,type BillingInvoice,type BillingSubscription,type BillingEnvelope} from '../src/billing';
+import {reservations} from '../src/reservations';
+import {completionService} from '../src/completions';
+import type {ProviderGateway} from '../src/provider';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Postgres',()=>{
   const schema=`billing_${randomUUID().replaceAll('-','')}`,admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
   const db=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`,max:16});
   let clock=new Date('2026-10-14T12:00:00Z'),accountId='',fail=false;
   const now=()=>clock,accounts=postgresAccounts(db,now,randomUUID),ledger=creditLedger(db,now,randomUUID);
+  const holds=reservations(db,now,randomUUID);
   let invoice:BillingInvoice,subscription:BillingSubscription,chargeLookups:{id:string;kind:'charge'|'dispute'}[]=[];
   const gateway:BillingGateway={
     verify(body,signature){if(signature!=='fixture')throw new Error('private signature detail');return JSON.parse(new TextDecoder().decode(body)) as BillingEnvelope;},
@@ -31,6 +35,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   beforeEach(async()=>{
     await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_inbox CASCADE');await db.query('TRUNCATE billing_leases');
     clock=new Date('2026-10-14T12:00:00Z');fail=false;chargeLookups=[];
+    await db.query('UPDATE ai_limits SET enabled=true,daily_micros=100000000,monthly_micros=1000000000,uncertain_micros=10000000,concurrent=16');
     accountId=(await accounts.provision({uid:'owner',email:'owner@example.com'})).id;await grantFreeFixture(ledger, accountId, clock);
     await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[accountId,'cus_owner',clock]);
     const start=clock.getTime()/1000,end=new Date('2026-11-14T12:00:00Z').getTime()/1000;
@@ -90,5 +95,59 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
     await deliver();invoice={...invoice,id:'in_two',lines:invoice.lines.map(line=>({...line,start:line.start+86400,end:line.end+86400}))};
     await deliver(envelope('evt_overlap','invoice.paid','in_two'));
     expect((await db.query('SELECT * FROM paid_periods')).rows).toHaveLength(1);expect((await db.query("SELECT state FROM billing_inbox WHERE event_id='evt_overlap'")).rows[0].state).toBe('queued');
+  });
+  it.each([
+    {type:'charge.refunded',objectId:'ch_before_dispatch'},
+    {type:'charge.dispute.created',objectId:'du_before_dispatch'},
+  ])('$type between reservation and dispatch prevents provider generation and releases the hold',async({type,objectId})=>{
+    await deliver();
+    let generated=0,started=false;
+    const provider:ProviderGateway={async countInput(){return 1000;},async *chat(){generated++;yield {type:'done',stopReason:'end_turn'};}};
+    const completions=completionService({account:async()=>accounts.provision({uid:'owner',email:'owner@example.com'}),ledger,provider,
+      reservations:{...holds,async dispatch(owner,id){await deliver(envelope('evt_before_dispatch',type,objectId));await holds.dispatch(owner,id);}}});
+    await expect(completions.run({key:'blocked-before-dispatch',signal:new AbortController().signal,
+      body:{protocol:1,turnId:'turn-paid',round:0,model:'gpt-6-astra',maxTokens:1000,system:'inspect',messages:[{role:'user',content:[{type:'text',text:'inspect'}]}],tools:[]}},
+      {start(){started=true;},async send(){}})).rejects.toMatchObject({status:403,code:'paid-allowance-inactive'});
+    expect((await db.query('SELECT blocked FROM billing_accounts')).rows[0].blocked).toBe(true);
+    expect((await db.query("SELECT state FROM billing_inbox WHERE event_id='evt_before_dispatch'")).rows[0].state).toBe('done');
+    expect(generated).toBe(0);expect(started).toBe(false);
+    expect((await db.query('SELECT state FROM ai_requests')).rows).toEqual([{state:'released'}]);
+    expect((await db.query('SELECT outcome,charged_subcredits FROM usage_receipts')).rows).toEqual([{outcome:'undispatched',charged_subcredits:'0'}]);
+    expect((await db.query('SELECT * FROM credit_entries')).rows).toHaveLength(0);
+    expect((await ledger.balance(accountId)).reservedCredits).toBe(0);
+  });
+  async function reservePaid(){
+    const request=await holds.prepare({accountId,key:randomUUID(),digest:'a'.repeat(64),turnId:'turn-paid',round:0,model:'gpt-6-astra',maxOutput:1000});
+    await holds.reserve(accountId,request.id,1000);return request.id;
+  }
+  it('rejects a paid hold whose grant expires before dispatch',async()=>{
+    await ledger.grant({accountId,source:'paid-short-period',plan:'plus',startsAt:clock,expiresAt:new Date(clock.getTime()+1000)});
+    const id=await reservePaid();clock=new Date(clock.getTime()+1001);
+    await expect(holds.dispatch(accountId,id)).rejects.toMatchObject({status:403,code:'paid-allowance-inactive'});
+    expect((await holds.status(accountId,id)).state).toBe('reserved');
+    await holds.release(accountId,id);
+    expect((await ledger.balance(accountId)).reservedCredits).toBe(0);
+    expect((await db.query('SELECT * FROM credit_entries')).rows).toHaveLength(0);
+  });
+  it('dispatches and settles a currently eligible paid hold once',async()=>{
+    await deliver();const id=await reservePaid();await holds.dispatch(accountId,id);
+    const usage={input:1000,cacheRead:0,output:100};
+    const first=await holds.settle(accountId,id,usage);expect(await holds.settle(accountId,id,usage)).toEqual(first);
+    expect(first).toMatchObject({outcome:'confirmed',chargedCredits:20000});
+    expect((await db.query('SELECT * FROM credit_entries')).rows).toHaveLength(1);
+    expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(1);
+  });
+  it.each([
+    {type:'charge.refunded',objectId:'ch_after_dispatch'},
+    {type:'charge.dispute.created',objectId:'du_after_dispatch'},
+  ])('$type after dispatch preserves the original usage settlement',async({type,objectId})=>{
+    await deliver();const id=await reservePaid();await holds.dispatch(accountId,id);
+    const original=(await db.query('SELECT grant_id FROM credit_holds WHERE request_id=$1',[id])).rows[0].grant_id;
+    await deliver(envelope('evt_after_dispatch',type,objectId));
+    const usage={input:1000,cacheRead:0,output:100},receipt=await holds.settle(accountId,id,usage);
+    expect(await holds.settle(accountId,id,usage)).toEqual(receipt);
+    expect(receipt).toMatchObject({outcome:'confirmed',chargedCredits:20000});
+    expect((await db.query('SELECT grant_id,amount FROM credit_entries')).rows).toEqual([{grant_id:original,amount:'-600000'}]);
+    expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(1);
   });
 });
