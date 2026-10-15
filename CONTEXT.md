@@ -345,6 +345,10 @@ STEP conversion. Durable face targets use geometric predicates. See ADR 0029 and
 **Account** — One verified Firebase identity mapped to service-owned status, entitlements
 and billing. It is not an engine Model, Session or Journal entry.
 
+**Merchant mode** — The explicit `pending`, `direct` or `managed` route for new paid
+purchases. It is independent of tax collection mode and does not convert an existing
+subscription. Pending cannot enable Checkout. See ADR 0032.
+
 **AI token credit** — A versioned billing unit weighted by model and token category,
 separate from a raw LLM token or the browser's supplier-cost estimate.
 
