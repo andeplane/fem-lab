@@ -19,10 +19,20 @@ function worker(storageFails = false) {
   const request = (path: string) => new Promise<Response>((resolve) => {
     listeners.get('fetch')!({ request: new Request(`https://example.test${path}`), respondWith: resolve, waitUntil: () => {} });
   });
-  return { fetch, request, cache };
+  return { fetch, request, cache, listeners };
 }
 
 describe('deployed worker assets', () => {
+  it('keeps only the same-origin sign-in document non-isolated while preserving its tab session COOP',async()=>{
+    const w=worker(),respondWith=vi.fn();
+    w.listeners.get('fetch')!({request:{url:'https://example.test/fem-lab/signin.html?ignored=1',mode:'navigate',cache:'default'},respondWith});
+    const auth=await respondWith.mock.lastCall![0] as Response;
+    expect(auth.headers.get('Cross-Origin-Embedder-Policy')).toBe('unsafe-none');expect(auth.headers.get('Cross-Origin-Opener-Policy')).toBe('same-origin');
+    for(const url of ['https://evil.test/fem-lab/signin.html','https://example.test/signin.html','https://example.test/fem-lab/signin.html/child']){
+      w.listeners.get('fetch')!({request:{url,mode:'navigate',cache:'default'},respondWith,waitUntil:()=>{}});
+      const response=await respondWith.mock.lastCall![0] as Response;expect(response.headers.get('Cross-Origin-Embedder-Policy')).toBe('require-corp');
+    }
+  });
   it('retains loaded worker and WASM assets after deployment removes them, preserving isolation', async () => {
     const w = worker();
     for (const name of ['session.worker-abcdefgh.js', 'engine-abcdefgh.wasm']) {
