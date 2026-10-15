@@ -92,7 +92,10 @@ origin is `https://femlab.app`; staging uses its own Hosting origin.
 
 `release-service.py --billing preserve` is the default: it retains an active
 configuration after rechecking prerequisites, and leaves an unconfigured service
-disabled. `--billing disabled` stops new checkout while preserving webhook and
+disabled. Preservation reads the revisions actually receiving traffic, so a failed
+candidate left in the service template cannot silently reset billing after rollback.
+Mixed billing states across a traffic split require an explicit activation choice.
+`--billing disabled` stops new checkout while preserving webhook and
 recovery processing. `--billing enabled` is an explicit activation request and
 fails before deployment unless the manifest records the required acceptance.
 Production also requires recorded staging checkout and webhook acceptance.

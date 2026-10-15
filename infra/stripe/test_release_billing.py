@@ -34,10 +34,14 @@ class ReleaseBillingTests(unittest.TestCase):
                 body = json.dumps({'image_summary': {'digest': 'sha256:immutable'}})
             elif argv[1:4] == ['secrets', 'versions', 'list']:
                 body = '1'
+            elif argv[1:4] == ['run', 'revisions', 'describe']:
+                body = json.dumps({'spec': {'containers': [{'env': [{'name': 'BILLING_ENABLED', 'value': 'true'}]}]}})
             elif argv[1:5] == ['run', 'services', 'describe', 'femlab-api']:
                 deploys = [call for call in calls if call[1:3] == ['run', 'deploy']]
                 if not deploys:
-                    body = json.dumps({'spec': {'template': {'spec': {'containers': [{'env': [{'name': 'BILLING_ENABLED', 'value': 'true'}]}]}}},
+                    # A failed disabled candidate can remain in the template after rollback;
+                    # preservation must follow the revision actually receiving traffic.
+                    body = json.dumps({'spec': {'template': {'spec': {'containers': [{'env': [{'name': 'BILLING_ENABLED', 'value': 'false'}]}]}}},
                                        'status': {'url': 'https://api.example.test', 'traffic': [{'revisionName': 'previous', 'percent': 100}]}})
                 else:
                     suffix = next(value.split('=', 1)[1] for value in deploys[-1] if value.startswith('--revision-suffix='))

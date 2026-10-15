@@ -19,8 +19,14 @@ def version(name):return run('secrets','versions','list',name,'--filter=state:EN
 before=run('run','services','describe','femlab-api',f'--region={region}','--format=json',optional=True)
 previous_service=json.loads(before.stdout) if not before.returncode else None
 previous=previous_service['status'] if previous_service else None
-previous_env={item['name']:item.get('value') for item in previous_service['spec']['template']['spec']['containers'][0].get('env',[])} if previous_service else {}
-billing=billing_config(a.environment,project,run,previous_env.get('BILLING_ENABLED')=='true',a.billing)
+serving_billing=set()
+for traffic in previous['traffic'] if previous else []:
+ if not traffic.get('percent'):continue
+ serving=json.loads(run('run','revisions','describe',traffic['revisionName'],f'--region={region}','--format=json').stdout)
+ env={item['name']:item.get('value') for item in serving['spec']['containers'][0].get('env',[])}
+ serving_billing.add(env.get('BILLING_ENABLED')=='true')
+if len(serving_billing)>1 and a.billing=='preserve':raise RuntimeError('Serving revisions disagree on billing; choose --billing enabled or disabled explicitly.')
+billing=billing_config(a.environment,project,run,True in serving_billing,a.billing)
 rollback={item['revisionName']:item['percent'] for item in previous['traffic'] if item.get('percent')} if previous else {}
 def ready(uri):
  with urllib.request.urlopen(uri+'/ready',timeout=30) as response:
