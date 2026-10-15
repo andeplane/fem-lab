@@ -94,8 +94,10 @@ disabled billing still prepares webhook and recovery processing. Automatic
 collection requires the owner-confirmed decision and separately verified active
 registration evidence and confirmed product classification. An explicit
 owner-confirmed non-collection decision requires neither a registration nor an
-invented product classification. Both manifests remain pending; the code
-does not infer the owner's tax obligations from company or Stripe account status.
+invented product classification. Following the owner's clarification below, both
+manifests record `not_collecting`; other launch acceptance gates remain false and
+checkout remains disabled. The code does not infer the owner's tax obligations
+from company or Stripe account status.
 Production's return
 origin is `https://femlab.app`; staging uses its own Hosting origin.
 
@@ -139,8 +141,9 @@ recovery-job and traffic rollback gates remain in place.
    The adapter enables `automatic_tax` only for `taxMode=automatic`, and release
    activation requires `activeTaxRegistrationVerified=true` as well as the owner's
    decision. `taxMode=not_collecting` explicitly sends `automatic_tax.enabled=false`
-   after the owner confirms that collection policy. Neither mode is selected by
-   default. Automatic tax does not collect in a jurisdiction without an applicable
+   after the owner confirms that collection policy. Missing decisions remain
+   pending; the owner's explicit initial choice is recorded below. Automatic tax
+   does not collect in a jurisdiction without an applicable
    registration; never describe that as verified tax collection. Run a test
    calculation and inspect `taxability_reason` for an automatic collection setup.
    A later change of tax policy does not retroactively reconfigure existing Stripe
@@ -153,46 +156,21 @@ recovery-job and traffic rollback gates remain in place.
 5. Activate production only after the above evidence and owner decisions are
    recorded. The present manifests intentionally keep billing disabled.
 
-## Owner statement and Norway customer scope
+## Owner statements and initial collection mode
 
-On 2026-10-15 the owner reported: “not VAT, but will work in norway”. This records
-the owner's stated absence of VAT registration; no registration or product tax
-classification was invented. An owner-confirmed `not_collecting` decision is a
-supported release path without product classification, while automatic collection
-still requires both classification and verified registration. The statement does
-not settle whether Norway describes the business location or restricts paying
-customers to Norway. The coordinating launch task owns that clarification and
-records the accepted collection decision before activation. This change leaves
-the public manifests pending and checkout disabled.
+On 2026-10-15 the owner reported: “not VAT, but will work in norway”, then clarified
+that **the business is based in Norway and customers are international**. Both
+manifests therefore record the owner's initial `not_collecting` decision and
+`taxCollectionDecisionConfirmed=true`; checkout remains disabled until the other
+acceptance gates pass. No Norway-only customer or payment restriction is applied.
+No registration or product tax classification was invented. Automatic collection
+still requires confirmed classification and verified active registration.
 
-Hosted Checkout's documented `billing_address_collection` accepts only `auto` or
-`required`; it has no billing-country allowlist. The `allowed_countries` field is
-specifically for shipping addresses, so adding a shipping form for a digital AI
-subscription would not enforce the intended billing policy.
-[Address collection](https://docs.stripe.com/payments/collect-addresses?payment-ui=stripe-hosted),
-[Checkout Session API](https://docs.stripe.com/api/checkout/sessions/create).
-
-If the owner chooses Norway-only paying customers, two documented options need
-separate implementation and acceptance:
-
-- Keep hosted Checkout and use a supported Radar custom rule to block
-  `is_missing(:billing_address_country:) OR :billing_address_country: != 'NO'`.
-  The country attribute and explicit missing-value handling are documented.
-  Check the account's Radar feature availability, payment-method support and
-  existing allow rules (which override block rules); test accepted Norwegian,
-  rejected foreign, missing-address and recurring-payment cases before activation.
-  This restricts provided billing information, not verified residence.
-  [Supported attributes](https://docs.stripe.com/radar/rules/supported-attributes),
-  [Rule reference](https://docs.stripe.com/radar/rules/reference),
-  [Payment-method coverage](https://docs.stripe.com/radar/supported-payment-methods).
-- Use a custom Elements checkout with a billing Address Element configured with
-  `allowedCountries: ['NO']`, plus authoritative server validation of the country
-  before confirmation. The UI country filter alone is insufficient. This changes
-  the checkout flow; it is not a flag on the existing hosted page.
-  [Address Element options](https://docs.stripe.com/js/elements_object/create_address_element).
-
-No country restriction, Radar rule, payment-method configuration or custom payment
-flow was applied as part of this review.
+This records the owner's stated registration status and initial configuration; it
+is not a determination that no tax obligations exist in any customer country.
+International registration, collection and filing obligations remain the owner's
+responsibility to establish with a qualified tax adviser, using Stripe's
+[threshold monitoring](https://docs.stripe.com/tax/monitoring) as supporting data.
 
 ## Tokens and model choice
 
