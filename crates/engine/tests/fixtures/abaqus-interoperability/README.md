@@ -38,6 +38,44 @@ harness requires exactly one matching `analyses[].sourceStep` in the conversion 
 uses that entry's engine `step` for the explicit solve and all Result/field queries. It does
 not assume that a source spelling is an engine target or silently select the first analysis.
 
+## Observed native acceptance
+
+The complete five-case command actually passed on the composed native CLI built from core
+`49478c56b5a9e959b8a8817305ac84ca189f9885` and host
+`d66f6d766306c29a1645154560e0ecae8aacb6b3`. The frozen executable SHA-256 is
+`f86302665bde1e5d920511aa90931cf3a4ef94c250ce866ae1a5368f97663b46`; its build receipt
+records 103 Rust source-file hashes, which were independently rechecked. This identifies
+the tested composition, not a released binary or an assertion that those changes are on main.
+
+Each original input was converted without editing its bytes, then explicitly solved with
+`cpu-direct` and `--verify` at one and four threads. All six selected public DTOs
+(Result, Mesh, Surface and displacement/stress/reaction fields) were exactly equal across
+thread counts after omitting only `timeMs`. The complete receipt records `completed: true`.
+An independent pure-data audit copied and hashed all 66 output payloads, rechecked every
+source identity and conversion-to-engine step mapping, and recomputed all declared oracles
+from the captured DTOs without executing the solver again.
+
+| Case | Compared displacement vectors | Maximum absolute U error, m | Fixed U bound, m |
+| --- | ---: | ---: | ---: |
+| Official CalculiX `beam20p` | 261 | 4.97594006e-12 | 1.745508e-10 |
+| Official CalculiX `beam10p` | 90 | 4.97642891e-12 | 1.7567258e-10 |
+| Unchanged FreeCAD `testcube` | 26 | 4.97395794e-14 | 3.91213e-13 |
+| Authors' original Abaqus Case_06 | 275 | 4.98029381e-10 | 7.16712e-10 |
+| Authored transformed two-material assembly | 24 | 5.43269925e-21 | 1.75e-15 |
+
+All analytical reaction balances passed. For the authored assembly, all nodal analytical
+stress components also passed. For the author case, the observed y-reaction was
+`3999999.9999999036 N` against `4000000 N`; all 825 published displacement components passed.
+Original references, input files, reference-label mappings and U/force tolerances were
+unchanged when the earlier failures were resolved. Historical numerical RED and target-name
+failure receipts remain preserved separately; they are not rewritten as successful runs.
+
+This establishes the five native static comparison paths. It does not establish browser,
+wasm or GPU numerical agreement, arbitrary Abaqus deck support, integration-point stress
+agreement, a modern verified CAE export workflow, or the modal/thermal paths listed below.
+The network-free CI tests validate the harness and licensed fixtures; this actual numerical
+run is separate evidence using the identified composed engine.
+
 ## Official CalculiX comparison cases
 
 [The manifest](../../../../../tools/abaqus-interoperability/corpus.json) pins the original
@@ -112,8 +150,9 @@ The FreeCAD case is now included in the strict harness comparison list. The inpu
 requests do **not** include RF, so no CalculiX reaction output is claimed: the reaction gate
 uses the independent analytical applied-force sum above. Integration-point stresses are
 retained but unclaimed pending an independently established ordering correspondence.
-Reference execution/source inventory is **not** FEM Lab numerical acceptance: the untouched
-input must still pass complete conversion and explicit solve against the composed importer.
+Reference execution/source inventory alone is **not** FEM Lab numerical acceptance. The
+untouched input subsequently passed complete conversion and explicit solve against the
+identified composed importer in the observed native acceptance above.
 
 ## Authors' published Abaqus assembly validation, with all nodal displacements
 
@@ -145,17 +184,21 @@ same fixed displacement tolerance as the other cases; reaction equilibrium is in
 checked against +4e6 N in y, not a published RF result. A single unchanged CalculiX attempt
 exited 0 while warning about unsupported assembly/output content and produced only a mesh,
 with no displacement DAT. That run is retained as a limitation, **not** a numerical oracle
-or an excuse to strip unsupported model data. Actual FEM Lab agreement remains pending the
-composed import/solve runtime.
+or an excuse to strip unsupported model data. The observed native acceptance above records
+the subsequent actual FEM Lab comparison against the identified composed import/solve runtime.
 
 The first actual composed-import trial preserved all 275 nodes/160 elements, balanced the
 4 MN load and produced identical 1/4-thread public outputs, but **failed** the published U
 comparison: maximum absolute error `1.50033150347e-5 m`; 608 of 825 components exceeded this
-harness's fixed `7.16712e-10 m` tolerance. This remains a strict RED acceptance case.
+harness's fixed `7.16712e-10 m` tolerance. This original strict RED remains retained evidence.
 [Abaqus documents selectively reduced volumetric integration for its linear 3D elements](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-linbending.htm),
 while the initial FEM Lab Full Hex8 path integrates pointwise strain at all eight Gauss
-points. That formulation difference requires investigation; it does not justify changing
-the reference, tolerances or silently substituting another element. No equivalence is claimed.
+points. [#673](https://github.com/andeplane/fem-lab/issues/673) resolved that formulation
+difference with an explicit `mean-dilatation` formulation and source-aware C3D8 conversion.
+The final imported Journal records `mesh.set` with `formulation: "mean-dilatation"`; the
+ordinary pointwise Full formulation was not globally redefined. With this mapping the full
+275-vector comparison passed the original bound, as recorded above. The harness does not
+override the imported formulation or change the reference to obtain that agreement.
 
 ## Authored assembly: two materials and two transformed instances
 
