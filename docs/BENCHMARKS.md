@@ -738,12 +738,33 @@ checked beyond aggregate counts.
 | D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
-| D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, H1 rate p over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
+| D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
 | D9 | quality, volume and Set survival on a box, cylinder, sphere and box-minus-cylinder at two sizes | dihedral ∈ [10.7°, 164.8°]; volume within the stated tolerance of the closed form; every Solid tag resolves to a non-empty face Set at both sizes | as stated | the mesher's SIGGRAPH 2007 dihedral-angle guarantee, measured rather than claimed | geometry test |
+
+**D4 distinguishes full gradient, engineering strain and energy (#630).** The elastic
+H1 seminorm measures the Frobenius error of every derivative of the represented nodal
+interpolant against the independently analytic Hessian of φ: nine entries in 3D and four
+in the represented 2D plane model. A plane-stress constitutive thickness strain is not an
+extra displacement DOF. Incompatible-mode cases measure the nodal interpolant, without
+substituting recovered or enhanced strains. Axisymmetric no-twist displacement uses its
+3D cylindrical lift: the four r,z derivatives plus the hoop gradient component u_r/r, integrated
+with physical volume 2πr dr dz on r∈[1,2]. No axis-limit behavior is claimed. Scalar heat
+keeps its full gradient over the model domain. The existing unweighted model-domain L2
+and engineering-Voigt strain errors and their gates are retained; the latter is neither
+full displacement H1 nor a stiffness-weighted energy norm.
+
+The integrated evaluator is independently calibrated on every continuum interpolation
+kind. Adding ±αx_j to u_i gives E₊²+E₋²−2E₀²=2α² for each of the nine/four Cartesian
+derivative components on unit volume/area. Each rigid rotation plane gives 4α² while
+engineering strain remains unchanged. Radial perturbation ±(αr,0) has cylindrical gradient
+diag(α,0,α); the strip's revolved volume is 3π, giving 12πα². These closed forms catch missing
+skew derivatives, hoop terms and radial volume weights. The manufactured PDE solves still
+use exactly the existing refinements and ±0.1 order gates, with no duplicated solves or
+relaxed tolerances.
 
 **D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
 vertical displacement only along the outer face's mid-plane line and reports −5.38 MPa.

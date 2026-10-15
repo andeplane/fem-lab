@@ -14009,12 +14009,26 @@ fn kinematics_at(kind: ElementKind, coords: &[f64], xi: [f64; 3], w: f64) -> ([f
     (x, w * det, sh, g)
 }
 
-/// `(‖u_h − u‖_L2, |u_h − u|_H1)` of a nodal solution against the manufactured field: the
-/// temperature and its gradient when `heat`, else the displacement and its engineering
-/// strain, integrated with [`error_rule`].
-fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64, f64) {
+/// Independently measured errors of the represented nodal interpolant. The existing
+/// unweighted engineering-Voigt strain metric is retained separately from the full gradient.
+#[derive(Clone, Copy)]
+struct ManufacturedErrors {
+    l2: f64,
+    full_gradient: f64,
+    engineering_strain: Option<f64>,
+}
+
+/// L2, full-gradient H1 seminorm and (elasticity only) the legacy engineering-strain error.
+/// Cartesian gradients include every represented component/direction: 3x3 in solids,
+/// 2x2 in plane models, without a constitutively inferred thickness displacement. In
+/// axisymmetry the no-twist 3D cylindrical lift additionally has the hoop gradient ur/r
+/// and physical volume 2*pi*r*dA. Its r in [1,2] domain needs no axis-limit convention.
+/// Heat retains its existing full scalar gradient over the model domain. The legacy L2
+/// and strain metrics retain their original unweighted model-domain measure in every case.
+/// Incompatible-mode cases measure the nodal interpolant, not recovered/enhanced strains.
+fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> ManufacturedErrors {
     let dpn = u.len() / mesh.n_nodes();
-    let (mut l2, mut h1) = (0.0, 0.0);
+    let (mut l2, mut legacy, mut full_gradient) = (0.0, 0.0, 0.0);
     let mut coords = Vec::new();
     for elem in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(elem);
@@ -14034,7 +14048,7 @@ fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64,
                     }
                 }
             }
-            let (exact_val, exact_grad, grad): (Vec<f64>, Vec<f64>, Vec<f64>) = if heat {
+            let (exact_val, exact_metric, metric): (Vec<f64>, Vec<f64>, Vec<f64>) = if heat {
                 let (phi, gr, _) = harmonic(h, x);
                 (vec![phi], gr.to_vec(), du[0].to_vec())
             } else {
@@ -14047,15 +14061,38 @@ fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64,
                 (ue[..dpn].to_vec(), ee.to_vec(), e.to_vec())
             };
             l2 += wd * val.iter().zip(&exact_val).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
-            h1 += wd * grad.iter().zip(&exact_grad).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
+            let legacy_at_point = metric.iter().zip(&exact_metric).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
+            legacy += wd * legacy_at_point;
+            if heat {
+                full_gradient += wd * legacy_at_point;
+            } else {
+                let (_, exact_u, exact_du) = harmonic(h, x);
+                let mut gradient_error = 0.0;
+                for i in 0..dpn {
+                    for j in 0..dpn {
+                        gradient_error += (du[i][j] - exact_du[i][j]).powi(2);
+                    }
+                }
+                let weight = if h == Harmonic::Axi {
+                    gradient_error += ((val[0] - exact_u[0]) / x[0]).powi(2);
+                    wd * 2.0 * PI * x[0]
+                } else {
+                    wd
+                };
+                full_gradient += weight * gradient_error;
+            }
         }
     }
-    (l2.sqrt(), h1.sqrt())
+    ManufacturedErrors {
+        l2: l2.sqrt(),
+        full_gradient: full_gradient.sqrt(),
+        engineering_strain: if heat { None } else { Some(legacy.sqrt()) },
+    }
 }
 
 /// The manufactured problem on one mesh — the exact field on every boundary DOF, no load —
-/// solved and measured: `(L2 error, H1 error)`.
-fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: bool) -> (f64, f64) {
+/// solved once and measured in L2, full-gradient H1 and the retained strain metric.
+fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: bool) -> ManufacturedErrors {
     let sets = sets_of(mesh);
     let bodies = one_body();
     let h = harmonic_of(id);
@@ -14085,17 +14122,29 @@ fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: b
     manufactured_errors(mesh, &expand(&red, &u_f), h, heat)
 }
 
-/// The observed L2 and H1 rates over the two finest of a series `(h, L2, H1)`, gated at
-/// `p + 1` and `p` within 0.1 for an element of degree `p`.
-fn assert_rates(series: &[(f64, f64, f64)], p: f64, label: &str) {
+/// Rates over the original two finest levels. L2 stays at p+1; full-gradient H1
+/// and the separately retained engineering-strain error stay at p, all within 0.1.
+fn assert_rates(series: &[(f64, ManufacturedErrors)], p: f64, label: &str, heat: bool) {
     let hs: Vec<f64> = series.iter().map(|s| s.0).collect();
-    let l2: Vec<f64> = series.iter().map(|s| s.1).collect();
-    let h1: Vec<f64> = series.iter().map(|s| s.2).collect();
+    let l2: Vec<f64> = series.iter().map(|s| s.1.l2).collect();
+    let h1: Vec<f64> = series.iter().map(|s| s.1.full_gradient).collect();
     let n = series.len();
     let (rl2, rh1) = (observed_rate(&hs[n - 2..], &l2[n - 2..]), observed_rate(&hs[n - 2..], &h1[n - 2..]));
-    eprintln!("D4 {label}: h {hs:?} L2 {l2:?} H1 {h1:?} → rates L2 {rl2:.3} (want {}) H1 {rh1:.3} (want {p})", p + 1.0);
+    eprintln!(
+        "D4 {label}: h {hs:?} L2 {l2:?} full-gradient H1 {h1:?} → rates L2 {rl2:.3} (want {}) H1 {rh1:.3} (want {p})",
+        p + 1.0
+    );
     assert!((rl2 - (p + 1.0)).abs() <= 0.1, "{label}: L2 rate {rl2:.3}, expected {}", p + 1.0);
-    assert!((rh1 - p).abs() <= 0.1, "{label}: H1 rate {rh1:.3}, expected {p}");
+    if heat {
+        assert!(series.iter().all(|s| s.1.engineering_strain.is_none()));
+    } else {
+        let strain: Vec<f64> =
+            series.iter().map(|s| s.1.engineering_strain.expect("elastic strain metric retained")).collect();
+        let rate = observed_rate(&hs[n - 2..], &strain[n - 2..]);
+        eprintln!("D4 {label}: engineering-Voigt strain {strain:?} → rate {rate:.3} (want {p})");
+        assert!((rate - p).abs() <= 0.1, "{label}: engineering-strain rate {rate:.3}, expected {p}");
+    }
+    assert!((rh1 - p).abs() <= 0.1, "{label}: full-gradient H1 rate {rh1:.3}, expected {p}");
 }
 
 fn degree(kind: ElementKind) -> f64 {
@@ -14108,13 +14157,14 @@ fn degree(kind: ElementKind) -> f64 {
 
 /// D4: manufactured-solution refinement rates. For every element kind on the lattice mesher
 /// (Kuhn-split for the simplex kinds) in every idealisation, and for both triangle orders on
-/// the free mesher, the L2 error of the field converges at `p + 1` and the H1 error at `p`
+/// the free mesher, the L2 error of the field converges at `p + 1` and its full-gradient H1 seminorm at `p`
 /// within 0.1 — elasticity with `u = ∇φ` and conduction with `T = φ` for a harmonic `φ`.
 ///
 /// A rate that is right with a wrong constant is caught by the answer benchmarks; a rate that
 /// is wrong means an element is not what it claims to be: a quadrature rule too weak for its
 /// degree, a shape function of the wrong order, a mid-node placed off the edge, a strain
-/// term missing from `B` that a constant-strain patch test cannot see.
+/// term missing from `B` that a constant-strain patch test cannot see. The original
+/// engineering-Voigt strain rate remains an additional gate; it is not called H1 or energy.
 #[test]
 fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
     for kind in ALL_KINDS {
@@ -14128,23 +14178,13 @@ fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
             [2usize, 4, 8].iter().map(|&n| (1.0 / n as f64, lattice_block(kind, n))).collect();
         for id in idealisations(kind) {
             for &form in &forms {
-                let series: Vec<(f64, f64, f64)> = meshes
-                    .iter()
-                    .map(|(h, m)| {
-                        let (l2, h1) = manufactured_solve(m, &id, form, false);
-                        (*h, l2, h1)
-                    })
-                    .collect();
-                assert_rates(&series, p, &format!("{kind:?} {id:?} {form:?}"));
+                let series: Vec<(f64, ManufacturedErrors)> =
+                    meshes.iter().map(|(h, m)| (*h, manufactured_solve(m, &id, form, false))).collect();
+                assert_rates(&series, p, &format!("{kind:?} {id:?} {form:?}"), false);
             }
-            let series: Vec<(f64, f64, f64)> = meshes
-                .iter()
-                .map(|(h, m)| {
-                    let (l2, h1) = manufactured_solve(m, &id, Formulation::Full, true);
-                    (*h, l2, h1)
-                })
-                .collect();
-            assert_rates(&series, p, &format!("{kind:?} {id:?} heat"));
+            let series: Vec<(f64, ManufacturedErrors)> =
+                meshes.iter().map(|(h, m)| (*h, manufactured_solve(m, &id, Formulation::Full, true))).collect();
+            assert_rates(&series, p, &format!("{kind:?} {id:?} heat"), true);
         }
     }
     for quadratic in [false, true] {
@@ -14158,15 +14198,90 @@ fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
             })
             .collect();
         for heat in [false, true] {
-            let series: Vec<(f64, f64, f64)> = meshes
+            let series: Vec<(f64, ManufacturedErrors)> = meshes
                 .iter()
-                .map(|(h, m)| {
-                    let (l2, h1) = manufactured_solve(m, &Idealisation::PlaneStrain, Formulation::Full, heat);
-                    (*h, l2, h1)
-                })
+                .map(|(h, m)| (*h, manufactured_solve(m, &Idealisation::PlaneStrain, Formulation::Full, heat)))
                 .collect();
-            assert_rates(&series, p, &format!("free quadratic={quadratic} heat={heat}"));
+            assert_rates(&series, p, &format!("free quadratic={quadratic} heat={heat}"), heat);
         }
+    }
+}
+
+// Closed-form calibration of the actual integrated D4 metric, independent of the PDE solve.
+const MANUFACTURED_AFFINE_AMPLITUDE: f64 = 0.25;
+
+/// The same nodal analytic field plus -A*x, zero, and +A*x. The cross terms with its
+/// interpolation error cancel in E-^2 + E+^2 - 2 E0^2, leaving 2 integral |A|^2.
+fn manufactured_affine_errors(mesh: &Mesh, h: Harmonic, gradient: [[f64; 3]; 3]) -> [ManufacturedErrors; 3] {
+    let dpn = mesh.dim;
+    [-1.0, 0.0, 1.0].map(|sign| {
+        let mut u = vec![0.0; mesh.n_nodes() * dpn];
+        for n in 0..mesh.n_nodes() as u32 {
+            let x = mesh.node(n);
+            let exact = exact_u(h, x).0;
+            for i in 0..dpn {
+                let affine: f64 = (0..dpn).map(|j| gradient[i][j] * x[j]).sum();
+                u[n as usize * dpn + i] = exact[i] + sign * MANUFACTURED_AFFINE_AMPLITUDE * affine;
+            }
+        }
+        manufactured_errors(mesh, &u, h, false)
+    })
+}
+
+#[test]
+fn manufactured_h1_metric_counts_every_cartesian_component_and_rigid_rotation() {
+    let a2 = MANUFACTURED_AFFINE_AMPLITUDE.powi(2);
+    for kind in ALL_KINDS {
+        let mesh = lattice_block(kind, 1);
+        let dim = mesh.dim;
+        let h = if dim == 3 { Harmonic::Solid } else { Harmonic::Plane };
+        for i in 0..dim {
+            for j in 0..dim {
+                let mut gradient = [[0.0; 3]; 3];
+                gradient[i][j] = 1.0;
+                let e = manufactured_affine_errors(&mesh, h, gradient);
+                let increment =
+                    e[0].full_gradient.powi(2) + e[2].full_gradient.powi(2) - 2.0 * e[1].full_gradient.powi(2);
+                let exact = 2.0 * a2; // Unit model area/volume, one affine derivative of magnitude alpha.
+                assert!((increment - exact).abs() < 2e-10, "{kind:?} d(u{i})/d(x{j}): {increment} versus {exact}");
+            }
+        }
+        for i in 0..dim {
+            for j in i + 1..dim {
+                let mut gradient = [[0.0; 3]; 3];
+                gradient[i][j] = -1.0;
+                gradient[j][i] = 1.0;
+                let e = manufactured_affine_errors(&mesh, h, gradient);
+                let increment =
+                    e[0].full_gradient.powi(2) + e[2].full_gradient.powi(2) - 2.0 * e[1].full_gradient.powi(2);
+                let exact = 4.0 * a2; // Two skew derivatives, each alpha; engineering strain is unchanged.
+                assert!((increment - exact).abs() < 2e-10, "{kind:?} rotation {i},{j}: {increment} versus {exact}");
+                let unchanged = e[1].engineering_strain.expect("elastic baseline strain");
+                for perturbed in [e[0], e[2]] {
+                    let strain = perturbed.engineering_strain.expect("elastic perturbed strain");
+                    assert!(
+                        (strain - unchanged).abs() < 2e-10 * unchanged.max(1.0),
+                        "{kind:?} rotation changes no strain"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn manufactured_h1_metric_counts_axisymmetric_hoop_and_physical_volume() {
+    for kind in ALL_KINDS.into_iter().filter(|kind| kind.dim() == 2) {
+        let mesh = lattice_block(kind, 1);
+        let e = manufactured_affine_errors(&mesh, Harmonic::Axi, [[1.0, 0.0, 0.0], [0.0; 3], [0.0; 3]]);
+        let increment = e[0].full_gradient.powi(2) + e[2].full_gradient.powi(2) - 2.0 * e[1].full_gradient.powi(2);
+        // v=(alpha*r,0) has cylindrical grad diag(alpha,0,alpha). The revolved
+        // strip r in [1,2], z in [0,1] has volume 3*pi: 2*integral |grad v|^2=12*pi*alpha^2.
+        let exact = 12.0 * PI * MANUFACTURED_AFFINE_AMPLITUDE.powi(2);
+        assert!(
+            (increment - exact).abs() < 2e-10,
+            "{kind:?} physical cylindrical gradient: {increment} versus {exact}"
+        );
     }
 }
 
