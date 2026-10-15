@@ -30,6 +30,11 @@ const now = () => new Date();
 const auth=projectId?getAuth(initializeApp({projectId})):undefined;
 
 const prices={plus:process.env.STRIPE_PRICE_PLUS??'',pro:process.env.STRIPE_PRICE_PRO??'',studio:process.env.STRIPE_PRICE_STUDIO??''};
+const purchasePrices={
+  plus:{personal:process.env.STRIPE_PRICE_PLUS_PERSONAL??'',business:process.env.STRIPE_PRICE_PLUS_BUSINESS??''},
+  pro:{personal:process.env.STRIPE_PRICE_PRO_PERSONAL??'',business:process.env.STRIPE_PRICE_PRO_BUSINESS??''},
+  studio:{personal:process.env.STRIPE_PRICE_STUDIO_PERSONAL??'',business:process.env.STRIPE_PRICE_STUDIO_BUSINESS??''},
+};
 const billingMode=process.env.BILLING_MODE==='live'?'live':'test';
 const billingEnabled=process.env.BILLING_ENABLED==='true';
 const taxMode=billingTaxMode(process.env.BILLING_TAX_MODE,billingEnabled);
@@ -37,7 +42,7 @@ const merchantMode=billingMerchantMode(process.env.BILLING_MERCHANT_MODE,billing
 const stripeKey=process.env.STRIPE_SECRET_KEY;
 const stripe=stripeKey&&new RegExp(`^(sk|rk)_${billingMode}_`).test(stripeKey)?new Stripe(stripeKey,{timeout:5000,maxNetworkRetries:1}):undefined;
 const billing=pool&&stripe&&process.env.STRIPE_WEBHOOK_SECRET&&Object.values(prices).every(price=>/^price_[a-zA-Z0-9_]+$/.test(price))?
-  billingLifecycle(pool,stripeGateway(stripe,process.env.STRIPE_WEBHOOK_SECRET),{live:process.env.BILLING_MODE==='live',prices},now,randomUUID):undefined;
+  billingLifecycle(pool,stripeGateway(stripe,process.env.STRIPE_WEBHOOK_SECRET),{live:process.env.BILLING_MODE==='live',prices,purchasePrices},now,randomUUID):undefined;
 const privacy=pool&&auth&&projectId&&process.env.EXPORT_BUCKET?accountPrivacy({db:pool,account:accountReader(identityVerifier(auth,projectId,now),postgresAccounts(pool,now,randomUUID)),recentIdentity:identityVerifier(auth,projectId,now,{maxAuthenticationAge:300}),objects:exportObjects(new Storage({projectId,retryOptions:{maxRetries:2,totalTimeout:30}}),process.env.EXPORT_BUCKET),identity:privacyIdentity(auth),payments:stripe?privacyPayments(stripe,projectId):undefined,now,newId:randomUUID}):undefined;
 if (process.argv.includes('--migrate')) {
   if (!pool) throw new Error('FIREBASE_PROJECT_ID and database connection must be configured.');
@@ -55,14 +60,14 @@ if (process.argv.includes('--migrate')) {
     if(privacy){const result=await privacy.recover();process.stdout.write(JSON.stringify({event:'privacy-recovery',severity:result.failed?'ERROR':'INFO',...result})+'\n');if(result.failed)process.exitCode=1;}
     if(billing){const payments=await billing.recover();process.stdout.write(JSON.stringify({event:'billing-recovery',severity:payments.failed?'ERROR':'INFO',...payments})+'\n');if(payments.failed)process.exitCode=1;}
     if(stripe&&billing&&projectId&&process.env.STRIPE_PORTAL_CONFIGURATION&&process.env.APP_RETURN_ORIGIN) {
-      const plans=await checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode,merchantMode),{live:billingMode==='live',prices,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},async()=>{throw new Error('Interactive authentication is not available in a job.');},now,randomUUID).recover();
+      const plans=await checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode,merchantMode),{live:billingMode==='live',prices,purchasePrices,merchantMode,taxMode,projectId,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},async()=>{throw new Error('Interactive authentication is not available in a job.');},now,randomUUID).recover();
       process.stdout.write(JSON.stringify({event:'plan-change-recovery',severity:plans.failed?'ERROR':'INFO',...plans})+'\n');if(plans.failed)process.exitCode=1;
     }
   } finally { await pool.end(); }
 } else {
   const readAccount = pool && projectId ? accountReader(identityVerifier(auth!, projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
   const payments=pool&&stripe&&billing&&readAccount&&projectId&&process.env.STRIPE_PORTAL_CONFIGURATION&&process.env.APP_RETURN_ORIGIN?
-    checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode,merchantMode),{live:process.env.BILLING_MODE==='live',prices,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},readAccount,now,randomUUID):undefined;
+    checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode,merchantMode),{live:process.env.BILLING_MODE==='live',prices,purchasePrices,merchantMode,taxMode,projectId,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},readAccount,now,randomUUID):undefined;
   const ledger = pool ? creditLedger(pool, now, randomUUID) : undefined;
   const holds=pool?reservations(pool,now,randomUUID):undefined;
   const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
@@ -75,7 +80,7 @@ if (process.argv.includes('--migrate')) {
   const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
-    ready: async () => { if (!pool||!completions||!privacy) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='008-export-expiry-ownership.sql'"); return versions.rowCount===1; },
+    ready: async () => { if (!pool||!completions||!privacy) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='009-purchase-use-contract.sql'"); return versions.rowCount===1; },
   });
   server.listen(port, '0.0.0.0');
   server.requestTimeout=120000; server.headersTimeout=30000;

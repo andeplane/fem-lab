@@ -70,7 +70,7 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
       const result=[];
       for await(const subscription of client.subscriptions.list({customer,status:'all',limit:100})) {
         const item=subscription.items.data[0];
-        if(subscription.items.data.length!==1||item?.quantity!==1)throw new Error('Unsupported subscription items.');
+        if(subscription.items.data.length!==1||item?.quantity!==1)throw new ServiceFailure(409,'subscription-use-unknown','This subscription needs review before changing plans.','billing','account.open');
         result.push({id:subscription.id,customerId:identity(subscription.customer),status:subscription.status,priceId:item.price.id,start:item.current_period_start,end:item.current_period_end,scheduleId:subscription.schedule?identity(subscription.schedule):null});
         if(result.length>100)throw new Error('Subscription count exceeds the supported limit.');
       }
@@ -104,9 +104,11 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
     },
     async session(id) {const session=await client.checkout.sessions.retrieve(id);return {id:session.id,url:session.url,expiresAt:session.expires_at,status:session.status};},
     async portal(customer,returnUrl) {return (await client.billingPortal.sessions.create({customer,return_url:returnUrl,configuration:portalConfiguration})).url;},
-    async schedule(subscription,price,key) {
-      const schedule=subscription.scheduleId?await client.subscriptionSchedules.retrieve(subscription.scheduleId):await client.subscriptionSchedules.create({from_subscription:subscription.id},{idempotencyKey:`femlab-schedule:${subscription.id}`});
-      if(schedule.subscription&&identity(schedule.subscription)!==subscription.id)throw new Error('Schedule subscription mismatch.');
+    async schedule(subscription,price,key,receipt) {
+      const id=subscription.scheduleId??(await client.subscriptionSchedules.create({from_subscription:subscription.id},{idempotencyKey:`femlab-schedule:${subscription.id}`})).id;
+      const schedule=await client.subscriptionSchedules.retrieve(id);
+      if(schedule.id!==id||!schedule.subscription||identity(schedule.subscription)!==subscription.id)throw new Error('Schedule subscription mismatch.');
+      await receipt(schedule.id);
       await client.subscriptionSchedules.update(schedule.id,{end_behavior:'release',proration_behavior:'none',phases:[
         {start_date:subscription.start,end_date:subscription.end,items:[{price:subscription.priceId,quantity:1}],proration_behavior:'none'},
         {start_date:subscription.end,duration:{interval:'month',interval_count:1},items:[{price,quantity:1}],proration_behavior:'none'},

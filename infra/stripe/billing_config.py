@@ -29,6 +29,9 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
     merchant_mode = catalog.get('merchantMode', 'pending')
     if merchant_mode not in ('pending', 'direct', 'managed'):
         raise ValueError('Invalid Stripe merchant mode.')
+    prices = installer.catalog_prices(catalog)
+    if any(plan.upper() not in prices for plan in installer.PLANS):
+        raise ValueError('Billing catalog requires all legacy tier prices for recovery.')
     enabled = activation == 'enabled' or (activation == 'preserve' and previous_enabled)
     if enabled:
         if merchant_mode == 'pending':
@@ -45,6 +48,11 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
             raise ValueError('Billing activation requires recorded acceptance: ' + ', '.join(missing))
         if merchant_mode == 'direct' and tax_mode == 'automatic' and catalog.get('activeTaxRegistrationVerified') is not True:
             raise ValueError('Automatic tax activation requires activeTaxRegistrationVerified evidence.')
+        if merchant_mode == 'managed':
+            missing_uses = [plan.upper() + '_' + use.upper() for plan in installer.PLANS for use in installer.PURCHASE_USES
+                            if plan.upper() + '_' + use.upper() not in prices]
+            if missing_uses:
+                raise ValueError('Managed Payments activation requires all purchaseUses prices: ' + ', '.join(missing_uses))
     versions = {}
     for secret in ('stripe-api-key', 'stripe-webhook-secret'):
         result = run('secrets', 'versions', 'list', secret, '--filter=state:ENABLED', '--sort-by=~createTime', '--limit=1', '--format=value(name)', optional=True)
@@ -66,11 +74,8 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
         key = ''
     variables = {'BILLING_ENABLED': str(enabled).lower(), 'BILLING_MODE': mode, 'BILLING_TAX_MODE': tax_mode, 'BILLING_MERCHANT_MODE': merchant_mode,
                  'STRIPE_PORTAL_CONFIGURATION': catalog['portalConfiguration']}
-    for plan in ('plus', 'pro', 'studio'):
-        price = catalog['plans'][plan]['price']
-        if not re.fullmatch(r'price_[A-Za-z0-9_]+', price):
-            raise ValueError('Invalid Stripe price identifier.')
-        variables['STRIPE_PRICE_' + plan.upper()] = price
+    for role, price in prices.items():
+        variables['STRIPE_PRICE_' + role] = price['price']
     return {'env': variables,
             'secrets': {'STRIPE_SECRET_KEY': 'stripe-api-key:' + versions['stripe-api-key'],
                         'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:' + versions['stripe-webhook-secret']},

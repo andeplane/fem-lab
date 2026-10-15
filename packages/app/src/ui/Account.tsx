@@ -1,4 +1,5 @@
-import {useRef,useState} from 'preact/hooks';
+import {useEffect,useRef,useState} from 'preact/hooks';
+import type {PurchaseUse} from '@femlab/registry';
 import type {UiState} from '../store';
 import {Cmd,type Dispatch} from './cmd';
 import {useDialogFocus} from './Dialog';
@@ -6,9 +7,12 @@ const PLANS=[{id:'plus',name:'Plus',price:49,credits:4_000_000},{id:'pro',name:'
 export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
   const [email,setEmail]=useState(''),[confirmation,setConfirmation]=useState('');
   const ref=useRef<HTMLDivElement>(null),a=s.account;
+  const usage=a.profile?.usage,billing=a.profile?.billing,hasPaidPlan=Boolean(usage&&usage.plan!=='free'),managedCheckout=billing?.merchantMode==='managed';
+  const checkoutModeReady=managedCheckout||billing?.merchantMode==='direct';
+  const [purchaseUse,setPurchaseUse]=useState<PurchaseUse|''>('');
+  useEffect(()=>setPurchaseUse(''),[a.uid,hasPaidPlan,managedCheckout]);
   useDialogFocus(Boolean(s.panels['account']),ref);
   if(!s.panels['account'])return null;
-  const usage=a.profile?.usage,billing=a.profile?.billing;
   return <div class="overlay wide"><div ref={ref} class="account-panel" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title">
     <div class="account-heading"><div><span class="eyebrow">FEM LAB ACCOUNT</span><h2 id="account-title">{a.uid?'Your AI allowance':'Sign in for AI'}</h2></div><Cmd dispatch={dispatch} cmd="panel.toggle" args={{panel:'account',open:false}} class="tbutton" label="Close account">×</Cmd></div>
     <p>Model, mesh and solve without signing in. Free Assistant previews are invitation-only during launch. Approved preview credits do not reset automatically.</p>
@@ -21,7 +25,8 @@ export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
       <div class="account-identity"><span>{a.email}</span><Cmd dispatch={dispatch} cmd="account.refresh" class="tbutton">Refresh</Cmd><Cmd dispatch={dispatch} cmd="account.signOut" class="tbutton">Sign out</Cmd></div>
       {usage?<div class="account-balance"><span class="eyebrow">{usage.plan.toUpperCase()} · AI CREDITS</span><strong>{usage.availableCredits.toLocaleString()}</strong><span>available of {usage.totalCredits.toLocaleString()} · {usage.reservedCredits.toLocaleString()} reserved</span>{usage.totalCredits>0?<small>Current allowance ends {new Date(usage.periodEndsAt).toLocaleDateString()}. Credits do not roll over.</small>:null}</div>:<p>Loading your allowance…</p>}
       <p class="account-credit-note">Credits account for model cost: output and larger models use more credits. The service checks your remaining allowance before each request.</p>
-      <div class="account-plans">{PLANS.map(p=><div key={p.id} class="account-plan"><h3>{p.name}</h3><strong>${p.price}<small> USD / month</small></strong><p>{p.credits.toLocaleString()} AI credits / paid period</p><Cmd dispatch={dispatch} cmd={usage&&usage.plan!=='free'?'account.changePlan':'account.checkout'} args={{plan:p.id}} class="tbutton outline" disabled={!billing?.available||usage?.plan===p.id||billing.reviewRequired}>{usage?.plan===p.id?'Current plan':usage&&usage.plan!=='free'?'Change next period':'Choose plan'}</Cmd></div>)}</div>
+      {!hasPaidPlan&&managedCheckout?<div class="account-purchase-use"><label>Subscription use<select value={purchaseUse} onChange={e=>setPurchaseUse(e.currentTarget.value as PurchaseUse|'')} aria-describedby="purchase-use-note"><option value="">Choose personal or business use</option><option value="personal">Personal use</option><option value="business">Business use</option></select></label><small id="purchase-use-note">Choose how you will use your subscription. This choice stays the same for this subscription.</small></div>:null}
+      <div class="account-plans">{PLANS.map(p=><div key={p.id} class="account-plan"><h3>{p.name}</h3><strong>${p.price}<small> USD / month</small></strong><p>{p.credits.toLocaleString()} AI credits / paid period</p><Cmd dispatch={dispatch} cmd={hasPaidPlan?'account.changePlan':'account.checkout'} args={!hasPaidPlan&&managedCheckout?{plan:p.id,purchaseUse}:{plan:p.id}} class="tbutton outline" disabled={!billing?.available||usage?.plan===p.id||billing.reviewRequired||(!hasPaidPlan&&(!checkoutModeReady||(managedCheckout&&!purchaseUse)))}>{usage?.plan===p.id?'Current plan':hasPaidPlan?'Change next period':'Choose plan'}</Cmd></div>)}</div>
       <p class="account-credit-note">USD list prices exclude applicable tax. {billing&&'merchantMode' in billing&&billing.merchantMode==='direct'?'For new purchases, Hafreager kode & koblinger is the seller. ':null}Seller and applicable tax are shown at checkout.</p>
       {!billing?.available?<p role="status">Paid plans are not available yet.</p>:<Cmd dispatch={dispatch} cmd="account.portal" class="tbutton">Manage subscription and payment</Cmd>}
       {usage?.plan==='free'&&usage.totalCredits===0?<p role="status">A free AI preview requires an invitation. Contact <a href="mailto:andershaf@gmail.com">FEM Lab support</a> to request one.</p>:null}

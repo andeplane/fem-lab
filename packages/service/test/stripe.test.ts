@@ -58,14 +58,16 @@ describe('signed Stripe transport',()=>{
     const subscription=(await payments.subscriptions('cus_wire'))[0]!;
     await payments.checkout({customer:'cus_wire',price:'price_plus',accountId:'account-one',successUrl:'https://femlab.app/?billing=success',cancelUrl:'https://femlab.app/?billing=canceled',expiresAt:2000,key:'checkout-key'});
     expect(await payments.session('cs_wire')).toMatchObject({status:'open'});
-    await payments.portal('cus_wire','https://femlab.app/');await payments.schedule(subscription,'price_pro','plan-key');
+    let received=false;
+    await payments.portal('cus_wire','https://femlab.app/');await payments.schedule(subscription,'price_pro','plan-key',async id=>{expect(id).toBe('sub_sched_wire');expect(requests.some(row=>row.path==='/v1/subscription_schedules/sub_sched_wire'&&row.method==='POST')).toBe(false);received=true;});
+    expect(received).toBe(true);
     const checkout=requests.find(row=>row.path==='/v1/checkout/sessions')!;
     expect(checkout.key).toBe('checkout-key');expect(checkout.body.get('customer')).toBe('cus_wire');expect(checkout.body.get('line_items[0][price]')).toBe('price_plus');
     expect(checkout.body.get('automatic_tax[enabled]')).toBe(merchant==='direct'?'true':null);expect(checkout.body.get('consent_collection[terms_of_service]')).toBe('required');
     expect(checkout.body.get('managed_payments[enabled]')).toBe(String(merchant==='managed'));
     expect(checkout.body.get('customer_update[name]')).toBe(merchant==='direct'?'auto':null);
     expect(checkout.body.get('tax_id_collection[enabled]')).toBe(merchant==='direct'?'true':null);
-    const phase=requests.find(row=>row.path==='/v1/subscription_schedules/sub_sched_wire')!;
+    const phase=requests.find(row=>row.path==='/v1/subscription_schedules/sub_sched_wire'&&row.method==='POST')!;
     expect(phase.key).toBe('plan-key');expect(phase.body.get('phases[0][end_date]')).toBe('200');expect(phase.body.get('phases[1][start_date]')).toBe('200');
     expect(phase.body.get('phases[1][items][0][price]')).toBe('price_pro');expect(phase.body.get('proration_behavior')).toBe('none');
     expect(requests.find(row=>row.path==='/v1/subscription_schedules')!.body.get('from_subscription')).toBe('sub_wire');
@@ -92,6 +94,35 @@ describe('signed Stripe transport',()=>{
     expect(requests[0]!.get('adaptive_pricing[enabled]')).toBeNull();
     expect(requests[0]!.get('payment_method_types[0]')).toBeNull();
     expect(requests[0]!.get('consent_collection[terms_of_service]')).toBe('required');
+  });
+  it('replays its own schedule creation key and records the verified ID before updating the same endpoint',async()=>{
+    const requests:{path:string;method:string;key:string|null;body:string}[]=[],receipts:string[]=[];
+    const fetcher:typeof fetch=async(url,init)=>{
+      const path=new URL(String(url)).pathname,method=init?.method??'GET';
+      requests.push({path,method,key:new Headers(init?.headers).get('idempotency-key'),body:String(init?.body??'')});
+      if(method==='POST'&&path==='/v1/subscription_schedules/sub_sched_frozen')expect(receipts.length).toBeGreaterThan(0);
+      return Response.json({id:'sub_sched_frozen',subscription:'sub_frozen'});
+    };
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','automatic','managed');
+    const subscription={id:'sub_frozen',customerId:'cus_frozen',status:'active',priceId:'price_plus_personal',start:100,end:200,scheduleId:null};
+    const receipt=async(id:string)=>{expect(requests.at(-1)).toMatchObject({path:'/v1/subscription_schedules/sub_sched_frozen',method:'GET'});receipts.push(id);};
+    await payments.schedule(subscription,'price_pro_personal','frozen-plan-key',receipt);
+    await payments.schedule(subscription,'price_pro_personal','frozen-plan-key',receipt);
+    const creates=requests.filter(row=>row.path==='/v1/subscription_schedules');
+    expect(creates).toHaveLength(2);expect(creates[0]).toEqual(creates[1]);expect(creates[0]!.key).toBe('femlab-schedule:sub_frozen');
+    const updates=requests.filter(row=>row.path==='/v1/subscription_schedules/sub_sched_frozen'&&row.method==='POST');
+    expect(updates).toHaveLength(2);expect(updates[0]).toEqual(updates[1]);expect(updates[0]!.key).toBe('frozen-plan-key');
+    expect(receipts).toEqual(['sub_sched_frozen','sub_sched_frozen']);
+  });
+  it.each(['foreign subscription','released schedule','receipt failure'] as const)('refuses to update a %s',async failure=>{
+    let updates=0,receipts=0;
+    const fetcher:typeof fetch=async(_url,init)=>{
+      if(init?.method==='POST')updates++;
+      return Response.json({id:'sub_sched_known',subscription:failure==='foreign subscription'?'sub_other':failure==='released schedule'?null:'sub_owner'});
+    };
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','automatic','managed');
+    await expect(payments.schedule({id:'sub_owner',customerId:'cus_owner',status:'active',priceId:'price_plus_personal',start:100,end:200,scheduleId:'sub_sched_known'},'price_pro_personal','owned-key',async()=>{receipts++;throw new Error('Durable receipt unavailable');})).rejects.toThrow(failure==='receipt failure'?'Durable receipt unavailable':'Schedule subscription mismatch');
+    expect(updates).toBe(0);expect(receipts).toBe(failure==='receipt failure'?1:0);
   });
   it.each([
     {status:400,type:'invalid_request_error',param:'expires_at',safe:true},
@@ -163,5 +194,10 @@ describe('signed Stripe transport',()=>{
     };
     const gateway=stripeGateway(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'whsec_fixture');
     expect(await gateway.invoice('in_local')).toMatchObject({currency:'usd',amountPaid:6125,customerId:'cus_local',subscriptionId:'sub_local',lines:[{priceId:'price_plus',start:100,end:200}]});
+  });
+  it.each([[],[{price:{id:'price_personal'},quantity:1},{price:{id:'price_business'},quantity:1}],[{price:{id:'price_personal'},quantity:2}]])('rejects unsupported subscription items with a structured review error',async(...items)=>{
+    const fetcher:typeof fetch=async()=>Response.json({object:'list',has_more:false,data:[{id:'sub_mixed',customer:'cus_one',status:'active',items:{data:items}}]});
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','automatic','managed');
+    await expect(payments.subscriptions('cus_one')).rejects.toMatchObject({status:409,code:'subscription-use-unknown',suggestion:'account.open'});
   });
 });

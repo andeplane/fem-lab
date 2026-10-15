@@ -12,6 +12,8 @@ from pathlib import Path
 ACCOUNT = 'andershaf@gmail.com'
 PROJECTS = {'test': 'femlab-app-staging', 'live': 'femlab-app'}
 SECRET = 'stripe-api-key'
+PLANS = ('plus', 'pro', 'studio')
+PURCHASE_USES = ('personal', 'business')
 
 
 def validate_key(key, mode):
@@ -19,10 +21,44 @@ def validate_key(key, mode):
         raise ValueError('Expected a restricted ' + mode + ' key (rk_' + mode + '_…). Nothing was stored.')
 
 
+def catalog_prices(catalog):
+    """Validate public price roles without credentials and return their inherited prices."""
+    plans = catalog.get('plans')
+    if not isinstance(plans, dict) or not plans or set(plans) - set(PLANS):
+        raise ValueError('Invalid Stripe catalog plans.')
+    prices = {}
+    seen = set()
+    for name, plan in plans.items():
+        if not isinstance(plan, dict) or type(plan.get('amountUsdCents')) is not int or plan['amountUsdCents'] <= 0:
+            raise ValueError('Invalid Stripe tier amount.')
+        uses = plan.get('purchaseUses', {})
+        if not isinstance(uses, dict) or set(uses) - set(PURCHASE_USES):
+            raise ValueError('Invalid Stripe purchaseUses mapping.')
+        roles = [(name.upper(), plan)]
+        for use, variant in uses.items():
+            if not isinstance(variant, dict) or set(variant) != {'product', 'price', 'taxCode'}:
+                raise ValueError('Invalid Stripe purchaseUses entry.')
+            if not isinstance(variant['taxCode'], str) or not re.fullmatch(r'txcd_[0-9]{8}', variant['taxCode']):
+                raise ValueError('Invalid Stripe purchase-use tax code identifier.')
+            roles.append((name.upper() + '_' + use.upper(), variant))
+        for role, entry in roles:
+            price = entry.get('price')
+            product = entry.get('product')
+            if not isinstance(price, str) or not re.fullmatch(r'price_[A-Za-z0-9_]+', price):
+                raise ValueError('Invalid Stripe price identifier.')
+            if not isinstance(product, str) or not re.fullmatch(r'[A-Za-z0-9_]+', product):
+                raise ValueError('Invalid Stripe product identifier.')
+            if price in seen:
+                raise ValueError('Duplicate Stripe price identifier across catalog roles.')
+            seen.add(price)
+            prices[role] = {'price': price, 'product': product, 'amountUsdCents': plan['amountUsdCents']}
+    return prices
+
+
 def validate_prices(key, mode, catalog, fetch=urllib.request.urlopen):
     if catalog['livemode'] != (mode == 'live'):
         raise ValueError('Catalog mode mismatch. Nothing was stored.')
-    for plan in catalog['plans'].values():
+    for plan in catalog_prices(catalog).values():
         request = urllib.request.Request('https://api.stripe.com/v1/prices/' + plan['price'],
                                         headers={'Authorization': 'Bearer ' + key, 'Stripe-Version': catalog['apiVersion']})
         try:
