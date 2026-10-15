@@ -393,6 +393,11 @@ describe('Registry', () => {
   it('file.export writes the four formats the engine cannot see, and hands the rest to it', async () => {
     const { registry, host, transport } = make();
     const wrote = (): [string, string, string | Uint8Array] => (host.files.download as unknown as { mock: { calls: [string, string, string | Uint8Array][] } }).mock.calls.at(-1)!;
+    const query = vi.mocked(transport.query).getMockImplementation()!;
+    vi.mocked(transport.query).mockImplementation(async q => {
+      if (q.query === 'query.model') throw new FemError('unit.display', 'cannot format the selected display unit', 'displayUnits');
+      return query(q);
+    });
 
     await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download' });
     expect(wrote()).toEqual(['beam.ts', 'text/typescript', 'fem.model.new({ name: "beam" })']);
@@ -400,6 +405,8 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'journal' } });
     expect(wrote()[0]).toBe('beam.femlab.json');
     expect(String(wrote()[2])).toContain('"femlab/1"');
+    expect(transport.query).not.toHaveBeenCalledWith({ query: 'query.model' });
+    vi.mocked(transport.query).mockImplementation(query);
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'png' } });
     expect(host.view.screenshot).toHaveBeenCalledWith({ legend: true });

@@ -55,9 +55,15 @@ export function batchModule(wasm) {
       return JSON.stringify(snapshot.journal.entries.map(entry => entry.hashAfter));
     }
     async import_file(json) { await this.replace(candidate => candidate.file(json)); }
-    export_file() { return compactFileText(this.snapshot().file); }
-    model_hash() { return this.snapshot().model.hash; }
-    revision() { return this.snapshot().model.revision; }
+    document() { return JSON.parse(this.query(JSON.stringify({ query: 'query.document' }))); }
+    export_file() {
+      const text = compactFileText(this.document().file);
+      const bytes = new TextEncoder().encode(text).byteLength;
+      if (bytes > MAX_MODEL_FILE_BYTES) throw { code: 'schema', cause: `Model file is ${bytes} UTF-8 bytes, exceeding the ${MAX_MODEL_FILE_BYTES}-byte host limit`, where: 'file', suggestion: 'reduce the Model or Journal before exporting the Model file' };
+      return text;
+    }
+    model_hash() { return this.document().hash; }
+    revision() { return this.document().revision; }
     surface() { return this.owner.surface(this.context()); }
     field(step, field, component) {
       const result = JSON.parse(this.query(JSON.stringify({ query: 'query.field', step, field })));

@@ -333,3 +333,114 @@ fn session_render_retained_mesh_uses_the_selected_result_and_checks_ownership() 
     stale.session.session_id = "old".into();
     assert_eq!(owner.render_result(&stale, id).err().unwrap().code, ErrorCode::SessionExpired);
 }
+
+fn document(owner: &mut SessionOwner, client: &Client) -> femlab_engine::query::ModelDocument {
+    let reply = owner.query(ReadRequest { context: client.context(), query: Query::Document {} }).unwrap();
+    assert_eq!(reply.context, client.context());
+    assert_eq!(reply.stamp, owner.stamp());
+    let wire = serde_json::to_value(&reply.value).unwrap();
+    let decoded: femlab_engine::query::QueryResult = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(decoded, reply.value);
+    serde_json::from_value(wire).unwrap()
+}
+
+#[test]
+fn checked_document_exports_si_without_display_formatting_or_read_mutation() {
+    let mut previous = None;
+    for threads in [1, 4] {
+        let mut owner = SessionOwner::new(None, Box::new(NoClock), threads, "document-export".into()).unwrap();
+        let mut client = Client::acquire(&mut owner);
+        let commands: Vec<femlab_engine::Command> =
+            serde_json::from_str(include_str!("../fixtures/document-display-overflow.json")).unwrap();
+        for command in &commands[..commands.len() - 1] {
+            client.write(&mut owner, &serde_json::to_string(command).unwrap()).unwrap();
+        }
+        let initial = client.snapshot(&mut owner);
+        let last = commands.last().unwrap();
+        let ack = client.write(&mut owner, &serde_json::to_string(last).unwrap()).unwrap().ack;
+        let mut expected = initial.file;
+        expected.model.units.length = Some("mm".into());
+        expected.model.units.force = Some("mN".into());
+        expected.journal.append(last.clone(), ack.hash.clone());
+        let before = document(&mut owner, &client);
+        assert_eq!(before.file, expected);
+        assert_eq!(before.hash, ack.hash);
+        assert_eq!(before.revision, ack.revision);
+        let payload = serde_json::to_value(&before).unwrap();
+        assert_eq!(payload["file"]["model"]["loads"][1]["total"][0], 1e307);
+        assert_eq!(payload["file"]["model"]["loads"][2]["total"][0], -1e307);
+        let catalogue = owner.query(ReadRequest { context: client.context(), query: Query::Results {} }).unwrap();
+        assert_eq!(serde_json::to_value(&catalogue.value).unwrap()["records"].as_array().unwrap().len(), 1);
+        let stamp = owner.stamp();
+        assert_eq!(
+            owner.query(ReadRequest { context: client.context(), query: Query::Model {} }).unwrap_err().code,
+            ErrorCode::UnitDisplay
+        );
+        assert_eq!(owner.snapshot(&client.context()).unwrap_err().code, ErrorCode::UnitDisplay);
+        assert_eq!(document(&mut owner, &client), before);
+        assert_eq!(
+            owner.query(ReadRequest { context: client.context(), query: Query::Results {} }).unwrap().value,
+            catalogue.value
+        );
+        assert_eq!(owner.stamp(), stamp);
+        // The reply owns its file; editing the returned value never edits the active Model.
+        let mut detached = before.clone();
+        detached.file.model.name = "detached".into();
+        detached.file.journal.entries.clear();
+        assert_eq!(document(&mut owner, &client), before);
+        if let Some(expected) = &previous {
+            assert_eq!(&before, expected);
+        }
+        previous = Some(before);
+    }
+}
+
+#[test]
+fn checked_document_rejects_wrong_session_cancelled_and_replaced_producers() {
+    let mut owner = owner("document-authority");
+    let mut ui = Client::acquire(&mut owner);
+    ui.write(&mut owner, NEW).unwrap();
+    let current = document(&mut owner, &ui);
+    let mut wrong = ui.context();
+    wrong.session.backend_epoch = "another-runtime".into();
+    assert_eq!(
+        owner.query(ReadRequest { context: wrong, query: Query::Document {} }).unwrap_err().code,
+        ErrorCode::SessionExpired
+    );
+    let cancelled = Client::acquire(&mut owner);
+    owner.cancel_run(&cancelled.lease.stamp.session, &cancelled.lease.run_id).unwrap();
+    assert_eq!(
+        owner.query(ReadRequest { context: cancelled.context(), query: Query::Document {} }).unwrap_err().code,
+        ErrorCode::Cancelled
+    );
+    assert_eq!(document(&mut owner, &ui), current);
+    let old = Client::acquire(&mut owner);
+    ui.write(&mut owner, NEW).unwrap(); // same Model content is still a different activation
+    let replacement = document(&mut owner, &ui);
+    assert_eq!(
+        owner.query(ReadRequest { context: old.context(), query: Query::Document {} }).unwrap_err().code,
+        ErrorCode::SessionExpired
+    );
+    assert_eq!(document(&mut owner, &ui), replacement);
+}
+
+#[test]
+fn checked_document_observes_newer_same_session_state_without_reauthorizing_a_stale_write() {
+    let mut owner = owner("document-version");
+    let mut writer = Client::acquire(&mut owner);
+    let empty = document(&mut owner, &writer);
+    let initial = writer.snapshot(&mut owner);
+    assert_eq!(empty.file, initial.file);
+    assert_eq!(empty.hash, initial.model.hash);
+    assert_eq!(empty.revision, 0);
+    writer.write(&mut owner, NEW).unwrap();
+    let mut reader = Client::acquire(&mut owner);
+    let old_stamp = reader.lease.stamp.clone();
+    let ack = writer.write(&mut owner, ADD).unwrap().ack;
+    let observed = document(&mut owner, &reader);
+    assert_eq!(observed.hash, ack.hash);
+    assert_eq!(observed.revision, ack.revision);
+    assert_ne!(old_stamp.state_version, owner.stamp().state_version);
+    assert_eq!(reader.write(&mut owner, REMOVE).unwrap_err().code, ErrorCode::SessionConflict);
+    assert_eq!(document(&mut owner, &writer), observed);
+}

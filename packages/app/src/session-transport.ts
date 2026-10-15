@@ -180,7 +180,11 @@ export class SessionTransport implements EngineTransport {
     if (ack.output.type !== 'export') throw new FemError('internal', 'mesh.export did not return a file');
     return { filename: ack.output.filename, mime: ack.output.mime, bytes: new TextEncoder().encode(ack.output.text) };
   }
-  async exportFile(): Promise<ModelFile> { return (await this.snapshot()).file; }
+  async exportFile(): Promise<ModelFile> {
+    const document = await this.query({ query: 'query.document' });
+    if (!('file' in document)) throw new FemError('internal', 'query.document did not return a Model file');
+    return document.file;
+  }
   async importFile(file: ModelFile): Promise<ImportAck> {
     const next = await this.replaceWith({ kind: 'file', file: structuredClone(file) });
     const snapshot = await next.snapshot();

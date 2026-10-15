@@ -71,6 +71,11 @@ impl Engine {
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
             Query::Model {} => self.query_model().map(QueryResult::Model),
+            Query::Document {} => Ok(QueryResult::Document(ModelDocument {
+                file: self.export_file(),
+                hash: self.model_hash(),
+                revision: self.revision(),
+            })),
             Query::Definition { kind, name } => crate::definition::command(&self.model, kind, &name)
                 .map(|command| QueryResult::Definition(ObjectDefinition { command })),
             Query::Journal { from_seq } => {

@@ -377,14 +377,15 @@ interface Built {
  * here from Queries it can.
  */
 async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | null> {
-  const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
-  if (spec.format === 'script') {
+  if (spec.format === 'journal' || spec.format === 'script') {
+    const file = await ctx.transport.exportFile();
+    if (spec.format === 'journal') {
+      return { filename: `${file.model.name}.femlab.json`, mime: 'application/json', data: boundedModelFileText(file) };
+    }
     const { text } = (await ctx.transport.query({ query: 'query.script' })) as { text: string };
-    return { filename: `${name}.ts`, mime: 'text/typescript', data: text };
+    return { filename: `${file.model.name}.ts`, mime: 'text/typescript', data: text };
   }
-  if (spec.format === 'journal') {
-    return { filename: `${name}.femlab.json`, mime: 'application/json', data: boundedModelFileText(await ctx.transport.exportFile()) };
-  }
+  const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
   if (spec.format === 'png') {
     const options = ScreenshotOptions.parse({
       legend: spec['legend'] !== false,
