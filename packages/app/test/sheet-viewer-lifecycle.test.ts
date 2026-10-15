@@ -43,6 +43,54 @@ function setup() {
   return { viewer, objects };
 }
 
+it('renders missing triangle/line samples neutrally and never reports staging zero as a covered pick', () => {
+  const { viewer, objects } = setup();
+  viewer.setMode('results'); viewer.setField(Float32Array.of(0, 1, 0.5), [0, 1]);
+  viewer.setFieldValidity(Uint8Array.of(0, 1, 1));
+  const tri = objects.mesh.geometry.getAttribute('color'), line = objects.outlines.geometry.getAttribute('color');
+  expect(tri.getX(0)).toBeCloseTo(tri.getY(0)); expect(tri.getY(0)).toBeCloseTo(tri.getZ(0));
+  expect(line.getX(0)).toBeCloseTo(tri.getX(0));
+  expect(tri.getX(1)).not.toBeCloseTo(tri.getY(1));
+  const canvas = document.querySelector('canvas')!;
+  vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 640, bottom: 480, width: 640, height: 480, toJSON: () => ({}) });
+  viewer.setProjection('orthographic'); viewer.setCamera({ position: [0.5, 0.5, 8], target: [0.5, 0.5, 0], up: [0, 1, 0] });
+  const halfHeight = Math.SQRT2 * 0.7;
+  const pick = viewer.pick(320 - 0.49 * 240 / halfHeight, 240 + 0.49 * 240 / halfHeight);
+  expect(pick?.node).toBe(0); expect(pick?.value).toBeNull();
+  expect(() => viewer.setFieldValidity(Uint8Array.of(1))).toThrowError(expect.objectContaining({ code: 'internal' }));
+  viewer.setField(Float32Array.of(0, 1, 0.5), [0, 1]); // A normal field clears the previous coverage mask.
+  expect(viewer.pick(320 - 0.49 * 240 / halfHeight, 240 + 0.49 * 240 / halfHeight)?.value).toBe(0);
+});
+
+it('uses a shared orthographic world span and serializable zoom without replacing retained bounds', () => {
+  const { viewer } = setup();
+  viewer.setProjection('orthographic'); viewer.setComparisonFrameHeight(9);
+  viewer.preset('top', { min: [10, 20, 0], max: [14, 24, 0] });
+  expect(viewer.getCamera().target).toEqual([12, 22, 0]);
+  const camera = (viewer as unknown as { orthographic: import('three').OrthographicCamera }).orthographic;
+  expect(camera.top).toBe(9); expect(camera.bottom).toBe(-9);
+  viewer.setCamera({ ...viewer.getCamera(), zoom: 2.5 });
+  expect(viewer.getCamera().zoom).toBe(2.5); expect(camera.zoom).toBe(2.5);
+  viewer.setComparisonFrameHeight(null); expect(camera.top).toBeCloseTo(Math.SQRT2 * 0.7);
+  viewer.fit(); expect(viewer.getCamera().target).toEqual([0.5, 0.5, 0]); expect(viewer.getCamera().zoom).toBeUndefined();
+});
+
+it('fits a perspective comparison to a portrait pane without changing ordinary single-Result framing', () => {
+  const { viewer } = setup();
+  const bounds = { min: [0, 0, 0] as [number, number, number], max: [1, 0.1, 0.1] as [number, number, number] };
+  const camera = (viewer as unknown as { perspective: import('three').PerspectiveCamera }).perspective;
+  camera.aspect = 0.375; camera.updateProjectionMatrix();
+  viewer.preset('iso', bounds, 0.375);
+  for (const x of [0, 1]) for (const y of [0, 0.1]) for (const z of [0, 0.1]) {
+    const point = camera.position.clone().set(x, y, z).project(camera);
+    expect(Math.abs(point.x)).toBeLessThan(0.9); expect(Math.abs(point.y)).toBeLessThan(0.9);
+  }
+  const radius = Math.hypot(1, 0.1, 0.1) * 0.5;
+  expect(camera.position.distanceTo(camera.position.clone().set(0.5, 0.05, 0.05))).toBeCloseTo(radius * 3.2 / 0.375);
+  viewer.preset('iso', bounds);
+  expect(camera.position.distanceTo(camera.position.clone().set(0.5, 0.05, 0.05))).toBeCloseTo(radius * 3.2);
+});
+
 it('retains hidden Sheet edges across surface and mode rebuilds and disposes each owned geometry once', () => {
   const { viewer, objects } = setup();
   const oldMesh = objects.mesh.geometry, oldEdges = objects.edges.geometry, oldOutline = objects.outlines.geometry;

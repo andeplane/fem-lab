@@ -85,6 +85,8 @@ export function verificationState(record: AssistantVerification, state: UiState)
 
 export interface UiState {
   account: AccountState;
+  /** Two immutable solve presentations; never serialized into the Model or Journal. */
+  resultComparison: import('@femlab/registry').ResultComparisonState;
   assistantVerifications: AssistantVerification[];
 
   autosave: AutosaveState['saved'];
@@ -273,6 +275,7 @@ export const initialState: UiState = {
   },
   panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
+  resultComparison: { configuration: { mode: 'single' }, viewMode: 'geometry', catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null },
   exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],
