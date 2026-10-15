@@ -40,7 +40,7 @@ class BillingConfigTests(unittest.TestCase):
                                    taxClassificationConfirmed=True, activeTaxRegistrationVerified=False,
                                    taxCollectionDecisionConfirmed=True, policyUrlsConfirmed=True,
                                    stagingCheckoutVerified=True, webhookVerified=True,
-                                   managedPaymentsAccountEnabled=True, managedPaymentsTermsAccepted=True,
+                                   managedPaymentsAccountEnabled=True, managedPaymentsTermsAccepted=(mode == 'live'),
                                    managedPaymentsEligibilityConfirmed=True, managedPaymentsCheckoutVerified=(mode == 'live'))
 
     def gcloud(self, *args, optional=False):
@@ -145,8 +145,7 @@ class BillingConfigTests(unittest.TestCase):
 
     def test_each_managed_gate_blocks_before_secret_access(self):
         gates = ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed', 'taxClassificationConfirmed',
-                 'managedPaymentsAccountEnabled', 'managedPaymentsTermsAccepted',
-                 'managedPaymentsEligibilityConfirmed')
+                 'managedPaymentsAccountEnabled', 'managedPaymentsEligibilityConfirmed')
         for gate in gates:
             for value in (False, None):
                 with self.subTest(gate=gate, value=value):
@@ -162,7 +161,8 @@ class BillingConfigTests(unittest.TestCase):
                     self.assertEqual(self.calls, [])
 
     def test_live_managed_payments_requires_all_checkout_and_webhook_evidence(self):
-        for gate in ('managedPaymentsCheckoutVerified', 'stagingCheckoutVerified', 'webhookVerified'):
+        for gate in ('managedPaymentsTermsAccepted', 'managedPaymentsCheckoutVerified',
+                     'stagingCheckoutVerified', 'webhookVerified'):
             with self.subTest(gate=gate):
                 self.managed_catalog('live')
                 self.update_catalog('live', **{gate: False})
@@ -185,6 +185,7 @@ class BillingConfigTests(unittest.TestCase):
                 self.assertEqual(result['env']['BILLING_TAX_MODE'], 'automatic')
                 self.assertEqual(verified, [(mode, catalog)])
                 self.assertIs(verified[0][1]['activeTaxRegistrationVerified'], False)
+                self.assertIs(verified[0][1]['managedPaymentsTermsAccepted'], mode == 'live')
                 self.assertEqual(json.loads((self.root / (mode + '.json')).read_text()), catalog)
 
     def test_enabling_without_runtime_key_fails(self):
