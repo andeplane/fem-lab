@@ -164,4 +164,9 @@ describe('signed Stripe transport',()=>{
     const gateway=stripeGateway(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'whsec_fixture');
     expect(await gateway.invoice('in_local')).toMatchObject({currency:'usd',amountPaid:6125,customerId:'cus_local',subscriptionId:'sub_local',lines:[{priceId:'price_plus',start:100,end:200}]});
   });
+  it.each([[],[{price:{id:'price_personal'},quantity:1},{price:{id:'price_business'},quantity:1}],[{price:{id:'price_personal'},quantity:2}]])('rejects unsupported subscription items with a structured review error',async(...items)=>{
+    const fetcher:typeof fetch=async()=>Response.json({object:'list',has_more:false,data:[{id:'sub_mixed',customer:'cus_one',status:'active',items:{data:items}}]});
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','automatic','managed');
+    await expect(payments.subscriptions('cus_one')).rejects.toMatchObject({status:409,code:'subscription-use-unknown',suggestion:'account.open'});
+  });
 });

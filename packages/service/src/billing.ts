@@ -1,9 +1,9 @@
 import {createHash} from 'node:crypto';
-import type {PlanId} from './credits';
 import {PLANS} from './credits';
 import {creditLedger} from './ledger';
 import {ServiceFailure} from './errors';
 import {transaction,type Database} from './transactions';
+import {billingPrices,type PriceCatalog} from './billing-prices';
 
 export interface BillingEnvelope {id:string;type:string;objectId:string;customerId:string|null;live:boolean}
 export interface BillingInvoice {
@@ -17,11 +17,12 @@ export interface BillingGateway {
   subscription(id:string):Promise<BillingSubscription>;
   chargeCustomer(id:string,kind:'charge'|'dispute'):Promise<string|null>;
 }
-export interface BillingConfig {live:boolean;prices:Record<Exclude<PlanId,'free'>,string>}
+export interface BillingConfig extends PriceCatalog {live:boolean}
 const supported=new Set(['invoice.paid','invoice.payment_succeeded','invoice.payment_failed','customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','charge.refunded','charge.dispute.created']);
 
 /** Signed inbox first; bounded inline processing belongs to the request, retries to a scheduled Job. */
 export function billingLifecycle(db:Database,gateway:BillingGateway,config:BillingConfig,now:()=>Date,newId:()=>string) {
+  const prices=billingPrices(config);
   async function receive(body:Uint8Array,signature:string|undefined) {
     let event:BillingEnvelope;
     try {event=gateway.verify(body,signature??'',now());}
@@ -74,20 +75,22 @@ export function billingLifecycle(db:Database,gateway:BillingGateway,config:Billi
           await sql.query('UPDATE billing_accounts SET blocked=true,updated_at=$2 WHERE account_id=$1',[account.account_id,now()]);
         }
         if(account?.status==='active'&&invoice?.status==='paid'&&subscription&&['invoice.paid','invoice.payment_succeeded'].includes(type)&&['subscription_create','subscription_cycle'].includes(invoice.reason??'')) {
-          const lines=invoice.lines.filter(line=>!line.proration&&line.quantity===1&&Object.values(config.prices).includes(line.priceId??''));
-          if(invoice.currency!=='usd'||lines.length!==1||invoice.lines.some(line=>line.proration))throw new Error('Unsupported paid invoice.');
-          const line=lines[0]!,plan=Object.entries(config.prices).find(([,price])=>price===line.priceId)![0] as Exclude<PlanId,'free'>;
+          const lines=invoice.lines.filter(line=>!line.proration&&line.quantity===1&&prices.get(line.priceId??''));
+          if(invoice.currency!=='usd'||lines.length!==1||invoice.lines.length!==1||invoice.lines.some(line=>line.proration))throw new Error('Unsupported paid invoice.');
+          const line=lines[0]!,selection=prices.get(line.priceId!)!,{plan,purchaseUse}=selection;
           const duration=line.end-line.start;
           if(!Number.isSafeInteger(line.start)||!Number.isSafeInteger(line.end)||duration<28*86400||duration>32*86400||invoice.amountPaid<PLANS[plan].priceUsd*100)throw new Error('Unsupported invoice period or payment amount.');
           const source=`paid:${subscription.id}:${line.start}`;
           // Different invoice IDs for the same period do not mint another allowance.
           const previous=(await sql.query('SELECT * FROM paid_periods WHERE account_id=$1 AND subscription_id=$2 AND period_start=$3',[account.account_id,subscription.id,new Date(line.start*1000)])).rows[0];
-          if(previous&&(previous.plan!==plan||(previous.period_end as Date).getTime()!==line.end*1000))throw new Error('Conflicting paid period.');
+          if(previous&&(previous.plan!==plan||previous.purchase_use!==purchaseUse||(previous.period_end as Date).getTime()!==line.end*1000))throw new Error('Conflicting paid period.');
           if(!previous) {
+            const first=(await sql.query('SELECT purchase_use FROM paid_periods WHERE account_id=$1 AND subscription_id=$2 ORDER BY period_start LIMIT 1',[account.account_id,subscription.id])).rows[0];
+            if(first&&first.purchase_use!==purchaseUse)throw new Error('Subscription purchase use requires billing review.');
             const overlap=(await sql.query("SELECT id FROM credit_grants WHERE account_id=$1 AND plan<>'free' AND starts_at < $2 AND expires_at > $3 LIMIT 1",[account.account_id,new Date(line.end*1000),new Date(line.start*1000)])).rows;
             if(overlap.length)throw new Error('Overlapping paid periods require billing review.');
             await creditLedger(sql,now,newId).grant({accountId:String(account.account_id),source,plan,startsAt:new Date(line.start*1000),expiresAt:new Date(line.end*1000)});
-            await sql.query('INSERT INTO paid_periods(invoice_id,account_id,subscription_id,period_start,period_end,plan,grant_source) VALUES($1,$2,$3,$4,$5,$6,$7)',[invoice.id,account.account_id,subscription.id,new Date(line.start*1000),new Date(line.end*1000),plan,source]);
+            await sql.query('INSERT INTO paid_periods(invoice_id,account_id,subscription_id,period_start,period_end,plan,grant_source,purchase_use) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[invoice.id,account.account_id,subscription.id,new Date(line.start*1000),new Date(line.end*1000),plan,source,purchaseUse]);
           }
         }
         await sql.query("UPDATE billing_inbox SET state='done',processed_at=$2,last_error=NULL WHERE event_id=$1",[id,now()]);

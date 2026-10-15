@@ -1,5 +1,7 @@
 /** Public host/account state. Tokens, provider keys and payment customer IDs are never included. */
 export type AccountPlan='free'|'plus'|'pro'|'studio';
+/** Declared use of a subscription, fixed for its lifetime. */
+export type PurchaseUse='personal'|'business';
 export interface AccountInfo {
   id:string;email:string;createdAt:string;status:'active';billingAvailable?:boolean;
   usage?:{plan:AccountPlan;totalCredits:number;availableCredits:number;reservedCredits:number;periodEndsAt:string;models:string[];maxOutput:number;contextLimit:number;tariffVersion:string};
@@ -13,7 +15,7 @@ export interface AccountServices {
   signIn(method:'google'|'email',email?:string):Promise<void>;
   signOut():Promise<void>;
   refresh():Promise<void>;
-  checkout(plan:Exclude<AccountPlan,'free'>):Promise<void>;
+  checkout(plan:Exclude<AccountPlan,'free'>,purchaseUse?:PurchaseUse):Promise<void>;
   portal():Promise<void>;
   changePlan(plan:Exclude<AccountPlan,'free'>):Promise<void>;
   exportData():Promise<void>;
