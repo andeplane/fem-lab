@@ -1,9 +1,8 @@
-// Issue #247 in the built app. Chromium 153 ends the browser process when IndexedDB deserialises a
-// stored `FileSystemHandle` in an off-the-record profile — which is exactly the profile Playwright
-// runs in — so this test seeds the shape a browser that can no longer produce a handle leaves
-// behind, and holds the app to the two things that matter: start-up never reads the handle slot, so
-// the projects come back; and the reopen click reports a plain `file.not-found` and offers the
-// picker again rather than dying or going quiet.
+// Issue #247 recovery in the built app. The historical Chromium 153 crash motivated keeping
+// startup separate from handle deserialization. Valid native-handle reloads are now covered by
+// project.spec.ts. This test seeds an invalid remembered handle and checks that startup reads
+// only metadata, saved projects still load, and explicit reopen reports `file.not-found` and
+// restores the picker instead of going quiet.
 import { expect, test } from './fixtures';
 import type { Page } from './fixtures';
 
@@ -15,7 +14,7 @@ async function ready(page: Page): Promise<void> {
 /**
  * Write both handle records straight into the `femlab` database, with a value that is not a
  * directory handle: a record from an older build, another app, or a structured clone that no
- * longer produces one. A real handle cannot be used — deserialising it is what kills the browser.
+ * longer produces one. This invalid record must fail even when real handles restore correctly.
  */
 const poison = (page: Page, name: string): Promise<void> =>
   page.evaluate(async (folder) => {
@@ -83,7 +82,7 @@ test('@cpu a remembered folder this browser cannot restore costs a message, not 
   await expect(page.getByTitle('project.open kept-project')).toBeVisible();
   await expect(page.locator('.recent')).toHaveCount(1);
   // The invariant behind all of it: nothing on the way to a usable app touched the handle store.
-  // With a real handle in that slot instead of this stand-in, that read is what ends the browser.
+  // Listing saved projects must remain independent of whether a remembered handle is usable.
   expect(await deserialised(page)).not.toContain('handles:folder');
 
   await page.getByTitle('project.open kept-project').click();
@@ -91,9 +90,9 @@ test('@cpu a remembered folder this browser cannot restore costs a message, not 
   const assistant = page.locator('.assistant');
 
   // The folder is offered by name, read from the descriptor beside the handle and never the handle.
-  const reopen = assistant.getByTitle('Reopen the remembered folder', { exact: true });
+  const reopen = assistant.getByTitle('Reopen gone-folder', { exact: true });
   await expect(reopen).toBeVisible();
-  await expect(reopen).toContainText('reopen ‘gone-folder’');
+  await expect(reopen).toHaveText('reopen gone-folder');
   expect(await deserialised(page)).toContain('handles:folder:info');
   expect(await deserialised(page)).not.toContain('handles:folder');
 
@@ -106,7 +105,10 @@ test('@cpu a remembered folder this browser cannot restore costs a message, not 
   await expect(banner).toContainText('file.not-found');
   await expect(banner).toContainText('the remembered folder ‘gone-folder’ is no longer available in this browser');
   await expect(banner).toContainText('open a project folder again to pick it');
-  await expect(assistant.getByTitle('Open a folder on disk', { exact: true })).toBeVisible();
+  await expect(assistant.getByTitle('Open a project folder', { exact: true })).toBeVisible();
+  await expect(reopen).toHaveCount(0);
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folder' }))).toBeNull();
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folderRecent' }))).toBeNull();
 
   // Forgotten rather than retried: the next start has no record left to offer, and the project stands.
   expect(await handleKeys(page)).toEqual([]);
@@ -115,5 +117,7 @@ test('@cpu a remembered folder this browser cannot restore costs a message, not 
   await expect(page.getByTitle('project.open kept-project')).toBeVisible();
   await page.getByTitle('project.open kept-project').click();
   await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
-  await expect(assistant.getByTitle('Open a folder on disk', { exact: true })).toBeVisible();
+  await expect(assistant.getByTitle('Open a project folder', { exact: true })).toBeVisible();
+  await expect(reopen).toHaveCount(0);
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folderRecent' }))).toBeNull();
 });

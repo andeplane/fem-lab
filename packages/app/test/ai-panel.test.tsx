@@ -1,7 +1,7 @@
 // ADR 0003 for the drawer: every clickable in it names a Command the registry has. Plus the pieces
 // the design's cards are made of — the verification block the model writes, the mention popover,
 // the skill toggles and the settings row.
-import { FemError, HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
@@ -19,14 +19,15 @@ import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import type { ChatRequest } from '../src/ai/provider';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
 import * as project from '../src/ai/project';
-import { fakeDir } from './project-fake';
+import { fakeDir, memoryProjectAccess } from './project-fake';
+import type { ProjectAccess } from '../src/project-host';
 
-async function mount(patch: Partial<Store['state']> = {}) {
+async function mount(patch: Partial<Store['state']> = {}, access: ProjectAccess = memoryProjectAccess(() => project.pickFolder())) {
   const transport = fakeTransport();
   transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : q.query === 'query.results' ? { limit: 8, records: [] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
   const viewer = { current: null };
-  const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}));
+  const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}), undefined, undefined, undefined, undefined, undefined, undefined, { projects: {} as never, active: async () => undefined, replay: async () => undefined, captureImport: () => ({}) as never }, undefined, undefined, undefined, undefined, access);
   host.chat.send = (text) => chatBridge.send(text);
   host.chat.insertMention = (ref) => chatBridge.insertMention(ref);
   host.chat.setDraft = (text) => chatBridge.setDraft(text);
@@ -98,6 +99,24 @@ describe('the assistant drawer', () => {
     expect(chips).toContain('beam-theory-check');
     expect(chips).toContain('write-report');
     expect([...root.querySelectorAll('.chips button')].every((b) => b.getAttribute('aria-pressed') === 'true')).toBe(true);
+  });
+
+  it('uses one picker, keeps cancellation quiet and shows permission errors in the drawer', async () => {
+    const picker = vi.spyOn(project, 'pickFolder').mockRejectedValue(new DOMException('cancelled by user', 'AbortError'));
+    try {
+      const { root, store } = await mount();
+      root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
+      await tick();
+      expect(picker).toHaveBeenCalledOnce();
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      const denied = fakeDir({});
+      denied.requestPermission = async () => 'denied';
+      picker.mockResolvedValue(denied);
+      root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
+      await vi.waitFor(() => expect(root.querySelector('[role="alert"]')?.textContent).toContain('permission'));
+      expect(picker).toHaveBeenCalledTimes(2);
+      expect(store.state.folder).toBeNull();
+    } finally { picker.mockRestore(); }
   });
 
   it('switches a skill off through panel.toggle, so the toggle is a Command like everything else', async () => {
@@ -556,31 +575,25 @@ describe('the assistant drawer', () => {
 
   // Issue #247: start-up only ever learns the folder's *name*; the handle behind it is read on
   // this click, where a browser that can no longer produce one has somewhere to say so.
-  it('offers a remembered folder by name, and reopens it or says plainly that it is gone', async () => {
-    const remembered = vi.spyOn(project, 'rememberedFolder').mockResolvedValue({ name: 'corbel', at: 1 });
-    const reopen = vi.spyOn(project, 'reopenRemembered');
-    try {
-      reopen.mockRejectedValue(new FemError('file.not-found', 'the remembered folder ‘corbel’ is no longer available in this browser', 'the remembered project folder', 'open a project folder again to pick it'));
-      const gone = await mount();
-      await vi.waitFor(() => expect(gone.root.textContent).toContain('reopen ‘corbel’'));
-      gone.root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
-      await vi.waitFor(() => expect(gone.store.state.lastError).toMatchObject({ code: 'file.not-found', suggestion: 'open a project folder again to pick it' }));
-      expect(gone.store.state.folder).toBeNull();
-      // …and the offer gives way to the picker rather than staying to fail again.
-      expect(gone.root.textContent).toContain('open a project folder');
-      expect(gone.root.textContent).not.toContain('reopen ‘corbel’');
+  it('offers a remembered folder by name, and reopens it or reports an unusable handle', async () => {
+    const access = memoryProjectAccess(vi.fn(async () => fakeDir({})));
+    await access.remember({ kind: 'directory', name: 'corbel' } as project.DirHandle);
+    const gone = await mount({}, access);
+    await vi.waitFor(() => expect(gone.root.textContent).toContain('reopen corbel'));
+    gone.root.querySelector<HTMLButtonElement>('[title="Reopen corbel"]')!.click();
+    await vi.waitFor(() => expect(gone.root.querySelector('[role="alert"]')?.textContent).toContain('directory handle'));
+    expect(gone.store.state.folder).toBeNull();
+    await vi.waitFor(() => expect(gone.root.textContent).not.toContain('reopen corbel'));
+    expect(gone.root.textContent).toContain('open a project folder');
+    expect(access.pick).not.toHaveBeenCalled();
 
-      reopen.mockResolvedValue(await project.ProjectFolder.fromHandle(fakeDir({ 'AGENTS.md': 'Use the project rules.' }, 'corbel')));
-      const back = await mount();
-      await vi.waitFor(() => expect(back.root.textContent).toContain('reopen ‘corbel’'));
-      back.root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
-      await vi.waitFor(() => expect(back.store.state.folder?.name).toBe('corbel'));
-      expect(back.root.textContent).toContain('/corbel');
-      expect(back.store.state.lastError).toBeNull();
-    } finally {
-      remembered.mockRestore();
-      reopen.mockRestore();
-    }
+    await access.remember(fakeDir({ 'AGENTS.md': 'Use the project rules.' }, 'corbel'));
+    const back = await mount({}, access);
+    await vi.waitFor(() => expect(back.root.textContent).toContain('reopen corbel'));
+    back.root.querySelector<HTMLButtonElement>('[title="Reopen corbel"]')!.click();
+    await vi.waitFor(() => expect(back.store.state.folder?.name).toBe('corbel'));
+    expect(back.root.textContent).toContain('/corbel');
+    expect(back.root.querySelector('[role="alert"]')).toBeNull();
   });
 
   it('shares project overrides, refreshed content and close with the host and every skill menu', async () => {
@@ -598,8 +611,8 @@ describe('the assistant drawer', () => {
       await vi.waitFor(() => expect(root.textContent).toContain('project-check'));
       expect(store.state.project).toBe(browserProject);
       expect(picker).toHaveBeenCalledTimes(1);
-      // Full project I/O is #13: opening skills must not change file.save's download default.
-      expect(await registry.query({ query: 'query.folder' })).toBeNull();
+      // Folder I/O is now shared with the Assistant without replacing browser-project identity.
+      expect(await registry.query({ query: 'query.folder' })).toMatchObject({ name: 'bridge', skills: ['beam-theory-check', 'project-check'] });
       const invoke = (name: string) => registry.dispatch({ cmd: 'skill.invoke', name });
       expect(await invoke('beam-theory-check')).toMatchObject({ source: 'project', body: 'First project instructions.' });
       await type(root, '/project');

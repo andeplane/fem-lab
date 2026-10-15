@@ -73,7 +73,8 @@ export const CopyWhat = z.union([
   z.object({ kind: z.literal('script'), seqs: z.array(int).optional() }),
   z.object({ kind: z.literal('text'), text: z.string() }),
 ]);
-export const OpenHow = z.union([z.object({ picker: z.literal(true) }), z.object({ handle: z.looseObject({}) })]);
+// Preserve opaque browser handles and their prototype methods through parsing.
+export const OpenHow = z.union([z.object({ picker: z.literal(true) }), z.object({ handle: z.unknown().nonoptional() }), z.object({ reopen: z.literal(true) })]);
 const Destination = z.enum(['download', 'folder']).optional();
 
 export interface Selection {
@@ -237,7 +238,8 @@ export interface HostContext {
     close(): void;
     refresh(): Promise<void>;
     info(): FolderInfo | null;
-    readText(path: string): Promise<string>;
+    recent(): Promise<{ name: string } | null>;
+    readText(path: string, maxBytes?: number): Promise<string>;
     /** Read a file from the open folder as bytes, for a format that is not text. */
     readBytes(path: string): Promise<Uint8Array>;
     writeText(path: string, text: string): Promise<void>;
@@ -483,7 +485,7 @@ export const HOST_COMMANDS: HostDef[] = [
   }),
   def('file.open', 'replacement', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
     if ('json' in how) return importText(ctx, how.json);
-    if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
+    if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/'), MAX_MODEL_FILE_BYTES));
     return importText(ctx, await ctx.files.pick());
   }),
   def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck and its include files (at most 16 MiB total) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity. Static additionally requires unitForce; supply unitTime when density is present. Mesh mode refuses force and time units. Source units are independent of display units. Parts, transformed instances, named Sets, material regions and full-integration C3D4/C3D8/C3D10/C3D20 solids are retained. Static mode translates supported isotropic elastic regions, translational constraints, nodal forces, face pressures and named linear-static load cases. Normal output requests are recorded in the report. Include contents are supplied explicitly or read by the host from the submission folder; the engine performs no file I/O. Binary .odb/.cae databases require a text .inp export. Unsupported physical behavior is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
@@ -549,12 +551,12 @@ export const HOST_COMMANDS: HostDef[] = [
   }),
   def('file.restore', 'replacement', 'Reopen an autosaved Journal revision as a separate project without overwriting the currently saved project. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
   def('file.read', 'workspace', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
-    const text = await ctx.folder.readText(assertInside(path).join('/'));
+    const text = await ctx.folder.readText(assertInside(path).join('/'), MAX_TEXT);
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
     return { text };
   }),
   def('file.write', 'workspace', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused.', z.object({ path: z.string(), text: z.string() }), ({ path, text }, ctx) => ctx.folder.writeText(assertInside(path).join('/'), text)),
-  def('folder.open', 'workspace', 'Open a folder on disk with the directory picker (needs a click) or from a stored handle; its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
+  def('folder.open', 'workspace', 'Open a folder on disk with picker: true, an opaque directory handle, or reopen: true for the remembered folder (needs a click and read/write permission); its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
   def('folder.close', 'workspace', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules are dropped, saves go back to downloads.', none, (_, ctx) => ctx.folder.close()),
   def('folder.refresh', 'workspace', 'Re-list the open folder on disk and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.folder.refresh()),
   def('project.new', 'replacement',
@@ -606,6 +608,7 @@ export const HOST_QUERIES: HostDef[] = [
   def('query.selection', 'modelRead', 'The current selection as bodies, faces and Sets plus the `refs` list (`face:beam.top`, …) that `@selection` expands to in the chat.', none, (_, ctx) => ctx.selection.get()),
   def('query.skills', 'workspace', 'Every available skill with its name, description, when to use it and whether it is built in or from the project folder. Invoke one with skill.invoke.', none, (_, ctx) => ctx.skills().map(({ name, description, when, source }) => ({ name, description, when, source }))),
   def('query.exportFormats', 'workspace', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `animation`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
+  def('query.folderRecent', 'workspace', 'The remembered folder name or null, without requesting permission. Use folder.open with reopen: true from a click to request access.', none, (_, ctx) => ctx.folder.recent(), false),
   def('query.folder', 'workspace', 'The open folder on disk: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the skills it carries; `null` when no folder is open.', none, (_, ctx) => ctx.folder.info()),
   def('query.projects', 'workspace',
     'Every project saved in this browser, most recently edited first: id, name, when it was last written, how many Commands its Journal holds, and a small thumbnail. The start screen\u2019s Recent projects list is a view of this Query.',

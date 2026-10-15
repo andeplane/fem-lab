@@ -51,8 +51,17 @@ including modifying the Model. Review scripts before running them; execution is 
   script termination and is not rolled back. Runtime vulnerabilities remain a residual risk.
 - `file.open` accepts at most 16 MiB of UTF-8 JSON on every route, with picker size checked
   before reading. Paths stay inside the chosen folder; JSON syntax failures are structured.
-  The browser folder-open host is still unimplemented; future folder readers must check the
-  file size before reading, in addition to the shared post-read bound.
+  The browser folder host checks immutable File snapshots before decoding or allocating their
+  contents, in addition to shared post-read limits. `file.read` text is bounded to 2 MiB;
+  model files to 16 MiB; binary geometry reads to 32 MiB. Directory handles remain opaque through
+  registry validation, and each relative path is resolved from the selected directory handle.
+  Folder selection is published only after permission, listing and captured session admission
+  succeed. Closing or retiring that Store prevents unfinished selections from publishing.
+  Native writes commit on stream close and abort failed streams. A subsequent catalog refresh
+  failure warns without reporting an already committed save as failed; the previous catalog
+  remains available until a successful refresh. Remembering the handle is optional and waits
+  for the IndexedDB transaction to commit. Reload offers its name without reading the handle;
+  only an explicit reopen reads it and requests read/write permission again.
   The WASM boundary deserializes `ModelFile` before mutation, and the engine checks its format.
   Failed file imports retain the current project identity. There is no current `file.load`
   Command. Files are data, not evaluated JavaScript.

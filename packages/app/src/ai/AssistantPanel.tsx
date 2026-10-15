@@ -18,7 +18,7 @@ import { buildSystem, buildTurn, downscaleImage, mentionLabel, objectIndex, pars
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
-import { ProjectFolder, pickFolder, rememberHandle, rememberedFolder, reopenRemembered, watchAgents, type DirHandle, type RememberedFolder } from './project';
+import { watchAgents } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
 
 export interface AssistantPanelProps {
@@ -264,11 +264,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     setTokens([]);
   }, [registry]);
   const { folder, skills } = ui;
-  /** The folder a previous session remembered, by name only: reading its handle is a click (#247). */
-  const [remembered, setRemembered] = useState<RememberedFolder | null>(null);
   const [provider, setProvider] = useState<ProviderId>(() => __HOSTED_AI__ ? 'openai' : defaultProvider());
   const [model, setModel] = useState(() => __HOSTED_AI__ ? 'gpt-5.4-mini' : storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
+  const [recentProject, setRecentProject] = useState<string | null>(null);
+  const [projectFailure, setProjectFailure] = useState<string | null>(null);
   const [charged, setCharged] = useState(0);
   const [pendingUsage, setPendingUsage] = useState<string | null>(null);
   const [turn, setTurn] = useState<TurnResult | null>(null);
@@ -319,40 +319,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     if (store.state.folder === folder) store.setFolder(folder);
   }, undefined, undefined, (error) => store.log('warn', `project refresh failed: ${String(error)}`)) : undefined), [folder, store]);
 
-  // With no folder open, offer the one a previous session remembered. Only its name is read here:
-  // deserialising the handle is what ends the browser process on Chromium 153 (#247), so that waits
-  // for the click, where a failure has somewhere to be reported.
   useEffect(() => {
-    if (folder) {
-      setRemembered(null);
-      return;
-    }
-    void rememberedFolder().then(setRemembered).catch(() => setRemembered(null));
-  }, [folder]);
+    let active = true;
+    setRecentProject(null);
+    if (!folder) void registry.query({ query: 'query.folderRecent' }).then((info) => {
+      if (active) setRecentProject((info as { name: string } | null)?.name ?? null);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [folder, registry, projectFailure]);
 
-  const openFolder = async () => {
-    let handle: DirHandle;
-    try {
-      // The host Command owns this when the app wires it; until then the panel opens it itself.
-      await dispatch({ cmd: 'folder.open', picker: true });
-      return;
-    } catch {
-      handle = await pickFolder();
-    }
-    store.setFolder(await ProjectFolder.fromHandle(handle));
-    // Remembered after the folder opened, so a storage failure costs the reopen offer, not the folder.
-    await rememberHandle(handle).catch((error: unknown) => store.log('warn', `this folder will not be offered after a reload: ${String(error)}`));
-  };
-
-  /** Reopen the remembered folder, or say plainly that it is gone and go back to the picker. */
-  const reopenFolder = async () => {
-    try {
-      const restored = await reopenRemembered();
-      setRemembered(null);
-      if (restored) store.setFolder(restored);
-    } catch (error) {
-      setRemembered(null);
-      store.fail(error);
+  const projectCommand = async (cmd: string, args: Record<string, unknown> = {}) => {
+    setProjectFailure(null);
+    try { await dispatch({ cmd, ...args }); }
+    catch (error) {
+      if (!(error instanceof FemError && error.code === 'cancelled')) {
+        setProjectFailure(error instanceof FemError ? error.cause : String(error));
+      }
+      throw error;
     }
   };
 
@@ -625,19 +608,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             <span class="count">{folder.agentsMd ? `${rules.length} project rules in force` : 'no project rules'}</span>
             <span class="paths">/{folder.name}</span>
           </Cmd>
-        ) : remembered ? (
-          <Cmd cmd="folder.open" class="agents" title="Reopen the remembered folder" run={reopenFolder}>
-            <span class="mono">↻</span>
-            <span class="file">reopen ‘{remembered.name}’</span>
-            <span class="count">remembered from a previous session</span>
-          </Cmd>
         ) : (
-          <Cmd cmd="folder.open" class="agents" title="Open a folder on disk" run={openFolder}>
+          <Cmd cmd="folder.open" class="agents" title="Open a project folder" run={() => projectCommand('folder.open', { picker: true })}>
             <span class="mono">＋</span>
             <span class="file">open a project folder</span>
             <span class="count">for AGENTS.md, skills and files</span>
           </Cmd>
         )}
+        {!folder && recentProject ? (
+          <Cmd cmd="folder.open" title={`Reopen ${recentProject}`} run={() => projectCommand('folder.open', { reopen: true })}>
+            reopen {recentProject}
+          </Cmd>
+        ) : null}
+        {folder ? <>
+          <Cmd cmd="folder.refresh" title="Refresh project files and rules" run={() => projectCommand('folder.refresh')}>refresh</Cmd>
+          <Cmd cmd="folder.close" title="Close project folder" run={() => projectCommand('folder.close')}>close folder</Cmd>
+        </> : null}
+        {projectFailure ? <div class="empty-note" role="alert">{projectFailure}</div> : null}
         {folder && openPanel('rules') ? <div class="rules">{folder.agentsMd?.text}</div> : null}
         <div class="chips">
           <span class="section-label">Skills</span>
