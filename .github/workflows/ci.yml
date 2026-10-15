@@ -31,6 +31,16 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  billing-release:
+    name: billing release guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s infra/stripe -p 'test_*.py' -v
+
   # macOS on every event; Linux only on the full set. Full crate coverage belongs to the GPU job.
   rust:
     name: rust (${{ matrix.os }})

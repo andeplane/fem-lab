@@ -15,7 +15,7 @@ import { creditLedger } from './ledger';
 import { reservations } from './reservations';
 import { completionService } from './completions';
 import { openaiGateway } from './provider';
-import {stripeGateway,stripePayments} from './stripe';
+import {billingTaxMode,stripeGateway,stripePayments} from './stripe';
 import {billingLifecycle} from './billing';
 import {checkoutService} from './checkout';
 import { serviceServer } from './http.js';
@@ -31,6 +31,8 @@ const auth=projectId?getAuth(initializeApp({projectId})):undefined;
 
 const prices={plus:process.env.STRIPE_PRICE_PLUS??'',pro:process.env.STRIPE_PRICE_PRO??'',studio:process.env.STRIPE_PRICE_STUDIO??''};
 const billingMode=process.env.BILLING_MODE==='live'?'live':'test';
+const billingEnabled=process.env.BILLING_ENABLED==='true';
+const taxMode=billingTaxMode(process.env.BILLING_TAX_MODE,billingEnabled);
 const stripeKey=process.env.STRIPE_SECRET_KEY;
 const stripe=stripeKey&&new RegExp(`^(sk|rk)_${billingMode}_`).test(stripeKey)?new Stripe(stripeKey,{timeout:5000,maxNetworkRetries:1}):undefined;
 const billing=pool&&stripe&&process.env.STRIPE_WEBHOOK_SECRET&&Object.values(prices).every(price=>/^price_[a-zA-Z0-9_]+$/.test(price))?
@@ -52,21 +54,21 @@ if (process.argv.includes('--migrate')) {
     if(privacy){const result=await privacy.recover();process.stdout.write(JSON.stringify({event:'privacy-recovery',severity:result.failed?'ERROR':'INFO',...result})+'\n');if(result.failed)process.exitCode=1;}
     if(billing){const payments=await billing.recover();process.stdout.write(JSON.stringify({event:'billing-recovery',severity:payments.failed?'ERROR':'INFO',...payments})+'\n');if(payments.failed)process.exitCode=1;}
     if(stripe&&billing&&projectId&&process.env.STRIPE_PORTAL_CONFIGURATION&&process.env.APP_RETURN_ORIGIN) {
-      const plans=await checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId),{live:billingMode==='live',prices,enabled:process.env.BILLING_ENABLED==='true',appOrigin:process.env.APP_RETURN_ORIGIN},async()=>{throw new Error('Interactive authentication is not available in a job.');},now,randomUUID).recover();
+      const plans=await checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode),{live:billingMode==='live',prices,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},async()=>{throw new Error('Interactive authentication is not available in a job.');},now,randomUUID).recover();
       process.stdout.write(JSON.stringify({event:'plan-change-recovery',severity:plans.failed?'ERROR':'INFO',...plans})+'\n');if(plans.failed)process.exitCode=1;
     }
   } finally { await pool.end(); }
 } else {
   const readAccount = pool && projectId ? accountReader(identityVerifier(auth!, projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
   const payments=pool&&stripe&&billing&&readAccount&&projectId&&process.env.STRIPE_PORTAL_CONFIGURATION&&process.env.APP_RETURN_ORIGIN?
-    checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId),{live:process.env.BILLING_MODE==='live',prices,enabled:process.env.BILLING_ENABLED==='true',appOrigin:process.env.APP_RETURN_ORIGIN},readAccount,now,randomUUID):undefined;
+    checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode),{live:process.env.BILLING_MODE==='live',prices,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},readAccount,now,randomUUID):undefined;
   const ledger = pool ? creditLedger(pool, now, randomUUID) : undefined;
   const holds=pool?reservations(pool,now,randomUUID):undefined;
   const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
   const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider}):undefined;
   const account = readAccount && ledger ? async (authorization: string | undefined) => {
     const owner = await readAccount(authorization);
-    return { ...owner, usage: await ledger.balance(owner.id), billingAvailable:process.env.BILLING_ENABLED==='true'&&Boolean(payments),billing:await payments?.status(owner.id) };
+    return { ...owner, usage: await ledger.balance(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:await payments?.status(owner.id) };
   } : undefined;
   const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
