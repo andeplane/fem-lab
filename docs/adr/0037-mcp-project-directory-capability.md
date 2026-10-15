@@ -48,3 +48,6 @@ then an independent thread replaces its ancestor with a link to an outside
 sentinel before read/write. The returned bytes and changed file must belong to
 the original captured directory and the outside sentinel must remain unchanged.
 Cross-platform CI executes this test without substituting a fake filesystem.
+
+The upstream contracts are [directory-relative cap-std operations](https://docs.rs/cap-std/4.0.3/cap_std/fs/struct.Dir.html)
+and [cap-fs-ext final-component symlink control](https://docs.rs/cap-fs-ext/4.0.3/cap_fs_ext/trait.OpenOptionsFollowExt.html).

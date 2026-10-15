@@ -16,7 +16,6 @@ import {
   errorText,
   exportText,
   readResource,
-  resolveInProject,
   RESOURCES,
   toolList,
   type ServerDeps,
@@ -216,7 +215,7 @@ describe('export_file', () => {
     await expect(callTool(registry, 'export_file', { format: 'msh', path: 'link/escape.msh' })).rejects.toMatchObject({ code: 'file.scope' });
     // a folder deeper inside the project is fine, link or not
     await mkdir(path.join(root, 'deep'), { recursive: true });
-    await symlink(path.join(root, 'deep'), path.join(root, 'inner'), 'dir');
+    await symlink('deep', path.join(root, 'inner'), 'dir');
     await callTool(registry, 'export_file', { format: 'msh', path: 'inner/mesh.msh' });
     expect(await readFile(path.join(root, 'deep', 'mesh.msh'), 'utf8')).toBe('<msh>');
     // and a bad format is a schema error from the registry, before anything is written
@@ -252,7 +251,7 @@ describe('export_file', () => {
     await callTool(registry, 'export_file', { format: 'report', path: 'new/deep/report.md' });
     expect(await readFile(path.join(root, 'new/deep/report.md'), 'utf8')).toBe('<report>');
     await writeFile(path.join(root, 'file'), 'not a directory');
-    await expect(resolveInProject(root, 'file/child/report.md')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    await expect(callTool(registry, 'export_file', { format: 'report', path: 'file/child/report.md' })).rejects.toMatchObject({ code: 'file.scope' });
   });
 
   it('allows concurrent exports to create a shared nested directory', async () => {
@@ -266,7 +265,6 @@ describe('export_file', () => {
   it('refuses every write when the server was started without a project folder', async () => {
     const registry = createRegistry({ engine: fakeEngine() });
     await expect(callTool(registry, 'export_file', { format: 'msh', path: 'x.msh' })).rejects.toMatchObject({ code: 'file.scope' });
-    await expect(resolveInProject(undefined, 'x')).rejects.toMatchObject({ code: 'file.scope' });
   });
 
   it('takes the mesh formats from the engine and the two Journal ones from the Journal', async () => {
@@ -337,4 +335,13 @@ it('refuses executing a described export handler outside request admission', asy
   const registry = createRegistry({ engine: fakeEngine() });
   await expect(registry.describe('export.file').run!({ format: 'journal', path: 'model.json' }))
     .rejects.toMatchObject({ code: 'session.expired' });
+});
+
+it('closes the injected project capability when the MCP server closes', () => {
+  let closed = 0;
+  const { server } = createServer({ engine: fakeEngine(), projectFiles: {
+    size: async () => 0, read: async () => new Uint8Array(), write: async () => {}, close: () => { closed++; },
+  } });
+  server.onclose!();
+  expect(closed).toBe(1);
 });
