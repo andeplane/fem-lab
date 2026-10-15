@@ -173,10 +173,31 @@ describe('the production project host', () => {
     const { registry, host, handle } = setup({ 'mesh.stl': 'small' });
     await registry.dispatch({ cmd: 'folder.open', handle });
     const file = await handle.getFileHandle('mesh.stl');
-    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
-    vi.spyOn(handle, 'getFileHandle').mockResolvedValue({ ...file, getFile: async () => ({ size: 32 * 1024 * 1024 + 1, lastModified: 0, text: async () => '', arrayBuffer }) });
+    let size = 32 * 1024 * 1024 + 1;
+    const arrayBuffer = vi.fn(async () => new Uint8Array([1, 2, 3]).buffer);
+    vi.spyOn(handle, 'getFileHandle').mockResolvedValue({ ...file, getFile: async () => ({ size, lastModified: 0, text: async () => '', arrayBuffer }) });
     await expect(host.folder.readBytes('mesh.stl')).rejects.toMatchObject({ code: 'unsupported' });
     expect(arrayBuffer).not.toHaveBeenCalled();
+    size--;
+    expect(await host.folder.readBytes('mesh.stl')).toEqual(new Uint8Array([1, 2, 3]));
+    expect(arrayBuffer).toHaveBeenCalledOnce();
+  });
+
+  it('applies the distinct text and model-file byte limits before decoding each folder snapshot', async () => {
+    const { registry, transport, handle } = setup({ 'large.femlab.json': 'placeholder' });
+    await registry.dispatch({ cmd: 'folder.open', handle });
+    const file = await handle.getFileHandle('large.femlab.json');
+    let size = 3 * 1024 * 1024;
+    const text = vi.fn(async () => JSON.stringify(MODEL_FILE));
+    vi.spyOn(handle, 'getFileHandle').mockResolvedValue({ ...file, getFile: async () => ({ size, lastModified: 0, text, arrayBuffer: async () => new ArrayBuffer(0) }) });
+    await expect(registry.dispatch({ cmd: 'file.read', path: 'large.femlab.json' })).rejects.toMatchObject({ code: 'unsupported' });
+    expect(text).not.toHaveBeenCalled();
+    await registry.dispatch({ cmd: 'file.open', path: 'large.femlab.json' });
+    expect(transport.importFile).toHaveBeenCalledWith(MODEL_FILE);
+    expect(text).toHaveBeenCalledOnce();
+    size = 16 * 1024 * 1024 + 1;
+    await expect(registry.dispatch({ cmd: 'file.open', path: 'large.femlab.json' })).rejects.toMatchObject({ code: 'unsupported' });
+    expect(text).toHaveBeenCalledOnce();
   });
 
   it('remembers an opaque handle, re-requests permission on reopen, and forgets it on close', async () => {
