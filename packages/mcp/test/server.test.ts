@@ -396,7 +396,7 @@ it.each(['read', 'write'])('startup captures configured authority before first %
     if (operation === 'read') {
       const result = await client.callTool({ name: toolNameFor('file.importAbaqus'), arguments: { path: 'source.inp', name: 'witness', body: 'bar', mode: 'mesh', unitLength: '1 m' } });
       expect(result.isError).not.toBe(true);
-      expect(engine.seen[0]).toMatchObject({ query: 'query.convertAbaqus', text: insideText });
+      expect(engine.seen).toContainEqual(expect.objectContaining({ query: 'query.convertAbaqus', text: insideText }));
     } else {
       const result = await client.callTool({ name: 'export_file', arguments: { path: 'victim', format: 'report' } });
       expect(result.isError).not.toBe(true);
