@@ -568,12 +568,8 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary, shown: &ModelSummar
             axis,
             total[axis].abs() * l / (e * area),
             "$$\\delta = \\frac{F L}{E A}$$",
-            format!(
-                "end load = {}, L = {}, A = {}",
-                shown_load,
-                q(&shown_size[axis]),
-                q(&display(model, area, crate::units::Dimension([2, 0, 0, 0]))?)
-            ),
+            display(model, area, crate::units::Dimension([2, 0, 0, 0]))
+                .map(|area| format!("end load = {}, L = {}, A = {}", shown_load, q(&shown_size[axis]), q(&area))),
         )
     } else {
         let i = size[other] * size[bend].powi(3) / 12.0;
@@ -581,23 +577,24 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary, shown: &ModelSummar
             bend,
             total[bend].abs() * l.powi(3) / (3.0 * e * i),
             "$$\\delta = \\frac{P L^3}{3 E I}, \\qquad I = \\frac{b h^3}{12}$$",
-            format!(
+            Ok(format!(
                 "end load = {}, L = {}, b = {}, h = {}",
                 shown_load,
                 q(&shown_size[axis]),
                 q(&shown_size[other]),
                 q(&shown_size[bend])
-            ),
+            )),
         )
     };
-    let Some(extreme) = r.extremes.iter().find(|x| x.field == "displacement" && x.component as usize == component)
-    else {
-        return Ok(None);
-    };
-    let fem = extreme.min.value.abs().max(extreme.max.value.abs());
-    let hand = display(model, delta, Length::DIM)?;
-    let unit = hand.unit.clone();
-    Ok(Some(format!(
+    given.and_then(|given| {
+        let Some(extreme) = r.extremes.iter().find(|x| x.field == "displacement" && x.component as usize == component)
+        else {
+            return Ok(None);
+        };
+        let fem = extreme.min.value.abs().max(extreme.max.value.abs());
+        display(model, delta, Length::DIM).map(|hand| {
+        let unit = hand.unit.clone();
+        Some(format!(
         "### Hand calculation for step `{}`\n\n\
          One box Body under one end force, verified fully clamped at the opposite end, is a prismatic bar in {} theory:\n\n\
          {}\n\n\
@@ -616,7 +613,9 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary, shown: &ModelSummar
         fmt_sig(fem, 5),
         unit,
         fmt_sig((fem - hand.value) / hand.value * 100.0, 3),
-    )))
+        ))
+        })
+    })
 }
 
 fn verification(
@@ -664,6 +663,17 @@ fn journal(j: &crate::journal::Journal) -> String {
     )
 }
 
+/// Unavailable geometry may omit the optional Mesh section; failed display quantities
+/// must retain their full structured diagnostic. Classification uses the stable code,
+/// since another boundary may annotate the error's location.
+fn optional_mesh(source: Result<MeshSummary, Error>) -> Result<Option<MeshSummary>, Error> {
+    match source {
+        Ok(mesh) => Ok(Some(mesh)),
+        Err(error) if error.code == ErrorCode::UnitDisplay => Err(error),
+        Err(_) => Ok(None),
+    }
+}
+
 impl Engine {
     /// `query.report`: the whole analysis as one Markdown document.
     pub(crate) fn report(
@@ -681,13 +691,10 @@ impl Engine {
             .collect::<Result<_, _>>()?;
         let summary = self.query_model()?;
         let built = match self.model.mesh.clone() {
-            Some(settings) => match self.query_mesh() {
-                Ok(mesh) => Some((mesh, settings)),
-                Err(error) if error.code == ErrorCode::UnitDisplay => return Err(error),
-                Err(_) => None,
-            },
-            None => None,
+            Some(settings) => optional_mesh(self.query_mesh()).map(|mesh| mesh.map(|mesh| (mesh, settings))),
+            None => Ok(None),
         };
+        built.and_then(|built| {
         let cost = self.model.steps.first().map(|s| s.name.clone()).and_then(|n| self.query_cost(&n).ok());
         let mut markdown = String::new();
         let mut sections = Vec::new();
@@ -729,12 +736,41 @@ impl Engine {
             sections.push(s.name());
         }
         Ok(ReportText { markdown, sections })
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_mesh_preserves_checked_display_errors_and_omits_unavailable_geometry() {
+        let mut model = crate::model::Model::new("formatter policy");
+        model.units.length = Some("mm".into());
+        let error = display(&model, f64::MAX, Length::DIM).unwrap_err().at("annotated report boundary");
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert_eq!(optional_mesh(Err(error.clone())), Err(error));
+
+        let geometry = femlab_geometry::mesher::surface(&[]).err().unwrap();
+        let unavailable = Error::new(ErrorCode::MeshFailed, geometry.0).at("mesher").suggest("mesh.set");
+        assert_eq!(optional_mesh(Err(unavailable)), Ok(None));
+
+        // Truthful metadata for a unit-cube Hex8; this pure policy preserves the input.
+        let mesh = MeshSummary {
+            source_labels: None,
+            nodes: 8,
+            elements: 1,
+            element_kind: "hex8".into(),
+            dofs: 24,
+            bbox: std::array::from_fn(|axis| Valued { value: (axis >= 3) as u8 as f64, unit: "m".into() }),
+            min_edge: Valued { value: 1.0, unit: "m".into() },
+            max_edge: Valued { value: 1.0, unit: "m".into() },
+            sets: Vec::new(),
+            quality: None,
+        };
+        assert_eq!(optional_mesh(Ok(mesh.clone())), Ok(Some(mesh)));
+    }
 
     /// Applicability is a pure decision over model definitions and solved-result metadata.
     /// These inputs deliberately include definitions a public Command would normally reject,

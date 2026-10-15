@@ -156,6 +156,11 @@ fn checked_display_unused_imported_node_sets_keep_exact_large_centroids_and_zero
         assert_eq!(far["centroid"][axis]["value"], 1e308);
         assert_eq!(far["measure"], json!({"value":0.0,"unit":"SI"}));
         assert_eq!(e.export_file(), file);
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"length":"mm"}}));
+        // The participating unit Tet remains readable. The authored unused node Set
+        // independently has coordinate1e308m, whose requested mm value cannot fit.
+        read(&mut e, json!({"query":"query.model"}));
+        rejected_read(&mut e, json!({"query":"query.set","name":"part.nset_FAR"}));
     }
 }
 
@@ -544,6 +549,132 @@ fn checked_display_imported_body_and_active_set_measures_use_their_physical_dime
         for query in queries {
             rejected_read(&mut e, query);
         }
+    }
+}
+
+#[test]
+fn checked_display_isolated_solid_mesh_and_built_set_bounds_preserve_state() {
+    let mut solid = box_model();
+    let ordinary = read(&mut solid, json!({"query":"query.model"}));
+    assert_eq!(ordinary["bodies"][0]["bbox"][3], json!({"value":1.0,"unit":"m"}));
+    command(&mut solid, json!({"cmd":"model.setUnits","units":{"length":"nm^35/m^34"}}));
+    rejected_read(&mut solid, json!({"query":"query.model"}));
+
+    let mut imported = fresh();
+    command(&mut imported, serde_json::from_str(IMPORTED_TET).unwrap());
+    let ordinary = read(&mut imported, json!({"query":"query.mesh"}));
+    assert_eq!(ordinary["bbox"][3], json!({"value":1.0,"unit":"m"}));
+    command(&mut imported, json!({"cmd":"model.setUnits","units":{"length":"nm^35/m^34"}}));
+    // Query the Mesh directly: an unrelated Model-summary failure must not preempt it.
+    rejected_read(&mut imported, json!({"query":"query.mesh"}));
+
+    let mut line = fresh();
+    for value in [
+        json!({"cmd":"geometry.addLine","name":"member","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"divisions":2}),
+        json!({"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"member"}}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}),
+    ] {
+        command(&mut line, value);
+    }
+    let ordinary = read(&mut line, json!({"query":"query.set","name":"whole"}));
+    assert_eq!(ordinary["count"], 2);
+    assert_eq!(ordinary["bbox"][3], json!({"value":1.0,"unit":"m"}));
+    command(&mut line, json!({"cmd":"model.setUnits","units":{"length":"nm^35/m^34"}}));
+    rejected_read(&mut line, json!({"query":"query.set","name":"whole"}));
+}
+
+#[test]
+fn checked_display_imported_geometry_patch_area_preserves_the_model() {
+    let mut e = fresh();
+    ok(&mut e, &super::import_cmd("part", &super::stl_of(&super::Shape::Box { size: [1.0; 3] }), ""));
+    let ordinary = read(&mut e, json!({"query":"query.model"}));
+    let patches = ordinary["bodies"][0]["patches"].as_array().unwrap();
+    assert_eq!(patches.len(), 6);
+    // Each planar face of the authored unit cube has exactly1m² area.
+    for patch in patches {
+        assert!((patch["area"]["value"].as_f64().unwrap() - 1.0).abs() < 1e-12);
+    }
+    command(&mut e, json!({"cmd":"model.setUnits","units":{"length":"nm^19/m^18"}}));
+    rejected_read(&mut e, json!({"query":"query.model"}));
+}
+
+#[test]
+fn checked_display_hand_reference_rejects_its_own_unrepresentable_deflection() {
+    let mut e = fresh();
+    for value in [
+        json!({"cmd":"geometry.addBox","name":"bar","size":["1 m","0.1 m","0.1 m"]}),
+        json!({"cmd":"material.add","name":"soft","E":"1e-207 Pa","nu":0.49999999}),
+        json!({"cmd":"material.assign","material":"soft","bodies":["bar"]}),
+        json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}},"formulation":"full"}),
+        json!({"cmd":"constraint.fix","name":"root","on":"bar.xmin"}),
+        json!({"cmd":"load.traction","name":"pull","on":"bar.xmax","total":["1 N","0 N","0 N"]}),
+        json!({"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["pull"]}),
+        json!({"cmd":"model.setUnits","units":{"length":"nm^11*cm/m^11"}}),
+        json!({"cmd":"solve.run","step":"s","solver":"cpu-direct"}),
+    ] {
+        command(&mut e, value);
+    }
+    let result = read(&mut e, json!({"query":"query.result","step":"s"}));
+    read(&mut e, json!({"query":"query.model"}));
+    read(&mut e, json!({"query":"query.mesh"}));
+    // The independent bar reference FL/(EA)=1e209m exceeds MAX*1e-101m.
+    // A constrained one-Hex near-incompressible model locks: its finite displacement
+    // is not an oracle for that reference. Only representability is asserted here.
+    let reference: f64 = 1.0 / (1e-207 * 0.01);
+    assert!(reference.is_finite());
+    assert!(reference > f64::MAX * 1e-101);
+    rejected_read(&mut e, json!({"query":"query.report","step":"s","include":["verification"]}));
+    assert_eq!(read(&mut e, json!({"query":"query.result","step":"s"})), result);
+}
+
+#[test]
+fn checked_display_interior_laminate_ply_remains_checked_after_readable_surface_fields() {
+    for cells in [2, 4, 8] {
+        let mut e = fresh();
+        for value in [
+            json!({"cmd":"mesh.set","mesher":{"kind":"surface","body":"skin","patches":[{"corners":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["1 m","1 m","0 m"],["0 m","1 m","0 m"]],"n":[cells,1],"tags":[null,"tip",null,"root"]}]}}),
+            json!({"cmd":"material.add","name":"soft","E":"1 Pa","nu":0}),
+            json!({"cmd":"material.add","name":"hard","E":"1e6 Pa","nu":0}),
+            json!({"cmd":"section.add","name":"stack","shape":{"kind":"laminate","plies":[
+                {"material":"soft","thickness":"1 mm"},{"material":"hard","thickness":"1 mm"},
+                {"material":"soft","thickness":"1 mm"},{"material":"hard","thickness":"1 mm"},
+                {"material":"soft","thickness":"1 mm"}
+            ]}}),
+            json!({"cmd":"section.assign","section":"stack","bodies":["skin"]}),
+            json!({"cmd":"constraint.fix","name":"root","on":"skin.root"}),
+            json!({"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1e-5 N m","0 N m"]}),
+            json!({"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}),
+            json!({"cmd":"solve.run","step":"s","solver":"cpu-direct"}),
+        ] {
+            command(&mut e, value);
+        }
+        let original = read(&mut e, json!({"query":"query.result","step":"s"}));
+        let id = original["resultId"].as_str().unwrap();
+        // Symmetric laminate has B=0. With nu=0, kappa=M/D and sigma_x(z)=E*z*kappa.
+        let hard_d = 2.0 * 1e6 * (0.0015_f64.powi(3) - 0.0005_f64.powi(3)) / 3.0;
+        let total_d = 0.005_f64.powi(3) / 12.0 + hard_d * (1.0 - 1e-6);
+        let exact_inner = 1e6 * 0.0015 * 1e-5 / total_d;
+        let ply = original["extremes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["field"] == "stressPly:2:bottom" && row["component"] == 0)
+            .unwrap();
+        assert!((ply["min"]["value"].as_f64().unwrap().abs() / exact_inner - 1.0).abs() < 1e-7);
+        for row in original["extremes"].as_array().unwrap().iter().filter(|row| {
+            ["stress", "stressUnaveraged", "stressTop", "stressBottom", "vonMises", "principal"]
+                .contains(&row["field"].as_str().unwrap())
+        }) {
+            assert!(row["min"]["value"].as_f64().unwrap().abs() < 0.1);
+            assert!(row["max"]["value"].as_f64().unwrap().abs() < 0.1);
+        }
+        command(&mut e, json!({"cmd":"model.setUnits","units":{"stress":"Pa*nm^34*cm/m^35"}}));
+        rejected_read(&mut e, json!({"query":"query.result","step":"s"}));
+        assert_eq!(read(&mut e, json!({"query":"query.result","resultId":id}))["extremes"], original["extremes"]);
+        rejected_command(&mut e, json!({"cmd":"solve.run","step":"s","solver":"cpu-direct"}));
+        command(&mut e, json!({"cmd":"model.setUnits","units":{}}));
+        command(&mut e, json!({"cmd":"solve.run","step":"s","solver":"cpu-direct"}));
+        assert_eq!(read(&mut e, json!({"query":"query.result","step":"s"}))["resultId"], "result-2");
     }
 }
 

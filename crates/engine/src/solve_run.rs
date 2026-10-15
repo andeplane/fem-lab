@@ -1398,90 +1398,96 @@ impl Engine {
             residual = crate::post::equilibrium::norm(ledger.force_residual);
             biggest = ledger.force_scale;
         }
-        Ok(ResultSummary {
-            result_id: record.id.clone(),
-            step: name.to_string(),
-            reaction_quantity: res.reaction_quantity,
-            storage_power: storage_power.map(|p| display(m, p, Power::DIM)).transpose()?,
-            yielded_fraction: res.scalars.get("yielded_fraction").copied(),
-            revision: record.revision,
-            stale: *hash != crate::hash::result_hash(&self.model),
-            solver: res.solver.solver.to_string(),
-            iterations: res.solver.iterations as u32,
-            residual: res.solver.rel_residual,
-            time_ms: res.solver.time_ms,
-            extremes: res
-                .extremes
-                .iter()
-                .map(|(f, e)| extreme(m, *f, e, res.reaction_quantity))
-                .chain(res.ply_stresses.iter().enumerate().flat_map(|(i, ply)| {
-                    ["bottom", "top"].into_iter().zip(&ply.extremes).flat_map(move |(side, extremes)| {
-                        extremes.iter().map(move |e| {
-                            let mut row = extreme(m, Field::Stress, e, res.reaction_quantity)?;
+        // Keep the checked prefix in publication order before composing frequency output.
+        let storage_power = storage_power.map(|p| display(m, p, Power::DIM)).transpose()?;
+        let extremes = res
+            .extremes
+            .iter()
+            .map(|(f, e)| extreme(m, *f, e, res.reaction_quantity))
+            .chain(res.ply_stresses.iter().enumerate().flat_map(|(i, ply)| {
+                ["bottom", "top"].into_iter().zip(&ply.extremes).flat_map(move |(side, extremes)| {
+                    extremes.iter().map(move |e| {
+                        extreme(m, Field::Stress, e, res.reaction_quantity).map(|mut row| {
                             row.field = format!("stressPly:{}:{side}", i + 1);
-                            Ok(row)
+                            row
                         })
                     })
-                }))
-                .collect::<Result<_, Error>>()?,
-            reactions: res
-                .reactions
-                .iter()
-                .map(|(n, r)| {
-                    Ok(ReactionRow {
-                        constraint: n.clone(),
-                        total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity))?,
-                    })
                 })
-                .collect::<Result<_, Error>>()?,
-            applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity))?,
-            static_equilibrium,
-            assumptions: res.assumptions.clone(),
-            frequencies: res
-                .frequencies
-                .iter()
-                .map(|f| display(m, *f, Frequency::DIM))
-                .collect::<Result<_, Error>>()?,
-            prestress_from: res.prestress_from.clone(),
-            // Dimensionless, so no display conversion: a load factor is a load factor in any unit
-            // system the Model is written in.
-            buckling_factors: res.buckling_factors.clone(),
-            history: res
-                .history
-                .iter()
-                .flat_map(crate::procedure::heat::history_extremes)
-                .map(|(t, lo, hi)| {
-                    let dim = field_dimension(
-                        res.history.as_ref().map_or(Field::Temperature, |h| h.field),
-                        res.reaction_quantity,
-                    );
-                    Ok(HistoryRow {
-                        time: display(m, t, Time::DIM)?,
-                        min: display(m, lo, dim)?,
-                        max: display(m, hi, dim)?,
-                    })
+            }))
+            .collect::<Result<_, Error>>()?;
+        let reactions = res
+            .reactions
+            .iter()
+            .map(|(n, r)| {
+                Ok(ReactionRow {
+                    constraint: n.clone(),
+                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity))?,
                 })
-                .collect::<Result<_, Error>>()?,
-            sweep: match &res.sweep {
-                Some(sweep) => sweep_rows(m, sweep)?,
-                None => Vec::new(),
+            })
+            .collect::<Result<_, Error>>()?;
+        let applied_total = vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity))?;
+        res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect::<Result<_, Error>>().and_then(
+            |frequencies| {
+                Ok(ResultSummary {
+                    result_id: record.id.clone(),
+                    step: name.to_string(),
+                    reaction_quantity: res.reaction_quantity,
+                    storage_power,
+                    yielded_fraction: res.scalars.get("yielded_fraction").copied(),
+                    revision: record.revision,
+                    stale: *hash != crate::hash::result_hash(&self.model),
+                    solver: res.solver.solver.to_string(),
+                    iterations: res.solver.iterations as u32,
+                    residual: res.solver.rel_residual,
+                    time_ms: res.solver.time_ms,
+                    extremes,
+                    reactions,
+                    applied_total,
+                    static_equilibrium,
+                    assumptions: res.assumptions.clone(),
+                    frequencies,
+                    prestress_from: res.prestress_from.clone(),
+                    // Dimensionless, so no display conversion: a load factor is a load factor in any unit
+                    // system the Model is written in.
+                    buckling_factors: res.buckling_factors.clone(),
+                    history: res
+                        .history
+                        .iter()
+                        .flat_map(crate::procedure::heat::history_extremes)
+                        .map(|(t, lo, hi)| {
+                            let dim = field_dimension(
+                                res.history.as_ref().map_or(Field::Temperature, |h| h.field),
+                                res.reaction_quantity,
+                            );
+                            Ok(HistoryRow {
+                                time: display(m, t, Time::DIM)?,
+                                min: display(m, lo, dim)?,
+                                max: display(m, hi, dim)?,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    sweep: match &res.sweep {
+                        Some(sweep) => sweep_rows(m, sweep)?,
+                        None => Vec::new(),
+                    },
+                    balance: if biggest == 0.0 { 0.0 } else { residual / biggest },
+                    contacts: res
+                        .contacts
+                        .iter()
+                        .map(|c| {
+                            Ok(ContactRow {
+                                contact: c.name.clone(),
+                                active: c.active,
+                                paired: c.paired,
+                                active_fraction: c.active as f64 / c.paired.max(1) as f64,
+                                force: vec3(m, c.force, Force::DIM)?,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    warnings: res.warnings.clone(),
+                })
             },
-            balance: if biggest == 0.0 { 0.0 } else { residual / biggest },
-            contacts: res
-                .contacts
-                .iter()
-                .map(|c| {
-                    Ok(ContactRow {
-                        contact: c.name.clone(),
-                        active: c.active,
-                        paired: c.paired,
-                        active_fraction: c.active as f64 / c.paired.max(1) as f64,
-                        force: vec3(m, c.force, Force::DIM)?,
-                    })
-                })
-                .collect::<Result<_, Error>>()?,
-            warnings: res.warnings.clone(),
-        })
+        )
     }
 }
 
@@ -1499,12 +1505,14 @@ fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Result<Vec<Swee
                 best
             }
         });
-        rows.push(SweepRow {
-            frequency: display(model, *hz, Frequency::DIM)?,
-            amplitude: display(model, at.1, Length::DIM)?,
-            // Radians are the SI angle and the Model has no display unit for one.
-            phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
-        });
+        rows.push(display(model, *hz, Frequency::DIM).and_then(|frequency| {
+            display(model, at.1, Length::DIM).map(|amplitude| SweepRow {
+                frequency,
+                amplitude,
+                // Radians are the SI angle and the Model has no display unit for one.
+                phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
+            })
+        })?);
     }
     Ok(rows)
 }

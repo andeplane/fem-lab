@@ -260,11 +260,12 @@ impl Engine {
                     .face_patches()
                     .into_iter()
                     .map(|p| {
-                        Ok(ImportedPatchRow {
+                        let area = display(m, p.area, Dimension([2, 0, 0, 0]))?;
+                        displayed3(m, p.centroid, Length::DIM).map(|centroid| ImportedPatchRow {
                             tag: p.tag,
                             triangle_count: p.triangle_count,
-                            area: display(m, p.area, Dimension([2, 0, 0, 0]))?,
-                            centroid: displayed3(m, p.centroid, Length::DIM)?,
+                            area,
+                            centroid,
                             mean_normal: p.mean_normal,
                             suggested_predicate: crate::definition::face(&p.suggested_predicate),
                         })
@@ -659,16 +660,17 @@ impl Engine {
                 }
                 let participating = source.participating_labels();
                 let unused = labels.iter().filter(|label| !participating.contains(label)).copied().collect();
-                return Ok(SetInfo {
+                let bbox = bbox6(&self.model, lo, hi)?;
+                return displayed3(&self.model, centroid, Length::DIM).map(|centroid| SetInfo {
                     count: labels.len() as u32,
                     source_node_labels: Some(labels),
                     unused_source_node_labels: unused,
                     name: name.into(),
                     kind: "node".into(),
-                    bbox: bbox6(&self.model, lo, hi)?,
+                    bbox,
                     measure: Valued { value: 0.0, unit: "SI".into() },
                     pressure_area: None,
-                    centroid: displayed3(&self.model, centroid, Length::DIM)?,
+                    centroid,
                 });
             }
         }
@@ -702,25 +704,28 @@ impl Engine {
             crate::mesh::SetKind::Element => (set.elems.iter().map(|&e| elem_measure(mesh, e)).sum(), mesh.dim as i8),
             crate::mesh::SetKind::Node => (0.0, 0),
         };
-        Ok(SetInfo {
+        let bbox = bbox6(m, lo, hi)?;
+        let measure = display(m, measure, Dimension([exponent, 0, 0, 0]))?;
+        let pressure_area = if set.kind == crate::mesh::SetKind::Face {
+            let area = set
+                .faces
+                .iter()
+                .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
+                .sum();
+            Some(display(m, area, Dimension([2, 0, 0, 0]))?)
+        } else {
+            None
+        };
+        displayed3(m, centroid, Length::DIM).map(|centroid| SetInfo {
             source_node_labels: None,
             unused_source_node_labels: Vec::new(),
             name: name.to_string(),
             kind: set.kind.as_str().into(),
             count: set.count() as u32,
-            bbox: bbox6(m, lo, hi)?,
-            measure: display(m, measure, Dimension([exponent, 0, 0, 0]))?,
-            pressure_area: if set.kind == crate::mesh::SetKind::Face {
-                let area = set
-                    .faces
-                    .iter()
-                    .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
-                    .sum();
-                Some(display(m, area, Dimension([2, 0, 0, 0]))?)
-            } else {
-                None
-            },
-            centroid: displayed3(m, centroid, Length::DIM)?,
+            bbox,
+            measure,
+            pressure_area,
+            centroid,
         })
     }
 

@@ -2562,3 +2562,26 @@ that does not make the resonant sample readable. The checked sweep output reject
 publishing, preserving the full native file/hash/revision/catalogue and the original modal
 summary/field. The next valid modal solve is result-2, so rejection consumes no Result ID.
 This case credits the actual amplitude/publication path, not unproved frequency failures.
+
+Additional isolated public reads cover an ordinary unit Box bbox, an imported unit-Tet Mesh
+bbox, a built line-node Set bbox, unused authored source-node bounds, and imported STL
+unit-cube patch areas. Each has an independently known SI extent or planar area; failed
+conversions preserve the complete native file/hash/revision/Result catalogue. They query
+their own capability directly, so an unrelated Model summary does not preempt the check.
+
+The hand-reference boundary uses an authored1N axial force on a1×0.1×0.1m Box,
+E=1e-207Pa and nu=0.49999999. The mathematical bar reference FL/(EA)=1e209m
+exceeds the finite limit of the chosen length unit (factor1e-101). The constrained one-Hex
+near-incompressible calculation has a finite, much smaller locking displacement, and
+Model/Mesh/Result queries remain readable. Verification rejects the independently
+unrepresentable reference without mutating the retained Result. This is a display and
+state-preservation fixture, not a physical large-strain or convergence claim.
+
+The interior-ply boundary uses a symmetric five-ply1m-wide flat cantilever, five1mm plies
+with E=[1,1e6,1,1e6,1]Pa, nu=0, and a1e-5Nm end moment. Symmetry gives B=0;
+D=∫E(z)z²dz, curvature=M/D, and sigma_x(z)=E(z)zM/D. At2/4/8 longitudinal cells,
+the stiff interior-ply outer face agrees with this independent constant-curvature reference
+(≈6.92305056Pa) within1e-7 relative error. Ordinary midplane and outer-surface stress
+remain below0.1Pa. A selected stress-unit factor≈1e-308 admits those fields and rejects
+the interior ply. Failed current reads and new solves preserve the prior original-unit
+Result and consume no Result ID; restoring SI lets the next solve publish result-2.
