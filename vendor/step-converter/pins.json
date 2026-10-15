@@ -1,0 +1,30 @@
+{
+  "version": "occt-import-js-0.0.23+femlab.1",
+  "upstream": {
+    "wrapper": {
+      "commit": "c2148e54b456b571238d35cac037d304053d64b2",
+      "bytes": 4399573,
+      "url": "https://codeload.github.com/kovacsv/occt-import-js/tar.gz/c2148e54b456b571238d35cac037d304053d64b2",
+      "sha256": "2bd3799b2ac56cbf3f0df6300a51c8890e137bd001462702b356f621e33ff192"
+    },
+    "occt": {
+      "version": "7.6.1",
+      "commit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
+      "bytes": 48218968,
+      "url": "https://codeload.github.com/Open-Cascade-SAS/OCCT/tar.gz/d2abb6d844231cb8f29be6894440874a4700e4a5",
+      "sha256": "2715d89a1bc44dfd34dab88f729c445ea93f6b57d6539b0c89614a80ae144a6c"
+    }
+  },
+  "runtimeSource": {
+    "commit": "c55ff404dbe1eb9f263c48b584d5ba627224763a",
+    "bytes": 29652200,
+    "url": "https://codeload.github.com/emscripten-core/emscripten/tar.gz/c55ff404dbe1eb9f263c48b584d5ba627224763a",
+    "sha256": "2b456a63bef514fbad27c44ab53a742b456048d54fdcfbc209985e1fc7f7fb6b"
+  },
+  "emsdk": {
+    "version": "3.1.69",
+    "bytes": 112049,
+    "url": "https://codeload.github.com/emscripten-core/emsdk/tar.gz/refs/tags/3.1.69",
+    "sha256": "7fbf610accce016f8b05196c254cc92162c07571979fbd0b6e5a4c50fded157c"
+  }
+}

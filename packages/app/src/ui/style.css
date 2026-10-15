@@ -343,10 +343,10 @@ textarea:focus {
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
    text labels while giving the flexible model and command fields the remaining room.
-   Keep the wide settings from 1900 px so the import receipt fits beside document actions. */
-@media (min-width: 1180px) and (max-width: 1899px) {
+   Keep the wide settings from 2100 px so the STEP receipt fits beside document actions. */
+@media (min-width: 1180px) and (max-width: 2099px) {
   .topbar {
-    gap: 4px;
+    gap: 2px;
     padding-inline: 8px;
   }
   .logo {
@@ -365,7 +365,7 @@ textarea:focus {
   /* File actions keep their labelled keyboard stops while the two import controls join
      the existing row. Full action names remain available in their labels and tooltips. */
   .topbar > .file-action {
-    width: 32px;
+    width: 28px;
   }
   .file-action-label {
     display: none;
@@ -392,8 +392,17 @@ textarea:focus {
    through 1399 px so Compare and the other fixed-width actions fit before it gives way. */
 @media (min-width: 1180px) and (max-width: 1399px) {
   .topbar {
-    gap: 1px;
+    gap: 0;
     padding-inline: 6px;
+  }
+  /* STEP adds an import action and a historical receipt beside the Abaqus actions.
+     Keep every labelled keyboard stop, with at least 24 px targets, in this row. */
+  .topbar > .tbutton {
+    min-width: 24px;
+    padding-inline: 2px;
+  }
+  .topbar > .file-action {
+    width: 24px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
      rather than the project name, which would otherwise collapse to nothing: the chip is
@@ -410,7 +419,7 @@ textarea:focus {
     min-width: 80px;
   }
   .topbar > .segmented button {
-    padding-inline: 5px;
+    padding-inline: 3px;
   }
 }
 

@@ -730,7 +730,7 @@ describe('the shell', () => {
   });
 
   // Issue #41: the start screen leads with the assistant composer, then New project, then the
-  // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
+  // Recent list, then the import/example/tutorial cards. Each carries its registry Command.
   it('renders the start screen in the issue’s reading order before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
@@ -750,6 +750,7 @@ describe('the shell', () => {
       'project.new',
       'project.new',
       'file.open',
+      'form.open',
       'form.open',
       'panel.toggle',
       'panel.toggle',

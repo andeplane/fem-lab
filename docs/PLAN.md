@@ -264,7 +264,7 @@ constitute delivery of its fillet/chamfer/hollowing requirements.
 | # | Task | Job |
 |---|---|---|
 | 7.1 | General existing-edge fillet/chamfer and CAD hollowing: **deferred, no committed release** (ADR 0030). Current sketches, extrusion/revolution and booleans retain their implemented engine paths | J2.1 |
-| 7.2 | Existing STL `geometry.import`; lazy host STEP conversion to the same portable triangle-geometry Command is tracked in [#351](https://github.com/andeplane/fem-lab/issues/351). Conversion does not retain editable B-rep or enable exact STEP export | J2.3, J15.2 |
+| 7.2 | STEP import through the lazy host tessellator ([#351](https://github.com/andeplane/fem-lab/issues/351), ADR 0029), issuing portable `geometry.import` triangle geometry; exact B-rep is discarded. STL uses the same imported geometry and normal mesher workflow. Exact CAD editing and STEP export remain deferred under ADR 0030 | J2.3, J15.2 |
 | 7.3 | Feature-aware CAD defeaturing: **deferred** (ADR 0030). Existing explicit cuts are editable/removable; import `simplifyBelow` is mesh simplification, not semantic fillet/hole recognition | J2.4 |
 | 7.4 | Gmsh-wasm as an optional Mesher if graded/hex/tet10-native meshing is worth GPL and 12–45 MB; decision recorded as an ADR then | J4.2, J4.4 |
 | 7.5 | Assembly of parts with ties (uses 6.5) | J2.7 |

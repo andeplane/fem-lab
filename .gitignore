@@ -15,3 +15,5 @@ packages/registry/src/generated/script-declarations*.json
 /infra/google/__pycache__/
 
 /.firebase/
+/vendor/step-converter/corresponding-source.tar.gz
+/packages/app/public/third-party/step-converter/

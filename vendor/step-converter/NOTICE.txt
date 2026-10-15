@@ -1,0 +1,34 @@
+FEM Lab STEP converter: occt-import-js-0.0.23+femlab.1
+
+This standalone converter uses and is based on facilities provided by Open CASCADE
+Technology software. It contains occt-import-js wrapper source at
+c2148e54b456b571238d35cac037d304053d64b2 and Open CASCADE Technology 7.6.1 at
+d2abb6d844231cb8f29be6894440874a4700e4a5. Both are distributed under LGPL 2.1;
+OCCT additionally grants the exception in licenses/OCCT_LGPL_EXCEPTION.txt.
+
+Copyright and license notices in the full source trees are preserved in the
+complete corresponding-source.tar.gz, distributed alongside the converter.
+Full LGPL texts are supplied separately for the wrapper and OCCT in licenses/.
+The OCCT exception permits specified header-derived object code; it is not
+treated as a blanket exception for linking the kernel into this executable.
+
+FEM Lab modifications dated 2026-10-15:
+1. Reject transfer warnings/failures, omitted recognized roots, unsupported free topology,
+   incomplete meshing and missing face/output geometry; return structured failure
+   and a versioned completeness receipt; enforce input/triangle ceilings. Face
+   counts describe post-transfer TopoDS occurrences, not all original STEP entities.
+2. Emit a modular ES-module entry for independently replaceable Worker/Node use.
+
+These converter modifications are distributed under LGPL 2.1. The separate FEM
+engine/application remains under its own license. No warranty is provided; see
+the included license texts. The public JS receipt/arrays are the replacement
+interface. Complete sources, patches, build recipe and replacement instructions
+are included in the accompanying source kit and vendor README.
+The separate FEM Lab build/source-packaging recipes are under the repository's
+MIT license, reproduced in licenses/FEM-Lab-MIT.txt with its copyright notice.
+
+Generated JavaScript glue and linked C/C++ runtime facilities come from Emscripten
+3.1.69 at c55ff404dbe1eb9f263c48b584d5ba627224763a. The full Emscripten preferred
+source is included in the source kit. Its LICENSE includes Emscripten MIT/NCSA
+and Node-derived path-library notices; additional musl, LLVM compiler-rt,
+libc++, libc++abi and libunwind license/copyright texts are supplied in licenses/.

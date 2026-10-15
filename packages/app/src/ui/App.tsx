@@ -20,6 +20,7 @@ import { ComparisonPlaybackControls } from './ComparisonPlayback';
 import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
 import { ImportAbaqus, AbaqusImportReport } from './ImportAbaqus';
+import { ImportStep, StepImportReport, STEP_IMPORT_DRAFT } from './ImportStep';
 import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
@@ -86,7 +87,7 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   else if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
   else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
   else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
-  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects', 'abaqus', 'abaqusReport', 'account']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects', 'abaqus', 'abaqusReport', 'step', 'stepReport', 'account']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
 }
 
 const doc = schema as unknown as EngineSchema;
@@ -154,6 +155,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <span class="file-action-label" aria-hidden="true">Import .inp</span><span class="file-action-icon" aria-hidden="true">⇥</span>
       </Cmd>
       {s.abaqusReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'abaqusReport', open: true }} title="View this import’s source units, counts and Set mappings" label="Abaqus report"><span class="file-action-label" aria-hidden="true">Abaqus report</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
+      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton file-action" args={{ command: 'geometry.importStep', args: STEP_IMPORT_DRAFT }} title="Import STEP geometry" label="Import STEP geometry"><span class="file-action-label" aria-hidden="true">Import STEP</span><span class="file-action-icon" aria-hidden="true">◇</span></Cmd>
+      {s.stepReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'stepReport', open: true }} title="Last successful STEP conversion receipt" label="STEP receipt"><span class="file-action-label" aria-hidden="true">STEP receipt</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
       <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
@@ -755,7 +758,7 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
                 <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
-              <SchemaForm s={s.form?.cmd === 'file.importAbaqus' ? { ...s, form: null } : s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <SchemaForm s={s.form && ['file.importAbaqus', 'geometry.importStep'].includes(s.form.cmd) ? { ...s, form: null } : s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
               <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
@@ -763,7 +766,7 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
       ) : (
         <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <Start s={s} dispatch={dispatch} />
-          {s.form && s.form.cmd !== 'file.importAbaqus' ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+          {s.form && !['file.importAbaqus', 'geometry.importStep'].includes(s.form.cmd) ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
         </div>
       )}
       <Examples s={s} dispatch={dispatch} />
@@ -771,6 +774,8 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
       <AccountPanel s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <ImportAbaqus s={s} dispatch={dispatch} />
+      <ImportStep s={s} dispatch={dispatch} />
+      <StepImportReport s={s} dispatch={dispatch} />
       <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />

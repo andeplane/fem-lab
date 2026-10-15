@@ -159,6 +159,9 @@ export interface UiState {
   benchmark: ActiveBenchmark | null;
   /** Informational import receipt, scoped to this live project; portable provenance is in its source. */
   abaqusReport: AbaqusConversionReport | null;
+  stepImport: import('./step-import').StepImportState | null;
+  /** Immutable last-successful conversion receipt; later Model edits do not update it. */
+  stepReport: import('@femlab/registry').StepReport | null;
   /** The Step a solve is running for, `null` when none is. */
   solving: string | null;
   /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
@@ -298,6 +301,8 @@ export const initialState: UiState = {
   result: null,
   benchmark: null,
   abaqusReport: null,
+  stepImport: null,
+  stepReport: null,
   solving: null,
   fieldKey: 'vonMises',
   legend: null,

@@ -2826,3 +2826,45 @@ existing primary-History variants pass on authenticated frozen-source native/WAS
 
 Production two-pane scrubbing/playback/browser and full strict coverage acceptance
 remain required by #286's linked plan before closing it.
+
+### STEP source geometry and converter-free replay (#351)
+
+These host conversion gates use directly hand-authored AP203 STEP fixtures in
+`packages/app/test/fixtures/step/`. The source records exact planes/circles/a cylindrical
+surface and shared topological edges, rather than a polygon exported by the tested kernel.
+`tools/test-step-import.mjs` calls the pinned patched converter and the actual checked
+registry adapter, then queries the ordinary engine geometry. This is a host conversion
+Benchmark; it does not add an OCCT dependency or original-STEP reader to `femlab bench`.
+
+| Source | Independent SI bounds | Exact volume (m³) | Exact surface area (m²) |
+| --- | --- | --- | --- |
+| 1 × 2 × 3 metre box | [0,0,0] to [1,2,3] | 6 | 22 |
+| 1 × 2 × 3 millimetre box | [0,0,0] to [0.001,0.002,0.003] | 6e-9 | 22e-6 |
+| 1 × 2 × 3 inch box | [0,0,0] to [0.0254,0.0508,0.0762] | 0.000098322384 | 0.01419352 |
+| Radius 1 m, height 2 m cylinder | exact source: [-1,-1,0] to [1,1,2] | 2π | 6π |
+
+Box errors use an arithmetic tolerance scaled by the declared unit. The explicit mm and
+conversion-based inch units change only the unit declaration of the independent source;
+they are not selected by display preferences. Curved tessellation bounds may lie inside
+the source cylinder's x/y extrema, so they are tested within physical deflection rather
+than compared to an exact extremum that the polygon need not sample.
+
+At absolute linear deflections 0.1, 0.025 and 0.00625 m, with coarse angular deflection
+π rad so it does not force finer segmentation, the cylinder checks decreasing analytic
+volume/area errors. The actual lateral facets independently establish their maximum radial
+sag `d`: the closest projected point lies on an edge unless the facet crosses the axis,
+which is rejected. The convex inscribed cross-section contains radius `1-d`, giving the
+conservative volume-error bound `2π(2d-d²)`. Passing `linearDeflection=d` alone is not treated
+as a proof of that geometric premise. Source tolerances can supersede a requested value.
+
+For the regular n-gon prism produced by these source circles, the additional closed forms
+are `V=n sin(2π/n)` and `A=4n sin(π/n)+n sin(2π/n)`. Circumferential chord length
+`h=2 sin(π/n)` gives second-order volume convergence, with error/h² tending to π/3.
+These formulas are independent of the converter and the engine's triangle integration.
+
+Each converted geometry also follows the normal Material, predicate-named face and lattice
+mesh workflow, requiring a nonempty Mesh and face Set. The resulting ordinary ModelFile
+and Journal are copied into an isolated directory with only a native executable and the
+checked FEM Node module pair. `tools/step-replay-only.mjs` replays native one/four threads
+and Node WASM, comparing every Journal hash and the complete Model, Mesh and resolved Set.
+The replay directory contains no original STEP, converter module or dependency tree.
