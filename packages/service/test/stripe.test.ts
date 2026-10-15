@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import {describe,expect,it} from 'vitest';
-import {stripeGateway,stripePayments} from '../src/stripe';
+import {billingTaxMode,stripeGateway,stripePayments} from '../src/stripe';
 describe('signed Stripe transport',()=>{
   it('verifies original bytes and uses the injected signature-age clock',()=>{
     const stripe=new Stripe('fixture'),gateway=stripeGateway(stripe,'whsec_fixture'),now=new Date('2026-10-14T12:00:00Z');
@@ -39,7 +39,7 @@ describe('signed Stripe transport',()=>{
       if(path.startsWith('/v1/subscription_schedules'))return Response.json({id:'sub_sched_wire',subscription:'sub_wire'});
       throw new Error('Unexpected payment fixture route');
     };
-    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test');
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','automatic');
     expect(await payments.customer({id:'11111111-1111-4111-8111-111111111111',email:'owned@example.com',createdAt:'2026-10-14T12:00:00.000Z',status:'active'},'customer-key')).toBe('cus_wire');
     expect(await payments.price('price_plus')).toMatchObject({amount:4900,interval:'month'});
     const subscription=(await payments.subscriptions('cus_wire'))[0]!;
@@ -49,8 +49,39 @@ describe('signed Stripe transport',()=>{
     const checkout=requests.find(row=>row.path==='/v1/checkout/sessions')!;
     expect(checkout.key).toBe('checkout-key');expect(checkout.body.get('customer')).toBe('cus_wire');expect(checkout.body.get('line_items[0][price]')).toBe('price_plus');
     expect(checkout.body.get('automatic_tax[enabled]')).toBe('true');expect(checkout.body.get('consent_collection[terms_of_service]')).toBe('required');
+    expect(checkout.body.get('tax_id_collection[enabled]')).toBe('true');
     const phase=requests.find(row=>row.path==='/v1/subscription_schedules/sub_sched_wire')!;
     expect(phase.key).toBe('plan-key');expect(phase.body.get('phases[0][end_date]')).toBe('200');expect(phase.body.get('phases[1][start_date]')).toBe('200');
     expect(phase.body.get('phases[1][items][0][price]')).toBe('price_pro');expect(phase.body.get('proration_behavior')).toBe('none');
+  });
+  it.each([['automatic','true'],['not_collecting','false']] as const)('sends the explicit %s collection decision to hosted Checkout',async(mode,expected)=>{
+    const requests:URLSearchParams[]=[];
+    const fetcher:typeof fetch=async(_url,init)=>{
+      requests.push(new URLSearchParams(String(init?.body??'')));
+      return Response.json({id:'cs_tax',url:'https://checkout.stripe.com/c/tax',status:'open',expires_at:2000});
+    };
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test',mode);
+    await payments.checkout({customer:'cus_tax',price:'price_plus',accountId:'account-one',successUrl:'https://femlab.app/?billing=success',cancelUrl:'https://femlab.app/?billing=canceled',expiresAt:2000,key:'checkout-tax-key'});
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.get('automatic_tax[enabled]')).toBe(expected);
+    expect(requests[0]!.get('tax_id_collection[enabled]')).toBe('true');
+    expect(requests[0]!.get('consent_collection[terms_of_service]')).toBe('required');
+  });
+  it('refuses pending checkout before making a Stripe request while preserving Portal access',async()=>{
+    let requests=0;
+    const fetcher:typeof fetch=async()=>{requests++;return Response.json({url:'https://billing.stripe.com/p/session/fixture'})};
+    const payments=stripePayments(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','pending');
+    await expect(payments.checkout({customer:'cus_tax',price:'price_plus',accountId:'account-one',successUrl:'https://femlab.app/?billing=success',cancelUrl:'https://femlab.app/?billing=canceled',expiresAt:2000,key:'checkout-tax-key'})).rejects.toMatchObject({code:'billing-tax-pending',status:503});
+    expect(requests).toBe(0);
+    expect(await payments.portal('cus_tax','https://femlab.app/')).toBe('https://billing.stripe.com/p/session/fixture');
+    expect(requests).toBe(1);
+  });
+  it('rejects enabled runtime billing without an explicit tax decision, but allows disabled webhook preparation',()=>{
+    for(const value of [undefined,'pending','unknown','']){
+      expect(()=>billingTaxMode(value,true)).toThrow('BILLING_TAX_MODE');
+      expect(billingTaxMode(value,false)).toBe('pending');
+    }
+    expect(billingTaxMode('automatic',true)).toBe('automatic');
+    expect(billingTaxMode('not_collecting',true)).toBe('not_collecting');
   });
 });
