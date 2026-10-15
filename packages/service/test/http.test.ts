@@ -59,9 +59,18 @@ describe('headless service host', () => {
     const url = await host(async () => true, { origins: ['https://femlab.app'] });
     const allowed = await fetch(`${url}/v1/account`, { method: 'OPTIONS', headers: { origin: 'https://femlab.app' } });
     expect(allowed.status).toBe(204); expect(allowed.headers.get('access-control-allow-origin')).toBe('https://femlab.app');
+    expect(allowed.headers.get('access-control-allow-headers')).toContain('x-femlab-credit-unit');
     expect(allowed.headers.get('access-control-allow-credentials')).toBeNull();
     const refused = await fetch(`${url}/v1/account`, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
     expect(refused.status).toBe(403); expect(refused.headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('rejects unknown credit units before account, claim or generation work',async()=>{
+    let called=0;const url=await host(async()=>true,{account:async()=>{called++;throw new Error('must not run')}});
+    for(const path of ['/v1/account','/v1/account/free-allowance','/v1/ai/completions','/chat/completions']){
+      const response=await fetch(url+path,{method:path==='/v1/account'?'GET':'POST',headers:{'x-femlab-credit-unit':'usd-milli-v9','content-type':'application/json'},...(path==='/v1/account'?{}:{body:'{}'})});
+      expect(response.status).toBe(422);expect(await response.json()).toMatchObject({code:'unsupported-credit-unit'});
+    }
+    expect(called).toBe(0);
   });
   it('passes monthly claims through authenticated ownership and redacts failures without implicit reads',async()=>{
     let called=0;const view={status:'eligible' as const,credits:6666666,periodStartsAt:'2026-10-01T00:00:00.000Z',periodEndsAt:'2026-11-01T00:00:00.000Z'};

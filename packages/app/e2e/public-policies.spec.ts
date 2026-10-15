@@ -8,7 +8,9 @@ test.describe('@cpu public policies',()=>{
     await expect(page.getByRole('heading',{name:'Terms of service',exact:true})).toBeVisible();
     await expect(page.getByRole('table')).toContainText('Plus');
     await expect(page.getByRole('table')).toContainText('$49 USD / month');
-    await expect(page.getByRole('table')).toContainText('50,000,000');
+    await expect(page.getByRole('table')).toContainText('7,500');
+    await expect(page.getByRole('table')).toContainText('12,000');
+    await expect(page.getByRole('table')).toContainText('37,500');
     await expect(page.locator('main')).toContainText('Hafreager kode & koblinger');
     await expect(page.locator('address')).toContainText('Seller and FEM Lab operator');
     await expect(page.locator('main')).toContainText('Hafreager kode & koblinger sells and provides your FEM Lab subscription, whether you purchase directly or through Stripe Managed Payments.');
@@ -20,7 +22,7 @@ test.describe('@cpu public policies',()=>{
     await expect(page.locator('main')).not.toContainText('its merchant of record sells that subscription');
     await expect(page.locator('main')).toContainText('do not renew automatically');
     await expect(page.locator('main')).toContainText('Signing up starts with zero AI credits.');
-    await expect(page.locator('main')).toContainText('explicitly claim 6,666,666 weighted AI credits');
+    await expect(page.locator('main')).toContainText('explicitly claim 5,000 AI credits');
     await expect(page.locator('main')).toContainText('00:00 UTC on the first day of the next month');
     await expect(page.locator('main')).toContainText('one claim per reviewed person and month');
     await expect(page.locator('main')).toContainText('free monthly credits are not added to a paid allowance');
