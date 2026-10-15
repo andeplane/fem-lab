@@ -775,6 +775,9 @@ returns `export.unavailable`. It writes no Materials, Constraints, Loads or Step
 
 Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
+`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
+strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
+retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
 `formulation: full` is the textbook linear element that locks in bending: keep the
 default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
 owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
@@ -1712,6 +1715,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Full integration: the textbook linear element, which locks in bending.",
       "type": "string",
       "const": "full"
+    },
+    {
+      "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+      "type": "string",
+      "const": "mean-dilatation"
     }
   ]
 }
@@ -1860,7 +1868,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Standard full-integration 3D solids; interpolation and source connectivity are retained.",
+  "description": "Authored 3D solid families; interpolation and source connectivity are retained.\nHex8 uses the explicit mesh formulation; other kinds retain standard full integration.",
   "type": "string",
   "enum": [
     "tet4",
@@ -2311,7 +2319,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10, Hex8 and Hex20 use standard\nfull integration. Requires solid3d,\nunchanged authored interpolation (order 1), formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full\nintegration or explicit mean-dilatation (B-bar). Requires solid3d,\nunchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
       "type": "object",
       "properties": {
         "body": {
@@ -5999,7 +6007,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar\nstrain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals\nretain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -8042,6 +8050,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Full integration: the textbook linear element, which locks in bending.",
       "type": "string",
       "const": "full"
+    },
+    {
+      "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+      "type": "string",
+      "const": "mean-dilatation"
     }
   ]
 }
@@ -8241,7 +8254,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Standard full-integration 3D solids; interpolation and source connectivity are retained.",
+  "description": "Authored 3D solid families; interpolation and source connectivity are retained.\nHex8 uses the explicit mesh formulation; other kinds retain standard full integration.",
   "type": "string",
   "enum": [
     "tet4",
@@ -8745,7 +8758,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10, Hex8 and Hex20 use standard\nfull integration. Requires solid3d,\nunchanged authored interpolation (order 1), formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full\nintegration or explicit mean-dilatation (B-bar). Requires solid3d,\nunchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
       "type": "object",
       "properties": {
         "body": {

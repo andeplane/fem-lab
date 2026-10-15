@@ -3024,3 +3024,47 @@ conforming-contact certificate.
 A positive control applies the determinant-one shear to tetrahedra in opposite
 y/z quadrants: their complete shared quadratic edge is
 `y=0,z=x(1-x)/4`, with midside node `(1/2,0,1/16)` retained.
+
+## Explicit mean-dilatation Hex8 (issue #673)
+
+`mean-dilatation` is the eight-point Hex8 with volume-averaged trace of strain, matching
+the small-strain B-bar definition used for Abaqus C3D8. Full integration and saved
+Full Journals retain their previous pointwise strain. Other supported solid kinds keep
+full integration in a mixed source.
+
+- On `[-1,1]^3`, the exact nodal field `u=(xy,0,0)` has B-bar strain
+  `(2y/3,-y/3,-y/3,x,0,0)` in engineering Voigt order. Its energy is `28 mu/9`;
+  pointwise full integration adds `4 K/3`. This distinguishes the formulation without a
+  second implementation as its oracle.
+- On `F=(xi,eta,zeta(1+b xi)+a xi eta)`, `a=.3,b=.2`, with nodal
+  `u=(eta zeta,0,0)`, the exact physical-volume mean divergence is `-a/3`, while the
+  centroid divergence is zero. Recovered normal/shear strain is checked against the
+  analytical derivatives and isotropic stress, including the nonconstant Jacobian weight.
+- Every constant strain, rigid translation and rigid rotation is reproduced on a
+  distorted Hex8. Its stiffness is symmetric with exactly six zero eigenvalues and
+  eighteen positive eigenvalues: no unstabilized hourglass modes.
+- Interpolate `u=(xy,0,0)` on a unit cube at 2, 4 and 8 subdivisions per axis. The B-bar
+  strain's exact L2 error is `h/6`; the observed strain rate is one under halving h.
+- Other supported element kinds produce the identical full-integration matrix under
+  `mean-dilatation`. A Hex8 finite-deformation request returns structured unsupported.
+
+The unchanged source-published Abaqus/CAE Job-11 case (275 nodes, 160 C3D8 cells,
+source SHA-256 `4c68bd4b4fa0f27423a65854c49f0f2109f26e187222db302b077340433225af`)
+compares all 825 displacement components against the author report. The independent
+corpus declared `1e-13 m + 2e-6 * max(abs(U_reference))` before this fix: `7.16712e-10 m`.
+The actual public native CLI with B-bar reaches a maximum error `4.980294e-10 m`,
+compared with `1.500332e-5 m` under the retained Full formulation. Original node coordinates
+and identities agree exactly, the reaction sums to 4 MN within `1e-4 N`, and native runs
+at 1 and 4 threads have identical displacement arrays. The network-free Rust regression
+uses the separately LGPLv3-licensed originals and transcribed author probes in
+`tests/fixtures/third-party/brief-finite-element-net/case06/`.
+
+A stricter per-token diagnostic retains four components just outside half a printed digit
+plus `1e-12 m`: `5.134347e-11 m` error versus `5.1e-11 m` allowed. Casting the computed
+values to IEEE binary32 makes all 825 meet that stricter policy, consistent with a
+single-precision stored author result; the original storage precision is unknown. Neither
+the author values nor either declared tolerance is changed.
+
+The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
+checking the closed-form extension, Poisson contraction and recovered stress through the
+actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.

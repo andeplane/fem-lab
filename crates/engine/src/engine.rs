@@ -1194,16 +1194,16 @@ impl Engine {
                 });
                 if imported
                     && (order != 1
-                        || formulation != crate::command::Formulation::Full
+                        || formulation == crate::command::Formulation::IncompatibleModes
                         || simplices.unwrap_or(false)
                         || refinement.is_some())
                 {
                     return Err(Error::new(
                         ErrorCode::Unsupported,
-                        "imported sources require unchanged authored interpolation (order 1), full integration and no split/refinement",
+                        "imported sources require unchanged authored interpolation (order 1), full or mean-dilatation integration and no split/refinement",
                     )
                     .at("mesher")
-                    .suggest("mesh.set with order 1, formulation full, simplices false and no refinement"));
+                    .suggest("mesh.set with order 1, formulation full or mean-dilatation, simplices false and no refinement"));
                 }
                 if imported && (!self.model.bodies.is_empty() || self.model.idealisation.dim() != 3) {
                     return Err(Error::new(

@@ -26,12 +26,12 @@ function nativeQueries(file, threads, queries) {
 }
 
 try {
-  for (const [fixture, unitLength, authored, active, unused, bounds] of [
-    ['sparse-label-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1]],
-    ['brick-sets.inp', '1 mm', 8, 8, [], [0, 0, 0, 1, 2, 3]],
-    ['far-unused-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1]],
-    ['signed-zero-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1]],
-    ['signed-zero-hex.inp', '1 mm', 8, 8, [], [0, 0, 0, 1, 2, 3]],
+  for (const [fixture, unitLength, authored, active, unused, bounds, formulation] of [
+    ['sparse-label-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1], 'full'],
+    ['brick-sets.inp', '1 mm', 8, 8, [], [0, 0, 0, 1, 2, 3], 'mean-dilatation'],
+    ['far-unused-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1], 'full'],
+    ['signed-zero-tet.inp', '1 m', 5, 4, [99], [0, 0, 0, 1, 1, 1], 'full'],
+    ['signed-zero-hex.inp', '1 mm', 8, 8, [], [0, 0, 0, 1, 2, 3], 'mean-dilatation'],
   ]) {
     const text = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus', fixture), 'utf8');
     const conversionQuery = request(text, unitLength);
@@ -46,7 +46,7 @@ try {
       assert.deepEqual(converted.report.bbox.map(value => value.value), bounds);
       assert.equal(converted.report.analysisConfigured, false);
       assert.deepEqual(converted.commands.map(command => command.cmd), ['model.new', 'model.setIdealisation', 'mesh.set']);
-      assert.equal(converted.commands[2].formulation, 'full');
+      assert.equal(converted.commands[2].formulation, formulation);
       assert.equal(converted.commands[2].order, 1);
       assert.equal(converted.commands[2].mesher.provenance.sha256, conversionQuery.sha256);
       for (const threads of [1, 4]) assert.deepEqual(nativeQueries(empty, threads, [conversionQuery]), [converted]);
