@@ -102,14 +102,17 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
     let missing = || Error::not_found(kind.label(), name, &m.names(kind)).suggest("query.objects");
     Ok(match kind {
         ObjectKind::Body => {
-            if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
-                &m.mesh
+            if let Some(crate::model::MeshSettings {
+                mesher: crate::model::MesherSettings::Imported(source),
+                formulation,
+                ..
+            }) = &m.mesh
             {
                 if source.body == name || source.regions.contains_key(name) {
                     return Ok(Command::MeshSet {
                         mesher: MesherSpec::Imported(crate::imported::spec(source)),
                         order: Some(1),
-                        formulation: Some(Formulation::Full),
+                        formulation: Some(*formulation),
                         simplices: Some(false),
                         refinement: None,
                     });

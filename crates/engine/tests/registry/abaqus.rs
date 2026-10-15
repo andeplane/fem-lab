@@ -567,3 +567,41 @@ fn abaqus_c3d8_selects_explicit_mean_dilatation_but_existing_full_journals_survi
         assert_eq!(opened.mesh().unwrap().mesh, e.mesh().unwrap().mesh);
     }
 }
+
+#[test]
+fn abaqus_converted_hex8_root_and_region_definitions_preserve_formulation_and_model_hash() {
+    for formulation in ["mean-dilatation", "full"] {
+        let mut e = engine();
+        let conversion = converted(&mut e, HEX, "1 mm");
+        for command in conversion.commands.iter().take(2) {
+            run(&mut e, &serde_json::to_string(command).unwrap()).unwrap();
+        }
+        let mut source = serde_json::to_value(&conversion.commands[2]).unwrap();
+        source["mesher"]["regions"] = json!({"region":[100]});
+        source["formulation"] = json!(formulation);
+        run(&mut e, &source.to_string()).unwrap();
+        for command in [
+            r#"{"cmd":"material.add","name":"default","E":"200 GPa","nu":0.25}"#,
+            r#"{"cmd":"material.add","name":"override","E":"100 GPa","nu":0.25}"#,
+            r#"{"cmd":"material.assign","material":"default","bodies":["part"]}"#,
+            r#"{"cmd":"material.assign","material":"override","bodies":["region"]}"#,
+        ] {
+            run(&mut e, command).unwrap();
+        }
+        let before = e.export_file().model;
+        let hash = e.model_hash();
+        let built = e.mesh().unwrap().clone();
+        for name in ["part", "region"] {
+            let definition = read(&mut e, json!({"query":"query.definition","kind":"body","name":name}));
+            assert_eq!(definition["command"]["formulation"], formulation);
+            run(&mut e, &definition["command"].to_string()).unwrap();
+            assert_eq!(e.model_hash(), hash, "{name}: {formulation}");
+            assert_eq!(e.export_file().model, before);
+            assert_eq!(e.mesh().unwrap(), &built);
+        }
+        let file = e.export_file();
+        let mut replay = engine();
+        pollster::block_on(replay.replay(&file.journal.entries, true, true)).unwrap();
+        assert_eq!(replay.export_file().model, before);
+    }
+}
