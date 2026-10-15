@@ -126,7 +126,13 @@ jobs:
       - run: npm ci
       - name: install pinned browser atomics toolchain
         run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
+      - name: wasm32 STL length regressions with debug overflow checks
+        run: |
+          node tools/build-wasm.mjs --dev
+          node tools/test-stl-wasm.mjs debug
       - run: node tools/build-wasm.mjs
+      - name: wasm32 STL length regressions in the optimized shipping module
+        run: node tools/test-stl-wasm.mjs optimized
       - run: node tools/build-wasm-threads.mjs
       - run: cargo build -p femlab --release
       - run: cargo test --locked -p femlab-project-io

@@ -108,9 +108,11 @@ const BINARY_HEADER: usize = 84;
 /// by the file's own length: a binary STL is exactly `84 + 50 n` bytes for its declared `n`.
 pub fn read_stl(bytes: &[u8]) -> Result<Soup, Error> {
     if bytes.len() >= BINARY_HEADER {
-        let count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
-        if bytes.len() == BINARY_HEADER + BINARY_FACET * count {
-            return read_binary(bytes, count);
+        let count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]);
+        // Even u32::MAX facets fit this u64 calculation. Candidate count bytes also
+        // belong to ordinary ASCII files, so never overflow usize before fallback.
+        if bytes.len() as u64 == BINARY_HEADER as u64 + BINARY_FACET as u64 * u64::from(count) {
+            return read_binary(bytes, count as usize);
         }
     }
     read_ascii(bytes)
