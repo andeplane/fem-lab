@@ -5,7 +5,7 @@ use std::path::Path;
 
 use clap::ValueEnum;
 use femlab_engine::command::ExportFormat;
-use femlab_engine::query::Output;
+use femlab_engine::query::{Output, Query, QueryResult};
 use femlab_engine::Command;
 
 use crate::run::{bounded_model_file_text, dispatch, new_engine, read_input};
@@ -65,9 +65,11 @@ pub fn export(file: &Path, out: Option<&Path>, opts: ExportOptions) -> i32 {
         return 1;
     }
     let text = match opts.format.engine_format() {
-        None => match engine.snapshot() {
-            Ok(snapshot) if opts.format == ExportKind::Script => snapshot.script,
-            Ok(snapshot) => match bounded_model_file_text(&snapshot.file) {
+        None => match engine.query(Query::Document {}) {
+            Ok(QueryResult::Document(document)) if opts.format == ExportKind::Script => {
+                document.file.journal.as_script(&document.file.engine_version)
+            }
+            Ok(QueryResult::Document(document)) => match bounded_model_file_text(&document.file) {
                 Ok(text) => text,
                 Err(error) => {
                     eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
@@ -75,7 +77,16 @@ pub fn export(file: &Path, out: Option<&Path>, opts: ExportOptions) -> i32 {
                 }
             },
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                return 1;
+            }
+            Ok(_) => {
+                let error = femlab_engine::Error::new(
+                    femlab_engine::ErrorCode::Internal,
+                    "query.document did not return a Model document",
+                )
+                .at("query.document");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
                 return 1;
             }
         },

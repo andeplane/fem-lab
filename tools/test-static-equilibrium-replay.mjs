@@ -139,28 +139,21 @@ function query(engine, input) { return JSON.parse(engine.query(JSON.stringify(in
 async function dispatch(engine, input) { await engine.dispatch(JSON.stringify(input)); }
 function selected(engine) { return query(engine, { query: 'query.result', step: 'static' }); }
 function snapshot(engine, includeSelected = true, readableModel = true) {
-  let authored;
-  if (readableModel) {
-    authored = { file: engine.export_file(), revision: engine.revision(), hash: engine.model_hash() };
-  } else {
-    // #580 rejects the deliberately unreadable authored display summary. #591 tracks
-    // checked file export's dependence on that summary; this test does not bypass it.
+  const authored = { file: engine.export_file(), revision: engine.revision(), hash: engine.model_hash() };
+  if (!readableModel) {
+    // #591's checked SI document read remains exportable while display snapshots stay strict.
     const unreadable = error => error.code === 'unit.display' && typeof error.where === 'string';
-    assert.throws(() => engine.export_file(), unreadable);
     assert.throws(() => engine.snapshot(), unreadable);
-    authored = {
-      journal: query(engine, { query: 'query.journal' }),
-      loads: ['positive', 'negative'].map(name => query(engine, { query: 'query.definition', kind: 'load', name })),
-    };
   }
   return {
     ...authored,
+    ...(!readableModel ? { unreadableDisplay: true } : {}),
     records: query(engine, { query: 'query.results' }),
     ...(includeSelected ? { selected: selected(engine) } : {}),
   };
 }
 function unchanged(engine, before) {
-  assert.deepEqual(snapshot(engine, Object.hasOwn(before, 'selected'), Object.hasOwn(before, 'file')), before,
+  assert.deepEqual(snapshot(engine, Object.hasOwn(before, 'selected'), !Object.hasOwn(before, 'unreadableDisplay')), before,
     'a rejected boundary operation must preserve authored state and the selected Result');
 }
 function boundaryError(error, code, display = false) {

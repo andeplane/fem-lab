@@ -1,11 +1,65 @@
 import { expect, it } from 'vitest';
-import { MAX_MODEL_FILE_BYTES } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, type ReadRequest } from '@femlab/registry';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { loadEngine } from '../src/engine';
+import { sessionEngine } from '../src/session-engine';
 import { createRegistry } from '../src/server';
 const here = fileURLToPath(new URL('../src', import.meta.url));
 const body = { cmd: 'geometry.addBox', name: 'shared', size: ['1 m', '1 m', '1 m'] };
 const remove = { cmd: 'geometry.remove', name: 'shared' };
+
+it('rejects a checked endpoint returning a Journal for the document read without changing the Model', async () => {
+  const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../../app/src/generated/wasm/femlab_engine_wasm');
+  let misrouted = false;
+  class MisroutedOwner extends wasm.SessionEngine {
+    override query(json: string): string {
+      const request = JSON.parse(json) as ReadRequest;
+      if (misrouted && request.query.query === 'query.document') request.query = { query: 'query.journal' };
+      return super.query(JSON.stringify(request));
+    }
+  }
+  const engine = sessionEngine({ SessionEngine: MisroutedOwner, PreparedEngine: wasm.PreparedEngine }, 1, 'misrouted-document');
+  const handle = await engine.acquire();
+  try {
+    await handle.dispatch({ cmd: 'model.new', name: 'preserved document' });
+    await handle.dispatch(body);
+    const before = await handle.modelFile();
+    const journal = await handle.query({ query: 'query.journal' });
+    misrouted = true;
+    await expect(handle.modelFile()).rejects.toMatchObject({ code: 'internal', cause: 'query.document did not return a Model file' });
+    expect(await handle.query({ query: 'query.journal' })).toEqual(journal);
+    misrouted = false;
+    expect(await handle.modelFile()).toEqual(before);
+  } finally { await handle.release(); }
+});
+
+it('reads the authoritative SI file under unreadable display units and fences its old request after replacement', async () => {
+  const engine = loadEngine(here);
+  const handle = await engine.acquire();
+  const commands = JSON.parse(readFileSync(new URL('../../../crates/engine/tests/fixtures/document-display-overflow.json', import.meta.url), 'utf8')) as Record<string, unknown>[];
+  let replacement: Awaited<ReturnType<typeof engine.acquire>> | undefined;
+  try {
+    for (const command of commands) await handle.dispatch(command);
+    const file = await handle.modelFile();
+    expect(file).toMatchObject({ model: { units: { length: 'mm', force: 'mN' }, loads: expect.arrayContaining([
+      expect.objectContaining({ name: 'plus', total: [1e307, 0, 0] }), expect.objectContaining({ name: 'minus', total: [-1e307, 0, 0] }),
+    ]) } });
+    const document = await handle.query({ query: 'query.document' });
+    expect(document).toMatchObject({ file, revision: commands.length, hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    const retained = await handle.query({ query: 'query.results' });
+    await expect(handle.query({ query: 'query.model' })).rejects.toMatchObject({ code: 'unit.display' });
+    expect(await handle.modelFile()).toEqual(file);
+    expect(await handle.query({ query: 'query.document' })).toEqual(document);
+    expect(await handle.query({ query: 'query.results' })).toEqual(retained);
+    replacement = await engine.acquire();
+    await replacement.dispatch({ cmd: 'model.new', name: 'new project' });
+    const current = await replacement.modelFile();
+    await expect(handle.modelFile()).rejects.toMatchObject({ code: 'session.expired' });
+    expect(await replacement.modelFile()).toEqual(current);
+  } finally { await replacement?.release(); await handle.release(); }
+});
 
 it('keeps the MCP Model and request lease after an oversized actual prepared ModelFile', async () => {
   const engine = loadEngine(here);

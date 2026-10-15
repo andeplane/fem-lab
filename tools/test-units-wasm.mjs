@@ -170,8 +170,8 @@ try {
 console.log('Checked display/compound units and atomic Result publication passed in shipped WASM; scoped equilibrium errors retain their contract.');
 
 // The native #580 geometry/Set/edge fixtures also cross the actual checked-owner ABI.
-// #591 still owns unreadable-model export independence. Explicitly assert that known
-// snapshot error, then preserve public Journal/catalogue; ordinary models use full files.
+// #591 exports canonical SI documents even when a display summary is unreadable.
+// Strict snapshots still reject; failed reads preserve the entire file and checked state.
 async function checkedDisplayReads(commands, oracle, queries, unreadableModel = false) {
   const owner = new Engine(1);
   try {
@@ -184,23 +184,27 @@ async function checkedDisplayReads(commands, oracle, queries, unreadableModel = 
     await displayCommand(owner, commands.at(-1));
     const journal = displaySnapshot(owner);
     const catalogue = displayRead(owner, { query: 'query.results' });
-    let file, hash;
-    if (unreadableModel) {
-      assert.throws(() => owner.export_file(), displayError);
-      assert.throws(() => owner.snapshot(), displayError);
-    } else {
-      displayRead(owner, { query: 'query.model' });
-      file = owner.export_file();
-      hash = owner.model_hash();
-    }
+    const file = owner.export_file();
+    const hash = owner.model_hash();
+    const revision = owner.revision();
+    const stamp = structuredClone(owner.lease.stamp);
+    const exported = JSON.parse(file);
+    assert.deepEqual(exported.model, { ...baseline.model, units: commands.at(-1).units },
+      'selected display units must not change any canonical SI Model value');
+    assert.deepEqual(exported.journal.entries, journal.entries);
+    assert.equal(revision, journal.entries.length);
+    assert.equal(hash, journal.entries.at(-1).hashAfter);
+    if (unreadableModel) assert.throws(() => owner.snapshot(), displayError);
+    else displayRead(owner, { query: 'query.model' });
     for (const query of queries) {
       assert.throws(() => displayRead(owner, query), displayError);
       assertDisplaySnapshot(owner, journal);
       assert.deepEqual(displayRead(owner, { query: 'query.results' }), catalogue);
-      if (!unreadableModel) {
-        assert.equal(owner.export_file(), file);
-        assert.equal(owner.model_hash(), hash);
-      }
+      assert.equal(owner.export_file(), file);
+      assert.equal(owner.model_hash(), hash);
+      assert.equal(owner.revision(), revision);
+      assert.deepEqual(owner.lease.stamp, stamp);
+      if (unreadableModel) assert.throws(() => owner.snapshot(), displayError);
     }
     if (unreadableModel) {
       // Recovery is an expected new Command; the whole Journal gains entries. The

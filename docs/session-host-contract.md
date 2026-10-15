@@ -59,6 +59,20 @@ failure cleanup abandons its ticket before the old producer resumes. The browser
 use the registry formatter for both finish and file output; see [ADR 0027](adr/0027-prepared-model-file-byte-bound.md)
 and [#536](https://github.com/andeplane/fem-lab/issues/536).
 
+`query.document` reads the authoritative SI ModelFile, real Model hash and revision through the
+same checked Query envelope. It preserves the selected display-unit strings without formatting
+a ModelSummary, so an unreadable display unit cannot prevent an explicit file export (#591).
+`file.save` and `file.export` for Journal JSON or TypeScript use this canonical document for
+the default filename; script contents still come from `query.script`. Journal JSON keeps the
+exact 16 MiB UTF-8 save bound before file I/O. Cancelled or replaced producers cannot read
+another session's document to complete their export.
+The owner validates the captured session and live Run; a read may observe a newer state version
+within that same session and never follows a different activation. The returned file is owned,
+and reading it does not advance state or alter retained Results. Browser, MCP, batch and native
+export adapters use this read and apply their existing exact UTF-8 encoder/budget before I/O.
+Full publication snapshots and Candidate validation remain strict; successful export does not
+authorize replacement or waive an unreadable candidate summary.
+
 Registry host handlers receive engine access constrained by their declared execution policy.
 Read/view handlers can query but cannot dispatch; workspace/producer handlers cannot obtain
 engine access; writes cannot smuggle model.new through dispatch; replacement uses the private

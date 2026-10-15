@@ -35,6 +35,16 @@ pub enum Query {
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
 
+    /// The complete authoritative Model file and Journal in SI, with the real Model hash and
+    /// revision. Retains selected display-unit strings without formatting a display summary;
+    /// use this to save even when query.model reports unit.display. This read changes neither
+    /// the Model nor retained Results. Hosts apply their exact UTF-8 save encoder and byte limit
+    /// before writing; this Query performs no I/O or replacement validation.
+    #[serde(rename = "query.document")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "ModelDocument"))]
+    Document {},
+
     /// The complete upsert Command for an existing object's current definition, with exact
     /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
     /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
@@ -1219,6 +1229,7 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Document(ModelDocument),
     Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
@@ -1241,6 +1252,15 @@ pub enum QueryResult {
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// An owned SI document read. Execution identity belongs to the enclosing checked ReadReply,
+/// not to the portable file; display formatting is deliberately absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelDocument {
+    pub file: crate::journal::ModelFile,
+    pub hash: String,
+    pub revision: u32,
 }
 
 /// Lossless input for editing one Model object through the same Command used to create it.

@@ -1,0 +1,126 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "checked export recovery"
+  },
+  {
+    "cmd": "model.setUnits",
+    "units": {
+      "length": "m",
+      "force": "N",
+      "stress": "Pa"
+    }
+  },
+  {
+    "cmd": "geometry.addLine",
+    "name": "shaft",
+    "points": [
+      [
+        "0 m",
+        "0 m",
+        "0 m"
+      ],
+      [
+        "1 m",
+        "0 m",
+        "0 m"
+      ]
+    ],
+    "divisions": 1,
+    "kind": "beam"
+  },
+  {
+    "cmd": "material.add",
+    "name": "steel",
+    "E": "200 GPa",
+    "nu": 0.3
+  },
+  {
+    "cmd": "material.assign",
+    "material": "steel",
+    "bodies": [
+      "shaft"
+    ]
+  },
+  {
+    "cmd": "section.add",
+    "name": "round",
+    "shape": {
+      "kind": "circle",
+      "radius": "50 mm"
+    }
+  },
+  {
+    "cmd": "section.assign",
+    "section": "round",
+    "bodies": [
+      "shaft"
+    ]
+  },
+  {
+    "cmd": "mesh.set",
+    "mesher": {
+      "kind": "lattice",
+      "size": "1 m"
+    }
+  },
+  {
+    "cmd": "constraint.fix",
+    "name": "root",
+    "on": "shaft.p0"
+  },
+  {
+    "cmd": "load.force",
+    "name": "tip",
+    "on": "shaft.p1",
+    "total": [
+      "1000 N",
+      "0 N",
+      "0 N"
+    ]
+  },
+  {
+    "cmd": "step.add",
+    "name": "axial",
+    "procedure": "static",
+    "constraints": [
+      "root"
+    ],
+    "loads": [
+      "tip"
+    ]
+  },
+  {
+    "cmd": "solve.run",
+    "step": "axial",
+    "solver": "cpu-direct"
+  },
+  {
+    "cmd": "load.moment",
+    "name": "plus",
+    "on": "shaft.p0",
+    "total": [
+      "1e307 N m",
+      "0 N m",
+      "0 N m"
+    ]
+  },
+  {
+    "cmd": "load.moment",
+    "name": "minus",
+    "on": "shaft.p1",
+    "total": [
+      "-1e307 N m",
+      "0 N m",
+      "0 N m"
+    ]
+  },
+  {
+    "cmd": "model.setUnits",
+    "units": {
+      "length": "mm",
+      "force": "mN",
+      "stress": "Pa"
+    }
+  }
+]

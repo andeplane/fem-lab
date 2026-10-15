@@ -4494,6 +4494,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
 - [query.difference](#queries-query-difference)
+- [query.document](#queries-query-document)
 - [query.field](#queries-query-field)
 - [query.frame](#queries-query-frame)
 - [query.frames](#queries-query-frames)
@@ -4640,6 +4641,22 @@ Returns: `DifferenceField`.
 | right | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
 | onto | yes | <code>{"$ref":"#/$defs/DifferenceOnto"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.difference"}</code> |  |
+
+<a id="queries-query-document"></a>
+
+### query.document
+
+The complete authoritative Model file and Journal in SI, with the real Model hash and
+revision. Retains selected display-unit strings without formatting a display summary;
+use this to save even when query.model reports unit.display. This read changes neither
+the Model nor retained Results. Hosts apply their exact UTF-8 save encoder and byte limit
+before writing; this Query performs no I/O or replacement validation.
+
+Returns: `ModelDocument`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| query | yes | <code>{"type":"string","const":"query.document"}</code> |  |
 
 <a id="queries-query-field"></a>
 

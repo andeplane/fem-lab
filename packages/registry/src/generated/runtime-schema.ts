@@ -5126,6 +5126,21 @@ const queries = {
       "x-returns": "ModelSummary"
     },
     {
+      "description": "The complete authoritative Model file and Journal in SI, with the real Model hash and\nrevision. Retains selected display-unit strings without formatting a display summary;\nuse this to save even when query.model reports unit.display. This read changes neither\nthe Model nor retained Results. Hosts apply their exact UTF-8 save encoder and byte limit\nbefore writing; this Query performs no I/O or replacement validation.",
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "const": "query.document"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "x-execution": "modelRead",
+      "x-returns": "ModelDocument"
+    },
+    {
       "description": "The complete upsert Command for an existing object's current definition, with exact\nSI quantities. Use it to populate an edit form; change its arguments and dispatch it\nto apply. Display summaries are rounded and must never be used to reconstruct edits.\nAuto-generated Sets and mesher-owned Bodies have no editable object definition.",
       "type": "object",
       "properties": {
