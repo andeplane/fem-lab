@@ -1632,6 +1632,14 @@ rows, because their oracles are the geometry itself:
 - **Round trip.** Our own `write_stl` output for a box, a 64-facet cylinder, a 32-facet sphere
   and a revolve is read back by `read_stl` and re-evaluated; volume, area and bounding box agree
   with the shape it came from to 1e-9, and the patch counts are 6, 3, 1 and 3.
+- **STL length width (#716).** An authored unit tetrahedron has volume 1/6, area
+  (3 + √3)/2 and bounds [0, 1] on each axis in both ASCII and binary forms. Its long ASCII
+  solid name makes bytes 80–83 an oversized binary-count candidate. Native reader tests
+  preserve its exact vertices/facets; the CI debug and optimized wasm32 imports check the
+  closed forms. Declared counts 85,899,345, 85,899,346, 2³¹ + 4 and 2³² − 1 cover addition
+  overflow, multiplication overflow and a wrapped length equal to a real 284-byte file.
+  Each malformed file must return a structured error without changing the Model or Journal,
+  and a subsequent valid import must still work.
 - **Topology.** `genus` is the oracle a volume cannot be: 0 for an imported cube, 1 for an
   imported torus, 1 for a plate with a through bore — and the bore's wall comes back as one
   smooth patch of exactly n·2R sin(π/n)·h, with the two faces it pierces still whole.

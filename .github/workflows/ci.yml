@@ -124,7 +124,13 @@ jobs:
       # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
+      - name: wasm32 STL length regressions with debug overflow checks
+        run: |
+          node tools/build-wasm.mjs --dev
+          node tools/test-stl-wasm.mjs debug
       - run: node tools/build-wasm.mjs
+      - name: wasm32 STL length regressions in the optimized shipping module
+        run: node tools/test-stl-wasm.mjs optimized
       - run: cargo build -p femlab --release
       - run: ./target/release/femlab schema --out engine.schema.json
       - uses: actions/upload-artifact@v4
