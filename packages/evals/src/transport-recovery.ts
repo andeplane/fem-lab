@@ -17,21 +17,23 @@ export interface RecoveryOptions {
   record(receipt: AttemptReceipt): void;
 }
 const NETWORK_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETRESET', 'ENETUNREACH', 'EHOSTUNREACH', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
+const TLS_CODES = new Set(['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_REVOKED', 'ERR_TLS_CERT_ALTNAME_INVALID']);
 function networkCause(error: TransportCause): boolean {
   const nodes: TransportCause[] = [error];
   for (let i = 0; i < nodes.length; i++) {
     const current = nodes[i]!;
-    if (current.status !== undefined || ['APIUserAbortError', 'AbortError', 'TimeoutError', 'APIConnectionTimeoutError'].includes(current.kind)) return false;
+    const unrecognizedCode = current.codePresent === null || current.codeType === 'unreadable' || (current.codeRecognized === false && current.codeType !== undefined && current.codeType !== 'absent' && current.codeType !== 'undefined');
+    if (unrecognizedCode || (current.code !== undefined && TLS_CODES.has(current.code)) || current.status !== undefined || ['APIUserAbortError', 'AbortError', 'TimeoutError', 'APIConnectionTimeoutError'].includes(current.kind)) return false;
     if (current.cause) nodes.push(current.cause);
     if (current.errors) nodes.push(...current.errors);
   }
   return nodes.some(node => node.code !== undefined && NETWORK_CODES.has(node.code));
 }
 export function retryableTransport(diagnostics: readonly ProviderDiagnostic[]): boolean {
-  return diagnostics.length > 0 && diagnostics.every(d => d.phase !== 'input-count' && d.abortOrigin === 'none' && networkCause(d.error));
+  return diagnostics.length > 0 && diagnostics.every(d => d.abortOrigin === 'none' && networkCause(d.error));
 }
 
-/** No text, tool, or opaque continuation escapes until the complete attempt and billing settle. */
+/** Count and generation share one retry; events stay buffered until completion and billing settle. */
 export function recoverableProvider(factory: (observer: ProviderObserver) => Provider, identity: Pick<Provider, 'id' | 'models'>, budget: EvaluationBudget, countInput: (request: ChatRequest) => Promise<number>, resources: () => Promise<void>, changed: () => Promise<void>, options: RecoveryOptions): Provider {
   if (options.maxTransportRetries !== 1) throw new Error('evaluation permits exactly one explicit transport retry');
   return { ...identity, async *chat(request) {
@@ -48,7 +50,16 @@ export function recoverableProvider(factory: (observer: ProviderObserver) => Pro
         const started = options.now();
         let tokens: number;
         try { tokens = await countInput(request); }
-        catch (error) { diagnostics.push(providerDiagnostic(error, 'input-count', request.signal, options.now() - started)); throw error; }
+        catch (error) {
+          diagnostics.push(providerDiagnostic(error, 'input-count', request.signal, options.now() - started));
+          if (attempt < options.maxTransportRetries && retryableTransport(diagnostics)) {
+            // Authoritative counting precedes reservation. Its retry consumes this same loop's allowance.
+            options.record({ request: budget.snapshot().requests, attempt, outcome: 'retry', diagnostics, discardedEvents: 0, unknownUsageRetained: false, reason: error instanceof Error ? error.message : String(error) });
+            await changed();
+            continue;
+          }
+          throw error;
+        }
         abort();
         reservation = budget.reserve(request.model, tokens, request.maxTokens);
         await changed(); abort();
