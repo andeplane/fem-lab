@@ -1,0 +1,57 @@
+/** A bounded allowlist: no error messages, stacks, headers, URLs, payloads or credentials. */
+export interface TransportCause {
+  kind: string;
+  code?: string;
+  status?: number;
+  requestId?: string;
+  cause?: TransportCause;
+  errors?: TransportCause[];
+}
+export interface ProviderDiagnostic {
+  phase: 'request' | 'stream' | 'input-count';
+  abortOrigin: 'none' | 'request-signal' | 'sdk-timeout';
+  elapsedMs: number;
+  error: TransportCause;
+}
+export interface ProviderObserver {
+  now(): number;
+  record(diagnostic: ProviderDiagnostic): void;
+}
+const KINDS = new Set(['Error', 'TypeError', 'AggregateError', 'AbortError', 'TimeoutError', 'APIError', 'APIConnectionError', 'APIConnectionTimeoutError', 'APIUserAbortError', 'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'NotFoundError', 'ConflictError', 'UnprocessableEntityError', 'RateLimitError', 'InternalServerError']);
+const CODES = /^(?:E[A-Z0-9_]{1,63}|UND_ERR_[A-Z0-9_]{1,55}|ERR_[A-Z0-9_]{1,59})$/;
+function field(value: object, key: string): unknown {
+  try { return Reflect.get(value, key); } catch { return undefined; }
+}
+function cause(value: unknown, seen: Set<object>, depth: number): TransportCause {
+  if (value === null || typeof value !== 'object' || depth === 4 || seen.has(value)) return { kind: 'UnknownError' };
+  seen.add(value);
+  const constructor = field(value, 'constructor');
+  const constructorName = typeof constructor === 'function' ? field(constructor, 'name') : undefined;
+  const name = field(value, 'name');
+  const kind = typeof constructorName === 'string' && KINDS.has(constructorName) ? constructorName : typeof name === 'string' && KINDS.has(name) ? name : 'UnknownError';
+  const result: TransportCause = { kind };
+  const code = field(value, 'code'), status = field(value, 'status'), requestId = field(value, 'requestID');
+  if (typeof code === 'string' && CODES.test(code)) result.code = code;
+  if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) result.status = status;
+  if (typeof requestId === 'string' && /^req_[A-Za-z0-9_-]{1,128}$/.test(requestId)) result.requestId = requestId;
+  const nested = field(value, 'cause'), aggregate = field(value, 'errors');
+  if (nested !== undefined) result.cause = cause(nested, seen, depth + 1);
+  if (Array.isArray(aggregate)) result.errors = aggregate.slice(0, 4).map(error => cause(error, seen, depth + 1));
+  return result;
+}
+export function providerDiagnostic(error: unknown, phase: ProviderDiagnostic['phase'], signal: AbortSignal | undefined, elapsedMs: number): ProviderDiagnostic {
+  const safe = cause(error, new Set(), 0);
+  return { phase, abortOrigin: signal?.aborted ? 'request-signal' : safe.kind === 'APIConnectionTimeoutError' ? 'sdk-timeout' : 'none', elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0, error: safe };
+}
+/** Host clocks are optional diagnostic inputs, never a prerequisite for a provider call. */
+export function startProviderObservation(observer: ProviderObserver | undefined): number | undefined {
+  try { return observer?.now(); } catch { return undefined; }
+}
+/** Observability must never mask the original provider failure or change retry/charging policy. */
+export function observeProviderFailure(observer: ProviderObserver | undefined, error: unknown, phase: ProviderDiagnostic['phase'], signal: AbortSignal | undefined, started: number | undefined): void {
+  if (observer) {
+    let elapsed = 0;
+    try { if (started !== undefined) elapsed = observer.now() - started; } catch { /* Keep the failure even if the clock fails. */ }
+    try { observer.record(providerDiagnostic(error, phase, signal, elapsed)); } catch { /* The original failure still reaches the caller. */ }
+  }
+}
