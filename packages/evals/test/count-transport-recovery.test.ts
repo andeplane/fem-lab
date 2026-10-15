@@ -50,12 +50,12 @@ it('exhausts two genuine transient count fetches with zero generation and zero r
   expect(run.budget.snapshot()).toMatchObject({ requests: 0, chargedOrReservedUsd: 0, retainedUnknown: [], inFlightRequests: 0, stoppedReason: 'Connection error.' });
 });
 
-it.each(['unknown', 'filtered-code', 'tls', 'mixed-tls', 'mixed-filtered', 'mixed-unreadable', 'auth', 'http', 'timeout'])('stops genuine SDK fatal %s count errors without retry or generation', async kind => {
+it.each(['unknown', 'filtered-code', 'tls', 'mixed-tls', 'mixed-filtered', 'mixed-unreadable', 'mixed-timeout', 'mixed-abort', 'auth', 'http', 'timeout'])('stops genuine SDK fatal %s count errors without retry or generation', async kind => {
   const run = setup(async (_stage, init) => {
     if (kind === 'auth' || kind === 'http') return new Response(JSON.stringify({ error: { message: 'private payload' } }), { status: kind === 'auth' ? 401 : 503, headers: { 'content-type': 'application/json' } });
     if (kind === 'timeout') return await new Promise<Response>((_resolve, reject) => { init!.signal!.addEventListener('abort', () => reject(new DOMException('private timeout', 'AbortError'))); });
-    if (kind === 'mixed-tls' || kind === 'mixed-filtered' || kind === 'mixed-unreadable') {
-      const fatal = kind === 'mixed-unreadable' ? Object.defineProperty(new Error('private cause'), 'code', { get() { throw new Error('private getter'); } }) : Object.assign(new Error('private cause'), { code: kind === 'mixed-tls' ? 'CERT_HAS_EXPIRED' : 'EPRIVATE_SECRET' });
+    if (kind === 'mixed-tls' || kind === 'mixed-filtered' || kind === 'mixed-unreadable' || kind === 'mixed-timeout' || kind === 'mixed-abort') {
+      const fatal = kind === 'mixed-unreadable' ? Object.defineProperty(new Error('private cause'), 'code', { get() { throw new Error('private getter'); } }) : Object.assign(new Error('private cause'), { code: kind === 'mixed-tls' ? 'CERT_HAS_EXPIRED' : kind === 'mixed-timeout' ? 'ETIMEDOUT' : kind === 'mixed-abort' ? 'UND_ERR_ABORTED' : 'EPRIVATE_SECRET' });
       throw new TypeError('private payload', { cause: new AggregateError([Object.assign(new Error('private socket'), { code: 'ECONNRESET' }), fatal], 'private aggregate') });
     }
     if (kind === 'tls' || kind === 'filtered-code') throw new TypeError('private payload', { cause: Object.assign(new Error('private cause'), { code: kind === 'tls' ? 'CERT_HAS_EXPIRED' : 'EPRIVATE_SECRET' }) });
@@ -123,6 +123,7 @@ it.each(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETRESET', 'ENETUNREACH', 'EHO
   for (const phase of ['input-count', 'request', 'stream'] as const) expect(retryableTransport([{ phase, abortOrigin: 'none', elapsedMs: 0, error: { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true } }])).toBe(true);
 });
 
-it.each(['ETIMEDOUT', 'ENOTFOUND', 'ECONNABORTED', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'])('does not expand retry eligibility to %s', code => {
+it.each(['ETIMEDOUT', 'ENOTFOUND', 'ECONNABORTED', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_DESTROYED', 'UND_ERR_CLOSED'])('does not expand retry eligibility to %s', code => {
   expect(retryableTransport([{ phase: 'input-count', abortOrigin: 'none', elapsedMs: 0, error: { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true } }])).toBe(false);
+  for (const phase of ['input-count', 'request', 'stream'] as const) expect(retryableTransport([{ phase, abortOrigin: 'none', elapsedMs: 0, error: { kind: 'AggregateError', errors: [{ kind: 'Error', code: 'ECONNRESET' }, { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true }] } }])).toBe(false);
 });
