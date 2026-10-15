@@ -12,7 +12,12 @@ describe('readHostCaps', () => {
   });
 
   it('asks for the hardware thread count once isolation is real', () => {
-    expect(readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 12 }, crossOriginIsolated: true }).threads).toBe(12);
+    expect(readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 12 }, crossOriginIsolated: true, SharedArrayBuffer }).threads).toBe(12);
+  });
+
+
+  it('requests one thread without SharedArrayBuffer even on an isolated document', () => {
+    expect(readHostCaps({ crossOriginIsolated: true, navigator: { hardwareConcurrency: 8 } }).threads).toBe(1);
   });
 
   it('survives a host with nothing on it', () => {
@@ -21,14 +26,14 @@ describe('readHostCaps', () => {
 });
 
 describe('capabilityNotes', () => {
-  const full = readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
+  const full = readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true, SharedArrayBuffer });
 
   it('says nothing when everything is available', () => {
     expect(capabilityNotes(full, engine())).toEqual([]);
   });
 
   it('names Chrome when there is no WebGPU', () => {
-    const caps = readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 8 }, crossOriginIsolated: true });
+    const caps = readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 8 }, crossOriginIsolated: true, SharedArrayBuffer });
     expect(capabilityNotes(caps, engine({ gpu: false }))[0]).toContain('Open in Chrome for GPU solving');
   });
 
@@ -38,17 +43,21 @@ describe('capabilityNotes', () => {
 
   it('says how to get threads back when the page is not isolated', () => {
     const caps = readHostCaps({ navigator: { userAgent: CHROME, gpu: {} } });
-    expect(capabilityNotes(caps, engine())).toContain('Running single-threaded; reload to enable threads.');
+    expect(capabilityNotes(caps, engine())).toContain('Running single-threaded; open in Chrome and reload to enable threads.');
+  });
+
+  it('reports an actual smaller worker pool visibly', () => {
+    expect(capabilityNotes(full, engine({ threads: 1 })).join(' ')).toContain('requested worker pool is unavailable');
   });
 
   it('warns once outside Chromium (ADR 0014)', () => {
-    const caps = readHostCaps({ navigator: { userAgent: 'Mozilla/5.0 Firefox/140.0', gpu: {} }, crossOriginIsolated: true });
+    const caps = readHostCaps({ navigator: { userAgent: 'Mozilla/5.0 Firefox/140.0', gpu: {} }, crossOriginIsolated: true, SharedArrayBuffer });
     expect(capabilityNotes(caps, engine()).join(' ')).toContain('Chromium is the supported browser');
   });
 });
 
 describe('engineChip', () => {
-  const host = readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
+  const host = readHostCaps({ navigator: { userAgent: CHROME, hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true, SharedArrayBuffer });
 
   it('reads like the design: where it runs and how many threads', () => {
     expect(engineChip(host, engine())).toBe('local GPU · 8 threads');
