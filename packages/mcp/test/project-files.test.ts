@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, expect, it } from 'vitest';
+import { errorText } from '../src/server';
 import { helperPath, nodeProjectFiles, nativeProjectBridge, type ProjectBridge, type ProjectFiles } from '../src/project-files';
 
 const directories: string[] = [];
@@ -127,7 +128,8 @@ it('refuses another operation after a capability closes and propagates a broken 
   await expect(bridge.request({op:'stat',path:'file'})).rejects.toThrow('closed');
   const pipe = controlled("require('node:fs').closeSync(0);console.log(JSON.stringify({ready:true}));setTimeout(()=>process.exit(1),200);");
   await new Promise(resolve => setTimeout(resolve,100));
-  await expect(pipe.request({op:'stat',path:'file'})).rejects.toThrow();
+  const failed = await pipe.request({op:'stat',path:'file'}).catch(error => JSON.parse(errorText(error)) as unknown);
+  expect(failed).toEqual({ code:'file.scope', cause:expect.stringContaining('request channel failed'), where:'path', suggestion:expect.any(String) });
   pipe.close();
 });
 

@@ -78,7 +78,7 @@ export function nativeProjectBridge(root: string, launch: SpawnProjectHelper = s
       lifetime(true);
       const next = tail.then(async () => {
         if (closed) throw unavailable('the project filesystem capability has closed');
-        await new Promise<void>((resolve, reject) => child.stdin.write(JSON.stringify(value) + '\n', error => error ? reject(error) : resolve()));
+        await new Promise<void>((resolve, reject) => child.stdin.write(JSON.stringify(value) + '\n', error => error ? reject(unavailable(`project filesystem request channel failed: ${error.message}`)) : resolve()));
         return read();
       });
       tail = next.catch(() => {});
