@@ -10,7 +10,7 @@
   "taxCollectionDecisionConfirmed": false,
   "policyUrlsConfirmed": true,
   "stagingCheckoutVerified": true,
-  "webhookVerified": true,
+  "webhookVerified": false,
   "activeTaxRegistrationVerified": false,
   "plans": {
     "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmWyAAtmJJ65hf91LvyAFE", "amountUsdCents": 4900, "credits": 7500},
