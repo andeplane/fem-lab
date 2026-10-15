@@ -110,6 +110,17 @@ fn imported_regions_lifecycle_preserves_editable_assignments_and_identity_metada
     ] {
         ok(&mut e, command);
     }
+    let objects =
+        serde_json::to_value(e.query(Query::Objects { kinds: Some(vec![ObjectKind::Body]) }).unwrap()).unwrap();
+    for name in ["bar", "first", "right"] {
+        let object = objects["objects"].as_array().unwrap().iter().find(|o| o["name"] == name).unwrap();
+        assert_eq!(object["ref"], format!("body:{name}"));
+        assert_eq!(object["kind"], "body");
+    }
+    assert_eq!(
+        objects["objects"].as_array().unwrap().iter().find(|o| o["name"] == "first").unwrap()["summary"],
+        "imported element region"
+    );
     let model = e.export_file().model;
     assert_eq!(model.material_of_body("first"), Some("default"));
     assert_eq!(model.material_of_body("right"), Some("second_material"));
@@ -236,7 +247,7 @@ fn imported_regions_source_manifest_and_identity_key_validation_are_bounded() {
         assert!(run(&mut e, &command.to_string()).is_err());
         assert_eq!(e.export_file(), before);
     }
-    for identities in [json!({"x":{"sourceLabel":1}}), json!({"0101":{"sourceLabel":1}})] {
+    for identities in [json!(42), json!({"x":{"sourceLabel":1}}), json!({"0101":{"sourceLabel":1}})] {
         let mut command = original.clone();
         command["mesher"]["provenance"] =
             json!({"sha256":"a".repeat(64),"conversionVersion":"test","nodeIdentities":identities});
@@ -347,4 +358,101 @@ fn imported_regions_gravity_density_warnings_follow_effective_region_materials()
     assert!(missing[0].text.contains("'right'"));
     ok(&mut e, r#"{"cmd":"material.assign","material":"dense","bodies":["right"]}"#);
     assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"));
+}
+
+#[test]
+fn imported_regions_names_cannot_replace_other_geometry_owners_in_either_order() {
+    let source = partitioned_bar(2, false).to_string();
+    let point = r#"{"cmd":"geometry.addMass","name":"left","at":["2 m","0 m","0 m"],"mass":"1 kg"}"#;
+    for first_point in [false, true] {
+        let mut e = engine();
+        let (first, second) = if first_point { (point, source.as_str()) } else { (source.as_str(), point) };
+        ok(&mut e, first);
+        let before = e.export_file();
+        assert_eq!(err(&mut e, second).code, ErrorCode::NameTaken);
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+fn separated_region_tetrahedra(tiny_volume: bool) -> Value {
+    // The other component supplies the aggregate x=0 lower bound and a regular
+    // nonzero volume; it is separated in z, so no approximate contact is involved.
+    let small = if tiny_volume {
+        [[0., 0., 0.], [1e-20, 0., 0.], [0., 1e-20, 0.], [0., 0., 1e-20]]
+    } else {
+        [[1e-230, 0., 0.], [1., 0., 0.], [1e-230, 1., 0.], [1e-230, 0., 1.]]
+    };
+    let other = [[0., 0., 3.], [1., 0., 3.], [0., 1., 3.], [0., 0., 4.]];
+    let nodes: Vec<_> = small
+        .into_iter()
+        .chain(other)
+        .enumerate()
+        .map(|(i, p)| json!({"label":i+1,"at":p.map(|v|format!("{v} m"))}))
+        .collect();
+    json!({"cmd":"mesh.set","mesher":{"kind":"imported","body":"source","nodes":nodes,
+        "elements":[{"label":11,"kind":"tet4","nodes":[1,2,3,4]},{"label":21,"kind":"tet4","nodes":[5,6,7,8]}],
+        "regions":{"near":[11],"other":[21]}}})
+}
+
+#[test]
+fn imported_regions_unrepresentable_region_bounds_and_measures_are_structured_read_errors() {
+    // A 10^99 m display length is finite and its cubic factor 10^297 is finite.
+    // Aggregate bounds and volume still fit. A region's internal 10^-230 m bound
+    // or 10^-60 m^3 volume cannot be represented in those requested units.
+    for tiny_volume in [false, true] {
+        let mut e = engine();
+        ok(&mut e, &separated_region_tetrahedra(tiny_volume).to_string());
+        let summary = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+        assert!(summary["bodies"][0]["measure"]["value"].as_f64().unwrap() > 0.1);
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m*km^33/m^33"}}"#);
+        let before = e.export_file();
+        let hash = e.model_hash();
+        let error = e.query(Query::Model {}).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert!(error.cause.contains("underflows to zero"), "{error:?}");
+        let dimension = if tiny_volume { "volume" } else { "length" };
+        assert!(error.cause.contains(dimension), "{error:?}");
+        assert_eq!(e.export_file(), before);
+        assert_eq!(e.model_hash(), hash);
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+        assert!(e.query(Query::Model {}).is_ok());
+    }
+}
+
+#[test]
+fn imported_regions_source_temperature_expands_all_material_regions_at_three_refinements() {
+    // Free isotropic expansion u=alpha*DeltaT*x is independent of both elastic
+    // moduli; the three symmetry planes remove rigid motion without restraining it.
+    for cells in [2, 4, 8] {
+        let mut e = engine();
+        let mut source = partitioned_bar(cells, false);
+        let node = |x: u32, y: u32, z: u32| 101 + 13 * (4 * x + 2 * z + y);
+        source["mesher"]["nodeSets"]["Y0"] =
+            json!((0..=cells).flat_map(|x| (0..=1).map(move |z| node(x, 0, z))).collect::<Vec<_>>());
+        source["mesher"]["nodeSets"]["Z0"] =
+            json!((0..=cells).flat_map(|x| (0..=1).map(move |y| node(x, y, 0))).collect::<Vec<_>>());
+        ok(&mut e, &source.to_string());
+        for command in [
+            r#"{"cmd":"material.add","name":"stiff","E":"200 GPa","nu":0,"alpha":"1e-5 1/K"}"#,
+            r#"{"cmd":"material.add","name":"soft","E":"100 GPa","nu":0,"alpha":"1e-5 1/K"}"#,
+            r#"{"cmd":"material.assign","material":"stiff","bodies":["left"]}"#,
+            r#"{"cmd":"material.assign","material":"soft","bodies":["right"]}"#,
+            r#"{"cmd":"constraint.fix","name":"x0","on":"bar.nset_ROOT","dofs":["ux"]}"#,
+            r#"{"cmd":"constraint.fix","name":"y0","on":"bar.nset_Y0","dofs":["uy"]}"#,
+            r#"{"cmd":"constraint.fix","name":"z0","on":"bar.nset_Z0","dofs":["uz"]}"#,
+            r#"{"cmd":"load.temperature","name":"warm","bodies":["bar"],"value":"303.15 K","reference":"293.15 K"}"#,
+            r#"{"cmd":"step.add","name":"thermal","procedure":"static","constraints":["x0","y0","z0"],"loads":["warm"]}"#,
+            r#"{"cmd":"solve.run","step":"thermal","solver":"cpu-direct"}"#,
+        ] {
+            ok(&mut e, command);
+        }
+        let coordinates = e.mesh().unwrap().mesh.coords.clone();
+        let displacement = e.field(Some("thermal"), Field::Displacement).unwrap();
+        for (actual, coordinate) in displacement.data.iter().zip(coordinates) {
+            assert!((actual - 1e-4 * coordinate).abs() < 1e-12, "cells={cells}: {actual} at {coordinate}");
+        }
+        for value in &e.field(Some("thermal"), Field::Stress).unwrap().data {
+            assert!(value.abs() < 1e-3, "cells={cells}: stress {value}");
+        }
+    }
 }

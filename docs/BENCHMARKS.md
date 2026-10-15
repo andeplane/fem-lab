@@ -2948,3 +2948,10 @@ at all three refinements; no nonzero asymptotic error-rate claim is made.
 Separate registry cases verify disconnected valid components, exact assembly provenance,
 source-name identity, editable assignments, rename/dependency guards, portable save/open
 and replay. Existing geometric invalidity and non-overlap acceptance guards remain active.
+
+The imported-region temperature case additionally applies the source owner's uniform
+10 K increment to both material regions at 2/4/8 axial cells. With α = 10⁻⁵ K⁻¹ and
+three symmetry-plane constraints, the independent free-expansion solution is
+u = α ΔT x in every component, with zero elastic stress. Every participating coordinate
+is checked. This verifies aggregate Body targeting across material blocks using the
+existing thermoelastic procedure; it introduces no new kernel or convergence-rate claim.
