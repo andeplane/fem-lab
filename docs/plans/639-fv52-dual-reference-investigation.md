@@ -45,6 +45,8 @@ The 3% columns are diagnostics, not correctness gates or an accepted FV52 Benchm
 Abaqus notes that element formulations can reorder higher physical modes: retain the shapes
 and describe index comparison honestly; do not rematch modes to improve an error column.
 Record refinement changes without claiming a known asymptotic rate or extrapolated truth.
+The separate Abaqus computed C3D20 row (44.796, 110.54, 110.54, 169.10, 193.92,
+206.64, 206.64 Hz) is formulation context only, never a third reference or fitted target.
 
 ## Verification and resource boundary
 
@@ -53,7 +55,8 @@ Record refinement changes without claiming a known asymptotic rate or extrapolat
 2. Require finite sorted frequencies, ten owned mode fields with the public nodal layout,
    current Result identity, and actual maximum measured backward residual ≤1e−10. Preserve
    every arithmetic-unresolved warning; a displayed zero frequency does not certify λ=0.
-3. Report the low-three/first-deformational separation and retained rigid subspace, without
+3. Report the low-three/first-deformational separation, individual rigid fits and normalized
+   Tx/Ty/Rz coefficient matrix/determinant/rank diagnostics (rank threshold1e−8), without
    declaring the warning itself a physical rigid-mode classifier. Preserve repeated-mode
    shapes; do not compare arbitrary eigenvector signs/bases across different meshes.
 4. Compare Model/Journal, Mesh/Set metadata, frequencies, residual, iterations, warnings and
@@ -64,7 +67,8 @@ Record refinement changes without claiming a known asymptotic rate or extrapolat
 At most six serial native solves; no broad suite, LLVM, GPU, browser, WASM build or solver
 change. The finest grid's uncoalesced element-entry upper bound is 3.69 million entries
 (~44 MB per CSR for f64 values/u32 columns), before direct-factor fill. Actual direct-factor
-memory/time is unmeasured. Record it; stop and report partial evidence on nonconvergence or
+memory/time is unmeasured. Record it; cap each owned CLI process at 2 GiB RSS / 180 s,
+then stop and report partial evidence on nonconvergence or
 resource pressure rather than changing physics or selecting a favorable target.
 
 Runtime: accepted #633 release ARM64 CLI SHA256

@@ -21,6 +21,7 @@ REFERENCES = {
     "Abaqus_NAFEMS_1990": [44.092, 106.66, 106.66, 156.23, 193.58, 200.13, 200.13],
     "Ansys_targets_1987": [45.897, 109.44, 109.44, 167.89, 193.59, 206.19, 206.19],
 }
+ABAQUS_C3D20_COMPUTED_CONTEXT_ONLY = [44.796, 110.54, 110.54, 169.10, 193.92, 206.64, 206.64]
 EDGES = ("x0", "x10", "y0", "y10")
 QUERIES = [{"query": "query.document"}, {"query": "query.mesh"},
            {"query": "query.result", "step": "modes"},
@@ -104,6 +105,7 @@ def check_and_summarize(raw, grid):
     assert all(f["unit"] == "Hz" for f in result["frequencies"])
     assert len(fields) == 10
     rigid_fits = []
+    rigid_coefficients = []
     for mode, field in enumerate(fields, 1):
         assert field["field"] == f"mode:{mode}" and field["resultId"] == "result-1"
         assert field["components"] == 3 and field["per"] == "node"
@@ -121,12 +123,34 @@ def check_and_summarize(raw, grid):
             square_error = sum((values[3*i] - tx + rz * (y - 5)) ** 2
                                + (values[3*i+1] - ty - rz * (x - 5)) ** 2
                                + values[3*i+2] ** 2 for i, (x, y, _) in enumerate(positions))
-            rigid_fits.append(math.sqrt(square_error / sum(v*v for v in values)))
+            shape_norm = math.sqrt(sum(v*v for v in values))
+            rigid_fits.append(math.sqrt(square_error) / shape_norm)
+            rigid_coefficients.append([tx * math.sqrt(expected_nodes) / shape_norm,
+                                       ty * math.sqrt(expected_nodes) / shape_norm,
+                                       rz * math.sqrt(inertia) / shape_norm])
     # Lossless public document preserves actual supports and explicit solve controls.
     commands = [entry["cmd"] for entry in document["file"]["journal"]["entries"]]
     fixes = [cmd for cmd in commands if cmd["cmd"] == "constraint.fix"]
     assert len(fixes) == 4 and all(c["dofs"] == ["uz"] for c in fixes)
     assert commands[-1]["cmd"] == "solve.run" and commands[-1]["maxIterations"] == 5000
+    # Independent rank/determinant diagnostics distinguish a full rigid span from duplicate Tx.
+    rank_work = [row[:] for row in rigid_coefficients]
+    rank = 0
+    for col in range(3):
+        pivot = max(range(rank, 3), key=lambda row: abs(rank_work[row][col]))
+        if abs(rank_work[pivot][col]) <= 1e-8:
+            continue
+        rank_work[rank], rank_work[pivot] = rank_work[pivot], rank_work[rank]
+        for row in range(rank + 1, 3):
+            ratio = rank_work[row][col] / rank_work[rank][col]
+            for k in range(col, 3):
+                rank_work[row][k] -= ratio * rank_work[rank][k]
+        rank += 1
+        if rank == 3:
+            break
+    a, b, c = rigid_coefficients
+    determinant = (a[0]*(b[1]*c[2]-b[2]*c[1]) - a[1]*(b[0]*c[2]-b[2]*c[0])
+                   + a[2]*(b[0]*c[1]-b[1]*c[0]))
     diagnostic = {}
     for source, targets in REFERENCES.items():
         errors = [(f - ref) / ref for f, ref in zip(frequencies[3:], targets)]
@@ -138,6 +162,10 @@ def check_and_summarize(raw, grid):
             "sweeps": result["iterations"], "warnings": result.get("warnings", []),
             "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": rigid_fits,
             "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": max(frequencies[:3]) / frequencies[3],
+            "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": rigid_coefficients,
+            "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": rank,
+            "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": determinant,
+            "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": ABAQUS_C3D20_COMPUTED_CONTEXT_ONLY,
             "references_DIAGNOSTIC_ONLY": diagnostic,
             "fieldSha256": [hashlib.sha256(json.dumps(f, sort_keys=True).encode()).hexdigest() for f in fields]}
 
