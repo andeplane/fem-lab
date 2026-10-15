@@ -1,14 +1,15 @@
 import type { Sql } from './accounts';
-import { calendarPeriod, CREDIT_SCALE, PLANS, TARIFF_VERSION, type PlanId } from './credits';
+import { calendarPeriod, CREDIT_SCALE, FREE_MONTHLY_CREDITS, PLANS, TARIFF_VERSION, type PlanId } from './credits';
+import {freePolicy,freeGrantAllowed,type EmailFingerprint} from './free-eligibility';
 
 export interface Grant {
   accountId: string; source: string; plan: PlanId; startsAt: Date; expiresAt: Date;
 }
-export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
-  async function grant(input: Grant): Promise<void> {
+export function creditLedger(sql: Sql, now: () => Date, newId: () => string, fingerprint?:EmailFingerprint) {
+  async function grantAmount(input: Grant, credits:number): Promise<void> {
     const clock = now();
     if (!input.source || input.source.length > 256 || !Number.isFinite(input.startsAt.getTime()) || !Number.isFinite(input.expiresAt.getTime()) || input.expiresAt <= input.startsAt) throw new Error('Invalid grant source or period.');
-    const amount = BigInt(PLANS[input.plan].credits) * CREDIT_SCALE;
+    const amount = BigInt(credits) * CREDIT_SCALE;
     await sql.query(`INSERT INTO credit_grants (id, account_id, source, plan, tariff_version, amount, starts_at, expires_at, created_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (source) DO NOTHING`,
     [newId(), input.accountId, input.source, input.plan, TARIFF_VERSION, amount.toString(), input.startsAt, input.expiresAt, clock]);
@@ -18,16 +19,17 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
   }
   async function balance(accountId: string) {
     const clock = now();
-    const rows = (await sql.query(`SELECT g.id, g.plan, g.amount, g.expires_at, g.starts_at,
+    const rows = (await sql.query(`SELECT g.id, g.plan, g.source, g.amount, g.expires_at, g.starts_at,
       g.amount + COALESCE((SELECT sum(e.amount) FROM credit_entries e WHERE e.grant_id=g.id),0)
       - COALESCE((SELECT sum(h.amount) FROM credit_holds h JOIN ai_requests r ON r.id=h.request_id
         WHERE h.grant_id=g.id AND r.state=ANY($3)),0) AS remaining
       FROM credit_grants g LEFT JOIN billing_accounts b ON b.account_id=g.account_id
-      WHERE g.account_id=$1 AND g.starts_at <= $2 AND g.expires_at > $2 AND (g.plan='free' OR NOT COALESCE(b.blocked,false))
+      WHERE g.account_id=$1 AND g.starts_at <= $2 AND g.expires_at > $2 AND NOT COALESCE(b.blocked,false)
       ORDER BY g.expires_at, g.id`, [accountId, clock, ['reserved','dispatched','pending_reconciliation']])).rows;
     const activePaid = rows.filter(row => row.plan !== 'free').sort((a, b) => PLANS[b.plan as PlanId].credits - PLANS[a.plan as PlanId].credits)[0];
     // Paid grants replace the free allowance for their period; a dormant free row is not extra spend.
-    const eligible = rows.filter(row => activePaid ? row.plan !== 'free' : row.plan === 'free');
+    const policy=activePaid?undefined:await freePolicy(sql,accountId,fingerprint);
+    const eligible = rows.filter(row => activePaid ? row.plan !== 'free' : row.plan === 'free'&&freeGrantAllowed(row.source,policy!));
     const total = eligible.reduce((sum, row) => sum + BigInt(String(row.amount)), 0n);
     const remaining = eligible.reduce((sum, row) => sum + BigInt(String(row.remaining)), 0n);
     const plan = (activePaid?.plan ?? 'free') as PlanId;
@@ -38,6 +40,10 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
   }
   // Free grants require an explicit operator approval, just as paid grants require an invoice.
   // Reading an account, calling completions or crossing a month boundary cannot mint money.
-  return { grant, balance };
+  return { grant:(input:Grant)=>grantAmount(input,PLANS[input.plan].credits), balance,
+    async grantMonthlyFree(input:Omit<Grant,'plan'>){
+      if(!/^free-month:[a-f0-9-]{36}:\d{4}-\d{2}$/.test(input.source))throw new Error('Invalid monthly allowance source.');
+      await grantAmount({...input,plan:'free'},FREE_MONTHLY_CREDITS);
+    } };
 }
 export type CreditLedger = ReturnType<typeof creditLedger>;

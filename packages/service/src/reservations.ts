@@ -3,6 +3,7 @@ import type { Sql } from './accounts';
 import { calendarPeriod, CREDIT_SCALE, maximumCharge, PLANS, supplierMicros, TARIFF_VERSION, usageCharge, type PlanId } from './credits';
 import { ServiceFailure } from './errors';
 import { transaction, type Database } from './transactions';
+import {freePolicy,freeGrantAllowed,type EmailFingerprint} from './free-eligibility';
 
 const active = ['preflight', 'reserved', 'dispatched', 'pending_reconciliation'];
 const held = ['reserved', 'dispatched', 'pending_reconciliation'];
@@ -26,22 +27,23 @@ async function status(sql: Sql, row: Row, replay: boolean): Promise<RequestStatu
   const state = final ? final.outcome === 'confirmed' ? 'settled' : final.outcome === 'unknown' ? 'company_loss' : 'released' : String(row.state);
   return { id: String(row.id), state, model: String(row.model), plan: row.plan as PlanId, maxOutput: Number(row.max_output), replay, receipt: final };
 }
-async function eligibleGrants(sql: Sql, accountId: string, clock: Date) {
+async function eligibleGrants(sql: Sql, accountId: string, clock: Date,fingerprint?:EmailFingerprint) {
   const rows = (await sql.query(`SELECT g.*, g.amount
     + COALESCE((SELECT sum(e.amount) FROM credit_entries e WHERE e.grant_id=g.id),0)
     - COALESCE((SELECT sum(h.amount) FROM credit_holds h JOIN ai_requests r ON r.id=h.request_id WHERE h.grant_id=g.id AND r.state=ANY($3)),0) AS available
     FROM credit_grants g LEFT JOIN billing_accounts b ON b.account_id=g.account_id
-    WHERE g.account_id=$1 AND starts_at <= $2 AND expires_at > $2 AND (g.plan='free' OR NOT COALESCE(b.blocked,false))
+    WHERE g.account_id=$1 AND starts_at <= $2 AND expires_at > $2 AND NOT COALESCE(b.blocked,false)
     ORDER BY expires_at,g.id`, [accountId, clock, held])).rows;
   const paid = rows.some(row => row.plan !== 'free');
-  return rows.filter(row => paid ? row.plan !== 'free' : row.plan === 'free');
+  const policy=paid?undefined:await freePolicy(sql,accountId,fingerprint);
+  return rows.filter(row => paid ? row.plan !== 'free' : row.plan === 'free'&&freeGrantAllowed(row.source,policy!));
 }
 async function owned(sql: Sql, accountId: string, id: string) {
   const row = (await sql.query('SELECT * FROM ai_requests WHERE id=$1 AND account_id=$2', [id, accountId])).rows[0];
   if (!row) throw new ServiceFailure(404, 'request-not-found', 'This AI request is not available.', 'usage');
   return row;
 }
-export function reservations(db: Database, now: () => Date, newId: () => string) {
+export function reservations(db: Database, now: () => Date, newId: () => string,fingerprint?:EmailFingerprint) {
   async function prepare(input: Prepare): Promise<RequestStatus> {
     if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(input.key) || !/^[a-f0-9]{64}$/.test(input.digest)) throw new ServiceFailure(400, 'invalid-idempotency-key', 'Supply a valid request key.', 'request');
     return transaction(db, async sql => {
@@ -61,7 +63,7 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
       const rate = (await sql.query(`SELECT count(*) FILTER(WHERE account_id=$1) AS own, count(*) AS total FROM ai_requests WHERE created_at >= $2`, [input.accountId, minute])).rows[0]!;
       const losses = (await sql.query("SELECT count(*) AS n FROM usage_receipts WHERE account_id=$1 AND outcome='unknown' AND created_at >= $2", [input.accountId, new Date(clock.getTime() - 86_400_000)])).rows[0]!;
       if (integer(rate.own) >= 20n || integer(rate.total) >= 200n || integer(losses.n) >= 3n) throw new ServiceFailure(429, 'rate-limited', 'Too many AI requests. Try again later.', 'admission');
-      const grants = await eligibleGrants(sql, input.accountId, clock);
+      const grants = await eligibleGrants(sql, input.accountId, clock,fingerprint);
       const plan = grants.reduce<PlanId>((best, row) => PLANS[row.plan as PlanId].credits > PLANS[best].credits ? row.plan as PlanId : best, 'free');
       if (!(PLANS[plan].models as readonly string[]).includes(input.model)) throw new ServiceFailure(403, 'model-not-in-plan', 'Choose a model included in your plan.', 'model', 'ai.setModel');
       if (grants.reduce((sum, row) => sum + integer(row.available), 0n) <= 0n) throw new ServiceFailure(402, 'credits-exhausted', 'Your AI allowance is used up.', 'admission', 'account.open');
@@ -87,13 +89,14 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
         COALESCE(sum(held_supplier_micros) FILTER(WHERE plan='free'),0) AS free FROM ai_requests WHERE state=ANY($1)`, [held])).rows[0]!;
       const spent = (await sql.query(`SELECT COALESCE(sum(supplier_micros) FILTER(WHERE created_at >= $1),0) AS day,
         COALESCE(sum(supplier_micros) FILTER(WHERE created_at >= $2),0) AS month,
-        COALESCE(sum(supplier_micros) FILTER(WHERE created_at >= $1 AND free_pool),0) AS free FROM usage_receipts`, [day,month])).rows[0]!;
+        COALESCE(sum(supplier_micros) FILTER(WHERE created_at >= $1 AND free_pool),0) AS free,
+        COALESCE(sum(supplier_micros) FILTER(WHERE created_at >= $2 AND free_pool),0) AS free_month FROM usage_receipts`, [day,month])).rows[0]!;
       if (!limits.enabled || integer(exposure.active) >= integer(limits.concurrent) || integer(exposure.held)+cost > integer(limits.uncertain_micros) ||
         integer(exposure.held)+integer(spent.day)+cost > integer(limits.daily_micros) || integer(exposure.held)+integer(spent.month)+cost > integer(limits.monthly_micros) ||
-        (row.plan === 'free' && integer(exposure.free)+integer(spent.free)+cost > integer(limits.free_daily_micros))) throw new ServiceFailure(503, 'spend-limit', 'Hosted AI has reached its current service limit. Try again later.', 'admission');
+        (row.plan === 'free' && (integer(exposure.free)+integer(spent.free)+cost > integer(limits.free_daily_micros)||integer(exposure.free)+integer(spent.free_month)+cost > integer(limits.free_monthly_micros)))) throw new ServiceFailure(503, 'spend-limit', 'Hosted AI has reached its current service limit. Try again later.', 'admission');
       const recentTokens = (await sql.query('SELECT COALESCE(sum(input_tokens),0) AS n FROM ai_requests WHERE account_id=$1 AND created_at >= $2', [accountId,new Date(clock.getTime()-60_000)])).rows[0]!;
       if (integer(recentTokens.n)+BigInt(inputTokens) > 512_000n) throw new ServiceFailure(429, 'token-rate-limited', 'Too much AI context in a short period. Try again later.', 'admission');
-      const grants = await eligibleGrants(sql, accountId, clock);
+      const grants = await eligibleGrants(sql, accountId, clock,fingerprint);
       // A plan can expire while input is counted; recheck entitlement against the current grants.
       const currentPlan = grants.reduce<PlanId>((best, grant) => PLANS[grant.plan as PlanId].credits > PLANS[best].credits ? grant.plan as PlanId : best, 'free');
       if (currentPlan !== row.plan) throw new ServiceFailure(409, 'plan-changed', 'Your plan changed. Refresh your account before retrying.', 'admission', 'account.refresh');
@@ -115,6 +118,20 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
       if (row.state !== 'reserved' || (row.deadline as Date) <= now()) throw new ServiceFailure(409, 'request-state', 'This request cannot be dispatched.', 'admission');
       const account = (await sql.query('SELECT status FROM accounts WHERE id=$1', [accountId])).rows[0];
       if (account?.status !== 'active') throw new ServiceFailure(403, 'account-inactive', 'This account cannot use hosted AI.', 'account');
+      if (row.plan !== 'free') {
+        // Refunds, disputes and period expiry can invalidate a hold before provider generation starts.
+        const grants = await eligibleGrants(sql, accountId, now());
+        const allocations = (await sql.query('SELECT grant_id FROM credit_holds WHERE request_id=$1', [id])).rows;
+        if (!allocations.length || allocations.some(hold => !grants.some(grant => grant.id === hold.grant_id))) {
+          throw new ServiceFailure(403, 'paid-allowance-inactive', 'This paid allowance is no longer available. Refresh your account before retrying.', 'admission', 'account.refresh');
+        }
+      }
+      if(row.plan==='free'){
+        const grants=await eligibleGrants(sql,accountId,now(),fingerprint);
+        const allocated=(await sql.query('SELECT grant_id FROM credit_holds WHERE request_id=$1',[id])).rows;
+        if(!allocated.length||allocated.some(hold=>!grants.some(grant=>grant.id===hold.grant_id)))throw new ServiceFailure(403,'free-allowance-revoked','This free allowance is no longer eligible.','admission');
+
+      }
       await sql.query("UPDATE ai_requests SET state='dispatched',updated_at=$2 WHERE id=$1", [id,now()]);
     });
   }

@@ -41,8 +41,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
   const body={protocol:1,turnId:'turn-one',round:0,model:'gpt-5.4-mini',maxTokens:1000,system:'project context',messages:[{role:'user',content:[{type:'text',text:'inspect'}]}],tools:[]};
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
-    const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}
+    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql','010-free-monthly-allowance.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
+    const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}await db.query('UPDATE ai_limits SET free_monthly_micros=50000000');
     server.listen(0,'127.0.0.1');await once(server,'listening');url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
   beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');counted=undefined;generated=0;mode='complete';});
@@ -62,8 +62,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     const pause=await readFile(new URL('../../../infra/google/sql-staging-ai-paused.sql',import.meta.url),'utf8');
     try {
       await db.query(pause);await db.query(pause);
-      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
-        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
+      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,free_monthly_micros,uncertain_micros FROM ai_limits')).rows[0])
+        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',free_monthly_micros:'0',uncertain_micros:'0'});
       for(const uid of ['free','paid']) {
         const response=await send('paused',body,`Bearer ${uid}`);
         expect(response.status).toBe(503);expect(await response.json()).toMatchObject({code:'ai-unavailable'});
@@ -71,13 +71,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       expect(counted).toBeUndefined();expect(generated).toBe(0);
       expect((await db.query('SELECT * FROM ai_requests')).rows).toHaveLength(0);
       expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
-      expect((await ledger.balance(paid.id)).availableCredits).toBe(4000000);
+      expect((await ledger.balance(paid.id)).availableCredits).toBe(10000000);
       await db.query('DELETE FROM ai_limits');await db.query('INSERT INTO ai_limits(id) VALUES(true)');
-      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
-        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
+      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,free_monthly_micros,uncertain_micros FROM ai_limits')).rows[0])
+        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',free_monthly_micros:'0',uncertain_micros:'0'});
     } finally {
-      await db.query('UPDATE ai_limits SET enabled=$1,daily_micros=$2,monthly_micros=$3,free_daily_micros=$4,uncertain_micros=$5 WHERE id=true',
-        [original.enabled,original.daily_micros,original.monthly_micros,original.free_daily_micros,original.uncertain_micros]);
+      await db.query('UPDATE ai_limits SET enabled=$1,daily_micros=$2,monthly_micros=$3,free_daily_micros=$4,uncertain_micros=$5,free_monthly_micros=$6 WHERE id=true',
+        [original.enabled,original.daily_micros,original.monthly_micros,original.free_daily_micros,original.uncertain_micros,original.free_monthly_micros]);
     }
   });
   it('streams normalized calls/continuation, with the authoritative receipt before executable tools',async()=>{

@@ -14,7 +14,9 @@ it('renders server balance and disables purchases when billing is unavailable',(
   const s={...structuredClone(initialState),panels:{account:true,'account.data':true},account:{...EMPTY_ACCOUNT,configured:true,status:'active' as const,uid:'a',email:'a@example.com',profile:{id:'a',email:'a@example.com',createdAt:'2026-10-14T00:00:00Z',status:'active' as const,usage:{plan:'free' as const,totalCredits:200000,availableCredits:199946,reservedCredits:0,periodEndsAt:'2026-11-01T00:00:00Z',models:['gpt-5.4-mini'],maxOutput:4096,contextLimit:64000,tariffVersion:'v1'},billing:{available:false,status:null,cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null}}}};
   const container=document.createElement('div');document.body.append(container);
   act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
-  expect(container.textContent).toContain('199,946');for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(true);expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.delete"]')?.disabled).toBe(true);act(()=>render(null,container));container.remove();
+  expect(container.textContent).toContain('199,946');
+  expect(Array.from(container.querySelectorAll('.account-plan p'),p=>p.textContent)).toEqual(['10,000,000 AI credits / paid period','16,000,000 AI credits / paid period','50,000,000 AI credits / paid period']);
+  for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(true);expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.delete"]')?.disabled).toBe(true);act(()=>render(null,container));container.remove();
 });
 function signedIn(plan:AccountPlan='free',merchantMode:NonNullable<AccountInfo['billing']>['merchantMode']='managed'){
   const billing:NonNullable<AccountInfo['billing']>={available:true,canManage:false,merchantMode,status:'active',cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null};
@@ -103,11 +105,49 @@ it.each([
   const s={...structuredClone(initialState),panels:{account:true},account:{...EMPTY_ACCOUNT,configured:true,status:'active' as const,uid:'a',email:'a@example.com',profile:{id:'a',email:'a@example.com',createdAt:'2026-10-14T00:00:00Z',status:'active' as const,billing:{available,status:null,cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null,...(mode?{merchantMode:mode}:{})}}}};
   const container=document.createElement('div');document.body.append(container);
   act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
-  expect(container.textContent).toContain('Seller and applicable tax are shown at checkout.');
-  expect(container.textContent?.includes('For new purchases, Hafreager kode & koblinger is the seller.')).toBe(mode==='direct');
+  expect(container.textContent).toContain('Hafreager kode & koblinger sells and provides FEM Lab subscriptions.');
+  expect(container.textContent?.includes('Stripe Managed Payments handles the transaction as merchant of record.')).toBe(mode==='managed');
+  expect(container.textContent).toContain('Checkout shows payment terms, applicable tax and total.');
   expect(container.textContent).not.toContain('Stripe is the seller');
   expect(container.textContent).toContain('USD list prices exclude applicable tax');
   for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(!available||mode!=='direct');
   if(!available)expect(container.textContent).toContain('New purchases and plan changes are currently unavailable.');
   act(()=>render(null,container));container.remove();
+});
+it.each([
+  {status:'review-required',enabled:false,text:'requires an eligibility review'},
+  {status:'eligible',enabled:true,text:'Eligibility approved'},
+  {status:'claimed',enabled:false,text:'has already been claimed'},
+  {status:'revoked',enabled:false,text:'eligibility has been revoked'},
+  {status:'paid',enabled:false,text:'not added to paid credits'},
+  {status:'unavailable',enabled:false,text:'temporarily unavailable'},
+  {status:undefined,enabled:false,text:'temporarily unavailable'},
+  {status:'future-status',enabled:false,text:'temporarily unavailable'},
+] as const)('requires authoritative free status $status before a claim',({status,enabled,text})=>{
+  const s=signedIn(),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  Object.assign(s.account.profile.usage,{totalCredits:0,availableCredits:0});
+  if(status)Object.assign(s.account.profile,{freeAllowance:{status,credits:6666666,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}});
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  const panel=container.querySelector('section[aria-label="Free monthly AI allowance"]')!;
+  expect(panel.textContent).toContain(text);expect(container.textContent).toContain('Signing up starts with zero credits.');
+  if(status)expect(panel.textContent).toContain('6,666,666 weighted AI credits');
+  expect(dispatch).not.toHaveBeenCalled();
+  const button=panel.querySelector<HTMLButtonElement>('[data-cmd="account.claimFreeAllowance"]')!;
+  expect(button.disabled).toBe(!enabled);act(()=>button.click());
+  if(enabled)expect(dispatch).toHaveBeenCalledExactlyOnceWith({cmd:'account.claimFreeAllowance'});else expect(dispatch).not.toHaveBeenCalled();
+  expect(s.journal).toBeNull();act(()=>render(null,container));container.remove();
+});
+it('denies a stale eligible free claim while paid credits, account loading or billing review are active',()=>{
+  for(const blocker of ['loading','paid','review']){
+    const paid=blocker==='paid';
+    const s=signedIn(paid?'plus':'free'),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+    Object.assign(s.account.profile,{freeAllowance:{status:'eligible',credits:6666666,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}});
+    if(blocker==='loading')Object.assign(s.account,{status:'loading'});
+    if(blocker==='review')s.account.profile.billing.reviewRequired=true;
+    act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+    const button=container.querySelector<HTMLButtonElement>('[data-cmd="account.claimFreeAllowance"]')!;
+    expect(button.disabled).toBe(true);act(()=>button.click());expect(dispatch).not.toHaveBeenCalled();
+    if(paid)expect(container.textContent).toContain('Free monthly credits are not added to paid credits.');
+    act(()=>render(null,container));container.remove();
+  }
 });
