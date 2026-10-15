@@ -89,3 +89,11 @@ and `FEMLAB_BASE_PATH=/` for Firebase Hosting. These are not service credentials
 and same-domain auth helper have been configured. Email links use session persistence,
 retain the pending email in this tab only, and remove the callback code after completing
 sign-in. No ID token is exposed by a host Command/Query or stored in the Journal.
+
+Production Assistant requests use the normalized streaming API and server usage receipts.
+A completed tool call cannot execute before a confirmed receipt; identity changes abort the
+request and clear the conversation and queued messages. First use requires an explicit
+account-scoped data-flow acknowledgement. No browser provider-key setting is offered.
+`FEMLAB_AI_MODE=development` is an explicit local/CI supplier-fixture build only; it is
+rejected when a hosted API origin is configured. CI tests the production anonymous/login
+boundary first and then runs existing supplier wire fixtures in this development host.

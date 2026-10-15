@@ -1,5 +1,4 @@
-import { AccountController } from './account/controller';
-import { firebaseAuth } from './account/firebase';
+import { accounts, accountLeaveHook } from './account/browser';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
@@ -36,7 +35,7 @@ const root = document.getElementById('app')!;
 const host = readHostCaps();
 const engineOptions = { gpu: false, threads: host.threads };
 const repository = new ProjectRepository(typeof indexedDB === 'undefined' ? memoryAtomicProjects() : indexedDbAtomicProjects(indexedDB), () => crypto.randomUUID());
-export const accounts = new AccountController(__FIREBASE_CONFIG__ && __AI_API_ORIGIN__ ? { auth: firebaseAuth(__FIREBASE_CONFIG__, location, sessionStorage, () => history.replaceState(null, '', location.pathname + location.hash)), fetch: (...args) => fetch(...args), origin: __AI_API_ORIGIN__, googleEnabled: __GOOGLE_SIGN_IN__, beforeLeave: prepareAccountNavigation, navigate: url => { location.assign(url); } } : null);
+
 const bundles = new WeakMap<object, Bundle>();
 const scriptJobs = new Set<{ runner: ScriptHost; producer: Producer }>();
 const nextMeta = (name: string): ProjectMeta => ({ id: crypto.randomUUID(), name, at: Date.now(), createdAt: Date.now(), commands: 0, hash: null, thumbnail: null });
@@ -337,6 +336,7 @@ export async function prepareAccountNavigation(): Promise<void> {
   if (id) sessionStorage.setItem('femlab.accountReturnProject', id);
   else sessionStorage.removeItem('femlab.accountReturnProject');
 }
+accountLeaveHook(prepareAccountNavigation);
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,

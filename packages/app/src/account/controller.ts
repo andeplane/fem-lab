@@ -17,6 +17,7 @@ export class AccountController {
     this.value={...EMPTY_ACCOUNT,configured:env!==null,status:env?'loading':'anonymous',googleEnabled:env?.googleEnabled??false};
     this.services={state:()=>this.state,signIn:(m,e)=>this.signIn(m,e),signOut:()=>this.signOut(),refresh:()=>this.refresh(),checkout:p=>this.redirect('/v1/billing/checkout',{plan:p}),portal:()=>this.redirect('/v1/billing/portal',{}),changePlan:p=>this.changePlan(p),exportData:()=>this.exportData(),deleteAccount:c=>this.deleteAccount(c),acceptDisclosure:()=>this.set({disclosureAccepted:true})};
   }
+  get version():number{return this.epoch}
   get state():AccountState{return this.value}
   subscribe(listener:(state:AccountState)=>void):()=>void{this.listeners.add(listener);listener(this.state);return()=>{this.listeners.delete(listener)}}
   private set(patch:Partial<AccountState>):void{this.value={...this.value,...patch};for(const fn of this.listeners)fn(this.value)}

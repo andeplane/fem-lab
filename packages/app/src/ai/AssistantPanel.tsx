@@ -1,3 +1,5 @@
+import { accounts } from '../account/browser';
+import { hostedProvider, hostedTools, HOSTED_COMMAND_INSTRUCTIONS } from './hosted';
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
 import { useStore } from '../ui/cmd';
 // The assistant drawer of docs/design/README.md. It owns the conversation (never persisted, never
@@ -65,7 +67,7 @@ const buffer = (text: string, producer?: Promise<RegistryProducer>): void => {
 
 const bufferMention = (ref: string): void => { chatBridge.pendingMentions.push(ref); };
 
-interface QueuedMessage { producer: Promise<RegistryProducer>; text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
+interface QueuedMessage { producer: Promise<RegistryProducer>; text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string; uid?:string; epoch?:number }
 
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
@@ -264,9 +266,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const { folder, skills } = ui;
   /** The folder a previous session remembered, by name only: reading its handle is a click (#247). */
   const [remembered, setRemembered] = useState<RememberedFolder | null>(null);
-  const [provider, setProvider] = useState<ProviderId>(() => defaultProvider());
-  const [model, setModel] = useState(() => storedModel(defaultProvider()));
+  const [provider, setProvider] = useState<ProviderId>(() => __HOSTED_AI__ ? 'openai' : defaultProvider());
+  const [model, setModel] = useState(() => __HOSTED_AI__ ? 'gpt-5.4-mini' : storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
+  const [charged, setCharged] = useState(0);
+  const [pendingUsage, setPendingUsage] = useState<string | null>(null);
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
   const summaries = useRef<RegistryProducer[]>([]);
@@ -276,11 +280,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const execute = useRef<(job: QueuedMessage, signal: AbortSignal) => Promise<void>>(async () => undefined);
 
   useEffect(() => {
+    if (__HOSTED_AI__) { setProvider('openai'); setModel(ui.account.profile?.usage?.models.includes(ui.assistantModel ?? '') ? ui.assistantModel! : ui.account.profile?.usage?.models[0] ?? 'gpt-5.4-mini'); return; }
     if (!ui.assistantModel) return;
     const owner = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(ui.assistantModel!));
     if (owner) { setProvider(owner); setModel(ui.assistantModel); }
-  }, [ui.assistantModel]);
+  }, [ui.assistantModel, ui.account.profile]);
   useEffect(() => () => { for (const owner of summaries.current) void owner.release(); for (const job of queue.current) void job.producer.then(owner => owner.release()).catch(() => undefined); queue.current = []; activeRequest.current?.abort(); }, []);
+  const accountVersion = useRef(accounts.version);
+  useLayoutEffect(() => {
+    if (!__HOSTED_AI__ || accountVersion.current === accounts.version) return;
+    accountVersion.current = accounts.version;
+    activeRequest.current?.abort();
+    for (const job of queue.current) void job.producer.then(owner => owner.release()).catch(() => undefined);
+    for (const owner of summaries.current) void owner.release();
+    summaries.current = []; queue.current = []; messages.current = []; setQueued([]); setItems([]); setTurn(null); setCharged(0); setPendingUsage(null); setStreaming(''); setImages([]); setDraft(''); setTokens([]);
+    chatBridge.clear(); chatBridge.pendingDraft = null;
+    void chatBridge.pendingProducer?.then(owner => owner.release()).catch(() => undefined); chatBridge.pendingProducer = undefined;
+  }, [ui.account.uid, accounts.version]);
   const composer = useRef<HTMLTextAreaElement>(null);
   const focusDraft = useRef(false);
   useLayoutEffect(() => {
@@ -290,7 +306,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     }
   });
 
-  const key = resolveKey(provider);
+  const key = __HOSTED_AI__ ? { key: null, source: 'none' as const } : resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
   const dispatch = useCallback((cmd: { cmd: string } & Record<string, unknown>) => registry.dispatch(cmd), [registry]);
 
@@ -364,18 +380,22 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
 
   const runMessage = useCallback(
     async (job: QueuedMessage, requestSignal: AbortSignal) => {
+      const sameAccount = () => !__HOSTED_AI__ || (accounts.state.uid === job.uid && accounts.version === job.epoch);
+      const add = (item: Item) => { if (sameAccount()) setItems(cur => [...cur, item]); };
+
       let producer: RegistryProducer;
       try { producer = await job.producer; } catch (error) { add({ kind: 'bad', text: String(error) }); return; }
       const registry = producer.registry;
       const signal = AbortSignal.any([requestSignal, producer.signal]);
       const ownedStore = () => producer.store() ?? store;
       const { text: line, images: attached, provider, model, key: apiKey } = job;
-      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
+      const providerImpl: Provider = __HOSTED_AI__ ? hostedProvider({origin:__AI_API_ORIGIN__!,uid:job.uid!,models:accounts.state.profile?.usage?.models ?? [],turnId:crypto.randomUUID(),fetch:(...args)=>fetch(...args),token:force=>accounts.token(job.uid!,force),current:sameAccount,request:id=>setPendingUsage(id),receipt:receipt=>{if(sameAccount()){setCharged(cur=>cur+receipt.chargedCredits);setPendingUsage(null);void accounts.refresh().catch(()=>undefined);}}}) : provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
       let prose = '';
       let proseContext: Omit<AssistantVerification, 'rows'> | null = null;
       const finishProse = () => {
+        if (!sameAccount()) return;
         if (prose.trim()) flushProse(prose, add, (rows) => {
           const record = { rows, ...proseContext! };
           const target = ownedStore();
@@ -387,15 +407,17 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         setStreaming('');
       };
       try {
-        if (signal.aborted) return;
+        if (signal.aborted || !sameAccount()) return;
         const built = await buildTurn({ text: line, registry, images: attached, selection: ownedStore().state.selection, skills });
-        if (signal.aborted) return;
+        if (signal.aborted || !sameAccount()) return;
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
         for (const bad of built.unresolved) add({ kind: 'bad', text: `${bad.ref}: ${bad.cause}` });
         messages.current.push(built.message);
 
-        const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal })) {
+        const baseSystem = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
+        const system = __HOSTED_AI__ ? baseSystem + '\n\n' + HOSTED_COMMAND_INSTRUCTIONS : baseSystem;
+        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: __HOSTED_AI__ ? hostedTools(registry) : toToolDefinitions(registry), messages: messages.current, signal, ...(__HOSTED_AI__ ? {maxTokens:accounts.state.profile?.usage?.maxOutput ?? 4096,timeoutMs:900_000} : {}) })) {
+          if (!sameAccount()) break;
           if (event.type === 'text') {
             if (!proseContext) {
               const state = ownedStore().state;
@@ -438,6 +460,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           ? { kind: 'tool', call: { ...i.call, status: 'cancelled', result: 'Not executed: response ended before this call could run.' } } : i));
         if (signal.aborted) add({ kind: 'prose', text: 'Response interrupted.' });
         await producer.release();
+        if (__HOSTED_AI__ && sameAccount()) void accounts.refresh().catch(() => undefined);
       }
     },
     [registry, ui.selection, skills, enabled, folder, store],
@@ -454,9 +477,12 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       }
       return;
     }
-    const selectedModel = store.state.assistantModel ?? model;
+    if (__HOSTED_AI__ && (!accounts.state.uid || accounts.state.status !== 'active' || !accounts.state.disclosureAccepted)) { void supplied?.then(owner => owner.release()); add({kind:'bad',text:accounts.state.uid ? 'Review and accept the AI disclosure before sending.' : 'Sign in to use the Assistant.'}); return; }
+    const available = accounts.state.profile?.usage?.models ?? ['gpt-5.4-mini'];
+    const preferredModel = store.state.assistantModel ?? model;
+    const selectedModel = __HOSTED_AI__ && !available.includes(preferredModel) ? available[0]! : preferredModel;
     const selectedProvider = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(selectedModel)) ?? provider;
-    const apiKey = resolveKey(selectedProvider).key;
+    const apiKey = __HOSTED_AI__ ? 'hosted' : resolveKey(selectedProvider).key;
     if (!apiKey) {
       void supplied?.then(owner => owner.release());
       add({ kind: 'bad', text: `no ${selectedProvider} API key yet — open Settings and paste one; it stays in this browser` });
@@ -465,7 +491,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     }
     const producer = supplied ?? acquireRegistryProducer(registry);
     void producer.catch(() => undefined);
-    queue.current.push({ producer, text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey });
+    queue.current.push({ producer, text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey, ...(__HOSTED_AI__ ? {uid:accounts.state.uid!,epoch:accounts.version} : {}) });
     followBottom.current = true;
     setQueued([...queue.current]);
     setDraft('');
@@ -797,19 +823,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
                 }}
               />
             </label>
-            <Cmd cmd="chat.send" class="send" disabled={compose() === '' && !(busy && queued.length)} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
+            <Cmd cmd="chat.send" class="send" disabled={(__HOSTED_AI__ && (ui.account.status !== 'active' || !ui.account.disclosureAccepted)) || (compose() === '' && !(busy && queued.length))} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
               {busy ? (compose() === '' && queued.length ? 'Send next' : 'Queue') : 'Send'}
             </Cmd>
           </div>
         </div>
 
+        {__HOSTED_AI__ ? <div class="hosted-account">
+          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${Math.floor(ui.account.profile?.usage?.availableCredits ?? 0).toLocaleString()} AI credits · Account` : 'Sign in for free AI'}</Cmd>
+          {ui.account.uid && !ui.account.disclosureAccepted ? <div class="ai-disclosure"><p>Your messages, selected model and project context, tool results and attached images pass through FEM Lab to OpenAI. Conversations stay in this browser; OpenAI processes requests under its API data policy. Review sensitive project content before sending.</p><a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noreferrer">Provider data policy</a><Cmd cmd="ai.acceptDisclosure" run={() => dispatch({cmd:'ai.acceptDisclosure'})}>Accept and enable AI</Cmd></div> : null}
+        </div> : null}
         <div class="model-row">
           <label>Model <select aria-label="Assistant model" data-cmd="ai.setModel" value={model}
             onChange={(e) => {
               const next = (e.target as HTMLSelectElement).value;
               void dispatch({ cmd: 'ai.setModel', model: next }).catch(error => add({ kind: 'bad', text: String(error) }));
             }}>
-            {(Object.keys(MODELS) as ProviderId[]).map(id => <optgroup label={id === 'openai' ? 'OpenAI' : 'Anthropic'}>
+            {__HOSTED_AI__ ? (ui.account.profile?.usage?.models ?? ['gpt-5.4-mini']).map(m => <option key={m} value={m}>{m}</option>) : (Object.keys(MODELS) as ProviderId[]).map(id => <optgroup label={id === 'openai' ? 'OpenAI' : 'Anthropic'}>
               {MODELS[id].map(m => <option key={m} value={m}>{m}</option>)}
             </optgroup>)}
           </select></label>
@@ -819,12 +849,12 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           <ol>{queued.map(job => <li>{job.text}{job.images.length ? ` · ${job.images.length} images` : ''}</li>)}</ol>
         </div> : null}
         <div class="cost">
-          <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${__HOSTED_AI__ || turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
+          <span>{__HOSTED_AI__ ? `${charged.toLocaleString()} AI credits used${pendingUsage ? ' · usage pending' : ''}` : key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
-      {openPanel('settings') ? (
+      {!__HOSTED_AI__ && openPanel('settings') ? (
         <div class="settings">
           <label>
             <span>Provider</span>
