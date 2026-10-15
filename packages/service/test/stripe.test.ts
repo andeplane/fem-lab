@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import {describe,expect,it} from 'vitest';
 import {billingTaxMode,stripeGateway,stripePayments} from '../src/stripe';
+import {CheckoutNotCreated} from '../src/checkout';
 describe('signed Stripe transport',()=>{
   it('verifies original bytes and uses the injected signature-age clock',()=>{
     const stripe=new Stripe('fixture'),gateway=stripeGateway(stripe,'whsec_fixture'),now=new Date('2026-10-14T12:00:00Z');
@@ -70,6 +71,32 @@ describe('signed Stripe transport',()=>{
     expect(requests[0]!.get('customer_update[name]')).toBe('auto');
     expect(requests[0]!.get('tax_id_collection[enabled]')).toBe('true');
     expect(requests[0]!.get('consent_collection[terms_of_service]')).toBe('required');
+  });
+  it.each([
+    {status:400,type:'invalid_request_error',param:'expires_at',safe:true},
+    {status:400,type:'invalid_request_error',param:'customer',safe:false},
+    {status:400,type:'invalid_request_error',safe:false},
+    {status:400,type:'api_error',param:'expires_at',safe:false},
+    {status:400,type:'idempotency_error',param:'expires_at',safe:false},
+    {status:400,param:'expires_at',safe:false},
+    {status:401,type:'invalid_request_error',param:'expires_at',safe:false},
+    {status:403,type:'invalid_request_error',param:'expires_at',safe:false},
+    {status:409,type:'invalid_request_error',param:'expires_at',safe:false},
+    {status:429,type:'invalid_request_error',param:'expires_at',safe:false},
+    {status:500,type:'invalid_request_error',param:'expires_at',safe:false},
+  ])('classifies only explicit expiry validation as not created: $status $type $param',async({status,type,param,safe})=>{
+    let requests=0;
+    const fetcher:typeof fetch=async()=>{requests++;return Response.json({error:{type,param,message:'Payment fixture rejection'}},{status,headers:{'Stripe-Should-Retry':'false'}})};
+    const payments=stripePayments(new Stripe('fixture',{maxNetworkRetries:0,httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','not_collecting');
+    const result=payments.checkout({customer:'cus_tax',price:'price_plus',accountId:'account-one',successUrl:'https://femlab.app/?billing=success',cancelUrl:'https://femlab.app/?billing=canceled',expiresAt:2000,key:'checkout-expiry-key'});
+    if(safe)await expect(result).rejects.toBeInstanceOf(CheckoutNotCreated);
+    else await expect(result).rejects.not.toBeInstanceOf(CheckoutNotCreated);
+    expect(requests).toBe(1);
+  });
+  it('keeps a transport failure ambiguous instead of classifying it as no Session',async()=>{
+    const fetcher:typeof fetch=async()=>{throw new Error('Connection lost')};
+    const payments=stripePayments(new Stripe('fixture',{maxNetworkRetries:0,httpClient:Stripe.createFetchHttpClient(fetcher)}),'bpc_fixture','femlab-test','not_collecting');
+    await expect(payments.checkout({customer:'cus_tax',price:'price_plus',accountId:'account-one',successUrl:'https://femlab.app/?billing=success',cancelUrl:'https://femlab.app/?billing=canceled',expiresAt:2000,key:'checkout-network-key'})).rejects.toBeInstanceOf(Stripe.errors.StripeConnectionError);
   });
   it('refuses pending checkout before making a Stripe request while preserving Portal access',async()=>{
     let requests=0;
