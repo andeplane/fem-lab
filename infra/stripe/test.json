@@ -12,7 +12,7 @@
   "webhookVerified": false,
   "activeTaxRegistrationVerified": false,
   "plans": {
-    "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmUHAAtmJJ65hfQVF4VCnb", "amountUsdCents": 4900, "credits": 4000000},
+    "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmUHAAtmJJ65hfQVF4VCnb", "amountUsdCents": 4900, "credits": 10000000},
     "pro": {"product": "femlab_pro_2026_10", "price": "price_1UQmUIAAtmJJ65hfQACv6dMm", "amountUsdCents": 14900, "credits": 16000000},
     "studio": {"product": "femlab_studio_2026_10", "price": "price_1UQmUJAAtmJJ65hf4OIUbmP4", "amountUsdCents": 49900, "credits": 50000000}
   },
