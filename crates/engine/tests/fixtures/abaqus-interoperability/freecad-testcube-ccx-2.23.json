@@ -1,0 +1,219 @@
+{
+  "format": "femlab-cross-solver-reference/1",
+  "scope": "Observed independently executed CalculiX displacement results; not proprietary Abaqus execution or FEM Lab output",
+  "input": {
+    "url": "https://raw.githubusercontent.com/JuliaTopOpt/TopOpt.jl/ca90253960194b18cfdd10521712bd90ba8d65dd/test/inp_parser/testcube.inp",
+    "bytes": 3436,
+    "sha256": "76d7a103106122f6d7872d4c1124223bfcd1e10eb968ce27e8213e4647048eb5",
+    "exporter": "FreeCAD 0.17.13514 (Git)",
+    "exportedAt": "2018-11-07",
+    "unchangedBeforeAndAfterRun": true
+  },
+  "solver": {
+    "name": "CalculiX",
+    "version": "2.23",
+    "binarySha256": "5a8bf50b5c3f4605e6342dfa5536609e39731370678e4cd067c5d1b2f01462c0",
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "physicsFilesByteIdenticalOfficialSourceArchive": 1180,
+    "sources": [
+      {
+        "url": "https://www.dhondt.de/ccx_2.23.src.tar.bz2",
+        "bytes": 1551289,
+        "sha256": "9c88385c10fb04f5dc6c4e98027a51bebdd8aee3920e05190d6c1dd08357d6e7"
+      },
+      {
+        "url": "https://www.dhondt.de/ccx_2.23.README.INSTALL",
+        "bytes": 17998,
+        "sha256": "c974f617cf8f57e3291c0531380a43f1134d48c5c641fb2d6d870ee6089e5835"
+      },
+      {
+        "url": "https://www.netlib.org/linalg/spooles/spooles.2.2.tgz",
+        "bytes": 4510271,
+        "sha256": "a84559a0e987a1e423055ef4fdf3035d55b65bbe4bf915efaa1a35bef7f8c5dd"
+      },
+      {
+        "url": "https://www.dhondt.de/ccx_2.23.SPOOLEScorrection.tar.bz2",
+        "bytes": 1932,
+        "sha256": "15528f09312dc7605c0600358f5e6de12945449f249dfcfca7417eed6c220b93"
+      },
+      {
+        "url": "https://codeload.github.com/opencollab/arpack-ng/tar.gz/40329031ae8deb7c1e26baf8353fa384fc37c251",
+        "release_tag": "3.9.1",
+        "commit": "40329031ae8deb7c1e26baf8353fa384fc37c251",
+        "bytes": 1021632,
+        "sha256": "bd86b9adf3152bda8a21b3b5faf65a877b209be0f33c4629e2073a073ea5d706"
+      }
+    ],
+    "build": "GCC/GFortran 13.4.0, GNU99 C; official SPOOLES corrections, ARPACK-NG 3.9.1 LP64, OpenBLAS 0.3.30, current Xcode 27 SDK; no solver physics source changes; final ARPACK-enabled build, not the failed preparation configuration",
+    "actualCommand": [
+      "ccx_2.23",
+      "-i",
+      "testcube"
+    ],
+    "actualEnvironment": {
+      "OMP_NUM_THREADS": "1",
+      "CCX_NPROC_RESULTS": "1",
+      "CCX_NPROC_STIFFNESS": "1",
+      "CCX_NPROC_EQUATION_SOLVER": "1",
+      "NUMBER_OF_CPUS": "1",
+      "LC_ALL": "C",
+      "OPENBLAS_NUM_THREADS": "1"
+    },
+    "exitCode": 0
+  },
+  "rawOutput": {
+    "file": "runs/testcube/testcube.dat",
+    "bytes": 3607,
+    "sha256": "1217bb8fbc9003188432ddb0164dc5059d18609d7102b7c618d5ec2f78d18329",
+    "set": "NALL",
+    "time": 1.0,
+    "displacementUnit": "mm",
+    "printedPrecision": "original DAT scientific notation, retained without smoothing or fit"
+  },
+  "externalEvidence": {
+    "manifestSha256": "172ec4cb6665944510d0ad0d0901c08f0268d6b7a5be355afb422001275633be",
+    "payloads": 66,
+    "bytes": 14938412,
+    "completedProvenanceSha256": "c243db9f7deda9dd637163c5817474478cbc3b8faf5c81aae7319d0955b0cefa",
+    "actualRunsSha256": "17af3baea81513b38bfaec02f78a39044b6f73b32c81cff1b336ade717799baf",
+    "location": "Independent 2026-10-15 reference package preserved outside the checkout; exact source archives, build commands/failures, binary and complete DAT/FRD/STA/stdout/stderr retained"
+  },
+  "limitations": [
+    "Original input requests U and S, not RF; no CalculiX reaction result is claimed",
+    "Pressure/load-sum reaction check is independent analytical equilibrium, not a printed CalculiX RF oracle",
+    "Integration-point stress ordering not independently reviewed; raw stress retained without numerical acceptance",
+    "This file is an observed cross-solver reference, not a mesh-refinement convergence Benchmark"
+  ],
+  "displacements": {
+    "1": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "2": [
+      3.094636e-05,
+      -5.444519e-06,
+      -0.0001269312
+    ],
+    "3": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "4": [
+      1.911302e-05,
+      -3.45686e-05,
+      -0.0001456065
+    ],
+    "5": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "6": [
+      -1.893151e-05,
+      2.081938e-05,
+      -0.0001397671
+    ],
+    "7": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "8": [
+      -2.690368e-05,
+      -2.520011e-05,
+      -0.0001387903
+    ],
+    "9": [
+      -2.34202e-05,
+      -2.517615e-06,
+      -0.0001348701
+    ],
+    "10": [
+      4.691607e-06,
+      1.357068e-05,
+      -0.0001293945
+    ],
+    "11": [
+      2.23738e-05,
+      -1.553819e-05,
+      -0.0001344135
+    ],
+    "12": [
+      -4.419338e-06,
+      -2.964675e-05,
+      -0.0001372841
+    ],
+    "13": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "14": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "15": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "16": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "17": [
+      2.307921e-05,
+      1.082844e-05,
+      -6.518682e-05
+    ],
+    "18": [
+      -1.901734e-05,
+      2.170859e-05,
+      -6.308198e-05
+    ],
+    "19": [
+      2.008586e-05,
+      -2.758754e-05,
+      -6.705426e-05
+    ],
+    "20": [
+      -2.19514e-05,
+      -2.011451e-05,
+      -7.102672e-05
+    ],
+    "21": [
+      -8.854774e-07,
+      -7.227846e-06,
+      -0.000137077
+    ],
+    "22": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "23": [
+      2.455047e-06,
+      1.572073e-05,
+      -6.034128e-05
+    ],
+    "24": [
+      -1.749345e-06,
+      -2.208762e-05,
+      -6.464129e-05
+    ],
+    "25": [
+      1.868247e-05,
+      -6.032718e-06,
+      -6.306754e-05
+    ],
+    "26": [
+      -1.909546e-05,
+      4.006944e-07,
+      -6.317794e-05
+    ]
+  }
+}

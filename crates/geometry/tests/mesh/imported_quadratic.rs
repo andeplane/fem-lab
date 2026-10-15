@@ -458,3 +458,70 @@ fn skew_curved_shared_vertex_uses_the_cone_instead_of_a_centroid_guess() {
     }
     certify_imported_geometry(&mesh).unwrap();
 }
+
+#[test]
+fn strong_injective_quadratic_shear_is_inconclusive_without_claiming_a_fold() {
+    // G=(x,y,z+3x²), det DG=1 everywhere. For Hex20, center normalization
+    // gives off-diagonal 3(2x-1)/2 in the x/z symmetric block, whose minor
+    // is negative at x=0,1. Tet10's centroid normalization likewise fails
+    // at x=1. This sufficient certificate must report inconclusive, not invalid.
+    for tet in [false, true] {
+        let mesh = source(tet, false, |[x, y, z]| [x, y, z + 3. * x * x]);
+        let error = format!("{:?}", certify_imported_geometry(&mesh).unwrap_err());
+        assert!(error.starts_with("Inconclusive"));
+        assert!(error.contains("quadratic cell global injectivity"));
+    }
+}
+
+#[test]
+fn parabolic_contact_at_only_midside_nodes_is_not_a_complete_reference_entity() {
+    // The upper tetrahedron is the identity map. The lower one is
+    // G(u,v,w)=(u,-w-(u-1/2)²,v), det DG=1. They meet precisely on
+    // x=1/2,y=0,0<=z<=1/2. Its endpoints are two shared midside nodes,
+    // but this line cuts a reference face's interior rather than an edge.
+    // q=y+(x-1/2)² is nonnegative on the upper cell and zero at those
+    // nodes; a nodal zero set must not masquerade as a complete entity.
+    let mut mesh = source(true, false, |p| p);
+    let mut points: Vec<[f64; 3]> = mesh.coords.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
+    for [u, v, w] in reference(true) {
+        let point = [u, -w - (u - 0.5) * (u - 0.5), v];
+        let node = if let Some(i) = points.iter().position(|p| *p == point) {
+            i
+        } else {
+            points.push(point);
+            points.len() - 1
+        };
+        mesh.blocks[0].conn.push(node as u32);
+    }
+    mesh.coords = points.into_iter().flatten().collect();
+    let shared: Vec<_> =
+        mesh.blocks[0].conn[..10].iter().filter(|n| mesh.blocks[0].conn[10..].contains(n)).copied().collect();
+    assert_eq!(shared, vec![4, 8]);
+    let error = format!("{:?}", certify_imported_geometry(&mesh).unwrap_err());
+    assert!(error.starts_with("Inconclusive"));
+    assert!(error.contains("labelled contact"));
+}
+
+#[test]
+fn genuinely_curved_shared_edge_preserves_its_complete_quadratic_entity() {
+    // The two reference tetrahedra occupy opposite y/z quadrants and meet
+    // only on the x edge. The determinant-one shear retains the curved edge
+    // y=0,z=x(1-x)/4, including its midside node at (1/2,0,1/16).
+    let mut mesh = source(true, false, shear);
+    let mut points: Vec<[f64; 3]> = mesh.coords.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
+    for [x, y, z] in reference(true) {
+        let point = shear([x, -y, -z]);
+        let node = if let Some(i) = points.iter().position(|p| *p == point) {
+            i
+        } else {
+            points.push(point);
+            points.len() - 1
+        };
+        mesh.blocks[0].conn.push(node as u32);
+    }
+    mesh.coords = points.into_iter().flatten().collect();
+    let shared: Vec<_> =
+        mesh.blocks[0].conn[..10].iter().filter(|n| mesh.blocks[0].conn[10..].contains(n)).copied().collect();
+    assert_eq!(shared, vec![0, 1, 4]);
+    certify_imported_geometry(&mesh).unwrap();
+}

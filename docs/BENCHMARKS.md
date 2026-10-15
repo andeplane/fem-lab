@@ -3012,6 +3012,19 @@ unchanged curved common face. The original CalculiX beam10p cells 50/60 provide 
 separate rounded-coordinate regression: no exact quadric exists through their
 whole common Tri6 polynomial, while a cubic identity does.
 
+Two adverse geometric controls retain the conservative proof boundary. The exact
+shear `G=(x,y,z+3x²)` has determinant one everywhere, while its center-normalized
+symmetric Jacobian loses positive definiteness near a reference corner; both
+Tet10 and Hex20 must return inconclusive rather than assert invalidity or admit
+an unproved map. Separately, `G(u,v,w)=(u,-w-(u-1/2)²,v)` has determinant one and
+meets the identity tetrahedron precisely on `x=1/2,y=0,0<=z<=1/2`. Only two
+midside nodes coincide. This segment cuts a face interior and is not a complete
+reference edge; its parabolic separator's nodal zeros must not become a false
+conforming-contact certificate.
+A positive control applies the determinant-one shear to tetrahedra in opposite
+y/z quadrants: their complete shared quadratic edge is
+`y=0,z=x(1-x)/4`, with midside node `(1/2,0,1/16)` retained.
+
 ## Explicit mean-dilatation Hex8 (issue #673)
 
 `mean-dilatation` is the eight-point Hex8 with volume-averaged trace of strain, matching
