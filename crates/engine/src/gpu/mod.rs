@@ -18,6 +18,7 @@ pub const SHADERS: &[(&str, &str)] = &[
     ("dot.wgsl", include_str!("../../shaders/dot.wgsl")),
     ("spmv_csr.wgsl", include_str!("../../shaders/spmv_csr.wgsl")),
     ("cg_vec.wgsl", include_str!("../../shaders/cg_vec.wgsl")),
+    ("aggregation_vec.wgsl", include_str!("../../shaders/aggregation_vec.wgsl")),
 ];
 
 /// Threads per workgroup in every kernel.

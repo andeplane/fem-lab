@@ -370,3 +370,11 @@ formulation: eight-point integration with physical-volume-averaged volumetric st
 It preserves deviatoric/shear strain and uses the ordinary material extension point.
 Abaqus C3D8 imports select it; other supported source kinds retain full integration.
 Existing `full` Journals keep pointwise full integration. See ADR 0034.
+
+
+**Reduced near space** (ADR0038):
+Optional internal GPU-solver metadata carrying explicit original-node groups and physical
+homogeneous displacement candidates restricted to retained free rows. It is not a Journal
+object or a force pullback. Supports, slaves and inactive rotational rows prevent inferring
+node/component identities from a reduced row number. A fixed aggregation hierarchy converts
+these candidates to scaled coordinates during f64 setup; the f64 residual still decides success.

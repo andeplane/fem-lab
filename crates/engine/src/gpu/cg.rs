@@ -1,29 +1,27 @@
 //! The f32 conjugate gradient on the device, and the f64 refinement that wraps it (ADR 0002).
 //!
-//! The system handed to the GPU is the symmetrically Jacobi-scaled one, `K̃ = D^-½ K D^-½`,
-//! built once per matrix on the CPU in f64 and cast to f32. Its diagonal is exactly 1, so the
-//! Jacobi preconditioner *is* the identity: plain CG needs no preconditioner kernel at all, and
-//! the entries sit at O(1), which is what f32 wants. Each outer refinement step scales the f64
-//! residual in (`b̃ = s ⊙ r`) and scales the f32 answer out (`d = s ⊙ x̃`); nothing else crosses.
+//! The system handed to the GPU is symmetrically Jacobi scaled in f64, then rounded to
+//! f32. A fixed symmetric aggregation/Chebyshev cycle preconditions coupled systems;
+//! scaled diagonal systems retain their exact identity specialization. Physical reduced
+//! displacement candidates are supplied by procedures, while matrix-only callers use a
+//! constant candidate. Setup, scaling and every outer residual remain f64.
 //!
-//! α and β never leave the device: `p·q` and `r·r` are reduced by `dot.wgsl` and copied into an
-//! eight-float `scalars` buffer that `cg_vec.wgsl` reads and writes. Twenty-five iterations go
-//! into one command encoder, and only then is `scalars` read back to test convergence — one
-//! round trip per 25 iterations instead of per iteration.
-//! A device-side halt flag freezes vector updates after exact convergence or scalar breakdown,
-//! preserving the correction for the f64 outer loop while the rest of the batch drains.
-//! The next readback distinguishes that halt from budget exhaustion and records actual
-//! updates. An acceptable finite recurrence residual can still be assessed by the f64 loop;
-//! a rounded-operator breakdown with no usable update is a structured `solve.stalled` error.
-//! A finite partial correction still reaches the unchanged f64 acceptance test.
+//! α and β stay on the device: r·z drives PCG and the separate r·r measures its recurrence
+//! residual. A device halt freezes updates on exact convergence or nonpositive/nonfinite
+//! energy. Readback records actual updates at bounded submission boundaries and preserves
+//! finite partial corrections. Only the original f64 outer residual accepts the solution.
 //!
 //! Everything that needs a device lives in this file, including the error for not having one,
 //! so `src/solve/` reaches 100 % coverage on a machine with no adapter at all.
+
+mod aggregation;
 
 use crate::engine::{OnProgress, Progress};
 use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::Csr;
 use crate::gpu::{Gpu, MAX_PER_DIM, WORKGROUP};
+use crate::par::Pool;
+use crate::solve::aggregation::{self as setup, Limits, NearSpace};
 use crate::solve::pcg::{inv_diagonal, CpuPcg};
 use crate::solve::{refine::refine, LinearSolve, SolveInfo, SolveOptions};
 
@@ -34,17 +32,19 @@ const PQ: u64 = 2;
 const BB: u64 = 5;
 const HALTED: usize = 6;
 const ITERATIONS: usize = 7;
-/// Floats in `scalars` (`RZ_OLD, RZ_NEW, PQ, ALPHA, BETA, BB, HALTED, ITERATIONS`).
-const SCALARS: u64 = 8;
+const RR: u64 = 8;
+/// Floats in `scalars` (`RZ_OLD, RZ_NEW, PQ, ALPHA, BETA, BB, HALTED, ITERATIONS, RR`).
+const SCALARS: u64 = 9;
 /// Iterations recorded into one command encoder before the residual is read back.
 const PER_SUBMIT: usize = 25;
 
-/// Why the uploaded f32 system stopped. A curvature breakdown concerns that rounded
-/// operator; it does not establish that the original f64 stiffness is indefinite.
+/// Why the uploaded f32 system stopped. Nonpositive energy concerns its operator or
+/// preconditioner; it does not establish that the original f64 stiffness is indefinite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CgStopReason {
     Converged,
     IterationLimit,
+    /// Nonpositive p·A p or r·M^-1 r in the uploaded f32 calculation.
     NonPositiveCurvature,
     NonFinite,
 }
@@ -67,7 +67,7 @@ impl CgReport {
     pub fn check_correction(self, progress: OnProgress<'_>) -> Result<(), Error> {
         let cause = match self.stop {
             CgStopReason::NonPositiveCurvature if self.iterations == 0 => {
-                Some("nonpositive curvature in the uploaded f32 operator")
+                Some("nonpositive curvature in the uploaded f32 operator or preconditioner")
             }
             CgStopReason::NonFinite => Some("a nonfinite scalar in the uploaded f32 solve"),
             CgStopReason::Converged | CgStopReason::IterationLimit | CgStopReason::NonPositiveCurvature => None,
@@ -91,7 +91,7 @@ impl CgReport {
                 phase: "solve",
                 fraction: 0.5,
                 message: format!(
-                    "GPU CG stopped on nonpositive uploaded curvature after {} updates; checking the partial correction in f64",
+                    "GPU CG stopped on nonpositive uploaded operator/preconditioner energy after {} updates; checking the partial correction in f64",
                     self.iterations
                 ),
             })
@@ -102,7 +102,7 @@ impl CgReport {
     }
 
     fn from_scalars(s: &[f32; SCALARS as usize], submitted: usize, tol: f32) -> Self {
-        let relative_residual = s[RZ_OLD as usize].sqrt() / s[BB as usize].sqrt().max(f32::MIN_POSITIVE);
+        let relative_residual = s[RR as usize].sqrt() / s[BB as usize].sqrt().max(f32::MIN_POSITIVE);
         let stop = if s[HALTED] == 3.0 || !relative_residual.is_finite() {
             CgStopReason::NonFinite
         } else if s[HALTED] == 1.0 || relative_residual < tol {
@@ -146,13 +146,45 @@ pub async fn solve_refined(
     opts: &SolveOptions,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo), Error> {
+    solve_refined_with_space(gpu, k, b, opts, None, None, progress).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn solve_refined_with_space(
+    gpu: Option<&Gpu>,
+    k: &Csr,
+    b: &[f64],
+    opts: &SolveOptions,
+    pool: Option<&Pool>,
+    space: Option<&NearSpace>,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<f64>, SolveInfo), Error> {
     let gpu = gpu.ok_or_else(|| {
         Error::new(ErrorCode::Unsupported, "no GPU adapter; use cpu-pcg or cpu-direct")
             .at("solve")
             .suggest("solve.run { solver: 'cpu-pcg' }")
     })?;
-    let mut inner = Inner::Gpu(Box::new(GpuCg::new(gpu, k, opts).await?));
+    let mut inner = Inner::Gpu(Box::new(GpuCg::new_with_space(gpu, k, opts, pool, space).await?));
     refine(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const SETUP_BYTES: usize = 8 << 30;
+#[cfg(target_arch = "wasm32")]
+const SETUP_BYTES: usize = 1536 << 20;
+#[cfg(not(target_arch = "wasm32"))]
+const DEVICE_BYTES: u64 = 4 << 30;
+#[cfg(target_arch = "wasm32")]
+const DEVICE_BYTES: u64 = 1 << 30;
+
+fn setup_limits(k: &Csr, fine_setup_bytes: usize) -> Limits {
+    let root = k.nnz().max(k.n);
+    Limits {
+        max_levels: 16,
+        max_bytes: SETUP_BYTES.saturating_sub(fine_setup_bytes),
+        max_interpolation_nnz: root.saturating_mul(16).min(u32::MAX as usize),
+        max_operator_nnz: root.saturating_mul(32).min(u32::MAX as usize),
+    }
 }
 
 /// The scaled operator on the device, plus the two f32 buffers the f64 loop hands it.
@@ -172,14 +204,60 @@ pub struct GpuCg<'a> {
 impl<'a> GpuCg<'a> {
     /// Scale `k` symmetrically, cast it to f32 and upload it once.
     pub async fn new(gpu: &'a Gpu, k: &Csr, opts: &SolveOptions) -> Result<GpuCg<'a>, Error> {
+        Self::new_with_space(gpu, k, opts, None, None).await
+    }
+
+    async fn new_with_space(
+        gpu: &'a Gpu,
+        k: &Csr,
+        opts: &SolveOptions,
+        pool: Option<&Pool>,
+        space: Option<&NearSpace>,
+    ) -> Result<GpuCg<'a>, Error> {
+        // Device capacity and construction payloads are independent admissions. Refuse
+        // before allocating scaled copies or constructing the hierarchy; no CPU retry.
+        CgContext::admit(gpu, k, opts.gpu_chunk_rows)?;
+        let fine_bytes =
+            (k.n as u64).saturating_mul(44).saturating_add((k.nnz() as u64).saturating_mul(8)).saturating_add(8192);
+        let remaining = DEVICE_BYTES.checked_sub(fine_bytes).ok_or_else(|| {
+            Error::new(ErrorCode::GpuTooLarge, "the fine GPU system exceeds its admitted payload budget")
+                .at("solve/aggregation")
+                .suggest("mesh.generate with a coarser size, or use a host with a larger admitted solve budget")
+        })?;
+        let fine_setup_bytes = k.nnz().saturating_mul(12).saturating_add(k.n.saturating_mul(24)).saturating_add(8192);
+        if fine_setup_bytes > SETUP_BYTES {
+            return Err(Error::new(ErrorCode::SolveTooLarge, "scaled GPU input exceeds its construction budget")
+                .at("solve/aggregation")
+                .suggest("mesh.generate with a coarser size"));
+        }
         let scale: Vec<f64> = inv_diagonal(k).into_iter().map(f64::sqrt).collect();
+        let mut scaled = vec![0.0f64; k.nnz()];
         let mut vals = vec![0.0f32; k.nnz()];
         for row in 0..k.n {
             for e in k.row_ptr[row] as usize..k.row_ptr[row + 1] as usize {
-                vals[e] = (scale[row] * k.vals[e] * scale[k.col_idx[e] as usize]) as f32;
+                scaled[e] = scale[row] * k.vals[e] * scale[k.col_idx[e] as usize];
+                vals[e] = scaled[e] as f32;
             }
         }
-        let ctx = CgContext::new(gpu, k, &vals, opts.gpu_chunk_rows).await?;
+        // A diagonal's symmetric Jacobi scaling already has the exact identity
+        // preconditioner. This is an algebraic specialization, never a failure fallback.
+        let admitted = if setup::needs_aggregation(k) {
+            let limits = setup_limits(k, fine_setup_bytes);
+            let build = || setup::build(k, &scaled, &scale, space, limits);
+            let plan = match pool {
+                Some(pool) => pool.install(build),
+                None => build(),
+            }?;
+            Some(aggregation::admit(plan, remaining)?)
+        } else {
+            None
+        };
+        let mut ctx = CgContext::new(gpu, k, &vals, opts.gpu_chunk_rows).await?;
+        if let Some(plan) = admitted {
+            let preconditioner = aggregation::DevicePlan::new(gpu, &ctx, plan, &ctx._kept[0], &ctx.z).await?;
+            ctx.preconditioner = Some(preconditioner);
+            gpu.queue.write_buffer(&ctx._kept[2], 4, bytemuck::bytes_of(&1u32));
+        }
         Ok(GpuCg {
             gpu,
             ctx,
@@ -190,6 +268,24 @@ impl<'a> GpuCg<'a> {
             x32: vec![0.0; k.n],
             iterations: 0,
         })
+    }
+
+    /// Apply the uploaded fixed preconditioner to a residual in symmetrically scaled
+    /// coordinates. This low-level diagnostic exposes symmetry, linearity and positive
+    /// energy independently of CG; it does not test physical solution acceptance.
+    pub async fn apply_preconditioner(&self, residual: &[f32], out: &mut [f32]) -> Result<(), Error> {
+        if residual.len() != self.scale.len() || out.len() != self.scale.len() {
+            return Err(Error::schema("preconditioner vectors must match the reduced operator").at("solve/aggregation"));
+        }
+        self.gpu.queue.write_buffer(&self.ctx._kept[0], 0, bytemuck::cast_slice(residual));
+        self.gpu.queue.write_buffer(&self.ctx.scalars, HALTED as u64 * 4, bytemuck::bytes_of(&0.0f32));
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        match &self.ctx.preconditioner {
+            Some(plan) => plan.encode(&mut enc),
+            None => enc.copy_buffer_to_buffer(&self.ctx._kept[0], 0, &self.ctx.z, 0, (out.len() as u64) * 4),
+        }
+        self.gpu.queue.submit([enc.finish()]);
+        self.ctx.read_f32(self.gpu, &self.ctx.z, out).await
     }
 
     /// One inner solve: scale the f64 residual in, run CG, scale the f32 correction out.
@@ -226,10 +322,12 @@ pub struct CgContext {
     p: wgpu::Buffer,
     q: wgpu::Buffer,
     scalars: wgpu::Buffer,
+    z: wgpu::Buffer,
+    preconditioner: Option<aggregation::DevicePlan>,
     partials: wgpu::Buffer,
-    /// `spmv, dot_partial, dot_final, init, alpha, update_x_r, beta, update_p`.
+    /// `spmv, dot_partial, dot_final, init, alpha, update_x_r, beta, update_p, start_p`.
     pipelines: Vec<wgpu::ComputePipeline>,
-    /// `dot(p, q)`, `dot(r, r)`, `dot_final`, `init`, `alpha`, `update_x_r`, `beta`, `update_p`.
+    /// Dot products and vector-step bindings, indexed by the constants below.
     binds: Vec<wgpu::BindGroup>,
     grid_vec: [u32; 2],
     grid_dot: [u32; 2],
@@ -246,11 +344,13 @@ const ALPHA: usize = 4;
 const UPDATE_X_R: usize = 5;
 const BETA: usize = 6;
 const UPDATE_P: usize = 7;
+const START_P: usize = 8;
 /// Indices into [`CgContext::binds`]. The first three are the dot product's; the five that
 /// follow sit at the index of the pipeline they belong to, so `binds[INIT]` is `init`'s.
 const BG_PQ: usize = 0;
 const BG_RR: usize = 1;
 const BG_FINAL: usize = 2;
+const BG_RZ: usize = 9;
 
 /// The 2D grid that covers `n` items at [`WORKGROUP`] threads each, uncapped: every kernel here
 /// writes one element per thread, so the grid has to reach all of them.
@@ -277,6 +377,19 @@ fn split_rows(k: &Csr, max_nnz: usize, cap: usize) -> Vec<(usize, usize)> {
 }
 
 impl CgContext {
+    fn admit(gpu: &Gpu, k: &Csr, chunk_rows: Option<usize>) -> Result<Vec<(usize, usize)>, Error> {
+        gpu.check_size("the gpu conjugate gradient", (k.n as u64).saturating_mul(4))?;
+        let max_entries = gpu.max_buffer_bytes() / 4;
+        let cap = max_entries.saturating_sub(1).min(u32::MAX as u64) as usize;
+        let spans = split_rows(k, max_entries as usize, chunk_rows.unwrap_or(cap).min(cap).max(1));
+        // row_ptr includes a sentinel, even when a diagonal has only one entry per row.
+        let biggest = spans.iter().fold((k.n as u64).saturating_mul(4).max(SCALARS * 4), |m, &(row0, rows)| {
+            m.max((k.row_ptr[row0 + rows] - k.row_ptr[row0]) as u64 * 4).max((rows as u64 + 1) * 4)
+        });
+        gpu.check_size("the gpu conjugate gradient", biggest)?;
+        Ok(spans)
+    }
+
     /// Compile the kernels, split the matrix into chunks and upload everything once.
     pub async fn new(gpu: &Gpu, k: &Csr, vals: &[f32], chunk_rows: Option<usize>) -> Result<CgContext, Error> {
         let pipelines = gpu
@@ -289,20 +402,16 @@ impl CgContext {
                 ("cg_vec.wgsl", "update_x_r"),
                 ("cg_vec.wgsl", "beta"),
                 ("cg_vec.wgsl", "update_p"),
+                ("cg_vec.wgsl", "start_p"),
             ])
             .await?;
-        let max_nnz = (gpu.max_buffer_bytes() / 4) as usize;
-        let spans = split_rows(k, max_nnz, chunk_rows.unwrap_or(usize::MAX).max(1));
-        // One check for every buffer this context would need: the vectors and the widest chunk.
-        let biggest = spans
-            .iter()
-            .fold((k.n * 4) as u64, |m, &(row0, rows)| m.max((k.row_ptr[row0 + rows] - k.row_ptr[row0]) as u64 * 4));
-        gpu.check_size("the gpu conjugate gradient", biggest)?;
+        let spans = Self::admit(gpu, k, chunk_rows)?;
 
         let storage = wgpu::BufferUsages::STORAGE;
         let zeros = vec![0.0f32; k.n];
         let x = gpu.buffer_f32("cg x", &zeros, storage | wgpu::BufferUsages::COPY_SRC);
-        let r = gpu.buffer_f32("cg r", &zeros, storage);
+        let r = gpu.buffer_f32("cg r", &zeros, storage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC);
+        let z = gpu.buffer_f32("cg z", &zeros, storage | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST);
         // `p` in and `q` out are how `spmv` is checked against an f64 oracle on its own.
         let p = gpu.buffer_f32("cg p", &zeros, storage | wgpu::BufferUsages::COPY_DST);
         let q = gpu.buffer_f32("cg q", &zeros, storage | wgpu::BufferUsages::COPY_SRC);
@@ -316,7 +425,11 @@ impl CgContext {
         let partials =
             gpu.buffer_f32("cg partials", &vec![0.0f32; n_wg as usize], storage | wgpu::BufferUsages::COPY_SRC);
         let dot_params = gpu.buffer_u32("cg dot params", &[k.n as u32, n_wg], wgpu::BufferUsages::UNIFORM);
-        let vec_params = gpu.buffer_u32("cg vec params", &[k.n as u32], wgpu::BufferUsages::UNIFORM);
+        let vec_params = gpu.buffer_u32(
+            "cg vec params",
+            &[k.n as u32, 0],
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
 
         let mut chunks = Vec::with_capacity(spans.len());
         for (row0, rows) in spans {
@@ -369,7 +482,7 @@ impl CgContext {
                 entries: &entries,
             })
         };
-        // `cg_vec.wgsl` declares x, r, p, q, b, scalars, params at bindings 0..6; each entry
+        // `cg_vec.wgsl` declares x, r, p, q, b, scalars, params, z at bindings 0..7; each entry
         // point's auto layout holds the subset it reads or writes, so the bind group does too.
         let all_vec = [
             x.as_entire_binding(),
@@ -379,6 +492,7 @@ impl CgContext {
             b.as_entire_binding(),
             scalars.as_entire_binding(),
             vec_params.as_entire_binding(),
+            z.as_entire_binding(),
         ];
         let vec_bind = |label: &str, pipeline: usize, used: &[usize]| {
             let entries: Vec<wgpu::BindGroupEntry> = used
@@ -399,13 +513,17 @@ impl CgContext {
             vec_bind("alpha", ALPHA, &[5]),
             vec_bind("update_x_r", UPDATE_X_R, &[0, 1, 2, 3, 5, 6]),
             vec_bind("beta", BETA, &[5]),
-            vec_bind("update_p", UPDATE_P, &[1, 2, 5, 6]),
+            vec_bind("update_p", UPDATE_P, &[1, 2, 5, 6, 7]),
+            vec_bind("start_p", START_P, &[2, 5, 6, 7]),
+            dot_bind("dot r·z", DOT_PARTIAL, &r, &z, 0),
         ];
         Ok(CgContext {
             chunks,
             x,
             b,
             scalars,
+            z,
+            preconditioner: None,
             partials,
             pipelines,
             binds,
@@ -460,12 +578,24 @@ impl CgContext {
             self.encode_vec(&mut pass, UPDATE_X_R);
             self.encode_dot(&mut pass, BG_RR);
         }
-        self.copy_scalar(enc, RZ_NEW);
+        self.copy_scalar(enc, RR);
+        self.encode_preconditioned_dot(enc, RZ_NEW);
         {
             let mut pass = enc.begin_compute_pass(&Default::default());
             self.encode_vec(&mut pass, BETA);
             self.encode_vec(&mut pass, UPDATE_P);
         }
+    }
+
+    /// Apply the same fixed linear preconditioner to every residual. Plain CG's
+    /// identity specialization reuses the already reduced r·r without a device copy.
+    fn encode_preconditioned_dot(&self, enc: &mut wgpu::CommandEncoder, slot: u64) {
+        if let Some(preconditioner) = &self.preconditioner {
+            preconditioner.encode(enc);
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            self.encode_dot(&mut pass, BG_RZ);
+        }
+        self.copy_scalar(enc, slot);
     }
 
     /// Every readback in this file, so a lost device is reported from one place. Only the
@@ -526,8 +656,13 @@ impl CgContext {
             // after `init`, r is b, so one reduction gives both r·r and the ‖b‖ it is measured against
             self.encode_dot(&mut pass, BG_RR);
         }
-        self.copy_scalar(&mut enc, RZ_OLD);
+        self.copy_scalar(&mut enc, RR);
         self.copy_scalar(&mut enc, BB);
+        self.encode_preconditioned_dot(&mut enc, RZ_OLD);
+        if self.preconditioner.is_some() {
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            self.encode_vec(&mut pass, START_P);
+        }
         gpu.queue.submit([enc.finish()]);
 
         let mut done = 0;

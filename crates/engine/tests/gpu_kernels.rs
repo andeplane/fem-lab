@@ -39,6 +39,11 @@ fn started() -> std::time::Instant {
 /// The reduced stiffness and load of the `[nx, ny, nz]` steel cantilever under a tip shear —
 /// Benchmark B1's system, which is what every solver here is measured on.
 fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
+    let red = cantilever_reduced(n);
+    (red.k_ff, red.f_f)
+}
+
+fn cantilever_reduced(n: [usize; 3]) -> femlab_engine::fem::assembly::Reduced {
     let mesh: Mesh = Structured { kind: ElementKind::Hex8, n }.box_([1.0, 0.1, 0.1]);
     let mut sets = BTreeMap::new();
     for (name, faces) in &mesh.face_sets {
@@ -87,8 +92,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
     let mut f = a.f_thermal.clone();
     assemble_loads(&p, &mut f).expect("a traction on a real face");
     let rc = resolve(&p).expect("no conflict");
-    let red = reduce(&a.k, &f, &rc, &[]);
-    (red.k_ff, red.f_f)
+    reduce(&a.k, &f, &rc, &[])
 }
 
 /// A pseudo-random f32 vector; the same numbers on every adapter.
@@ -457,6 +461,172 @@ fn gpu_cg_reports_updates_budget_and_rounded_operator_breakdown() {
     }
 }
 
+/// The Dirichlet one-dimensional Laplacian has exact sine eigenvectors and positive
+/// energy. These sizes exercise a dense coarse solve, transfer, and multiple levels;
+/// no second implementation of the aggregation algorithm supplies an oracle.
+fn poisson(n: usize) -> Csr {
+    let mut row_ptr = vec![0];
+    let mut col_idx = Vec::new();
+    let mut vals = Vec::new();
+    for row in 0..n {
+        if row > 0 {
+            col_idx.push((row - 1) as u32);
+            vals.push(-1.0);
+        }
+        col_idx.push(row as u32);
+        vals.push(2.0);
+        if row + 1 < n {
+            col_idx.push((row + 1) as u32);
+            vals.push(-1.0);
+        }
+        row_ptr.push(vals.len() as u32);
+    }
+    Csr { n, row_ptr, col_idx, vals }
+}
+
+#[test]
+fn aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes() {
+    let g = gpu();
+    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    for n in [31, 127, 1023] {
+        let k = poisson(n);
+        let inner = pollster::block_on(GpuCg::new(&g, &k, &opts)).unwrap();
+        let (a, b) = data(n, 0.73);
+        let sum: Vec<f32> = a.iter().zip(&b).map(|(&x, &y)| x + y).collect();
+        let mut ma = vec![0.0; n];
+        let mut mb = vec![0.0; n];
+        let mut ms = vec![0.0; n];
+        pollster::block_on(inner.apply_preconditioner(&a, &mut ma)).unwrap();
+        pollster::block_on(inner.apply_preconditioner(&b, &mut mb)).unwrap();
+        pollster::block_on(inner.apply_preconditioner(&sum, &mut ms)).unwrap();
+        let aa = dot_f64(&a, &ma).0;
+        let bb = dot_f64(&b, &mb).0;
+        assert!(aa > 0.0 && bb > 0.0, "n={n}: nonpositive cycle energy {aa}, {bb}");
+        let asymmetry = (dot_f64(&a, &mb).0 - dot_f64(&b, &ma).0).abs();
+        assert!(asymmetry <= 2e-4 * (aa * bb).sqrt(), "n={n}: cycle asymmetry {asymmetry:e}");
+        let linear_error = ms
+            .iter()
+            .zip(&ma)
+            .zip(&mb)
+            .map(|((&s, &x), &y)| (s as f64 - x as f64 - y as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let output_norm = ms.iter().map(|&x| (x as f64).powi(2)).sum::<f64>().sqrt();
+        assert!(linear_error <= 2e-4 * output_norm, "n={n}: nonlinear cycle {linear_error:e}");
+        let mut again = vec![0.0; n];
+        pollster::block_on(inner.apply_preconditioner(&a, &mut again)).unwrap();
+        assert_eq!(ma, again, "n={n}: repeated cycle changed bits");
+        assert_eq!(
+            pollster::block_on(inner.apply_preconditioner(&a[..n - 1], &mut again)).unwrap_err().code,
+            ErrorCode::Schema
+        );
+        assert_eq!(
+            pollster::block_on(inner.apply_preconditioner(&a, &mut again[..n - 1])).unwrap_err().code,
+            ErrorCode::Schema
+        );
+
+        let angle = std::f64::consts::PI / (n + 1) as f64;
+        let eigenvalue = 4.0 * libm::sin(0.5 * angle).powi(2);
+        let exact: Vec<f64> = (1..=n).map(|i| libm::sin(angle * i as f64)).collect();
+        let rhs: Vec<f64> = exact.iter().map(|x| eigenvalue * x).collect();
+        let mut solutions = Vec::new();
+        for threads in [1, 4] {
+            let pool = Pool::new(threads);
+            let (got, info) = pollster::block_on(solve(&k, &rhs, &opts, &pool, Some(&g), &mut nop)).unwrap();
+            assert_eq!(info.solver, "gpu-pcg");
+            assert!(info.rel_residual < 100.0 * opts.rel_tol, "n={n}: {:?}", info);
+            let error = got.iter().zip(&exact).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt();
+            let norm = exact.iter().map(|x| x * x).sum::<f64>().sqrt();
+            assert!(error < 1e-6 * norm, "n={n}: sine solution error {error:e}");
+            solutions.push(got);
+        }
+        assert_eq!(solutions[0], solutions[1], "n={n}: thread count changed GPU solution bits");
+    }
+    // Exact diagonal specialization remains an identity map, including stored zeros.
+    let diagonal = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![4.0, 0.0, 0.0, 16.0] };
+    let inner = pollster::block_on(GpuCg::new(&g, &diagonal, &opts)).unwrap();
+    let mut out = [0.0; 2];
+    pollster::block_on(inner.apply_preconditioner(&[0.25, -0.5], &mut out)).unwrap();
+    assert_eq!(out, [0.25, -0.5]);
+    // The public matrix-only refinement wrapper has the same independent exact oracle.
+    let (got, info) =
+        pollster::block_on(femlab_engine::gpu::cg::solve_refined(Some(&g), &diagonal, &[1.0, -8.0], &opts, &mut nop))
+            .unwrap();
+    assert_eq!(got, [0.25, -0.5]);
+    assert_eq!(info.solver, "gpu-pcg");
+}
+
+/// Exercise the public procedure, including its physical reduced near-space handoff.
+/// Matrix-only tests above deliberately have no geometry metadata.
+fn solve_cantilever_model(e: &mut Engine, n: [usize; 3]) -> femlab_engine::query::ResultSummary {
+    let mesh = serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n[0],"ny":n[1],"nz":n[2]}},"formulation":"incompatible-modes"}).to_string();
+    for command in [
+        r#"{"cmd":"model.new","name":"GPU aggregation B1 cantilever"}"#,
+        r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","0.1 m","0.1 m"]}"#,
+        &mesh,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#,
+        r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#,
+        r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin","dofs":["ux","uy","uz"]}"#,
+        r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-1 kN"]}"#,
+        r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["tip"]}"#,
+        r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
+    ] {
+        pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+    }
+    serde_json::from_value(
+        serde_json::to_value(e.query(Query::Result { step: None, result_id: None }).unwrap()).unwrap(),
+    )
+    .unwrap()
+}
+
+fn cantilever_displacement(e: &mut Engine) -> Vec<f64> {
+    let field: femlab_engine::query::ResultField = serde_json::from_value(
+        serde_json::to_value(
+            e.query(Query::Field { step: None, result_id: None, field: "displacement".into() }).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(field.components, 3);
+    assert!(field.values.iter().all(|x| x.is_finite()));
+    field.values
+}
+
+/// Independent B1 Timoshenko tip displacement and unaggregated global equilibrium.
+/// The historical 2% bending tolerance and unchanged f64 residual policy are retained.
+fn check_cantilever_reference(e: &mut Engine, result: &femlab_engine::query::ResultSummary) {
+    assert_eq!(result.solver, "gpu-pcg");
+    assert!(result.residual < 1e-8, "true f64 residual {}", result.residual);
+    let query=serde_json::from_value(serde_json::json!({"query":"query.probe","step":"s","field":"displacement","component":2,"at":["1 m","0.05 m","0.05 m"]})).unwrap();
+    let probe: femlab_engine::query::ProbeResult =
+        serde_json::from_value(serde_json::to_value(e.query(query).unwrap()).unwrap()).unwrap();
+    let ei = 210e9 * 0.1 * 0.1f64.powi(3) / 12.0;
+    let shear = (5.0 / 6.0) * (210e9 / (2.0 * (1.0 + 0.3))) * 0.1 * 0.1;
+    let reference = -1000.0 / (3.0 * ei) - 1000.0 / shear;
+    assert!((probe.value.value / reference - 1.0).abs() < 0.02, "B1 tip {} vs {reference}", probe.value.value);
+    let equilibrium = result.static_equilibrium.as_ref().unwrap();
+    // One part per million of the 1 kN action is an independent force/moment gate;
+    // the solver's residual remains stricter and is never inferred from this ledger.
+    for component in &equilibrium.force_residual {
+        assert!(component.value.abs() < 0.001, "force residual {:?}", equilibrium.force_residual);
+    }
+    for component in &equilibrium.moment_residual {
+        assert!(component.value.abs() < 0.001, "moment residual {:?}", equilibrium.moment_residual);
+    }
+}
+
+#[test]
+fn production_gpu_aggregation_cantilever_matches_b1_and_thread_counts() {
+    let mut answers = Vec::new();
+    for threads in [1, 4] {
+        let mut e = Engine::new(Some(gpu()), Box::new(NoClock), threads);
+        let result = solve_cantilever_model(&mut e, [16, 4, 4]);
+        check_cantilever_reference(&mut e, &result);
+        answers.push(cantilever_displacement(&mut e));
+    }
+    assert_eq!(answers[0], answers[1], "physical near-space setup changed with thread count");
+}
+
 /// D5's CI sibling: 66k degrees of freedom solved on the GPU inside the f64 refinement loop,
 /// against the direct factorisation of the same matrix. The wall time is printed, never
 /// asserted — software adapters are for correctness, not for timing (AGENTS.md).
@@ -470,29 +640,31 @@ fn gpu_cg_reports_updates_budget_and_rounded_operator_breakdown() {
 #[ignore]
 fn the_sixty_six_thousand_dof_cantilever_matches_the_direct_solver() {
     let g = gpu();
-    let (k, f) = cantilever([50, 20, 20]);
-    let pool = Pool::new(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2));
+    let adapter = g.adapter.clone();
+    let red = cantilever_reduced([50, 20, 20]);
+    let pool = Pool::new(4);
     let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
     let t0 = started();
-    let (want, _) = pollster::block_on(solve(&k, &f, &direct, &pool, None, &mut nop)).expect("direct");
+    let (want, _) = pollster::block_on(solve(&red.k_ff, &red.f_f, &direct, &pool, None, &mut nop)).expect("direct");
     let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
-    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let mut e = Engine::new(Some(g), Box::new(NoClock), 1);
     let t1 = started();
-    let (got, info) = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop)).expect("gpu-pcg");
+    let result = solve_cantilever_model(&mut e, [50, 20, 20]);
+    check_cantilever_reference(&mut e, &result);
+    let full = cantilever_displacement(&mut e);
+    let got: Vec<f64> = red.free.iter().map(|&row| full[row as usize]).collect();
     let gpu_ms = t1.elapsed().as_secs_f64() * 1e3;
-    assert_eq!(info.solver, "gpu-pcg");
     let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
     let diff: Vec<f64> = got.iter().zip(&want).map(|(a, b)| a - b).collect();
     assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
-    println!(
-        "D5 CI sibling: {} equations, {} refinement steps, residual {:e}; gpu {gpu_ms:.0} ms vs direct {cpu_ms:.0} ms on {}",
-        k.n, info.iterations, info.rel_residual, g.adapter
-    );
-
-    // the same solve twice on one adapter is the same bits (plan A §5.4, R5)
-    let (again, _) = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop)).expect("gpu-pcg again");
-    let differing = got.iter().zip(&again).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
-    assert_eq!(differing, 0, "{differing} of {} components differ between two identical solves", k.n);
+    println!("D5 CI sibling: {} equations, {} refinement steps, residual {:e}; GPU {gpu_ms:.0} ms, direct {cpu_ms:.0} ms on {adapter}", red.k_ff.n,result.iterations,result.residual);
+    // Rebuild via the same public procedure at a second CPU pool size. Setup and
+    // same-adapter device arithmetic must retain the complete displacement bits.
+    drop(e);
+    let mut again = Engine::new(Some(gpu()), Box::new(NoClock), 4);
+    let repeated = solve_cantilever_model(&mut again, [50, 20, 20]);
+    check_cantilever_reference(&mut again, &repeated);
+    assert_eq!(full, cantilever_displacement(&mut again));
 }
 
 /// Benchmark B1's `[8,2,2]` cantilever through `solve.run { solver: 'gpu-pcg' }`: the whole
@@ -514,28 +686,26 @@ fn the_small_cantilever_solves_on_the_gpu_and_matches_the_direct_solver() {
     assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
 }
 
-/// The 800k-DOF run of Benchmark D5, by hand: `cargo test --release --features gpu-tests -- --ignored`.
-///
-/// It prints what happened and asserts nothing, because what happens is the open question: at
-/// this conditioning (κ ≈ 1e8) the unpreconditioned f32 CG does not converge inside the inner
-/// budget, and plan A's R3 says the refinement then reports `solve.stalled` and names
-/// `cpu-direct`. The number this prints is what an aggregation preconditioner has to beat.
+/// D5: 780,300 reduced equations, run explicitly on a real device only after host
+/// and device capacity admission. No giant direct factorisation supplies the oracle.
+/// Software adapters exercise the identical cycle in the smaller active cases above.
 #[test]
 #[ignore]
-fn the_million_dof_cantilever_prints_its_time() {
+fn the_million_dof_cantilever_meets_b1_and_the_f64_residual() {
     let g = gpu();
-    let (k, f) = cantilever([100, 50, 50]);
-    let pool = Pool::new(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2));
-    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let adapter = g.adapter.clone();
+    let mut e = Engine::new(Some(g), Box::new(NoClock), 4);
     let t = started();
-    let outcome = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop))
-        .map(|(_, info)| format!("{} refinement steps, residual {:e}", info.iterations, info.rel_residual));
+    let result = solve_cantilever_model(&mut e, [100, 50, 50]);
+    check_cantilever_reference(&mut e, &result);
+    let displacement = cantilever_displacement(&mut e);
+    assert_eq!(displacement.len(), 101 * 51 * 51 * 3);
+    assert_eq!(displacement.len() - 51 * 51 * 3, 780_300);
     println!(
-        "D5: {} equations, {} in {:.1} s on {}",
-        k.n,
-        outcome.unwrap_or_else(|e| e.cause),
-        t.elapsed().as_secs_f64(),
-        g.adapter
+        "D5: 780300 equations, {} refinement steps, f64 residual {:e}, {:.1} s on {adapter}",
+        result.iterations,
+        result.residual,
+        t.elapsed().as_secs_f64()
     );
 }
 
@@ -564,6 +734,24 @@ fn the_gpu_solver_reports_a_matrix_too_big_for_the_device_and_obeys_a_cancel() {
     let e = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop)).expect_err("vectors beyond 1 KiB");
     assert_eq!(e.code, ErrorCode::GpuTooLarge);
     assert!(e.cause.contains("gpu conjugate gradient"), "{}", e.cause);
+
+    // A tiny matrix still needs the complete scalar scratch. Both independent
+    // device limits must refuse it before buffer construction, not wgpu validation.
+    let tiny = poisson(2);
+    let vals: Vec<f32> = tiny.vals.iter().map(|&v| v as f32).collect();
+    for storage_limit in [false, true] {
+        g.limits.max_buffer_size = 1024;
+        g.limits.max_storage_buffer_binding_size = 1024;
+        if storage_limit {
+            g.limits.max_storage_buffer_binding_size = 16;
+        } else {
+            g.limits.max_buffer_size = 16;
+        }
+        let error = pollster::block_on(CgContext::new(&g, &tiny, &vals, None)).err().unwrap();
+        assert_eq!(error.code, ErrorCode::GpuTooLarge);
+        assert!(error.cause.contains("36 bytes"));
+        assert!(error.suggestion.unwrap().contains("coarser"));
+    }
 
     // and an adapter that cannot run a 256-thread workgroup fails at the kernels, before any buffer
     let mut small = gpu();
@@ -688,13 +876,13 @@ fn a_tied_assembly_solves_on_the_gpu_and_matches_the_direct_solver() {
     assert!((0..k.n).all(|r| k.row_ptr[r] < k.row_ptr[r + 1]), "every reduced row has entries");
 }
 
-/// #673: exercise the actual assembled B-bar operator, GPU Jacobi preconditioner and
+/// #673: exercise the actual assembled B-bar operator, GPU aggregation preconditioner and
 /// refinement against uniaxial elasticity, including Poisson contraction and recovered stress.
 #[test]
 fn mean_dilatation_hex8_gpu_patch_matches_uniaxial_elasticity() {
     let mut e = Engine::new(Some(gpu()), Box::new(NoClock), 2);
     for n in [2, 4, 8] {
-        let mesh=serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":1,"nz":1}},"formulation":"mean-dilatation"}).to_string();
+        let mesh=serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":2,"nz":2}},"formulation":"mean-dilatation"}).to_string();
         for command in [
             r#"{"cmd":"model.new","name":"GPU B-bar patch"}"#,
             r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","1 m","1 m"]}"#,

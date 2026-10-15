@@ -791,7 +791,7 @@ checked beyond aggregate counts.
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
-| D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
+| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Earlier Jacobi 66k result was green at residual 4.8e-10; the new aggregation source and asserted 780,300 case remain pending actual GPU acceptance | GPU PCG + f64 refinement at scale, without CPU fallback | pending #3 |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
@@ -3076,7 +3076,7 @@ values to IEEE binary32 makes all 825 meet that stricter policy, consistent with
 single-precision stored author result; the original storage precision is unknown. Neither
 the author values nor either declared tolerance is changed.
 
-The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
+The software-adapter GPU gate runs a uniaxial traction patch on 2×2×2, 4×2×2 and 8×2×2 Hex8 meshes,
 checking the closed-form extension, Poisson contraction and recovered stress through the
 actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.
 
@@ -3093,3 +3093,31 @@ produces the singular all-ones matrix. Loading its `(1,-1)` eigenvector must rep
 f64 matrix indefinite or silently solving on the CPU. A finite f64 load beyond the
 f32 range must report a nonfinite GPU scalar. This is a breakdown oracle, not a claim
 that rounding caused the large D5 failure.
+
+
+### Fixed symmetric GPU aggregation (#3, provisional source)
+
+The coupled-system PCG preconditioner is a fixed f64-setup/f32-device V-cycle, with
+Galerkin coarse operators, a stored prolongation and its actual transpose, matched
+four-stage forward/reverse Chebyshev smoothing, and a bounded coarse CᵀC map. Procedures
+supply physical reduced candidates and explicit node grouping; matrix-only calls use
+an algebraic constant. ADR0038 states the admission, arithmetic and reduction contract.
+These source changes are uncompiled and unaccepted until actual CI/device evidence is recorded.
+
+`aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes` uses the exact
+Dirichlet tridiagonal Laplacian at 31, 127 and 1023 rows. Its sine eigenvector and
+λ=4 sin²(π/(2(n+1))) provide independent solution oracles at multiple hierarchy depths.
+It checks cycle positive energy, linearity and bilinear symmetry within 2e-4 relative
+f32 allowance, repeated-map identity, final sine displacement within 1e-6 relative,
+unchanged f64 residual acceptance and exact 1/4-thread solution identity. This does not
+compare against another implementation of the cycle. Pure setup tests check QR candidate
+reproduction, Galerkin energy, actual transpose, disconnected and partially constrained
+node groups, fixed-order thread identity, range rejection and every explicit resource bound.
+
+The production Engine-path 1200-equation bending case checks the same independent B1
+reference and conservation gates as D5. The existing uniaxial mean-dilatation patch now
+includes a fine aggregation level and keeps its extension, Poisson contraction and stress
+tolerances unchanged. Device limits are tested independently for maxBufferSize and
+maxStorageBufferBindingSize, including a tiny valid matrix whose scalar scratch is larger
+than its matrix/vector buffers. Admission failures are structured and suggest a coarser mesh.
+No changed residual threshold, fallback solve or software-adapter timing claim is used.

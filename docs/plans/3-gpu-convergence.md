@@ -28,3 +28,19 @@ Elasticity aggregation needs the correct near-nullspace and degree-of-freedom gr
 - Record actual hierarchy/operator sizes, iteration counts, residuals and adapter identity. Only a real device run can support performance observations; software-adapter timings are not performance evidence.
 
 The initial source base is frozen import candidate `1986cd9064e30aaf9fbd73270433ee87b3c0f7a7`. Issue #3 remains open until the implementation and numerical/coverage gates pass. Issue #17 is claimed and delivered separately when its work actually starts.
+
+
+## Provisional source checkpoint
+
+The source now contains a deterministic vector smoothed-aggregation setup, a fixed GPU
+forward/reverse degree-four Chebyshev cycle, bounded CᵀC coarse application, and separate
+r·z/ r·r PCG reductions. Static procedures carry original-node groups and reduced physical
+modes through the existing solver boundary; public matrix-only entry points remain wrappers.
+Exact diagonals retain their algebraic identity specialization. ADR0038 records the tradeoff.
+
+This checkpoint is **uncompiled and unaccepted** pending remote compiler and actual GPU
+checks. No local build/device run is authorized during the shared disk resource window.
+The bounded independent CPU probes guide selection only. The 66k and asserted 780,300 cases
+remain required; the latter will not be allocated until a real peak/capacity estimate and
+compute lease are agreed. The branch is rebased from the original 1986 candidate onto merged
+import main 5c9 and incorporates the current 607 Checks freshness repair before publication.

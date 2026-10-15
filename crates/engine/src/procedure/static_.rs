@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::command::Field;
+use crate::command::{Field, Solver};
 use crate::engine::OnProgress;
 use crate::error::{Error, ErrorCode};
 use crate::fem::contact::{self, ActiveSet};
@@ -21,7 +21,58 @@ use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
 use crate::procedure::{
     report, retained_frame_count, rotation_field, time_grid, vector_field, Amplitude, History, StepResult,
 };
-use crate::solve::{direct::Direct, solve, solve_reusable, LinearSolve, SolveInfo, SolveOptions};
+use crate::solve::{
+    aggregation::{needs_aggregation, NearSpace},
+    direct::Direct,
+    resolve_solver, solve_reusable_with_space, LinearSolve, SolveInfo, SolveOptions,
+};
+
+/// Admit full and reduced mode columns before the geometry helper allocates them.
+/// This is a deterministic construction bound, not a claim about free host memory.
+const NEAR_SPACE_BYTES: usize = 256 << 20;
+
+fn admit_near_space(full_dofs: usize, retained_rows: usize, limit: usize) -> Result<(), Error> {
+    // Six full and reduced f64 columns, row groups, plus Vec metadata. Actual
+    // idealisations with fewer rigid modes consume less than this upper bound.
+    let bytes = (full_dofs as u64)
+        .saturating_add(retained_rows as u64)
+        .saturating_mul(6 * 8)
+        .saturating_add((retained_rows as u64).saturating_mul(4))
+        .saturating_add(1024);
+    if bytes > limit as u64 {
+        return Err(Error::new(
+            ErrorCode::SolveTooLarge,
+            format!("the reduced elastic near space exceeds its {limit}-byte construction bound"),
+        )
+        .at("solve/aggregation")
+        .suggest("mesh.generate with a coarser size, or solve.run { solver: 'cpu-direct' }"));
+    }
+    Ok(())
+}
+
+fn near_space(
+    p: &Problem<'_>,
+    red: &assembly::Reduced,
+    opts: &SolveOptions,
+    gpu_available: bool,
+) -> Result<Option<NearSpace>, Error> {
+    if !gpu_available
+        || resolve_solver(opts.solver, red.k_ff.n, gpu_available) != Solver::GpuPcg
+        || !needs_aggregation(&red.k_ff)
+    {
+        return Ok(None);
+    }
+    admit_near_space(p.n_dofs(), red.free.len(), NEAR_SPACE_BYTES)?;
+    let dpn = p.dofs_per_node();
+    let node_of_row = red.free.iter().map(|&dof| dof / dpn as u32).collect();
+    let modes = checks::rigid_basis(p.mesh, &p.idealisation, dpn)
+        .into_iter()
+        .map(|(_, full)| red.free.iter().map(|&dof| full[dof as usize]).collect())
+        .collect();
+    // H=T E_free has identity retained rows, so these displacement coordinates generate
+    // legal homogeneous corrections. T^T is a force pullback and is not used here.
+    Ok(Some(NearSpace { node_of_row, modes }))
+}
 
 /// The retained frames of an amplituded Step, from the two solved parts of `u(t) = u_th + g·u_L`.
 ///
@@ -99,7 +150,9 @@ pub(crate) async fn statics(
     // because what reaches a solver is still a plain reduced `k_ff` (plan B §1).
     let (kt, ft) = pool.install(|| mpc::transform(&a.k, &f, &mpc));
     let red = assembly::reduce(&kt, &ft, &rc, &mpc.slaves);
-    let (u_f, solver, factored) = solve_reusable(&red.k_ff, &red.f_f, opts, pool, gpu, progress).await?;
+    let space = near_space(p, &red, opts, gpu.is_some())?;
+    let (u_f, solver, factored) =
+        solve_reusable_with_space(&red.k_ff, &red.f_f, opts, pool, gpu, space.as_ref(), progress).await?;
     let mut u = assembly::expand(&red, &u_f);
     mpc::recover(&mpc, &mut u);
     Ok(Statics { pat, a, applied, f, rc, mpc, red, u, solver, factored })
@@ -208,11 +261,13 @@ async fn active_set_solve(
         let m = base.with_active(&set.active, true, dpn);
         let (kt, ft) = pool.install(|| mpc::transform(&a.k, f, &m));
         let red = assembly::reduce(&kt, &ft, rc, &m.slaves);
-        let (u_f, solver, factored) = match solve_reusable(&red.k_ff, &red.f_f, opts, pool, gpu, progress).await {
-            Ok(s) => s,
-            Err(e) if e.code == ErrorCode::SolveNotPositiveDefinite => return Err(contact::lifted_off(p, &m, set)),
-            Err(e) => return Err(e),
-        };
+        let space = near_space(p, &red, opts, gpu.is_some())?;
+        let (u_f, solver, factored) =
+            match solve_reusable_with_space(&red.k_ff, &red.f_f, opts, pool, gpu, space.as_ref(), progress).await {
+                Ok(s) => s,
+                Err(e) if e.code == ErrorCode::SolveNotPositiveDefinite => return Err(contact::lifted_off(p, &m, set)),
+                Err(e) => return Err(e),
+            };
         let mut u = assembly::expand(&red, &u_f);
         mpc::recover(&m, &mut u);
         let r = contact::residual(&a.k, &u, f);
@@ -356,7 +411,9 @@ pub(crate) async fn post(
             // `Tᵀf_thermal`, because the reduced system this is solved against is `TᵀKT`.
             let ft_th = mpc::transpose_load(&mpc, &a.f_thermal);
             let f_th: Vec<f64> = red.free.iter().map(|&dof| ft_th[dof as usize]).collect();
-            let (th_f, th) = solve(&red.k_ff, &f_th, opts, pool, gpu, &mut progress).await?;
+            let space = near_space(p, &red, opts, gpu.is_some())?;
+            let (th_f, th, _) =
+                solve_reusable_with_space(&red.k_ff, &f_th, opts, pool, gpu, space.as_ref(), &mut progress).await?;
             for (i, &dof) in red.free.iter().enumerate() {
                 u_th[dof as usize] = th_f[i];
             }
@@ -592,4 +649,20 @@ pub fn run_history(
         assumptions: Vec::new(),
         contacts: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod aggregation_admission_tests {
+    use super::*;
+
+    #[test]
+    fn near_space_is_admitted_before_full_and_reduced_columns_are_allocated() {
+        // Six columns for two full and one retained DOF, one u32 group and metadata.
+        admit_near_space(2, 1, 1172).unwrap();
+        let error = admit_near_space(2, 1, 1171).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
+        assert!(error.suggestion.unwrap().contains("coarser"));
+        assert_eq!(admit_near_space(usize::MAX, usize::MAX, 1024).unwrap_err().code, ErrorCode::SolveTooLarge);
+    }
 }
