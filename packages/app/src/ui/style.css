@@ -1411,11 +1411,16 @@ textarea:focus {
 .banner .code {
   color: var(--yellow);
 }
-.banner.capability-notes {
-  height: auto;
-  min-height: 32px;
+.capability-notes {
+  display: flex;
+  flex: none;
   flex-wrap: wrap;
-  padding-block: 6px;
+  gap: 4px 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-panel);
+  background: var(--bg-panel);
+  color: var(--text-low);
+  font-size: 12px;
 }
 .banner.error {
   background: var(--red-bg);

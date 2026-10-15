@@ -153,3 +153,33 @@ test('@sw cold Pages bootstrap waits for real SW control and downloads only the 
     expect(errors).toEqual([]);
   }
 });
+
+test('@cpu capability information preserves solve blockers and Assistant alignment across viewports', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', { value: undefined });
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+  });
+  await page.goto('./');
+  await solveBars(page);
+  const notice = page.getByRole('status', { name: 'Engine capabilities', exact: true });
+  await expect(notice).toContainText('so solves run on the CPU.');
+  await expect(page.locator('.banner')).toHaveCount(0);
+  for (const width of [1600, 1280, 1100]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+    await expect(page.locator('.assistant')).toBeVisible();
+    const drawer = (await page.locator('.assistant').boundingBox())!;
+    const workspace = (await page.locator('.workspace').boundingBox())!;
+    const status = (await notice.boundingBox())!;
+    const viewport = (await page.locator('.comparison-canvases').boundingBox())!;
+    expect(drawer.y).toBe(workspace.y);
+    expect(drawer.height).toBe(workspace.height);
+    expect(status.y + status.height).toBeLessThanOrEqual(viewport.y);
+    expect(viewport.height).toBeGreaterThan(100);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await expect(notice).toBeVisible();
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: false }));
+  }
+  await testInfo.attach('capability-note-workspace.png', { body: await page.screenshot(), contentType: 'image/png' });
+});

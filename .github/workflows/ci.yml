@@ -322,12 +322,15 @@ jobs:
           cp -R packages/app/dist/examples/thumbnails/. packages/app/public/examples/thumbnails/
       # Existing supplier wire fixtures use the explicit local development host.
       - run: npm run build -w packages/app
+      - name: chromium, cold Pages network boundary
+        run: xvfb-run -a npx playwright test e2e/browser-threads.spec.ts --project=sw --grep "cold Pages bootstrap"
+        working-directory: packages/app
       - name: chromium, cpu path
         run: xvfb-run -a npx playwright test --project=cpu
         working-directory: packages/app
       - name: chromium, service-worker isolation
         if: github.event_name != 'pull_request' || inputs.strict
-        run: xvfb-run -a npx playwright test --project=sw
+        run: xvfb-run -a npx playwright test --project=sw --grep-invert "cold Pages bootstrap"
         working-directory: packages/app
       - name: webgpu on swiftshader
         if: github.event_name != 'pull_request' || inputs.strict
