@@ -1,4 +1,4 @@
-import { FemError, type DifferenceField, type EngineTransport, type Query, type QueryResult, type ResultField, type ResultSummary, type RetainedResults, type Surface, type Valued } from '@femlab/registry';
+import { FemError, type DifferenceField, type EngineTransport, type FrameResult, type FramesResult, type Query, type QueryResult, type ResultField, type ResultSummary, type RetainedResults, type Surface, type Valued } from '@femlab/registry';
 import { expect, it, vi } from 'vitest';
 import { fakeTransport, RESULT } from '../../registry/test/fakes';
 import { ResultComparison, type ComparisonViewer } from '../src/result-comparison';
@@ -14,7 +14,7 @@ function viewer() {
     animate: vi.fn(), setField: vi.fn(), setDeformed: vi.fn(), setSurface: vi.fn(), setVisible: vi.fn(), setMode: vi.fn(),
     setDim: vi.fn(), setColormap: vi.fn(), setFieldValidity: vi.fn(), setSelection: vi.fn(), preset: vi.fn(), setProjection: vi.fn(), getProjection: () => 'perspective' as const,
     setLayer: vi.fn(() => true), setClip: vi.fn(), setTheme: vi.fn(), setHover: vi.fn(), setHighlight: vi.fn(),
-    viewportAspect: vi.fn(() => 4 / 3), screenshot: vi.fn(() => 'data:image/png;base64,pane'),
+    viewportAspect: vi.fn(() => 4 / 3), screenshot: vi.fn((_legend?: Parameters<ComparisonViewer['screenshot']>[0], _options?: Parameters<ComparisonViewer['screenshot']>[1]) => 'data:image/png;base64,pane'),
     setCamera: vi.fn((next: CameraState) => { camera = next; if (next.zoom !== undefined) zoom = next.zoom; }), getCamera: () => camera,
     setComparisonFrameHeight: vi.fn(), getCameraZoom: () => zoom, setCameraZoom: vi.fn((next: number) => { zoom = next; }),
   } satisfies ComparisonViewer;
@@ -307,4 +307,85 @@ it('does not overwrite a concurrent Model edit or eviction with status captured 
     if (evicted) expect(comparison.state().right?.error?.code).toBe('not-found');
     else expect(comparison.state().right?.summary.stale).toBe(true);
   }
+});
+
+function history(id: string, field: 'temperature' | 'displacement' = 'displacement'): FramesResult {
+  return { resultId: id, step: 'static', modelHash: id, stale: id === 'old', nodeCount: 3, field, components: 3, storedComponents: field === 'temperature' ? 1 : 3, retainedBytes: 240,
+    frames: [0, 0.4, 0.8].map((timeSi, index) => ({ index, timeSi, time: q(timeSi * 1000, 'ms') })) };
+}
+function retainedFrame(id: string, index: number, field: 'temperature' | 'displacement' = 'displacement'): FrameResult {
+  const frame = history(id, field).frames[index]!;
+  return { sample: { resultId: id, step: 'static', modelHash: id, frame }, field, components: 3, nodeCount: 3, unit: field === 'temperature' ? 'K' : 'm',
+    values: field === 'temperature' ? [273.15 + frame.timeSi, 0, 0, 273.15 + frame.timeSi, 0, 0, 273.15 + frame.timeSi, 0, 0] : [0, 0, 0, 0.001 * frame.timeSi, 0, 0, 0, 0.002 * frame.timeSi, 0] };
+}
+it('uses independently retained primary arrays for contour, deformation, legends, scientific picks and capture times', async () => {
+  const { comparison, left, right, reply } = setup();
+  reply(async (query, original) => {
+    if (query.query === 'query.frames') return history(query.resultId!);
+    if (query.query === 'query.frame') return retainedFrame(query.resultId!, query.sample?.kind === 'frame' ? query.sample.index : 2);
+    return original(query);
+  });
+  await comparison.configure({ mode: 'sideBySide', left: { ...operand('old', 'displacement', 0), sample: { kind: 'frame', index: 1 } }, right: { ...operand('new', 'displacement', 1), sample: { kind: 'time', time: '800 ms', sampling: 'exact' } } });
+  expect(comparison.state().left?.sample?.frame.time).toEqual(q(400, 'ms'));
+  expect(comparison.state().right?.sample?.frame.index).toBe(2);
+  expect(left.setDeformed).toHaveBeenLastCalledWith(Float32Array.from(retainedFrame('old', 1).values), 1);
+  expect(right.setDeformed).toHaveBeenLastCalledWith(Float32Array.from(retainedFrame('new', 2).values), 1);
+  expect(comparison.state().left?.legend?.max).toEqual(q(0.4, 'mm'));
+  const pick = await comparison.pick({ pane: 'left', resultId: 'old', at: [q(1.0004), q(0), q(0)] });
+  expect(pick?.value).toEqual(q(0.0004));
+  expect(pick?.samples.left?.frame.index).toBe(1);
+  expect(pick?.samples.right?.frame.index).toBe(2);
+  comparison.capture({ width: 900 });
+  expect(left.screenshot.mock.lastCall?.[1]?.title).toContain('frame 1 · 400 ms');
+  expect(right.screenshot.mock.lastCall?.[1]?.title).toContain('frame 2 · 800 ms');
+});
+
+it('uses a sampled thermal scalar without final-summary displacement, and verifies both engine difference sample receipts', async () => {
+  const { comparison, left, reply } = setup();
+  reply(async (query, original) => {
+    if (query.query === 'query.result') return { ...summaries[query.resultId!]!, extremes: [...summaries[query.resultId!]!.extremes, { ...RESULT.extremes[0]!, field: 'temperature', min: q(0, 'degC'), max: q(1, 'degC') }] };
+    if (query.query === 'query.frames') return history(query.resultId!, 'temperature');
+    if (query.query === 'query.frame') return retainedFrame(query.resultId!, query.sample?.kind === 'frame' ? query.sample.index : 2, 'temperature');
+    if (query.query === 'query.difference') return { ...diff([-0.4, -0.4, null]), unit: 'K', left: { ...diff([]).left, field: 'temperature', sample: retainedFrame('old', 1, 'temperature').sample }, right: { ...diff([]).right, field: 'temperature', sample: retainedFrame('new', 2, 'temperature').sample } };
+    return original(query);
+  });
+  const configuration = { mode: 'difference' as const, left: { ...operand('old', 'temperature', 0), sample: { kind: 'frame' as const, index: 1 } }, right: { ...operand('new', 'temperature', 0), sample: { kind: 'frame' as const, index: 2 } }, onto: 'right' as const };
+  await comparison.configure(configuration);
+  expect(comparison.state().left?.canDeform).toBe(false);
+  expect(comparison.state().difference?.canDeform).toBe(false);
+  expect(left.setDeformed).toHaveBeenLastCalledWith(null, 1);
+  expect(comparison.state().difference?.legend?.min.value).toBeCloseTo(-0.4);
+  expect(comparison.state().difference?.legend?.min.unit).toBe('degC');
+  comparison.capture({ width: 900 });
+  expect(left.screenshot.mock.lastCall?.[1]?.title).toContain('left old frame 1 · 400 ms · right new frame 2 · 800 ms');
+  const before = comparison.state().configuration;
+  reply(async (query, original) => {
+    if (query.query === 'query.frames') return history(query.resultId!, 'temperature');
+    if (query.query === 'query.frame') return retainedFrame(query.resultId!, query.sample?.kind === 'frame' ? query.sample.index : 2, 'temperature');
+    if (query.query === 'query.difference') return { ...diff([0, 0, 0]), left: { ...diff([]).left, sample: retainedFrame('old', 0, 'temperature').sample } };
+    return original(query);
+  });
+  await expect(comparison.configure(configuration)).rejects.toMatchObject({ code: 'result.stale', where: 'sample' });
+  expect(comparison.state().configuration).toEqual(before);
+});
+
+it('refuses historical derived fields and a wrong catalogue, and fences delayed frame completion after leaving Results', async () => {
+  const { comparison, left, reply, store } = setup();
+  reply(async (query, original) => query.query === 'query.frames' ? history(query.resultId!) : original(query));
+  await expect(comparison.configure({ ...pair, right: { ...pair.right, sample: { kind: 'frame', index: 0 } } })).rejects.toMatchObject({ code: 'unsupported', where: 'field' });
+  expect(left.setSurface).not.toHaveBeenCalled();
+  reply(async (query, original) => query.query === 'query.frames' ? history('different-engine-id') : original(query));
+  await expect(comparison.configure({ ...pair, left: { ...pair.left, sample: { kind: 'frame', index: 0 } } })).rejects.toMatchObject({ code: 'result.stale' });
+  let release!: (value: FrameResult) => void;
+  reply(async (query, original) => {
+    if (query.query === 'query.frames') return history(query.resultId!);
+    if (query.query === 'query.frame') return new Promise<FrameResult>(resolve => { release = resolve; });
+    return original(query);
+  });
+  const pending = comparison.configure({ ...pair, left: { ...pair.left, sample: { kind: 'frame', index: 1 } } });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  store.set({ viewMode: 'mesh' }); comparison.suspend();
+  release(retainedFrame('old', 1)); await pending;
+  expect(store.state.viewMode).toBe('mesh');
+  expect(left.setSurface).not.toHaveBeenCalled();
 });

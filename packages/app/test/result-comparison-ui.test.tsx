@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { afterEach, expect, it, vi } from 'vitest';
 import { RESULT } from '../../registry/test/fakes';
+import { FemError, type FramesResult } from '@femlab/registry';
 import { ComparisonControls, ComparisonPaneChrome } from '../src/ui/ResultComparison';
 import { Store } from '../src/store';
 import { afterEffects, waitFor } from './wait-for';
@@ -14,7 +15,10 @@ function setup() {
   const catalogue = { limit: 8, records: ['old', 'new'].map((id, i) => ({ id, step: 'static', solvedRevision: i, modelName: id, modelHash: id, inputHash: id, stale: i === 0, nodes: i ? 9 : 3, elements: i ? 4 : 1, fieldBytes: 72, meshBytes: 100, modelJsonBytes: 100 })) };
   store.set({ resultComparison: { ...store.state.resultComparison, catalogue } });
   const root = document.createElement('div'); document.body.append(root);
-  const query = vi.fn(async (input: Parameters<Query>[0]) => ({ ...RESULT, resultId: input['resultId'], extremes: [RESULT.extremes[0]!, { ...RESULT.extremes[0]!, field: 'vonMises' }] }));
+  const query = vi.fn(async (input: Parameters<Query>[0]) => {
+    if (input['query'] === 'query.frames') throw new FemError('unsupported', 'final-only History');
+    return { ...RESULT, resultId: input['resultId'], extremes: [RESULT.extremes[0]!, { ...RESULT.extremes[0]!, field: 'vonMises' }] };
+  });
   return { store, dispatch, root, query };
 }
 it('keeps the empty comparison strip mounted as the first retained Result fills its disabled controls', async () => {
@@ -59,7 +63,7 @@ it('scopes all pane controls to a retained id and shows honest stale, units, cov
   const { store, dispatch, root } = setup();
   const pane = { operand: { resultId: 'old', field: 'temperature' }, summary: { ...RESULT, stale: true }, label: 'temperature left − temperature right',
     legend: { min: { value: -10, unit: 'degC' }, max: { value: 10, unit: 'degC' }, colormap: 'viridis' as const, automatic: true, difference: true },
-    bodyNames: ['old-body'], hiddenBodies: [], canDeform: false, pick: { resultId: 'old', pane: 'difference' as const, field: 'temperature', component: null, at: [{ value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }] as [{ value: number; unit: string }, { value: number; unit: string }, { value: number; unit: string }], body: 'old-body', face: null, node: 2, value: null, difference: true }, error: null };
+    bodyNames: ['old-body'], hiddenBodies: [], canDeform: false, frames: null, sample: null, pick: { resultId: 'old', pane: 'difference' as const, field: 'temperature', component: null, at: [{ value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }] as [{ value: number; unit: string }, { value: number; unit: string }, { value: number; unit: string }], body: 'old-body', face: null, node: 2, value: null, difference: true, samples: { left: null, right: null } }, error: null };
   store.set({ resultComparison: { ...store.state.resultComparison, coverage: { insideNodes: 2, totalNodes: 3, outsideNodes: [2] }, interpolated: true } });
   await act(async () => render(<ComparisonPaneChrome pane={pane} name="difference" s={store.state} dispatch={dispatch} />, root));
   expect(root.textContent).toContain('stale'); expect(root.textContent).toContain('2/3 nodes covered'); expect(root.textContent).toContain('interpolated'); expect(root.textContent).toContain('Δ degC'); expect(root.textContent).toContain('unavailable coverage');
@@ -87,7 +91,7 @@ it('keeps an available pane field picker usable when the other retained id has b
 
 it('shows each exact retained Mesh count and preserves an evicted pane diagnostic without inventing counts', async () => {
   const { store, dispatch, root } = setup();
-  const pane = (resultId: string): ComparisonPaneState => ({ operand: { resultId, field: 'displacement', component: 0 }, summary: RESULT, label: 'ux', legend: null, bodyNames: [], hiddenBodies: [], canDeform: false, pick: null, error: null });
+  const pane = (resultId: string): ComparisonPaneState => ({ operand: { resultId, field: 'displacement', component: 0 }, summary: RESULT, label: 'ux', legend: null, bodyNames: [], hiddenBodies: [], canDeform: false, frames: null, sample: null, pick: null, error: null });
   const left = pane('old'), right = pane('new');
   await act(async () => render(<><ComparisonPaneChrome pane={left} name="left" s={store.state} dispatch={dispatch} /><ComparisonPaneChrome pane={right} name="right" s={store.state} dispatch={dispatch} /></>, root));
   expect([...root.querySelectorAll('.comparison-mesh')].map(element => element.textContent)).toEqual(['Mesh · nodes 3 · elements 1', 'Mesh · nodes 9 · elements 4']);
@@ -96,4 +100,26 @@ it('shows each exact retained Mesh count and preserves an evicted pane diagnosti
   await act(async () => render(<><ComparisonPaneChrome pane={evicted} name="left" s={store.state} dispatch={dispatch} /><ComparisonPaneChrome pane={right} name="right" s={store.state} dispatch={dispatch} /></>, root));
   expect(root.querySelector('.comparison-pane-title')?.textContent).toContain('unavailable or evicted');
   expect([...root.querySelectorAll('.comparison-mesh')].map(element => element.textContent)).toEqual(['Mesh · nodes 9 · elements 4']);
+});
+
+it('shows primary-only sampled choices and dispatches explicit unequal frame/time selectors without derived fallback', async () => {
+  const { store, dispatch, root, query } = setup();
+  const read: Query = async input => {
+    if (input['query'] !== 'query.frames') return query(input);
+    const frames: FramesResult = { resultId: String(input['resultId']), step: 'static', modelHash: String(input['resultId']), stale: false, nodeCount: 3, field: 'displacement', components: 3, storedComponents: 3, retainedBytes: 240,
+      frames: [0, 0.4, 0.8].map((timeSi, index) => ({ index, timeSi, time: { value: timeSi * 1000, unit: 'ms' } })) };
+    return frames;
+  };
+  await act(async () => render(<ComparisonControls s={store.state} dispatch={dispatch} query={read} />, root));
+  await waitFor(() => root.querySelector<HTMLSelectElement>('[aria-label="left field"]')?.options.length === 5);
+  const select = (label: string, value: string) => {
+    const element = root.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!; element.value = value; element.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  await act(async () => { select('left sample selection', 'frame'); select('right sample selection', 'time'); });
+  expect(root.querySelector('[aria-label="left field"]')?.textContent).not.toContain('von Mises');
+  await act(async () => { select('left retained frame', '1'); select('right time sampling', 'nearest'); });
+  const time = root.querySelector<HTMLInputElement>('[aria-label="right physical time"]')!;
+  await act(async () => { time.value = '450 ms'; time.dispatchEvent(new Event('input', { bubbles: true })); });
+  root.querySelector<HTMLButtonElement>('.comparison-actions .apply')!.click();
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.compareResults', mode: 'sideBySide', left: { resultId: 'old', field: 'displacement', sample: { kind: 'frame', index: 1 } }, right: { resultId: 'new', field: 'displacement', sample: { kind: 'time', time: '450 ms', sampling: 'nearest' } } });
 });

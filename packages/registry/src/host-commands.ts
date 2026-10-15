@@ -15,7 +15,7 @@ import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
 import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
 import {EMPTY_ACCOUNT,type AccountServices} from './account-types';
-import { ComparisonConfig, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, type ResultComparisonHost } from './result-comparison';
+import { ComparisonConfig, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, RetainedFrameSample, type ResultComparisonHost } from './result-comparison';
 export { MAX_MODEL_FILE_BYTES } from './model-file';
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -39,13 +39,9 @@ export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
 export const Animation = z.object({ step: z.string().min(1), mode: int.positive().optional(), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
-const TimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
 export const TransientPlayback = z.object({
   step: z.string(), playing: z.boolean(), speed: z.number().positive().optional(),
-  sample: z.union([
-    z.object({ kind: z.literal('frame'), index: int.nonnegative() }),
-    z.object({ kind: z.literal('time'), time: TimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
-  ]).optional(),
+  sample: RetainedFrameSample.optional(),
 });
 export const SelectionInput = z.object({
   load: z.string().min(1).optional(),
@@ -427,7 +423,7 @@ function comparisonHost(ctx: HostContext): ResultComparisonHost {
 }
 
 export const HOST_COMMANDS: HostDef[] = [
-  def('view.compareResults', 'sessionView', 'Configure two explicit immutable Result ids and fields. sideBySide draws their own retained surfaces with shared cameras and independent legends; difference draws engine left minus right on the required target side and reports interpolation/coverage. single restores the normal Result workflow. Model and Journal are unchanged; frames/playback are separate.', ComparisonConfig, (input, ctx) => comparisonHost(ctx).configure(input)),
+  def('view.compareResults', 'sessionView', 'Configure two explicit immutable Result ids and fields, each optionally selecting its own retained primary frame by exact/nearest physical time or retained index. Actual resolved ids and times remain visible; historical derived fields are unavailable. sideBySide draws their own retained surfaces with shared cameras and independent legends; difference draws engine left minus right on the required target side and reports interpolation/coverage. Omit samples for final fields; single restores the normal Result workflow. No Model or Journal change.', ComparisonConfig, (input, ctx) => comparisonHost(ctx).configure(input)),
   def('view.setComparisonLegend', 'sessionView', 'Set one explicitly identified comparison pane’s colormap or physical range. Bounds carry units; auto follows available data. Difference ranges describe difference amounts, so temperature conversion removes origin offsets. An obsolete pane/result id is refused; other panes and scientific fields are unchanged.', ComparisonLegendInput, (input, ctx) => comparisonHost(ctx).legend(input)),
   def('view.setComparisonVisible', 'sessionView', 'Show or hide named Bodies only in one comparison pane identified by its retained Result id. Names belong to that solved surface, including stale Results. Other panes, the current Model and the Journal are unchanged; scientific difference coverage continues to describe the full target Mesh.', ComparisonVisibilityInput, (input, ctx) => comparisonHost(ctx).visible(input)),
   def('view.pickComparison', 'sessionView', 'Pick the nearest visible retained surface entity at a unit-bearing world point, explicitly scoped to a pane and Result id. The readout uses that solve’s scientific field (or engine difference) and reports missing coverage as null. This never selects an editable object or spends a Properties pick target in the current Model.', ComparisonPickInput, (input, ctx) => comparisonHost(ctx).pick(input)),

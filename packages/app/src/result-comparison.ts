@@ -1,4 +1,4 @@
-import { FemError, type ComparisonConfiguration, type ComparisonLegendSpec, type ComparisonLegendState, type ComparisonOperandInput, type ComparisonPaneName, type ComparisonPaneState, type ComparisonPick, type ComparisonPickSpec, type ComparisonVisibilitySpec, type DifferenceField, type EngineError, type EngineTransport, type ResultComparisonHost, type ResultComparisonState, type ResultField, type ResultSummary, type RetainedResults, type Surface, type Valued } from '@femlab/registry';
+import { FemError, type ComparisonConfiguration, type ComparisonLegendSpec, type ComparisonLegendState, type ComparisonOperandInput, type ComparisonPaneName, type ComparisonPaneState, type ComparisonPick, type ComparisonPickSpec, type ComparisonVisibilitySpec, type DifferenceField, type EngineError, type EngineTransport, type FrameResult, type FramesResult, type ResolvedFrame, type ResultComparisonHost, type ResultComparisonState, type ResultField, type ResultSummary, type RetainedResults, type Surface, type Valued } from '@femlab/registry';
 import { fieldChoices, formatNumber, type FieldChoice } from './fields';
 import { checkResultIdentity } from './result-transfer';
 import type { Store } from './store';
@@ -24,6 +24,8 @@ interface Payload {
   unit: string;
   label: string;
   displacement: Float32Array | null;
+  frames: FramesResult | null;
+  sample: ResolvedFrame | null;
 }
 export interface ComparisonLifecycle {
   pauseSingle(): void;
@@ -32,6 +34,12 @@ export interface ComparisonLifecycle {
 const EMPTY_SURFACE = { positions: new Float32Array(), indices: new Uint32Array(), triBody: new Uint32Array(), triFace: new Uint32Array(), faceNames: [], bodyNames: [], source: 'mesh' as const };
 const quantity = (value: number, unit: string): Valued => ({ value, unit });
 const key = (operand: ComparisonOperandInput): string => `${operand.resultId}\0${operand.field}\0${operand.component ?? ''}`;
+function sameSample(a: ResolvedFrame | null, b: ResolvedFrame | null): boolean {
+  return a === null || b === null ? a === b : a.resultId === b.resultId && a.step === b.step && a.modelHash === b.modelHash && a.frame.index === b.frame.index && a.frame.timeSi === b.frame.timeSi;
+}
+function sampleCaption(sample: ResolvedFrame | null): string {
+  return sample ? `frame ${sample.frame.index} · ${formatNumber(sample.frame.time.value)} ${sample.frame.time.unit}` : 'final field';
+}
 function engineError(error: unknown): EngineError {
   if (error instanceof FemError) return error.toJSON();
   return { code: 'internal', cause: String(error), where: 'view.compareResults', suggestion: 'retry the selected Result from query.results' };
@@ -160,18 +168,35 @@ export class ResultComparison implements ResultComparisonHost {
   private async prepare(pane: 'left' | 'right', operand: ComparisonOperandInput): Promise<Payload> {
     const summary = await this.transport.query({ query: 'query.result', resultId: operand.resultId }) as ResultSummary;
     if (summary.resultId !== operand.resultId) throw new FemError('result.stale', 'the summary belongs to a different solve', 'resultId');
-    const request = { query: 'query.field' as const, resultId: operand.resultId, field: operand.field };
-    const [surface, field] = await Promise.all([this.transport.surface({ resultId: operand.resultId }), this.transport.query(request) as Promise<ResultField>]);
+    const [surface, { field, frames, sample }] = await Promise.all([this.transport.surface({ resultId: operand.resultId }), this.readField(operand)]);
     checkResultIdentity({ query: 'query.surface', resultId: operand.resultId }, surface);
-    checkResultIdentity(request, field);
     const values = scalarValues(field, operand);
     const unit = summary.extremes.find(e => e.field === operand.field)?.min.unit ??
       (operand.field.startsWith('mode:') ? summary.extremes.find(e => e.field === 'displacement')?.min.unit : undefined) ?? field.unit;
     const conversion = await this.conversion(field.unit, unit);
     const label = labelOf(operand, summary, field.components);
-    const displacement = operand.field.startsWith('mode:') ? Float32Array.from(field.values) :
+    const displacement = sample ? field.field === 'displacement' ? Float32Array.from(field.values) : null : operand.field.startsWith('mode:') ? Float32Array.from(field.values) :
       summary.extremes.some(e => e.field === 'displacement') ? await this.displacement(operand.resultId) : null;
-    return { pane, operand: { ...operand }, summary, surface, field, values, ...displayValues(values, conversion.scale, conversion.offset), ...conversion, unit, label, displacement };
+    return { pane, operand: { ...operand }, summary, surface, field, values, ...displayValues(values, conversion.scale, conversion.offset), ...conversion, unit, label, displacement, frames, sample };
+  }
+
+  private async readField(operand: ComparisonOperandInput): Promise<{ field: ResultField; frames: FramesResult | null; sample: ResolvedFrame | null }> {
+    if (!operand.sample) {
+      const request = { query: 'query.field' as const, resultId: operand.resultId, field: operand.field };
+      const field = await this.transport.query(request) as ResultField;
+      checkResultIdentity(request, field);
+      return { field, frames: null, sample: null };
+    }
+    const frames = await this.transport.query({ query: 'query.frames', resultId: operand.resultId }) as FramesResult;
+    if (frames.resultId !== operand.resultId) throw new FemError('result.stale', 'the frame catalogue belongs to a different solve', 'resultId');
+    if (operand.field !== frames.field) throw new FemError('unsupported', `this History retains only ${frames.field}`, 'field', 'select the primary field from query.frames, or omit sample for a final derived field');
+    const request = { query: 'query.frame' as const, resultId: operand.resultId, field: frames.field, sample: operand.sample };
+    const frame = await this.transport.query(request) as FrameResult;
+    checkResultIdentity(request, frame);
+    if (frames.modelHash !== frame.sample.modelHash || frames.field !== frame.field || frames.frames[frame.sample.frame.index]?.timeSi !== frame.sample.frame.timeSi)
+      throw new FemError('result.stale', 'the retained frame does not match its catalogue', 'sample', 'select a retained index from query.frames');
+    return { field: { resultId: frame.sample.resultId, step: frame.sample.step, field: frame.field, components: frame.components, nodeCount: frame.nodeCount,
+      per: 'node', entityCount: frame.nodeCount, unit: frame.unit, values: frame.values }, frames, sample: frame.sample };
   }
 
   private async displacement(resultId: string): Promise<Float32Array> {
@@ -183,6 +208,8 @@ export class ResultComparison implements ResultComparisonHost {
   private async prepareDifference(configuration: Extract<PairConfiguration, { mode: 'difference' }>, left: Payload, right: Payload) {
     const response = await this.transport.query({ query: 'query.difference', left: configuration.left, right: configuration.right, onto: configuration.onto }) as DifferenceField;
     checkResultIdentity({ query: 'query.difference', left: configuration.left, right: configuration.right, onto: configuration.onto }, response);
+    if (!sameSample(response.left.sample ?? null, left.sample) || !sameSample(response.right.sample ?? null, right.sample))
+      throw new FemError('result.stale', 'difference operands do not match the prepared retained frames', 'sample', 'retry the selected comparison samples');
     const target = configuration.onto === 'left' ? left : right;
     const values = projectValues(response.values, response.components);
     const conversion = await this.conversion(response.unit, target.unit);
@@ -198,7 +225,7 @@ export class ResultComparison implements ResultComparisonHost {
     const retain = prior && key(prior.operand) === key(payload.operand);
     return { operand: payload.operand, summary: payload.summary, label: payload.label,
       legend: this.legendOf(payload, retain ? prior.legend : null), bodyNames: [...payload.surface.bodyNames],
-      hiddenBodies: retain ? prior.hiddenBodies : [], canDeform: payload.displacement !== null, pick: null, error: null };
+      hiddenBodies: retain ? prior.hiddenBodies : [], canDeform: payload.displacement !== null, frames: payload.frames, sample: payload.sample, pick: null, error: null };
   }
   private legendOf(payload: Payload, prior: ComparisonLegendState | null): ComparisonLegendState | null {
     const bounds = extent(payload.values, payload.scale, payload.offset);
@@ -256,7 +283,8 @@ export class ResultComparison implements ResultComparisonHost {
     const raw = payload.values[picked.entity] ?? null;
     const pick: ComparisonPick = { resultId: input.resultId, pane: input.pane, field: payload.operand.field, component: payload.operand.component ?? null,
       at: [quantity(payload.surface.positions[picked.node * 3]!, 'm'), quantity(payload.surface.positions[picked.node * 3 + 1]!, 'm'), quantity(payload.surface.positions[picked.node * 3 + 2]!, 'm')],
-      body: picked.body, face: picked.face, node: picked.node, value: raw === null ? null : quantity(raw, payload.field.unit), difference: input.pane === 'difference' };
+      body: picked.body, face: picked.face, node: picked.node, value: raw === null ? null : quantity(raw, payload.field.unit), difference: input.pane === 'difference',
+      samples: { left: this.payloads.left?.sample ?? null, right: this.payloads.right?.sample ?? null } };
     this.publish({ [input.pane]: { ...metadata, pick } });
     this.draw();
     return structuredClone(pick);
@@ -343,7 +371,9 @@ export class ResultComparison implements ResultComparisonHost {
         title: payload.label, unit: `${legend.difference ? 'Δ ' : ''}${legend.min.unit}`, min: legend.min.value, max: legend.max.value, colormap: legend.colormap,
       };
       const width = input.width === undefined ? undefined : Math.floor(input.width / payloads.length) + (index < input.width % payloads.length ? 1 : 0);
-      const title = `${input.title ? `${input.title} · ` : ''}${payload.pane} · ${payload.operand.resultId} · ${metadata.summary.stale ? 'stale' : 'current'}${metadata.error ? ' · unavailable' : ''}`;
+      const samples = payload.pane === 'difference' && (this.payloads.left?.sample || this.payloads.right?.sample) ?
+        ` · left ${this.payloads.left!.operand.resultId} ${sampleCaption(this.payloads.left!.sample)} · right ${this.payloads.right!.operand.resultId} ${sampleCaption(this.payloads.right!.sample)}` : payload.sample ? ` · ${sampleCaption(payload.sample)}` : '';
+      const title = `${input.title ? `${input.title} · ` : ''}${payload.pane} · ${payload.operand.resultId} · ${metadata.summary.stale ? 'stale' : 'current'}${metadata.error ? ' · unavailable' : ''}${samples}`;
       return viewer.screenshot(burn, { ...input, width, title });
     });
   }

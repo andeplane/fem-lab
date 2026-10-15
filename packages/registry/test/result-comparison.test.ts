@@ -68,3 +68,16 @@ it('reports an absent workspace in a headless host rather than selecting hidden 
     expect(registry.describe(name).execution).toBe(name.startsWith('query.') ? 'modelRead' : 'sessionView');
   }
 });
+
+it('registers independent typed retained index/time selection and rejects malformed samples before host actions', async () => {
+  const { registry, host, transport } = setup();
+  const configuration = { mode: 'sideBySide', left: { ...left, sample: { kind: 'frame', index: 2 } }, right: { ...right, sample: { kind: 'time', time: { value: 400, unit: 'ms' }, sampling: 'nearest' } } };
+  await registry.dispatch({ cmd: 'view.compareResults', ...configuration });
+  expect(host.resultComparison!.configure).toHaveBeenLastCalledWith(configuration);
+  for (const sample of [
+    { kind: 'frame', index: -1 }, { kind: 'frame', index: 1.5 }, { kind: 'frame', index: 4294967296 },
+    { kind: 'time', time: '0.4 s' }, { kind: 'time', time: '0.4 s', sampling: 'interpolate' },
+  ]) await expect(registry.dispatch({ cmd: 'view.compareResults', mode: 'sideBySide', left: { ...left, sample }, right })).rejects.toMatchObject({ code: 'schema' });
+  expect(host.resultComparison!.configure).toHaveBeenCalledTimes(1);
+  expect(transport.dispatch).not.toHaveBeenCalled();
+});
