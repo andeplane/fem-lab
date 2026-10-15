@@ -679,15 +679,33 @@ fn rows(n: usize, slot: usize) -> std::ops::Range<usize> {
     at(slot)..at(slot + 1)
 }
 
-struct RowBlock {
-    row_ptr: Vec<u32>,
-    col_idx: Vec<u32>,
-    vals: Vec<f64>,
+struct OutputSpan<'a> {
+    op: &'a RowOp<'a>,
+    row_ptr: &'a [u32],
+    first_row: usize,
+    global_nnz_offset: usize,
+    col_idx: &'a mut [u32],
+    vals: &'a mut [f64],
+}
+
+fn fill_sparse_span(_: usize, spans: &mut [OutputSpan<'_>]) {
+    for span in spans {
+        for (local_row, pair) in span.row_ptr.windows(2).enumerate() {
+            let mut slot = pair[0] as usize - span.global_nnz_offset;
+            for (col, value) in span.op.row(span.first_row + local_row) {
+                if value != 0.0 {
+                    span.col_idx[slot] = col;
+                    span.vals[slot] = value;
+                    slot += 1;
+                }
+            }
+        }
+    }
 }
 
 /// Four fixed partitions, with a count pass followed by exactly the same numerical fill.
 /// Every map envelope and count array is admitted before parallel work. Exact output fill,
-/// the four blocks and their final merged copy are admitted before the second pass.
+/// one final CSR and four disjoint borrowed spans are admitted before the second pass.
 fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<RectCsr, Error> {
     let (n_rows, n_cols) = op.shape();
     let mut scratch = 0u128;
@@ -709,55 +727,56 @@ fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<Rect
     let nnz = budget.entries(nnz, kind)?;
     // All dimensions are <=root n. Native n<=u32MAX; wasm scale:&[f64] gives
     // n<=isizeMAX/8, so n_rows+4 and n_rows+1 fit usize without a second overflow arm.
-    // The disjoint output blocks and final CSR coexist during their ordered merge.
+    // OutputSpan has the same nine pointer words as the former three-Vec blocks.
+    // Borrowing the final output avoids their duplicate row/index/value payloads.
     budget.allocations(
         &[
-            vector_bytes::<RowBlock>(ROW_PARTITIONS),
-            vector_bytes::<u32>(n_rows + ROW_PARTITIONS),
-            vector_bytes::<u32>(nnz),
-            vector_bytes::<f64>(nnz),
+            vector_bytes::<OutputSpan<'_>>(ROW_PARTITIONS),
             vector_bytes::<u32>(n_rows + 1),
             vector_bytes::<u32>(nnz),
             vector_bytes::<f64>(nnz),
         ],
         0,
     )?;
-    let blocks = par::map_collect(ROW_PARTITIONS, |slot| {
-        let range = rows(n_rows, slot);
-        let block_nnz = counts[slot].iter().sum();
-        let mut out = RowBlock {
-            row_ptr: Vec::with_capacity(range.len() + 1),
-            col_idx: Vec::with_capacity(block_nnz),
-            vals: Vec::with_capacity(block_nnz),
-        };
-        out.row_ptr.push(0);
-        for row in range {
-            // Count and fill use the same admitted operands and fixed arithmetic order.
-            let values = op.row(row);
-            for (col, value) in values {
-                if value != 0.0 {
-                    out.col_idx.push(col);
-                    out.vals.push(value);
-                }
-            }
-            out.row_ptr.push(out.vals.len() as u32);
-        }
-        out
-    });
     let mut out = RectCsr {
         n_rows,
         n_cols,
         row_ptr: Vec::with_capacity(n_rows + 1),
-        col_idx: Vec::with_capacity(nnz),
-        vals: Vec::with_capacity(nnz),
+        col_idx: vec![0; nnz],
+        vals: vec![0.0; nnz],
     };
     out.row_ptr.push(0);
-    for block in blocks {
-        let offset = out.vals.len() as u32;
-        out.row_ptr.extend(block.row_ptr.into_iter().skip(1).map(|n| offset + n));
-        out.col_idx.extend(block.col_idx);
-        out.vals.extend(block.vals);
+    let mut offset = 0u32;
+    for &count in counts.iter().flatten() {
+        offset += count as u32;
+        out.row_ptr.push(offset);
     }
+    let mut spans = Vec::with_capacity(ROW_PARTITIONS);
+    let mut col_tail = out.col_idx.as_mut_slice();
+    let mut value_tail = out.vals.as_mut_slice();
+    for (slot, partition_counts) in counts.iter().enumerate() {
+        let range = rows(n_rows, slot);
+        let partition_nnz = partition_counts.iter().sum();
+        let (col_idx, rest) = std::mem::take(&mut col_tail).split_at_mut(partition_nnz);
+        col_tail = rest;
+        let (vals, rest) = std::mem::take(&mut value_tail).split_at_mut(partition_nnz);
+        value_tail = rest;
+        spans.push(OutputSpan {
+            op: &op,
+            // Keep global offsets but limit iteration to this partition plus its
+            // sentinel. An empty partition has one offset and no writable values.
+            row_ptr: &out.row_ptr[range.start..=range.end],
+            first_row: range.start,
+            global_nnz_offset: out.row_ptr[range.start] as usize,
+            col_idx,
+            vals,
+        });
+    }
+    // Count and fill use identical pure row arithmetic on immutable operands, so
+    // every prefix interval is filled exactly once. Safe splits establish that
+    // workers cannot overlap; fixed partitions preserve the original row order.
+    par::for_each_chunk_mut(&mut spans, 1, fill_sparse_span as fn(usize, &mut [OutputSpan<'_>]));
+    drop(spans);
     budget.bytes -= scratch;
     Ok(out)
 }
@@ -1207,6 +1226,47 @@ mod tests {
         let zero = multiply(a, &opposite, Entries::Operator, &mut budget).unwrap();
         assert_eq!(zero.row_ptr, [0, 0]);
         assert!(zero.vals.is_empty());
+    }
+
+    #[test]
+    fn final_sparse_output_fits_its_exact_storage_bound_with_empty_partitions() {
+        // The single output row belongs to the last fixed partition. Three empty
+        // partitions retain only their prefix sentinel. Independent scalar answers
+        // are 2*5+3*7=31 and 2*3+3*(-2)=0, requiring one and zero stored entries.
+        let a = Matrix { n_rows: 1, row_ptr: &[0, 2], col_idx: &[0, 1], vals: &[2.0, 3.0] };
+        for (values, expected) in [([5.0, 7.0], &[31.0][..]), ([3.0, -2.0], &[][..])] {
+            let b =
+                RectCsr { n_rows: 2, n_cols: 1, row_ptr: vec![0, 1, 2], col_idx: vec![0, 0], vals: values.to_vec() };
+            // Each of three empty partitions reserves one map root, and the
+            // active partition reserves a root plus its single possible column.
+            // Admit counts, four borrowed span headers and exactly one final CSR.
+            let exact = 5 * MAP_ENTRY_BYTES
+                + size_of::<usize>()
+                + ROW_PARTITIONS * size_of::<Vec<usize>>()
+                + ROW_PARTITIONS * size_of::<OutputSpan<'_>>()
+                + 2 * size_of::<u32>()
+                + expected.len() * (size_of::<u32>() + size_of::<f64>());
+            let mut admitted = Budget {
+                limits: Limits { max_bytes: exact, ..limits() },
+                bytes: 0,
+                interpolation_nnz: 0,
+                operator_nnz: 0,
+            };
+            let product = multiply(a, &b, Entries::Operator, &mut admitted).unwrap();
+            assert_eq!(product.row_ptr, [0, expected.len() as u32]);
+            assert_eq!(product.vals, expected);
+            assert_eq!(product.col_idx, vec![0; expected.len()]);
+            let mut refused = Budget {
+                limits: Limits { max_bytes: exact - 1, ..limits() },
+                bytes: 0,
+                interpolation_nnz: 0,
+                operator_nnz: 0,
+            };
+            let error = multiply(a, &b, Entries::Operator, &mut refused).unwrap_err();
+            assert_eq!(error.code, ErrorCode::SolveTooLarge);
+            assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
+            assert!(error.cause.contains(&format!("requested {exact} setup bytes; admitted limit {}", exact - 1)));
+        }
     }
 
     #[test]

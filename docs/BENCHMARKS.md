@@ -3217,3 +3217,25 @@ Journal at one thread against the original two-thread result. This is an exact
 patch/boundary case, not a convergence-rate or adapter timing benchmark.
 The adapter-free test also requires the existing structured `unsupported` error
 for an explicitly requested GPU solve with zero equations.
+
+### Direct final sparse output allocation (#3)
+
+The sparse-product count and fill passes retain identical BTreeMap arithmetic and four
+fixed row partitions. Final prefix offsets give disjoint borrowed output slices, avoiding
+owned partition arrays and the merged copy. This removes `12*NNZ + 4*(rows+4)` requested
+bytes per operation under the unchanged cumulative setup allowance; it does not estimate RSS.
+
+The allocation regression uses the independent scalar products `[2,3]·[5,7]=31` and
+`[2,3]·[3,-2]=0`. A single row gives three empty partitions, each retaining only its prefix
+sentinel. The exact requested storage consists of five admitted map envelopes, one count,
+four count-vector headers, four borrowed-span headers and one final CSR. On native64 the
+bounds are 2972 and 2960 bytes; wasm32 gives 2776 and 2764. Both must produce the exact
+closed-form result at the bound and refuse at bound minus one. The old duplicate-output
+allocation cannot fit these bounds. Full-plan 1/4-thread identity, Dirichlet-chain energy,
+transfer duality and the existing GPU scientific oracles remain independent acceptance gates.
+
+At the preceding `cb8d24a2` release producer, the unchanged 66k test passed on actual Metal.
+The first reviewed 780,300-equation attempt instead returned a genuine setup capacity error:
+8,902,588,620 requested bytes against the remaining 7,837,371,816-byte allowance, before GPU
+iterations. This is retained as RED, with no cap increase, retry, fallback or accepted
+scientific result. Direct final output remains pending its own numerical/resource checks.

@@ -83,9 +83,15 @@ prolongation and Galerkin symbolic fill, construction payload allowances and ind
 charges cumulative requested Vec storage, including old/new growth overlap; live ordered-map
 entries reserve conservative storage until their maps are released. This is deliberately not
 an allocator/RSS/peak-memory estimator. Sparse product rows use four fixed partitions: first
-admit symbolic map envelopes, then count exact fill, then admit block/output storage before
-repeating identical row arithmetic to fill in parallel. Fixed row order and merge order make
-setup independent of pool size. The bounded coarsest operator has at most 96 rows.
+admit symbolic map envelopes, then count exact fill, then admit one final CSR and four
+borrowed output-span headers before repeating identical row arithmetic in parallel. Prefix
+offsets split the final index/value arrays into disjoint mutable slices; each span borrows
+only its partition's row offsets plus sentinel. Empty partitions have one sentinel and no
+writable entries. This removes the former owned blocks and merged copy without changing
+the cumulative allowance, arithmetic or fixed partition order. Final arrays are initialized
+before indexed writes, trading that initialization bandwidth for fewer allocations and no
+merge copy. Setup remains independent of pool size. The bounded coarsest operator has at
+most 96 rows.
 
 The initial private setup/device payload caps differ between native and wasm32 hosts; they
 remain experimental construction guards until measured on 66k. The near-space handoff has a

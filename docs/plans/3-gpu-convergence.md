@@ -2,7 +2,7 @@
 
 Issue: https://github.com/andeplane/fem-lab/issues/3. Browser CPU threading remains separate issue #17.
 
-The D5 `[100,50,50]` incompatible-mode Hex8 cantilever has 780,300 reduced equations. At issue start, its ignored harness printed a stalled GPU solve without an acceptance assertion. This branch now declares the physical/residual assertions; execution remains pending. The 66k sibling keeps its existing numerical gate. Acceptance must preserve the f64 outer residual tolerance, reject a CPU fallback as GPU success, and avoid software-adapter performance claims.
+The D5 `[100,50,50]` incompatible-mode Hex8 cantilever has 780,300 reduced equations. At issue start, its ignored harness printed a stalled GPU solve without an acceptance assertion. This branch now declares the physical/residual assertions. The source-matched production release 66k sibling passes its original gates; the first actual 780k attempt was refused during hierarchy storage admission before GPU iterations. Acceptance must preserve the f64 outer residual tolerance, reject a CPU fallback as GPU success, and avoid software-adapter performance claims.
 
 ## Establish the numerical cause
 
@@ -159,3 +159,24 @@ admitted limit; per-vector platform ceilings remain separate. The property advan
 that declared request, checks strict progress/bounded attempts and exact final-boundary
 refusal, then independently verifies Dirichlet-chain energy/transfer duality or the two-spring
 inverse. Full Plan equality supplies only the secondary resource-independence check.
+
+## Actual 780k storage refusal and direct final output
+
+The verified `cb8d24a2` release binary, with native inputs unchanged by the `ed892105`
+main merge, passed the original 66k test: 8 f64 refinements, 1049 actual inner updates,
+relative residual `4.802661830863288e-10`, B1/equilibrium/direct `1e-8` and exact 1/4-thread
+fields. Its separately admitted one-attempt 780,300-equation run returned `solve.too-large`
+during setup: requested 8,902,588,620 bytes against the remaining 7,837,371,816-byte
+allowance. No GPU iterations or scientific acceptance occurred. OS maximum RSS was
+8,500,002,816 bytes; the resource guard did not terminate it. This RED is retained.
+
+The next checkpoint keeps the cumulative requested-storage contract and all caps. Sparse
+products fill a single final CSR through four safely split borrowed spans, eliminating the
+owned partition arrays and merged copy. Both metadata shapes use nine pointer words, so
+each operation requests exactly `12*NNZ + 4*(rows+4)` fewer bytes. Prefix/count arithmetic,
+RowOp/BTreeMap numerical order and fixed partitions are unchanged; zero initialization of
+the final arrays is the explicit cost. A real one-row product has closed-form answers 31
+or exact cancellation to zero, three empty partitions and exact admitted native bounds
+2972/2960 bytes (2776/2764 on wasm32); one byte less must refuse. Existing independent
+energy/duality and thread-identity oracles remain unchanged. Small numerical/coverage
+checks, source-matched release 66k and a new resource review precede any 780k retry.
