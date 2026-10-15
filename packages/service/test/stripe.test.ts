@@ -17,14 +17,26 @@ describe('signed Stripe transport',()=>{
       if(path==='/v1/invoices/in_wire')return Response.json({id:'in_wire',customer:{id:'cus_wire'},parent:{subscription_details:{subscription:{id:'sub_wire'}}},status:'paid',currency:'usd',billing_reason:'subscription_cycle',amount_paid:4900});
       if(path==='/v1/invoices/in_wire/lines')return Response.json({object:'list',has_more:false,data:[{id:'il_one',pricing:{price_details:{price:{id:'price_plus'}}},parent:{subscription_item_details:{proration:false}},quantity:1,period:{start:100,end:200}}]});
       if(path==='/v1/subscriptions/sub_wire')return Response.json({id:'sub_wire',customer:'cus_wire',status:'active',cancel_at_period_end:true,items:{data:[{current_period_end:200}]}});
-      if(path==='/v1/disputes/dp_one')return Response.json({id:'dp_one',charge:{id:'ch_one'}});
+      if(path==='/v1/disputes/du_one')return Response.json({id:'du_one',charge:{id:'ch_one'}});
       if(path==='/v1/charges/ch_one')return Response.json({id:'ch_one',customer:{id:'cus_wire'}});
       throw new Error('Unexpected Stripe fixture route');
     };
     const gateway=stripeGateway(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'whsec_fixture');
     expect(await gateway.invoice('in_wire')).toEqual({id:'in_wire',customerId:'cus_wire',subscriptionId:'sub_wire',status:'paid',currency:'usd',reason:'subscription_cycle',amountPaid:4900,lines:[{priceId:'price_plus',quantity:1,proration:false,start:100,end:200}]});
     expect(await gateway.subscription('sub_wire')).toEqual({id:'sub_wire',customerId:'cus_wire',status:'active',cancelAtPeriodEnd:true,periodEnd:200});
-    expect(await gateway.chargeCustomer('dp_one')).toBe('cus_wire');expect(await gateway.chargeCustomer('ch_one')).toBe('cus_wire');
+    expect(await gateway.chargeCustomer('du_one','dispute')).toBe('cus_wire');expect(await gateway.chargeCustomer('ch_one','charge')).toBe('cus_wire');
+  });
+  it.each(['du_current','dp_previous','opaque_future'])('resolves a dispute through its charge without inferring the resource from %s',async(id)=>{
+    const paths:string[]=[];
+    const fetcher:typeof fetch=async url=>{
+      const path=new URL(String(url)).pathname;paths.push(path);
+      if(path===`/v1/disputes/${id}`)return Response.json({id,charge:'ch_owned'});
+      if(path==='/v1/charges/ch_owned')return Response.json({id:'ch_owned',customer:'cus_owned'});
+      throw new Error('Unexpected Stripe fixture route');
+    };
+    const gateway=stripeGateway(new Stripe('fixture',{httpClient:Stripe.createFetchHttpClient(fetcher)}),'whsec_fixture');
+    expect(await gateway.chargeCustomer(id,'dispute')).toBe('cus_owned');
+    expect(paths).toEqual([`/v1/disputes/${id}`,'/v1/charges/ch_owned']);
   });
   it('creates hosted payment URLs with server-owned parameters and a non-prorated next-period schedule',async()=>{
     const requests:{path:string;method:string;body:URLSearchParams;key:string|null}[]=[];

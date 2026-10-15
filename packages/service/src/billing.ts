@@ -15,7 +15,7 @@ export interface BillingGateway {
   verify(body:Uint8Array,signature:string,now:Date):BillingEnvelope;
   invoice(id:string):Promise<BillingInvoice>;
   subscription(id:string):Promise<BillingSubscription>;
-  chargeCustomer(id:string):Promise<string|null>;
+  chargeCustomer(id:string,kind:'charge'|'dispute'):Promise<string|null>;
 }
 export interface BillingConfig {live:boolean;prices:Record<Exclude<PlanId,'free'>,string>}
 const supported=new Set(['invoice.paid','invoice.payment_succeeded','invoice.payment_failed','customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','charge.refunded','charge.dispute.created']);
@@ -54,7 +54,7 @@ export function billingLifecycle(db:Database,gateway:BillingGateway,config:Billi
         invoice=await gateway.invoice(objectId);customerId=invoice.customerId;
         if(invoice.subscriptionId)subscription=await gateway.subscription(invoice.subscriptionId);
       } else if(type.startsWith('customer.subscription.')) {subscription=await gateway.subscription(objectId);customerId=subscription.customerId;}
-      else customerId=await gateway.chargeCustomer(objectId);
+      else customerId=await gateway.chargeCustomer(objectId,type==='charge.dispute.created'?'dispute':'charge');
       await transaction(db,async sql=>{
         const liveLease=(await sql.query('SELECT owner,expires_at FROM billing_leases WHERE customer_id=$1',[lockKey])).rows[0];
         if(liveLease?.owner!==owner||(liveLease.expires_at as Date)<=now())throw new Error('Billing lease expired.');

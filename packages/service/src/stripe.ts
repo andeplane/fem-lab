@@ -38,8 +38,8 @@ export function stripeGateway(client:Stripe,webhookSecret:string):BillingGateway
       return {id:subscription.id,customerId:identity(subscription.customer),status:subscription.status,cancelAtPeriodEnd:subscription.cancel_at_period_end,
         periodEnd:subscription.items.data[0]?.current_period_end??null};
     },
-    async chargeCustomer(id) {
-      const charge=id.startsWith('dp_')?await client.charges.retrieve(identity((await client.disputes.retrieve(id)).charge)):await client.charges.retrieve(id);
+    async chargeCustomer(id,kind) {
+      const charge=kind==='dispute'?await client.charges.retrieve(identity((await client.disputes.retrieve(id)).charge)):await client.charges.retrieve(id);
       return charge.customer?identity(charge.customer):null;
     },
   };
