@@ -4919,6 +4919,9 @@ including thickness or radial weighting (plane strain: one metre of depth). Pres
 times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
 the original midsurface area without requiring Material/Section; curved physical shell
 loads use the Section's top/bottom offsets. Builds the Mesh if needed.
+The centroid averages resolved node coordinates; authored imported NSETs include
+unused source labels. A bounded fixed-order fallback prevents a finite coordinate
+mean overflowing through rounding, while preserving existing finite mean results.
 
 Returns: `SetInfo`.
 

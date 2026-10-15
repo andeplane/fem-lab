@@ -27,6 +27,38 @@ fn displayed3(model: &crate::model::Model, values: [f64; 3], dim: Dimension) -> 
     display_values(model, values, dim)
 }
 
+/// Fixed-order mean of validated finite node coordinates, with constant scratch space.
+/// Keep finite divide-before-sum results exactly, including small cancellation residuals.
+#[derive(Clone, Copy, Default)]
+struct CoordinateMean {
+    mean: f64,
+    scaled_sum: f64,
+    scale: f64,
+}
+
+impl CoordinateMean {
+    fn add(&mut self, value: f64, count: f64) {
+        self.mean += value / count;
+        let scale = self.scale.max(value.abs());
+        if scale > 0.0 {
+            self.scaled_sum = self.scaled_sum * (self.scale / scale) + value / scale;
+            self.scale = scale;
+        }
+    }
+
+    fn finish(self, count: f64) -> f64 {
+        if self.mean.is_finite() {
+            self.mean
+        } else {
+            // Sets have unique u32 node ids (imported sources at most 250000): count < 2^53.
+            // Each normalized term/rescale has magnitude <= 1. The k-th rounded partial
+            // stays within exactly representable [-k,k], so sum/count stays in [-1,1].
+            // Divide ONCE after summing: rescaling then cannot overflow the finite scale.
+            (self.scaled_sum / count) * self.scale
+        }
+    }
+}
+
 fn axial_row(value: Axial, unit: &str) -> AxialRow {
     match value {
         Axial::Isotropic(value) => AxialRow::Isotropic(Valued { value, unit: unit.into() }),
@@ -644,7 +676,8 @@ impl Engine {
                 }
                 let mut lo = [f64::INFINITY; 3];
                 let mut hi = [f64::NEG_INFINITY; 3];
-                let mut centroid = [0.0; 3];
+                let mut centroid = [CoordinateMean::default(); 3];
+                let n = labels.len() as f64;
                 for &label in &labels {
                     // source()/build validate sorted labels and every membership before
                     // Model publication. Replacement/replay revalidate; rename changes
@@ -655,12 +688,13 @@ impl Engine {
                         let value = source.nodes[node].at[k];
                         lo[k] = lo[k].min(value);
                         hi[k] = hi[k].max(value);
-                        centroid[k] += value / labels.len() as f64;
+                        centroid[k].add(value, n);
                     }
                 }
                 let participating = source.participating_labels();
                 let unused = labels.iter().filter(|label| !participating.contains(label)).copied().collect();
                 let bbox = bbox6(&self.model, lo, hi)?;
+                let centroid = centroid.map(|mean| mean.finish(n));
                 return displayed3(&self.model, centroid, Length::DIM).map(|centroid| SetInfo {
                     count: labels.len() as u32,
                     source_node_labels: Some(labels),
@@ -687,14 +721,14 @@ impl Engine {
         let m = &self.model;
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
-        let mut centroid = [0.0; 3];
+        let mut centroid = [CoordinateMean::default(); 3];
         let n = set.nodes.len().max(1) as f64;
         for &node in &set.nodes {
             let p = mesh.node(node);
             for k in 0..3 {
                 lo[k] = lo[k].min(p[k]);
                 hi[k] = hi[k].max(p[k]);
-                centroid[k] += p[k] / n;
+                centroid[k].add(p[k], n);
             }
         }
         // A face Set measures area (length in 2D), an element Set volume (area in 2D), a node
@@ -716,6 +750,7 @@ impl Engine {
         } else {
             None
         };
+        let centroid = centroid.map(|mean| mean.finish(n));
         displayed3(m, centroid, Length::DIM).map(|centroid| SetInfo {
             source_node_labels: None,
             unused_source_node_labels: Vec::new(),
@@ -1103,6 +1138,52 @@ mod measure_tests {
     use super::*;
     use femlab_geometry::{ElementBlock, ElementKind};
     use std::collections::BTreeMap;
+
+    fn coordinate_mean(values: &[f64]) -> f64 {
+        let count = values.len().max(1) as f64;
+        let mut mean = CoordinateMean::default();
+        for &value in values {
+            mean.add(value, count);
+        }
+        mean.finish(count)
+    }
+
+    #[test]
+    fn coordinate_mean_extreme_constants_remain_finite_at_independent_counts() {
+        // A constant's mathematical mean is itself at every count. Preserve the finite
+        // seven-member baseline's one-ulp rounding, while repairing 3/100-member overflow.
+        for count in [3, 7, 10, 100] {
+            for sign in [-1.0, 1.0] {
+                let actual = coordinate_mean(&vec![sign * f64::MAX; count]);
+                let expected = if count == 7 { f64::from_bits(f64::MAX.to_bits() - 1) } else { f64::MAX };
+                assert_eq!(actual.to_bits(), (sign * expected).to_bits());
+                assert!(actual.is_finite());
+                assert!(f64::MAX - actual.abs() <= f64::MAX - f64::from_bits(f64::MAX.to_bits() - 1));
+            }
+        }
+        for values in
+            [vec![f64::MAX, -f64::MAX], vec![f64::MAX, 0.0, -f64::MAX], vec![f64::MAX, f64::MAX, -f64::MAX, -f64::MAX]]
+        {
+            assert_eq!(coordinate_mean(&values), 0.0, "symmetric coordinates have zero mean");
+        }
+    }
+
+    #[test]
+    fn coordinate_mean_preserves_finite_rounding_and_subnormal_residuals() {
+        let tick = f64::from_bits(1);
+        for (values, expected) in [
+            (vec![], 0.0),
+            (vec![0.0; 3], 0.0),
+            (vec![tick], tick),
+            (vec![3.0 * tick; 3], 3.0 * tick),
+            (vec![f64::MAX, -f64::MAX, 3.0 * tick], tick),
+            (vec![-f64::MAX, f64::MAX, -3.0 * tick], -tick),
+            (vec![1.0, f64::MAX], f64::MAX / 2.0),
+            (vec![-3.0, 0.0, 3.0], 0.0),
+        ] {
+            assert_eq!(coordinate_mean(&values).to_bits(), expected.to_bits());
+        }
+    }
 
     fn warped_pair(n: usize) -> Mesh {
         let mut coords = Vec::new();

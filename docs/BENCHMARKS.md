@@ -263,6 +263,23 @@ tolerance. Integer-tick kN conversions exercise a separate exact scaling identit
 native registry and shipped WASM run the same rejection and conversion fixtures against
 a solved small cantilever and check that its retained Result remains unchanged.
 
+Set-centroid boundary identities use a unit Tet4 at the origin plus independent unused
+authored NSET coordinates. Constant `±f64::MAX` samples at counts 3, 7, 10 and 100 have
+mathematical mean `±f64::MAX`: three/100-member overflow is repaired exactly, while the
+finite seven-member baseline retains its one-ulp rounding. Symmetric signed extremes
+have zero mean; `[MAX, -MAX, 3λ]`, `λ = 2^-1074`, retains its finite exact mean `λ`.
+The implementation preserves finite divide-before-sum results and uses a bounded,
+fixed-order scaled fallback only for nonfinite axes. Normalized values are summed before
+one division by the exactly representable member count (<2^53), then rescaled; dividing
+each normalized value first would repeat the original rounding-overflow defect.
+These constant/cancellation identities cover sample counts and coordinate scales, rather
+than a mesh convergence rate. Public ordinary Set centroids additionally preserve
+`[7, 0, 3λ]` and repair the actual three-node MAX-line mean to `[MAX, 1, 0]`
+(two line elements, with constant x and node y = 0/1/2). Native 1/4-thread and WASM
+fixtures check source/unused labels, the unit
+Tet's unchanged physical bounds, read-only Model/Journal/retained Results, replay/open,
+and genuine selected-unit overflow when the finite MAX coordinate is expressed in mm.
+
 A10 (`every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms`) checks
 all entries, component blocks and Cholesky pivots on scaled affine simplices and curved
 quadratic maps. Plane stress includes thickness, plane strain unit depth, axisymmetry the
