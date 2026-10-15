@@ -75,7 +75,7 @@ export interface CaseScore {
 export interface LaneResult {
   host: HostKind;
   live: boolean;
-  status: 'completed' | 'not-run';
+  status: 'completed' | 'not-run' | 'interrupted';
   reason?: string;
   cases: CaseScore[];
   passed: number;

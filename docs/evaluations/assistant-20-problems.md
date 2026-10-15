@@ -93,8 +93,8 @@ The frozen manifest records:
 - each prompt, streamed assistant text, tool calls/results with timing, token usage/cost, resulting
   Journal and model/result queries, score components and failure cause.
 
-Artifacts contain no environment values, request headers or API keys. The runner checks only whether
-an authorized provider credential is present. If absent, it writes a lane result with
+Artifacts contain no environment values, request headers or API keys. The runner records whether
+an authorized provider credential is present and admits each request against the shared budget. If absent, it writes a lane result with
 `status: "not-run"` and `reason: "provider credential unavailable"`; it does not substitute a fake
 provider. Scripted providers and prepared Journals are used only by unit tests of event recording and
 scoring and are marked `live: false`.
@@ -105,13 +105,54 @@ runner may be developed against their public contracts, but a live report is pro
 frozen commit containing all reviewed prerequisites. No pending branch is silently copied into the
 evaluation branch.
 
-Run the live lane from a clean commit. The runner builds its wasm and app, packs MCP, installs that
-tarball in a temporary directory, refuses an MCP entry or wasm outside the installed tree, serves
-the built app itself, and fails if any artifact hash changes during the run:
+Run the live lane from a clean commit after confirming the available credential, spending
+bound and host capacity. A successful model-list read proves access, not generation credits.
+The runner keeps the 30 GiB disk floor, checks it before preparation, cases and requests,
+and does not automatically start an engine build. Use the reviewed source/runtime receipts
+when the engine source has not changed:
 
 ```sh
+FEMLAB_EVAL_WASM_SOURCE_MANIFEST=/absolute/path/production-source-completeness.json \
+FEMLAB_EVAL_WASM_RUNTIME_MANIFEST=/absolute/path/staged-artifact-receipt.json \
+FEMLAB_EVAL_OUTPUT=/absolute/path/new-run.json \
 npm run live -w packages/evals
 ```
+
+Runtime reuse verifies the sealed production source files, the tracked core diff against
+the producer's source revision, the raw schema and all eight browser/Node binding hashes.
+The app and isolated packed MCP package are then built from the clean evaluation commit.
+The report distinguishes this verified reuse from building the engine itself. A new native/
+WASM build additionally requires an allocated build slot and explicit
+`FEMLAB_EVAL_BUILD_ENGINE=1`; it is never inferred from a present API key.
+`FEMLAB_EVAL_PREPARE_ONLY=1` prepares and hashes artifacts without generating responses;
+its lanes are explicitly not run and cannot pass the quality gate.
+
+Both lanes share one budget. The defaults are USD 50, 400 generation requests, at most
+128,000 authoritative input tokens and 16,000 output tokens per request, 20 rounds per
+case, ten minutes per case and 90 minutes wall time. The official
+[GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol), checked
+2026-10-15, supports the existing Standard tariff. Before each generation the runner counts
+the same Responses payload and reserves its maximum output and worst-case cache-write
+input cost. Generation retries are disabled. Missing or inconsistent usage retains the
+reservation and stops further generation. No allowance, hosted spending or payment setting
+is changed by this runner. Set `FEMLAB_EVAL_MAX_USD`, `FEMLAB_EVAL_MAX_REQUESTS`,
+`FEMLAB_EVAL_MAX_INPUT_TOKENS`, `FEMLAB_EVAL_MAX_TOKENS`, `FEMLAB_EVAL_MAX_ROUNDS`,
+`FEMLAB_EVAL_TIMEOUT_MS` and `FEMLAB_EVAL_MAX_WALL_MS` to freeze explicit bounds in the
+manifest before a run; budget changes require a new run.
+
+Checkpoint JSON is written atomically before generation reservations, after settlement and
+after every case. A case or request still in flight cannot be resumed, and unknown billing
+requires a new run. At a clean case boundary, `FEMLAB_EVAL_RESUME=/absolute/path/run.json`
+reuses only the exact completed prefix under identical source, provider configuration,
+case specification and app/MCP artifact hashes. Earlier failures remain scored; they are
+not replaced by retries. The previous JSON is preserved before resumption. A resource or
+budget interruption remains explicit and cannot satisfy a host's quality gate. Default
+output names include the run timestamp; existing outputs require explicit resumption.
+
+The September interrupted credit/disk attempt recorded in PR #317 remains historical
+failure evidence. It is not a valid 0/20 quality score, cannot meet the shipping gate and
+cannot be resumed onto a changed engine or harness. A current score requires a new real
+attempt of the same twenty fixed problems through both hosts.
 
 Unit tests must prove at least: a correct value and balanced reactions pass; an independently wrong
 value fails while balance passes; an otherwise correct value fails when reaction balance is above

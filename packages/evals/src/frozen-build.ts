@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { verifyReusedWasm, type ReusedWasm } from './frozen-reuse';
 
 export interface FrozenBuild {
   appDirectory: string;
@@ -10,6 +11,7 @@ export interface FrozenBuild {
   nodeWasm: string;
   tarball: string;
   commands: string[];
+  wasmProvenance?: Record<string, unknown>;
   close(): Promise<void>;
 }
 
@@ -20,11 +22,12 @@ function run(command: string, args: string[], cwd: string): string {
 }
 
 /** Build HEAD, pack MCP, and install its actual tarball away from the checkout. */
-export async function prepareFrozenBuild(root: string): Promise<FrozenBuild> {
+export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm): Promise<FrozenBuild> {
   const directory = await mkdtemp(path.join(tmpdir(), 'femlab-assistant-build-'));
-  const commands = ['node tools/build-wasm.mjs', 'npm run build -w packages/app', 'npm pack + isolated npm install packages/mcp'];
+  const commands = [reusedWasm ? 'verify sealed source/schema/all eight reused wasm bindings' : 'node tools/build-wasm.mjs', 'npm run build -w packages/app', 'npm pack + isolated npm install packages/mcp'];
   try {
-    run(process.execPath, ['tools/build-wasm.mjs'], root);
+    const wasmProvenance = reusedWasm ? await verifyReusedWasm(root, reusedWasm, reference => run('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], root)) : undefined;
+    if (!reusedWasm) run(process.execPath, ['tools/build-wasm.mjs'], root);
     run(npm, ['run', 'build', '-w', 'packages/app'], root);
     const packedOutput = run(npm, ['pack', '--json', '--pack-destination', directory], path.join(root, 'packages/mcp'));
     const start = packedOutput.lastIndexOf('\n[') + 1;
@@ -44,6 +47,7 @@ export async function prepareFrozenBuild(root: string): Promise<FrozenBuild> {
       nodeWasm: path.join(installed, 'dist/wasm-node/femlab_engine_wasm_bg.wasm'),
       tarball,
       commands,
+      ...(wasmProvenance ? { wasmProvenance } : {}),
       close: () => rm(directory, { recursive: true, force: true }),
     };
   } catch (error) {

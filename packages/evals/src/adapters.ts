@@ -9,6 +9,7 @@ import type { Provider } from '../../app/src/ai/eval-api';
 import { credentialAvailability, type EvalAdapter } from './runner';
 import { evaluateCase, type RemoteDefinitionSet, type RemoteEngine } from './remote';
 import type { EvalCase, EvalEvidence } from './types';
+import { withinCaseDeadline } from './deadline';
 
 export interface AdapterOptions {
   provider: Provider;
@@ -97,7 +98,7 @@ export class BrowserEvalAdapter implements EvalAdapter {
         const fem = (window as unknown as { fem: { registry: { query(q: Record<string, unknown>): Promise<unknown> } } }).fem;
         await fem.registry.query({ query: 'query.capabilities' });
       });
-      return await evaluateCase(new BrowserRemote(context, page), this.options.provider, this.options.model, spec, this.options);
+      return await withinCaseDeadline(() => evaluateCase(new BrowserRemote(context, page), this.options.provider, this.options.model, spec, this.options), () => context.close(), this.options.timeoutMs);
     } catch (error) {
       await context.close();
       throw error;
@@ -181,7 +182,7 @@ export class McpEvalAdapter implements EvalAdapter {
     const client = new Client({ name: 'femlab-assistant-eval', version: '1' });
     try {
       await client.connect(transport);
-      return await evaluateCase(new McpRemote(client, transport, project), this.options.provider, this.options.model, spec, this.options);
+      return await withinCaseDeadline(() => evaluateCase(new McpRemote(client, transport, project), this.options.provider, this.options.model, spec, this.options), () => transport.close(), this.options.timeoutMs);
     } catch (error) {
       await transport.close().catch(() => undefined);
       await rm(project, { recursive: true, force: true });
