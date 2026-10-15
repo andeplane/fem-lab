@@ -42,7 +42,8 @@ origins=f'https://{project}.web.app,https://{project}.firebaseapp.com'
 if a.environment=='production':origins+=',https://femlab.app,https://www.femlab.app'
 api_env='^|^'+common+f'|PGUSER=femlab_api|APP_ORIGINS={origins}'
 print(project+': releasing API '+manifest['revision'],flush=True)
-api_secrets=f'PGPASSWORD=database-api-password:{version("database-api-password")},OPENAI_API_KEY=openai-api-key:{version("openai-api-key")}{stripe_secrets}'
+free_secret=f'FREE_ELIGIBILITY_HMAC_KEY=free-eligibility-hmac-key:{version("free-eligibility-hmac-key")}'
+api_secrets=f'PGPASSWORD=database-api-password:{version("database-api-password")},OPENAI_API_KEY=openai-api-key:{version("openai-api-key")},{free_secret}{stripe_secrets}'
 # A billing activation or secret rotation can release the same image again under a new immutable revision.
 config_hash=hashlib.sha256((api_env+'|'+api_secrets).encode()).hexdigest()[:8]
 suffix='r'+manifest['buildId'].split('-')[0]+'-'+config_hash
@@ -52,7 +53,7 @@ candidate=json.loads(run('run','services','describe','femlab-api',f'--region={re
 route=next(item for item in candidate['traffic'] if item.get('tag')=='release-candidate' and item['revisionName']==revision)
 ready(route['url']);uri=candidate['url']
 print(project+': releasing recovery job',flush=True)
-run('run','jobs','deploy','femlab-recover',f'--image={image}',f'--region={region}',f'--service-account=femlab-jobs@{project}.iam.gserviceaccount.com','--cpu=1','--memory=1Gi','--tasks=1','--max-retries=1','--task-timeout=900s','--command=node','--args=service/main.mjs,--recover',f'--set-cloudsql-instances={connection}',f'--set-env-vars=^|^{common}|PGUSER=femlab_jobs',f'--set-secrets=PGPASSWORD=database-jobs-password:{version("database-jobs-password")}{stripe_secrets}')
+run('run','jobs','deploy','femlab-recover',f'--image={image}',f'--region={region}',f'--service-account=femlab-jobs@{project}.iam.gserviceaccount.com','--cpu=1','--memory=1Gi','--tasks=1','--max-retries=1','--task-timeout=900s','--command=node','--args=service/main.mjs,--recover',f'--set-cloudsql-instances={connection}',f'--set-env-vars=^|^{common}|PGUSER=femlab_jobs',f'--set-secrets=PGPASSWORD=database-jobs-password:{version("database-jobs-password")},{free_secret}{stripe_secrets}')
 run('run','jobs','execute','femlab-recover',f'--region={region}','--wait')
 # Only after the new recovery identity has executed successfully, remove its legacy DDL access.
 run('secrets','remove-iam-policy-binding','database-migration-password',f'--member=serviceAccount:femlab-jobs@{project}.iam.gserviceaccount.com','--role=roles/secretmanager.secretAccessor',optional=True)

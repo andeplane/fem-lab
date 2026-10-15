@@ -82,6 +82,7 @@ class ReleaseBillingTests(unittest.TestCase):
             env = next(value for value in command if value.startswith('--set-env-vars='))
             secrets = next(value for value in command if value.startswith('--set-secrets='))
             self.assertIn('APP_RETURN_ORIGIN=https://femlab.app', env)
+            self.assertIn('FREE_ELIGIBILITY_HMAC_KEY=free-eligibility-hmac-key:1', secrets)
             for name, value in binding['env'].items():
                 self.assertIn(name + '=' + value, env)
             for name, value in binding['secrets'].items():
