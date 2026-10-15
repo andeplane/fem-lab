@@ -973,6 +973,13 @@ Direct linear solves verify their residual too: nonfinite or excessive residuals
 solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
 (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
 direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+Modal solves verify every requested eigenpair's normwise backward residual against
+`tolerance` and return solve.stalled without storing a Result when `maxIterations`
+subspace sweeps are exhausted. The reported residual is the largest requested-pair
+residual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.
+Resolved Ritz values must also stabilize to relative change 1e-10. Values unresolved
+at the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency
+warnings; their backward residual passed, but relative frequency convergence is not certified.
 On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
 assembly and triangular solves retain the engine thread count.
 
@@ -980,8 +987,8 @@ assembly and triangular solves retain the engine thread count.
 | --- | --- | --- | --- |
 | step | yes | <code>{"type":"string"}</code> | Existing Step to solve; its procedure, active Constraints and Loads define the problem. |
 | solver | no | <code>{"anyOf":[{"$ref":"#/$defs/Solver"},{"type":"null"}]}</code> | Linear solver implementation; omitted means auto, which selects an available compatible backend. |
-| tolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step settings control nonlinear convergence. |
-| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Linear iterative solver iteration budget; omitted means 5000. |
+| tolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence. |
+| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000. A modal budget must be greater than zero. |
 | cmd | yes | <code>{"type":"string","const":"solve.run"}</code> | Registered Command identifier; use &#96;solve.run&#96; to select this operation. |
 
 <a id="commands-step-add"></a>
@@ -7173,7 +7180,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nModal solves verify every requested eigenpair's normwise backward residual against\n`tolerance` and return solve.stalled without storing a Result when `maxIterations`\nsubspace sweeps are exhausted. The reported residual is the largest requested-pair\nresidual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.\nResolved Ritz values must also stabilize to relative change 1e-10. Values unresolved\nat the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency\nwarnings; their backward residual passed, but relative frequency convergence is not certified.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
       "type": "object",
       "properties": {
         "step": {
@@ -7192,7 +7199,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "tolerance": {
-          "description": "Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step\nsettings control nonlinear convergence.",
+          "description": "Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum\nnormwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.",
           "type": [
             "number",
             "null"
@@ -7200,7 +7207,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "format": "double"
         },
         "maxIterations": {
-          "description": "Linear iterative solver iteration budget; omitted means 5000.",
+          "description": "Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.\nA modal budget must be greater than zero.",
           "type": [
             "integer",
             "null"

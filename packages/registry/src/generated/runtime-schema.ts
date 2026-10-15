@@ -2102,7 +2102,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nModal solves verify every requested eigenpair's normwise backward residual against\n`tolerance` and return solve.stalled without storing a Result when `maxIterations`\nsubspace sweeps are exhausted. The reported residual is the largest requested-pair\nresidual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.\nResolved Ritz values must also stabilize to relative change 1e-10. Values unresolved\nat the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency\nwarnings; their backward residual passed, but relative frequency convergence is not certified.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
       "type": "object",
       "properties": {
         "step": {
@@ -2121,7 +2121,7 @@ const commands = {
           ]
         },
         "tolerance": {
-          "description": "Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step\nsettings control nonlinear convergence.",
+          "description": "Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum\nnormwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.",
           "type": [
             "number",
             "null"
@@ -2129,7 +2129,7 @@ const commands = {
           "format": "double"
         },
         "maxIterations": {
-          "description": "Linear iterative solver iteration budget; omitted means 5000.",
+          "description": "Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.\nA modal budget must be greater than zero.",
           "type": [
             "integer",
             "null"

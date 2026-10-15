@@ -534,6 +534,13 @@ export interface Fem {
      * solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
      * (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
      * direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+     * Modal solves verify every requested eigenpair's normwise backward residual against
+     * `tolerance` and return solve.stalled without storing a Result when `maxIterations`
+     * subspace sweeps are exhausted. The reported residual is the largest requested-pair
+     * residual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.
+     * Resolved Ritz values must also stabilize to relative change 1e-10. Values unresolved
+     * at the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency
+     * warnings; their backward residual passed, but relative frequency convergence is not certified.
      * On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
      * assembly and triangular solves retain the engine thread count.
      */

@@ -6196,6 +6196,13 @@ fn a_free_block_has_six_zero_frequencies() {
     assert_eq!(res.frequencies.len(), 8);
     // Mode 1 is also the Result's displacement field, so a VTU export shows it.
     assert_eq!(res.fields[&Field::Displacement], res.modes[0]);
+    assert!(res.solver.rel_residual.is_finite() && res.solver.rel_residual <= SolveOptions::default().rel_tol);
+    assert_eq!(res.scalars["rel_residual"], res.solver.rel_residual);
+    assert!(res.warnings.iter().any(|w| w.code == "modal.unresolved-frequency"));
+    for warning in res.warnings.iter().filter(|w| w.code == "modal.unresolved-frequency") {
+        assert!(warning.text.contains("relative frequency convergence is not certified"));
+        assert!(warning.where_.as_ref().unwrap().starts_with("mode:"));
+    }
 }
 
 /// A modal Step over a Material without a density has no mass matrix, and says so instead of
@@ -17169,4 +17176,54 @@ fn a_set_that_moves_past_the_newton_budget_is_cut_back() {
     let res = run_nonlinear(&p, nl_options(2), &mut nop).expect("the gap closes");
     assert_eq!(res.contacts[0].active, 4);
     assert!(res.scalars["contact_changes"] >= 1.0);
+}
+
+/// #633: native callers have the same finite-control contract as JSON hosts.
+#[test]
+fn modal_native_controls_reject_nonfinite_tolerance_and_metadata_matches_the_pencil() {
+    let (mesh, sets) = rod_mesh(20, 1.0);
+    let bodies = one_body();
+    let p = rod_problem(&mesh, &sets, &bodies);
+    for rel_tol in [f64::NAN, f64::INFINITY] {
+        let solver = SolveOptions { rel_tol, ..SolveOptions::default() };
+        let step = Step::Modal { n_modes: 1, shift: None, solver, prestress: None };
+        assert_eq!(run_step(&p, &step).unwrap_err().code, ErrorCode::Schema);
+    }
+    let step = Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None };
+    let res = run_step(&p, &step).unwrap();
+    let pat = pattern(&mesh, p.dofs_per_node());
+    let k = assemble_stiffness(&p, &pat).unwrap().k;
+    let m = assemble_mass(&p, &pat, false).unwrap();
+    let rc = resolve(&p).unwrap();
+    let zeros = vec![0.0; k.n];
+    let kr = reduce(&k, &zeros, &rc, &[]);
+    let mr = reduce(&m, &zeros, &rc, &[]);
+    let phi: Vec<f64> = kr.free.iter().map(|&i| res.modal_dofs[0][i as usize]).collect();
+    let (mut ku, mut mu) = (vec![0.0; phi.len()], vec![0.0; phi.len()]);
+    kr.k_ff.spmv(&phi, &mut ku);
+    mr.k_ff.spmv(&phi, &mut mu);
+    let lambda = (2.0 * PI * res.frequencies[0]).powi(2);
+    let r = ku.iter().zip(&mu).fold(0.0_f64, |r, (a, b)| r.max((a - lambda * b).abs()));
+    let matrix_norm = |matrix: &Csr| {
+        (0..matrix.n)
+            .map(|i| {
+                matrix.vals[matrix.row_ptr[i] as usize..matrix.row_ptr[i + 1] as usize]
+                    .iter()
+                    .map(|v| v.abs())
+                    .sum::<f64>()
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let denominator =
+        (matrix_norm(&kr.k_ff) + lambda * matrix_norm(&mr.k_ff)) * phi.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+    let expected = r / denominator;
+    assert!(res.solver.rel_residual > 0.0 && res.solver.rel_residual <= SolveOptions::default().rel_tol);
+    // This independently evaluates the documented algebraic identity. The tolerance covers
+    // the frequency->lambda round trip and the differently ordered residual arithmetic.
+    assert!(
+        (expected - res.solver.rel_residual).abs() < 16.0 * f64::EPSILON,
+        "{expected} vs {}",
+        res.solver.rel_residual
+    );
+    assert_eq!(res.scalars["rel_residual"], res.solver.rel_residual);
 }
