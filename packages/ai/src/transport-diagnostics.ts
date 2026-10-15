@@ -24,11 +24,19 @@ export interface ProviderObserver {
 }
 const KINDS = new Set(['Error', 'TypeError', 'AggregateError', 'AbortError', 'TimeoutError', 'APIError', 'APIConnectionError', 'APIConnectionTimeoutError', 'APIUserAbortError', 'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'NotFoundError', 'ConflictError', 'UnprocessableEntityError', 'RateLimitError', 'InternalServerError']);
 // Exact public identifiers only: a private value shaped like E*/ERR_* must not become evidence.
+// Undici identifiers are pinned to undici-types 6.21.0 errors.d.ts; Node TLS/system
+// identifiers below are diagnostic only. Recognition never grants retry eligibility.
 const CODES = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETRESET', 'ENETUNREACH', 'EHOSTUNREACH',
   'EAI_AGAIN', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED', 'ENOTCONN', 'EPROTO',
   'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
   'UND_ERR_ABORTED', 'UND_ERR_DESTROYED', 'UND_ERR_CLOSED',
+  'UND_ERR_HEADERS_OVERFLOW', 'UND_ERR_RESPONSE_STATUS_CODE', 'UND_ERR_INVALID_ARG',
+  'UND_ERR_INVALID_RETURN_VALUE', 'UND_ERR_INFO', 'UND_ERR_REQ_CONTENT_LENGTH_MISMATCH',
+  'UND_ERR_RES_CONTENT_LENGTH_MISMATCH', 'UND_ERR_NOT_SUPPORTED', 'UND_ERR_BPL_MISSING_UPSTREAM',
+  'UND_ERR_RES_EXCEEDED_MAX_SIZE', 'UND_ERR_REQ_RETRY', 'UND_ERR_PRX_TLS',
+  'EACCES', 'EPERM', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EHOSTDOWN', 'ENETDOWN',
+  'ERR_SSL_WRONG_VERSION_NUMBER', 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR',
   'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT',
   'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
   'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_REVOKED', 'ERR_TLS_CERT_ALTNAME_INVALID',
