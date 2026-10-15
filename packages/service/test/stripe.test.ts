@@ -49,6 +49,8 @@ describe('signed Stripe transport',()=>{
     const checkout=requests.find(row=>row.path==='/v1/checkout/sessions')!;
     expect(checkout.key).toBe('checkout-key');expect(checkout.body.get('customer')).toBe('cus_wire');expect(checkout.body.get('line_items[0][price]')).toBe('price_plus');
     expect(checkout.body.get('automatic_tax[enabled]')).toBe('true');expect(checkout.body.get('consent_collection[terms_of_service]')).toBe('required');
+    expect(checkout.body.get('managed_payments[enabled]')).toBe('false');
+    expect(checkout.body.get('customer_update[name]')).toBe('auto');
     expect(checkout.body.get('tax_id_collection[enabled]')).toBe('true');
     const phase=requests.find(row=>row.path==='/v1/subscription_schedules/sub_sched_wire')!;
     expect(phase.key).toBe('plan-key');expect(phase.body.get('phases[0][end_date]')).toBe('200');expect(phase.body.get('phases[1][start_date]')).toBe('200');
@@ -64,6 +66,8 @@ describe('signed Stripe transport',()=>{
     await payments.checkout({customer:'cus_tax',price:'price_plus',accountId:'account-one',successUrl:'https://femlab.app/?billing=success',cancelUrl:'https://femlab.app/?billing=canceled',expiresAt:2000,key:'checkout-tax-key'});
     expect(requests).toHaveLength(1);
     expect(requests[0]!.get('automatic_tax[enabled]')).toBe(expected);
+    expect(requests[0]!.get('managed_payments[enabled]')).toBe('false');
+    expect(requests[0]!.get('customer_update[name]')).toBe('auto');
     expect(requests[0]!.get('tax_id_collection[enabled]')).toBe('true');
     expect(requests[0]!.get('consent_collection[terms_of_service]')).toBe('required');
   });
