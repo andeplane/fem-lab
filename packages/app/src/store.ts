@@ -275,7 +275,7 @@ export const initialState: UiState = {
   },
   panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
-  resultComparison: { configuration: { mode: 'single' }, viewMode: 'geometry', catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null },
+  resultComparison: { configuration: { mode: 'single' }, viewMode: 'geometry', catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null },
   exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],

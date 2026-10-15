@@ -62,6 +62,29 @@ export type ComparisonLegendSpec = z.output<typeof ComparisonLegendInput>;
 export type ComparisonVisibilitySpec = z.output<typeof ComparisonVisibilityInput>;
 export type ComparisonPickSpec = z.output<typeof ComparisonPickInput>;
 
+export const ComparisonPlaybackInput = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('independent'), pane: z.enum(['left', 'right']), resultId: z.string().min(1), playing: z.boolean(),
+    speed: z.number().positive().optional(), sample: RetainedFrameSample.optional() }),
+  z.object({ mode: z.literal('synchronized'), leftResultId: z.string().min(1), rightResultId: z.string().min(1), playing: z.boolean(),
+    speed: z.number().positive().optional(), time: RetainedTimeQuantity.optional(), sampling: z.enum(['exact', 'nearest']) }),
+]);
+export type ComparisonPlaybackSpec = z.output<typeof ComparisonPlaybackInput>;
+export interface ComparisonPlaybackPane {
+  resultId: string;
+  sample: ResolvedFrame;
+  playing: boolean;
+  speed: number;
+  playheadSi: number;
+}
+/** Physical playhead and held samples are distinct on unequal schedules. */
+export interface ComparisonPlaybackState {
+  mode: 'independent' | 'synchronized';
+  left: ComparisonPlaybackPane | null;
+  right: ComparisonPlaybackPane | null;
+  playheadSi: number | null;
+  interval: { startSi: number; endSi: number } | null;
+}
+
 export interface ComparisonLegendState {
   min: Valued;
   max: Valued;
@@ -114,10 +137,12 @@ export interface ResultComparisonState {
   warnings: Warning[];
   loading: boolean;
   error: EngineError | null;
+  playback: ComparisonPlaybackState | null;
 }
 /** A browser implements this typed boundary; a headless host explicitly lacks the workspace. */
 export interface ResultComparisonHost {
   configure(input: ComparisonConfiguration): void | Promise<void>;
+  play(input: ComparisonPlaybackSpec): void | Promise<void>;
   legend(input: ComparisonLegendSpec): void | Promise<void>;
   visible(input: ComparisonVisibilitySpec): void | Promise<void>;
   pick(input: ComparisonPickSpec): ComparisonPick | null | Promise<ComparisonPick | null>;

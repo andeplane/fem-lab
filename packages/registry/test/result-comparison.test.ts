@@ -61,12 +61,30 @@ it('reports an absent workspace in a headless host rather than selecting hidden 
   delete host.resultComparison;
   await expect(registry.dispatch({ cmd: 'view.compareResults', mode: 'single' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.compareResults' });
   await expect(registry.query({ query: 'query.resultComparison' })).rejects.toMatchObject({ code: 'unsupported' });
-  for (const name of ['view.compareResults', 'view.setComparisonLegend', 'view.setComparisonVisible', 'view.pickComparison', 'query.resultComparison']) {
+  await expect(registry.dispatch({ cmd: 'view.playComparison', mode: 'independent', pane: 'left', resultId: 'r', playing: true })).rejects.toMatchObject({ code: 'unsupported' });
+  for (const name of ['view.compareResults', 'view.playComparison', 'view.setComparisonLegend', 'view.setComparisonVisible', 'view.pickComparison', 'query.resultComparison']) {
     const definition = [...HOST_COMMANDS, ...HOST_QUERIES].find(row => row.name === name)!;
     expect(definition.description.length).toBeGreaterThan(80);
     expect(registry.describe(name).provider).toBe('host');
     expect(registry.describe(name).execution).toBe(name.startsWith('query.') ? 'modelRead' : 'sessionView');
   }
+});
+
+it('registers independent and shared physical comparison playback with explicit immutable ids and seek policy', async () => {
+  const { registry, host, transport } = setup();
+  const independent = { mode: 'independent', pane: 'right', resultId: 'solve-after', playing: false, speed: 2, sample: { kind: 'time', time: '400 ms', sampling: 'nearest' } };
+  await registry.dispatch({ cmd: 'view.playComparison', ...independent });
+  expect(host.resultComparison!.play).toHaveBeenLastCalledWith(independent);
+  const synchronized = { mode: 'synchronized', leftResultId: 'solve-before', rightResultId: 'solve-after', playing: true, speed: 0.5, time: { value: 0.4, unit: 's' }, sampling: 'exact' };
+  await registry.dispatch({ cmd: 'view.playComparison', ...synchronized });
+  expect(host.resultComparison!.play).toHaveBeenLastCalledWith(synchronized);
+  for (const invalid of [
+    { ...independent, resultId: '' }, { ...independent, pane: 'difference' }, { ...independent, speed: 0 }, { ...independent, speed: Infinity },
+    { ...independent, sample: { kind: 'frame', index: -1 } }, { ...synchronized, leftResultId: '' },
+    { mode: 'synchronized', leftResultId: 'a', rightResultId: 'b', playing: true }, { ...synchronized, sampling: 'interpolate' },
+  ]) await expect(registry.dispatch({ cmd: 'view.playComparison', ...invalid })).rejects.toMatchObject({ code: 'schema' });
+  expect(host.resultComparison!.play).toHaveBeenCalledTimes(2);
+  expect(transport.dispatch).not.toHaveBeenCalled();
 });
 
 it('registers independent typed retained index/time selection and rejects malformed samples before host actions', async () => {

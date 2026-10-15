@@ -3,6 +3,9 @@ import { fieldChoices, formatNumber, type FieldChoice } from './fields';
 import { checkResultIdentity } from './result-transfer';
 import type { Store } from './store';
 import type { CameraState, Viewer, ViewPreset } from './viewer/viewer';
+import { ComparisonPlayback } from './comparison-playback';
+import type { PlaybackClock } from './transient';
+import type { ComparisonPlaybackSpec } from '@femlab/registry';
 
 /** The renderer boundary is injectable without pretending a fake owns a WebGL context. */
 export type ComparisonViewer = Pick<Viewer, 'animate' | 'setField' | 'setDeformed' | 'setSurface' | 'setVisible' | 'setMode' | 'setDim' | 'setColormap' | 'setFieldValidity' | 'setSelection' | 'setCamera' | 'getCamera' | 'preset' | 'setProjection' | 'getProjection' | 'setComparisonFrameHeight' | 'getCameraZoom' | 'setCameraZoom' | 'setLayer' | 'setClip' | 'setTheme' | 'setHover' | 'setHighlight' | 'viewportAspect' | 'screenshot'>;
@@ -57,9 +60,16 @@ export class ResultComparison implements ResultComparisonHost {
   private initialFit: number | null = null;
   private cameraRevision = 0;
   private clip: Parameters<Viewer['setClip']>[0] = null;
+  private readonly playback: ComparisonPlayback;
 
   constructor(private readonly store: Store, private readonly transport: EngineTransport,
-    readonly viewers: { left: ComparisonViewerRef; right: ComparisonViewerRef }, private readonly lifecycle: ComparisonLifecycle) {}
+    readonly viewers: { left: ComparisonViewerRef; right: ComparisonViewerRef }, private readonly lifecycle: ComparisonLifecycle, clock?: PlaybackClock) {
+    this.playback = new ComparisonPlayback(transport, clock, {
+      configuration: () => this.store.state.resultComparison.configuration,
+      commit: (frames, catalogues, current) => this.commitFrames(frames, catalogues, current),
+      changed: playback => this.publish({ playback }), failed: error => this.publish({ error: engineError(error) }),
+    });
+  }
 
   get configured(): boolean { return this.store.state.resultComparison.configuration.mode !== 'single'; }
   get active(): boolean { return !this.disposed && this.configured && this.store.state.viewMode === 'results'; }
@@ -79,6 +89,7 @@ export class ResultComparison implements ResultComparisonHost {
     if (this.disposed) throw new FemError('session.expired', 'comparison belongs to a closed project');
     const ticket = ++this.epoch;
     this.initialFit = null;
+    this.playback.invalidate();
     const wasActive = this.active;
     const cameraRevision = this.cameraRevision;
     this.lifecycle.pauseSingle();
@@ -136,11 +147,16 @@ export class ResultComparison implements ResultComparisonHost {
     this.draw();
   }
 
-  invalidate(): void { this.epoch++; this.initialFit = null; }
-  dispose(): void { this.disposed = true; this.invalidate(); this.payloads = {}; this.conversions.clear(); }
+  invalidate(): void { this.epoch++; this.initialFit = null; this.playback.pause(); }
+  dispose(): void { this.disposed = true; this.invalidate(); this.playback.invalidate(); this.payloads = {}; this.conversions.clear(); }
   /** Current geometry/mesh modes borrow the primary renderer without replacing pinned ids. */
   suspend(): void { this.invalidate(); this.publish({ loading: false }); this.resetPresentation(); }
   resume(): void { this.draw(); this.fitInitial(); }
+  pausePlayback(): void { this.playback.pause(); }
+  play(input: ComparisonPlaybackSpec): Promise<void> {
+    if (!this.active) throw new FemError('unsupported', 'comparison playback requires Results view', 'view.playComparison', 'view.setMode results');
+    return this.playback.select(input);
+  }
   resize(): void {
     if (!this.active) return;
     const height = this.frameHeight();
@@ -204,6 +220,47 @@ export class ResultComparison implements ResultComparisonHost {
     const field = await this.transport.query(request) as ResultField;
     checkResultIdentity(request, field);
     return Float32Array.from(field.values);
+  }
+  private async framePayload(prior: Payload, frame: FrameResult, frames: FramesResult): Promise<Payload> {
+    if (frame.sample.resultId !== prior.operand.resultId || frame.field !== prior.operand.field)
+      throw new FemError('result.stale', 'playback frame does not belong to this pane', 'resultId');
+    const operand: ComparisonOperandInput = { ...prior.operand, sample: { kind: 'frame', index: frame.sample.frame.index } };
+    const field: ResultField = { resultId: frame.sample.resultId, step: frame.sample.step, field: frame.field, components: frame.components,
+      per: 'node', entityCount: frame.nodeCount, nodeCount: frame.nodeCount, unit: frame.unit, values: frame.values };
+    const values = scalarValues(field, operand), conversion = await this.conversion(frame.unit, prior.unit);
+    return { ...prior, operand, field, values, ...conversion, ...displayValues(values, conversion.scale, conversion.offset), frames, sample: frame.sample,
+      displacement: frame.field === 'displacement' ? Float32Array.from(frame.values) : null };
+  }
+  /** Independent completions merge the latest other pane; synchronized pairs commit together.
+   * A status receipt follows all asynchronous scientific and display preparation. */
+  private async commitFrames(frames: Partial<Record<'left' | 'right', FrameResult>>, catalogues: Partial<Record<'left' | 'right', FramesResult>>, current: () => boolean): Promise<boolean> {
+    const epoch = this.epoch;
+    const owns = () => current() && this.current(epoch) && this.active;
+    while (owns()) {
+      const configuration = this.store.state.resultComparison.configuration;
+      if (configuration.mode === 'single') return false;
+      const priorLeft = this.payloads.left!, priorRight = this.payloads.right!;
+      const [left, right] = await Promise.all([frames.left ? this.framePayload(priorLeft, frames.left, catalogues.left!) : priorLeft,
+        frames.right ? this.framePayload(priorRight, frames.right, catalogues.right!) : priorRight]);
+      const next = { ...configuration, left: left.operand, right: right.operand };
+      const difference = next.mode === 'difference' ? await this.prepareDifference(next, left, right) : null;
+      const catalogue = await this.transport.query({ query: 'query.results' }) as RetainedResults;
+      if (!owns()) return false;
+      // A separate pane selection can finish during any await above. Recompute the pair/difference
+      // with its latest payload; never publish that pane's former sample or metadata.
+      if ((!frames.left && priorLeft !== this.payloads.left) || (!frames.right && priorRight !== this.payloads.right)) continue;
+      for (const payload of [left, right]) {
+        const record = catalogue.records.find(record => record.id === payload.operand.resultId);
+        if (!record) throw new FemError('not-found', `retained Result '${payload.operand.resultId}' is unavailable or evicted`, 'resultId', 'query.results');
+        payload.summary = { ...payload.summary, stale: record.stale };
+      }
+      if (difference) difference.payload.summary = { ...difference.payload.summary, stale: left.summary.stale || right.summary.stale };
+      this.payloads = { left, right, ...(difference ? { difference: difference.payload } : {}) };
+      this.publish({ configuration: next, catalogue, left: this.pane(left), right: this.pane(right), difference: difference ? this.pane(difference.payload) : null,
+        coverage: difference?.response.coverage ?? null, interpolated: difference?.response.interpolated ?? false, warnings: difference?.response.warnings ?? [], error: null });
+      this.draw(); return true;
+    }
+    return false;
   }
   private async prepareDifference(configuration: Extract<PairConfiguration, { mode: 'difference' }>, left: Payload, right: Payload) {
     const response = await this.transport.query({ query: 'query.difference', left: configuration.left, right: configuration.right, onto: configuration.onto }) as DifferenceField;
@@ -277,6 +334,7 @@ export class ResultComparison implements ResultComparisonHost {
     const current = this.paneRequest(input.pane, 'pick');
     const at = await Promise.all(input.at.map(q => this.convert(q, 'm')));
     if (!current()) return null;
+    if (this.target(input.pane, input.resultId).payload !== payload) return null;
     const { metadata } = this.target(input.pane, input.resultId);
     const picked = nearestEntity(payload, metadata.hiddenBodies, at, input.body, input.face, this.store.state.deformScale);
     if (!picked) return null;

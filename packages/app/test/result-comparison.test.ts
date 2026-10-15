@@ -389,3 +389,83 @@ it('refuses historical derived fields and a wrong catalogue, and fences delayed 
   expect(store.state.viewMode).toBe('mesh');
   expect(left.setSurface).not.toHaveBeenCalled();
 });
+
+it('merges simultaneous independent sampled selections without restoring the other pane or its controls', async () => {
+  const { comparison, left, right, reply, transport } = setup();
+  let hold = false, release!: (value: RetainedResults) => void, receipt: RetainedResults | null = null;
+  reply(async (query, original) => {
+    if (query.query === 'query.frames') return history(query.resultId!);
+    if (query.query === 'query.frame') return retainedFrame(query.resultId!, query.sample?.kind === 'frame' ? query.sample.index : 0);
+    if (hold && query.query === 'query.results') {
+      hold = false; receipt = await original(query) as RetainedResults;
+      return new Promise<RetainedResults>(resolve => { release = resolve; });
+    }
+    return original(query);
+  });
+  await comparison.configure({ mode: 'sideBySide', left: { ...operand('old', 'displacement', 0), sample: { kind: 'frame', index: 0 } }, right: { ...operand('new', 'displacement', 1), sample: { kind: 'frame', index: 0 } } });
+  await comparison.legend({ pane: 'right', resultId: 'new', range: [q(0), q(0.003)] });
+  comparison.visible({ pane: 'right', resultId: 'new', bodies: ['body-new'], on: false });
+  hold = true;
+  const pending = comparison.play({ mode: 'independent', pane: 'left', resultId: 'old', playing: false, sample: { kind: 'frame', index: 1 } });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  await comparison.play({ mode: 'independent', pane: 'right', resultId: 'new', playing: false, sample: { kind: 'frame', index: 2 } });
+  release(receipt!); await pending;
+  expect(comparison.state().left?.sample?.frame.index).toBe(1); expect(comparison.state().right?.sample?.frame.index).toBe(2);
+  expect(comparison.state().right?.legend?.max).toEqual(q(3, 'mm')); expect(comparison.state().right?.hiddenBodies).toEqual(['body-new']);
+  expect(left.setDeformed).toHaveBeenLastCalledWith(Float32Array.from(retainedFrame('old', 1).values), 1);
+  expect(right.setDeformed).toHaveBeenLastCalledWith(Float32Array.from(retainedFrame('new', 2).values), 1);
+  expect(transport.dispatch).not.toHaveBeenCalled();
+});
+
+it('recomputes a sampled thermal difference and its scientific pick for the actual newly selected pair', async () => {
+  const { comparison, left, reply } = setup();
+  reply(async (query, original) => {
+    if (query.query === 'query.result') return { ...summaries[query.resultId!]!, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature', min: q(0, 'degC'), max: q(1, 'degC') }] };
+    if (query.query === 'query.frames') return history(query.resultId!, 'temperature');
+    if (query.query === 'query.frame') return retainedFrame(query.resultId!, query.sample?.kind === 'frame' ? query.sample.index : 0, 'temperature');
+    if (query.query === 'query.difference') {
+      const lf = retainedFrame('old', query.left.sample?.kind === 'frame' ? query.left.sample.index : 0, 'temperature');
+      const rf = retainedFrame('new', query.right.sample?.kind === 'frame' ? query.right.sample.index : 0, 'temperature');
+      const value = lf.sample.frame.timeSi - rf.sample.frame.timeSi;
+      return { ...diff([value, value, null]), comparisonResultId: query.onto === 'left' ? 'old' : 'new', unit: 'K', left: { ...diff([]).left, field: 'temperature', sample: lf.sample }, right: { ...diff([]).right, field: 'temperature', sample: rf.sample } };
+    }
+    return original(query);
+  });
+  await comparison.configure({ mode: 'difference', onto: 'left', left: { ...operand('old', 'temperature', 0), sample: { kind: 'frame', index: 0 } }, right: { ...operand('new', 'temperature', 0), sample: { kind: 'frame', index: 0 } } });
+  await comparison.play({ mode: 'independent', pane: 'left', resultId: 'old', playing: false, sample: { kind: 'frame', index: 1 } });
+  await comparison.play({ mode: 'independent', pane: 'right', resultId: 'new', playing: false, sample: { kind: 'frame', index: 2 } });
+  expect(comparison.state().difference?.legend?.min).toEqual(q(-0.4, 'degC'));
+  expect(comparison.state().difference?.canDeform).toBe(false);
+  expect(left.setFieldValidity).toHaveBeenLastCalledWith(Uint8Array.of(1, 1, 0));
+  const pick = await comparison.pick({ pane: 'difference', resultId: 'old', at: [q(0), q(0), q(0)] });
+  expect(pick?.value).toEqual(q(-0.4, 'K'));
+  expect(pick?.samples.left?.frame.index).toBe(1); expect(pick?.samples.right?.frame.index).toBe(2);
+});
+
+it('drops delayed playback drawings after mode/session changes and refuses an evicted final status receipt', async () => {
+  for (const action of ['suspend', 'dispose', 'evict'] as const) {
+    const { comparison, left, reply, store, catalogue } = setup();
+    let release!: (value: FrameResult) => void, hold = false;
+    reply(async (query, original) => {
+      if (query.query === 'query.frames') return history(query.resultId!);
+      if (query.query === 'query.frame') {
+        if (hold && query.resultId === 'old' && query.sample?.kind === 'frame' && query.sample.index === 2) return new Promise<FrameResult>(resolve => { release = resolve; });
+        return retainedFrame(query.resultId!, query.sample?.kind === 'frame' ? query.sample.index : 0);
+      }
+      return original(query);
+    });
+    await comparison.configure({ mode: 'sideBySide', left: operand('old', 'displacement', 0), right: operand('new', 'displacement', 0) });
+    const drawing = left.setField.mock.calls.length;
+    hold = true;
+    const pending = comparison.play({ mode: 'independent', pane: 'left', resultId: 'old', playing: false, sample: { kind: 'frame', index: 2 } });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    if (action === 'suspend') { store.set({ viewMode: 'mesh' }); comparison.suspend(); }
+    else if (action === 'dispose') comparison.dispose();
+    else catalogue({ ...comparison.state().catalogue, records: comparison.state().catalogue.records.filter(record => record.id !== 'old') });
+    release(retainedFrame('old', 2));
+    if (action === 'evict') await expect(pending).rejects.toMatchObject({ code: 'not-found', where: 'resultId' });
+    else await pending;
+    expect(left.setField.mock.calls).toHaveLength(drawing); expect(comparison.state().left?.sample).toBeNull();
+    expect(comparison.state().playback).toBeNull();
+  }
+});

@@ -212,3 +212,21 @@ runtime claim uses stale ignored bindings. Software adapters establish correctne
 This extends the existing read/host registry boundaries (ADRs 0003, 0007, 0008, 0012 and 0018).
 Rust owns frame resolution/interpolation and scientific values; the TypeScript host owns I/O,
 clock, caching and drawing. No new mutable engine entry point or second Model builder is planned.
+
+## Implemented steps and remaining gates
+
+The sampled engine boundary, scalar/vector compatibility, same-id selection, uniform thermal,
+explicit rigid-fall, axial affine, partial-coverage and Fourier refinement oracles are implemented.
+Eight public native cases pass, including decreasing spatial and temporal errors on the documented
+grids. Actual optimized sampled bindings and two production Chromium cases verify independent
+thermal/free-fall samples and quantitative difference/pick values. These browser receipts predate
+the parent first-entry camera correction; the stronger complete-body bounds gate is still pending.
+
+`view.playComparison` now has the typed independent/shared-clock boundary. Deferred clock and
+controller tests cover irregular schedules, actual held times, shared shorter-endpoint stopping,
+independent remainder, speed/pause continuity, atomic pairs, concurrent independent selections,
+primary-field restrictions and late mode/session replies. The focused 36-case host suite and
+registry 134 cases pass; registry coverage is 100% on all four measures, and both typechecks pass.
+This step is callable through the registered host Command; playback UI, transactional scrub
+preview/cancel, production playback/lifecycle checks, cross-runtime replay and the final full
+host/strict coverage remain open. #286 is incomplete until those gates are fulfilled.
