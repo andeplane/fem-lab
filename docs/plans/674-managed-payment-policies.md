@@ -27,6 +27,12 @@ and applicable tax are shown at checkout.” Do not add a speculative personal v
 business purchase selector before the supported tax-category/catalogue route is
 settled with the activation work.
 
+The optional field is feature-detected so this copy can ship before #676 without
+editing or duplicating its public types. Only the exact `direct` value identifies
+Hafreager kode & koblinger as seller for new purchases. Managed, pending and missing
+values keep neutral checkout wording. Billing availability continues to control
+purchase actions independently of the copy.
+
 Primary sources read on 15 October 2026:
 
 - [How Managed Payments works](https://docs.stripe.com/payments/managed-payments/how-it-works): identifies the merchant-of-record route and customer-facing Onelink branding, including “Sold through Onelink”; describes payment support, receipts and separate order management. Naming is documented here, but app copy does not claim that an actual FEM Lab managed checkout has been verified.
