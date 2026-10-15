@@ -166,6 +166,14 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
             {EXPORT_FORMATS.filter((r) => r.group === group).map((row) => {
               const why = unavailable(row, ctx);
               const spec = specOf(row, step, image());
+              const action = (
+                <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null || (row.format === 'webm' && s.capturingAnimation)} title={line(spec)}>
+                  export
+                </Cmd>
+              );
+              const resolution = row.format === 'png'
+                ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} />
+                : row.format === 'webm' && why === null ? <AnimationResolution s={s} dispatch={dispatch} /> : null;
               return (
                 <div key={row.format} class={why ? 'export-row off' : 'export-row'}>
                   <input
@@ -179,11 +187,12 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
                   <span class="export-name">{row.name}</span>
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
-                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} /> : null}
-                  {row.format === 'webm' && why === null ? <AnimationResolution s={s} dispatch={dispatch} /> : null}
-                  <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null || (row.format === 'webm' && s.capturingAnimation)} title={line(spec)}>
-                    export
-                  </Cmd>
+                  {resolution ? (
+                    <div class="export-resolution-actions">
+                      {resolution}
+                      {action}
+                    </div>
+                  ) : action}
                 </div>
               );
             })}

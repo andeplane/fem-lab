@@ -2285,6 +2285,11 @@ button.solve.stale {
 .export-row.off {
   color: var(--text-dim);
 }
+.export-resolution-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .export-row .ext {
   color: var(--text-low);
 }
