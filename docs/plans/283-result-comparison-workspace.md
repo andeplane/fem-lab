@@ -1,13 +1,16 @@
 # App Result comparison workspace
 
+Status: implemented and accepted. PR #604 merged as main `1a5fcf2b` (tree `012803b2`).
+Accepted runtime baseline `eced67dd` also includes transient integration #286.
+Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
+
 Implementation issue: [#283](https://github.com/andeplane/fem-lab/issues/283).
 Parent decomposition: [Result and Journal comparison](16-result-journal-comparison.md), #16.
-Initial inspected source: `191c4d65` (main, 2026-10-15). Final host composition preserves
-the account, hosted-AI and service changes on `e11a0285`.
-Transient frame selection and playback remain #286; comparison here uses each immutable
-Result's final fields.
+Initial inspected source: `191c4d65` (2026-10-15); historical checkpoints are separated below.
+#283 delivers final-field comparison. The subsequently accepted #286 extends the same workspace
+with retained frame selection and playback.
 
-## Existing source contracts
+## Historical source baseline
 
 - `query.results` returns up to eight immutable solve ids, solved revision, current/stale,
   node/element counts and measured payload sizes. #280, #281 and #282 are closed.
@@ -68,7 +71,7 @@ mesh. Leaving comparison restores the prior single field/legend flow. Project re
 missing/evicted ids and late replies clear or refuse the relevant retained presentation; they
 cannot write over a newer selection or attach old values to new geometry.
 
-## Source mapping and planned changes
+## Implemented source mapping
 
 | Requirement | Source seam | Change and acceptance |
 | --- | --- | --- |
@@ -81,14 +84,14 @@ cannot write over a newer selection or attach old values to new geometry.
 | UI, script and AI parity | `registry/src/host-commands.ts`, `host.ts`, generated host declarations | Comparison configuration, legend, visibility and pick/probe Commands plus comparison-state Query. Concrete schemas/docstrings; registry tests at 100%. |
 | Preserve single flow | `ResultsView`, existing Legend/DeformBar, host Commands | Existing default, solve completion, scalar/derived fields, stale contours, animation/playback, selection and exports retain their single-Result behavior. |
 
-Planned host names are `view.compareResults`, `view.setComparisonLegend`,
+The registered host names are `view.compareResults`, `view.setComparisonLegend`,
 `view.setComparisonVisible`, `view.pickComparison`, and `query.resultComparison`.
 Configuration is explicit: single mode takes no operands; side-by-side takes left/right
 id/field/component; difference additionally requires the target side. Existing camera, view mode
 and projection Commands remain the shared boundary. New controls dispatch the same definitions
 as scripts/AI. These are host capabilities, never Journal entries or a new engine architecture point.
 
-## Delivery and verification
+## Historical delivery sequence and required verification
 
 1. Add the typed registry contract and controller/presentation state with deferred-transport
    regression fixtures. Check explicit-id routing, unit conversion, stale status, mismatch,
@@ -122,6 +125,41 @@ as scripts/AI. These are host capabilities, never Journal entries or a new engin
 | UI/AI/script parity, physical quantities, exact pane/id targets, unsupported headless host and existing camera compatibility | `packages/registry/test/result-comparison.test.ts` plus the exhaustive host registry samples and coverage gate. |
 | Empty catalogue to first retained Result preserves single-view layout, camera and physical boundary picks | `packages/app/test/result-comparison-ui.test.tsx` preserves the mounted empty controls; the existing meshed Sheet Chromium case asserts the unchanged canvas rectangle/public camera and all original undeformed/deformed boundary picks. |
 | Existing single-Result fields, playback, selection, session replacement and accepted account UI | The complete app suite includes `results.test.tsx`, `transient-results.test.ts`, `main-session.test.ts` and `account-ui.test.tsx`; leaving comparison restores the existing workflow. |
+
+## Final accepted source and runtime
+
+[Final #283 CI](https://github.com/andeplane/fem-lab/actions/runs/38677130063) completed
+successfully at canonical head `a752fcec`, tree `012803b2`; accepted main `1a5fcf2b` has the
+same tree. All ten #283 source commits and the separate accepted #610 physical line regression
+are preserved. Seven comparison/Sheet/line production cases and all 27 exact 320×180
+thumbnails passed on the authentic composed parent runtime. The original first-entry cropping,
+first-solve layout movement and fractional-height thumbnail failures are resolved, not waived.
+
+Accepted runtime baseline `eced67dd`, tested tree `0abc2e27`, includes #286’s sampled fields/clocks.
+The accepted source is main `eced67dd09906269c8bd946c442225846bcb99db`, whole tree
+`0abc2e2799c62f21c7128565a1b93a1a09efa66b`, identical to tested #286 head `79d9b7f5`.
+[Final fast CI](https://github.com/andeplane/fem-lab/actions/runs/38676074047) and
+[full strict validation](https://github.com/andeplane/fem-lab/actions/runs/38676136571) passed.
+The GPU-inclusive report covers 28,545 lines, 3,328 functions and 61,241 regions at 100%, with
+no exclusions. The separate CPU bridge excludes `src/gpu/`; its totals are not the full report.
+Native/WASM replay, registry 135/135 at 100%, app 1,274 passes plus five existing skips,
+27 thumbnails, build/size, CPU Chromium 204 passes plus two skips, service-worker four passes
+and SwiftShader four passes are recorded in those runs.
+
+[Deployment 38679221526](https://github.com/andeplane/fem-lab/actions/runs/38679221526)
+succeeded at that main commit. Three existing production Chromium cases passed against the
+actual deployed app, zero retries: independent retained panes, sampled thermal comparison
+and sampled explicit comparison. Each browser trace loaded WASM SHA256
+`471980d4942142d0bb319e1b265b15f5cfc912756e3882d0872010f08747cfba`, matching the tested
+complete browser/Node binding pair and emitted schema `088b6ebd…`. The deployment receipt,
+source/runtime manifests, original logs and standalone replay dependencies are retained in the
+#612 issue evidence index. Browser/raster acceptance does not claim physical-device or user
+visual acceptance.
+
+## Historical source-scoped checkpoints
+
+These earlier receipts explain implementation history; their source/runtime pairs are not the
+final-current-runtime proof above.
 
 The historical full-suite checkpoint on `e11a0285` used the authentic `d0cd3769` runtime
 (artifact `11930522380`, WASM SHA256 `cb8408f4…`). Subsequent accepted #588 changes require
