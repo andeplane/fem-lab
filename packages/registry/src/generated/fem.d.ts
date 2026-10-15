@@ -761,7 +761,7 @@ export interface Fem {
      */
     convert(args: Omit<Extract<Query, { query: 'query.convert' }>, 'query'>): Promise<Converted>;
     /**
-     * Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.
+     * Inspect the supplied Abaqus bundle for missing INCLUDE and NODE/ELEMENT INPUT files.
      * Uses the same bounded lexer and safe relative-path graph as conversion. This read
      * performs no model/physics conversion or file/network I/O; hosts can acquire listed
      * files through their captured scoped I/O and repeat until the bundle is complete.

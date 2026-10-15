@@ -340,11 +340,14 @@ pub(crate) struct Active {
 impl Active {
     pub(crate) fn finish(&self) -> Result<(), Error> {
         if !self.pending.is_empty() {
-            return Err(malformed(
-                self.keyword.line,
-                "ELEMENT",
-                "connectivity",
-                "incomplete continued element connectivity",
+            return Err(with_source(
+                malformed(
+                    self.pending_line.unwrap_or(self.keyword.line),
+                    "ELEMENT",
+                    "connectivity",
+                    "incomplete continued element connectivity",
+                ),
+                self.pending_source.as_deref().or(self.keyword.source.as_deref()),
             ));
         }
         let requires_data = match self.section {
@@ -352,11 +355,14 @@ impl Active {
             Section::Nodes { .. } | Section::Elements { .. } | Section::Set { .. } | Section::Surface { .. } => true,
         };
         if requires_data && self.records == 0 {
-            return Err(malformed(
-                self.keyword.line,
-                &self.keyword.name,
-                "data",
-                "this keyword requires at least one data record",
+            return Err(with_source(
+                malformed(
+                    self.keyword.line,
+                    &self.keyword.name,
+                    "data",
+                    "this keyword requires at least one data record",
+                ),
+                self.keyword.source.as_deref(),
             ));
         }
         Ok(())
@@ -763,7 +769,7 @@ impl Builder {
 
 pub(super) fn with_source(error: Error, source: Option<&str>) -> Error {
     if let Some(source) = source {
-        if error.where_.as_deref().is_some_and(|at| at.starts_with(&format!("{source}: "))) {
+        if error.where_.as_deref().is_some_and(|at| at.starts_with(&format!("{source}: ")) || at.contains(": line ")) {
             return error;
         }
         let at = error.where_.as_deref().unwrap_or("input").to_string();
@@ -1311,5 +1317,12 @@ mod tests {
         assert_eq!(builder.memberships, MAX_MEMBERSHIPS);
         assert_eq!(builder.reserve_members(1, 5, "NSET").unwrap_err().code, ErrorCode::Schema);
         assert_eq!(builder.room_for(usize::MAX, 6, "NSET").unwrap_err().code, ErrorCode::Schema);
+    }
+
+    #[test]
+    fn deeper_alternate_record_sources_survive_outer_owner_annotations() {
+        let original = with_source(malformed(7, "NODE", "coordinate", "nonfinite coordinate"), Some("Data/Nodes.inp"));
+        let wrapped = with_source(original.clone(), Some("Parts/Owner.inp"));
+        assert_eq!(wrapped, original);
     }
 }
