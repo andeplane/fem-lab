@@ -23,15 +23,16 @@ async function ready(page: Page): Promise<void> {
 async function patch(page: Page, x: number, y: number): Promise<{ bright: number; maxSat: number; mean: [number, number, number] }> {
   return page.evaluate(({ x, y }) => {
     const canvas = document.querySelector('canvas')!;
-    const rect = canvas.getBoundingClientRect();
     const copy = document.createElement('canvas');
     copy.width = canvas.width;
     copy.height = canvas.height;
     const context = copy.getContext('2d')!;
     context.drawImage(canvas, 0, 0);
-    const scale = canvas.width / rect.width;
-    const px = Math.round(x * rect.width * scale);
-    const py = Math.round(y * rect.height * scale);
+    // The front orthographic camera targets (1, .33); the 2 x 1 m truss diagonal
+    // fixes its viewport height. Probe a physical point, independent of strip height.
+    const scale = canvas.height / (2 * Math.hypot(2, 1) * 0.7);
+    const px = Math.round(canvas.width / 2 + (x - 1) * scale);
+    const py = Math.round(canvas.height / 2 - (y - 0.33) * scale);
     const data = context.getImageData(px - 5, py - 5, 11, 11).data;
     let bright = 0;
     let maxSat = 0;
@@ -54,10 +55,13 @@ async function patch(page: Page, x: number, y: number): Promise<{ bright: number
 }
 
 function screen(page: Page, x: number, y: number): Promise<{ x: number; y: number }> {
-  return page.locator('canvas').boundingBox().then((rect) => ({ x: rect!.x + x * rect!.width, y: rect!.y + y * rect!.height }));
+  return page.locator('canvas').boundingBox().then((rect) => {
+    const scale = rect!.height / (2 * Math.hypot(2, 1) * 0.7);
+    return { x: rect!.x + rect!.width / 2 + (x - 1) * scale, y: rect!.y + rect!.height / 2 - (y - 0.33) * scale };
+  });
 }
 
-test('@cpu draws and colors two-bar line members while preserving visibility and picking', async ({ page }) => {
+test('@cpu draws and colors two-bar line members while preserving visibility and picking', async ({ page }, info) => {
   test.setTimeout(120_000);
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
@@ -71,9 +75,10 @@ test('@cpu draws and colors two-bar line members while preserving visibility and
   }, commands);
 
   await expect(page.locator('.tree .name', { hasText: 'truss' })).toBeVisible();
-  // With the front orthographic camera, these are the midpoints of the two known members.
-  const left = { x: 0.4055, y: 0.446 };
-  const right = { x: 0.5945, y: 0.446 };
+  // At the midpoint, reversing endpoint colors gives the same interpolated color.
+  // The physical quarter points have distinct signed-uy and magnitude colors.
+  const left = { x: 0.25, y: 0.25 };
+  const right = { x: 1.75, y: 0.25 };
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.bright)).toBeGreaterThan(0);
   const geometryLeft = await patch(page, left.x, left.y);
   const geometryRight = await patch(page, right.x, right.y);
@@ -90,16 +95,37 @@ test('@cpu draws and colors two-bar line members while preserving visibility and
 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'static' }));
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 0 }));
+  const displacement = await page.evaluate(() => window.fem.query.field({ field: 'displacement' }));
+  expect(displacement.unit).toBe('m');
+  expect(displacement.components).toBe(3);
+  expect(displacement.entityCount).toBe(3);
+  const uy: number[] = [], magnitude: number[] = [];
+  for (let node = 0; node < displacement.entityCount; node++) {
+    const [ux, y, uz] = displacement.values.slice(node * 3, node * 3 + 3) as [number, number, number];
+    expect(ux).toBeCloseTo(0, 12); expect(uz).toBeCloseTo(0, 12);
+    uy.push(y); magnitude.push(Math.hypot(ux, y, uz));
+  }
+  // Each 45-degree member contributes (EA/L) sin²(45°), so δ = P√2/(EA).
+  const delta = 10_000 * Math.SQRT2 / (200e9 * Math.PI * 0.02 ** 2);
+  expect(Math.min(...uy)).toBeCloseTo(-delta, 12); expect(Math.max(...uy)).toBe(0);
+  expect(Math.min(...magnitude)).toBe(0); expect(Math.max(...magnitude)).toBeCloseTo(delta, 12);
   await page.getByRole('button', { name: 'uy', exact: true }).click();
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.maxSat)).toBeGreaterThan(25);
   await expect.poll(() => patch(page, right.x, right.y).then((p) => p.maxSat)).toBeGreaterThan(25);
-  const uyColour = await patch(page, left.x, left.y);
+  const uyColours = await Promise.all([patch(page, left.x, left.y), patch(page, right.x, right.y)]);
   await page.getByRole('button', { name: '|u|', exact: true }).click();
   await expect(page.locator('.legend-field')).toHaveText('|u|');
-  await expect.poll(async () => {
-    const umagColour = await patch(page, left.x, left.y);
-    return Math.abs(uyColour.mean[0] - umagColour.mean[0]) + Math.abs(uyColour.mean[1] - umagColour.mean[1]) + Math.abs(uyColour.mean[2] - umagColour.mean[2]);
-  }).toBeGreaterThan(6);
+  const samples = [];
+  for (const [index, point] of [left, right].entries()) {
+    const uyColour = uyColours[index]!;
+    await expect.poll(async () => {
+      const umagColour = await patch(page, point.x, point.y);
+      return Math.abs(uyColour.mean[0] - umagColour.mean[0]) + Math.abs(uyColour.mean[1] - umagColour.mean[1]) + Math.abs(uyColour.mean[2] - umagColour.mean[2]);
+    }).toBeGreaterThan(6);
+    samples.push({ point, screen: await screen(page, point.x, point.y), uyColour, magnitudeColour: await patch(page, point.x, point.y) });
+  }
+  await info.attach('physical-line-color-probes', { body: JSON.stringify({ delta, uy, magnitude, samples }), contentType: 'application/json' });
+  await info.attach('physical-line-colors', { body: await page.screenshot(), contentType: 'image/png' });
 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['truss'], on: false }));
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.bright)).toBe(0);
