@@ -7,7 +7,7 @@ import OpenAI from 'openai';
 import { responseParameters, responsesProvider, type Provider } from '@femlab/ai';
 import { expect, it } from 'vitest';
 import { BrowserEvalAdapter, McpEvalAdapter } from '../src/adapters';
-import { boundedProvider, EvaluationBudget, requireFreeDisk } from '../src/budget';
+import { boundedProvider, EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../src/budget';
 import { EVAL_CASES } from '../src/cases';
 import { prepareFrozenBuild } from '../src/frozen-build';
 import { markdownReport } from '../src/report';
@@ -57,7 +57,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const sdkVersion = (JSON.parse(await readFile(path.join(root, 'node_modules/openai/package.json'), 'utf8')) as { version: string }).version;
   const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, minimumFreeGiB: 30, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
   if (previous && (previous.format !== 'femlab-assistant-eval/1' || previous.manifest.gitCommit !== commit || previous.manifest.dirty || previous.manifest.specificationSha256 !== sha(JSON.stringify(EVAL_CASES)) || previous.manifest.provider !== 'openai' || previous.manifest.model !== model || JSON.stringify(previous.manifest.configuration) !== JSON.stringify(configuration) || previous.lanes.some(lane => !lane.live) || !previous.controls || previous.controls.caseInFlight !== false)) throw new Error('checkpoint configuration or frozen source differs; start a new evaluation');
-  const budget = new EvaluationBudget(limits, previous?.controls?.budget);
+  const budget = previous ? restoreEvaluationBudget(limits, previous.controls?.budget) : new EvaluationBudget(limits);
   const runStartedAt = previous?.manifest.startedAt ?? startedAt;
   const resources = async () => {
     const disk = await statfs(root);
@@ -98,14 +98,19 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
       provider: 'openai', model, configuration, startedAt: runStartedAt, finishedAt: startedAt,
     };
     const lanes: LaneResult[] = [];
+    let persistence = Promise.resolve();
     const persist = async () => {
       manifest.finishedAt = new Date().toISOString();
       const artifact: EvaluationArtifact = { format: 'femlab-assistant-eval/1', manifest, lanes, controls: { budget: budget.snapshot(), resumedFromSha256: previousBytes ? sha(previousBytes) : null, caseInFlight } };
       const text = serializeArtifact(artifact, [key ?? '']);
-      const temporary = `${output}.${randomUUID()}.pending`;
-      await writeFile(temporary, text, { flag: 'wx' });
-      await rename(temporary, output);
-      await writeFile(output.replace(/\.json$/, '') + '.md', markdownReport(artifact));
+      const markdown = markdownReport(artifact);
+      persistence = persistence.then(async () => {
+        const temporary = `${output}.${randomUUID()}.pending`;
+        await writeFile(temporary, text, { flag: 'wx' });
+        await rename(temporary, output);
+        await writeFile(output.replace(/\.json$/, '') + '.md', markdown);
+      });
+      await persistence;
     };
     persistProgress = persist;
     const server = build ? await serveFrozenApp(build.appDirectory) : null;

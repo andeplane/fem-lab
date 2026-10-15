@@ -24,6 +24,7 @@ export class EvaluationBudget {
   }
   interrupt(reason: string): void { this.reason ??= reason; }
   assertReady(): void {
+    if (this.inFlightRequests > 0) { this.reason = 'previous generation is still in flight'; throw new Error(this.reason); }
     if (this.reason !== null) throw new Error(this.reason);
     if (this.requests >= this.limits.maxRequests) { this.reason = 'evaluation request limit reached'; throw new Error(this.reason); }
   }
@@ -87,4 +88,10 @@ export function boundedProvider(provider: Provider, budget: EvaluationBudget, co
 
 export function requireFreeDisk(availableBytes: number, minimumBytes: number): void {
   if (!Number.isFinite(availableBytes) || availableBytes < minimumBytes) throw new Error(`evaluation requires at least ${minimumBytes / 2 ** 30} GiB free disk`);
+}
+
+/** Explicit resume must never interpret a missing ledger as a fresh zero balance. */
+export function restoreEvaluationBudget(limits: EvaluationLimits, checkpoint: unknown): EvaluationBudget {
+  if (checkpoint === null || typeof checkpoint !== 'object') throw new Error('evaluation budget checkpoint is missing');
+  return new EvaluationBudget(limits, checkpoint as ReturnType<EvaluationBudget['snapshot']>);
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatEvent, ChatRequest, Provider, Usage } from '@femlab/ai';
-import { boundedProvider, EvaluationBudget, requireFreeDisk } from '../src/budget';
+import { boundedProvider, EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../src/budget';
 import { runLane, type EvalAdapter } from '../src/runner';
 import { EVAL_CASES } from '../src/cases';
 
@@ -66,7 +66,10 @@ describe('bounded evaluation generation', () => {
   it('restores spent budget only under identical resolved limits and refuses unresolved billing', () => {
     const budget = new EvaluationBudget(limits);
     budget.reserve(request.model, 100, 1000).finish(usage);
-    expect(new EvaluationBudget(limits, budget.snapshot()).snapshot()).toEqual(budget.snapshot());
+    expect(restoreEvaluationBudget(limits, budget.snapshot()).snapshot()).toEqual(budget.snapshot());
+    expect(() => restoreEvaluationBudget(limits, undefined)).toThrow('missing');
+    expect(() => restoreEvaluationBudget(limits, null)).toThrow('missing');
+    expect(() => restoreEvaluationBudget(limits, {})).toThrow('incompatible');
     expect(() => new EvaluationBudget({ ...limits, maxUsd: 2 }, budget.snapshot())).toThrow('checkpoint');
     expect(() => new EvaluationBudget(limits, { ...budget.snapshot(), inFlightRequests: 1 })).toThrow('checkpoint');
     expect(() => new EvaluationBudget(limits, { ...budget.snapshot(), stoppedReason: 'usage unknown' })).toThrow('checkpoint');

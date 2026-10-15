@@ -15,7 +15,8 @@ export function markdownReport(artifact: EvaluationArtifact): string {
     '| --- | --- | ---: | --- |',
   ];
   for (const lane of artifact.lanes) {
-    lines.push(`| ${lane.host} | ${lane.status}${lane.reason ? `: ${lane.reason}` : ''} | ${lane.passed}/${lane.total} (${percent(lane.passRate)}) | ${lane.gatePassed ? 'pass' : 'fail'} |`);
+    const scored = lane.status === 'completed' ? `${lane.passed}/${lane.total} (${percent(lane.passRate)})` : `not scored (${lane.cases.length}/20 attempted)`;
+    lines.push(`| ${lane.host} | ${lane.status}${lane.reason ? `: ${lane.reason}` : ''} | ${scored} | ${lane.gatePassed ? 'pass' : 'fail'} |`);
   }
   lines.push('', '## Cases', '', '| Host | ID | Result | Observed | Failure cause |', '| --- | --- | --- | ---: | --- |');
   for (const lane of artifact.lanes) {

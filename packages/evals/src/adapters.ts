@@ -98,7 +98,7 @@ export class BrowserEvalAdapter implements EvalAdapter {
         const fem = (window as unknown as { fem: { registry: { query(q: Record<string, unknown>): Promise<unknown> } } }).fem;
         await fem.registry.query({ query: 'query.capabilities' });
       });
-      return await withinCaseDeadline(() => evaluateCase(new BrowserRemote(context, page), this.options.provider, this.options.model, spec, this.options), () => context.close(), this.options.timeoutMs);
+      return await withinCaseDeadline(signal => evaluateCase(new BrowserRemote(context, page), this.options.provider, this.options.model, spec, { ...this.options, signal }), () => context.close(), this.options.timeoutMs);
     } catch (error) {
       await context.close();
       throw error;
@@ -182,7 +182,7 @@ export class McpEvalAdapter implements EvalAdapter {
     const client = new Client({ name: 'femlab-assistant-eval', version: '1' });
     try {
       await client.connect(transport);
-      return await withinCaseDeadline(() => evaluateCase(new McpRemote(client, transport, project), this.options.provider, this.options.model, spec, this.options), () => transport.close(), this.options.timeoutMs);
+      return await withinCaseDeadline(signal => evaluateCase(new McpRemote(client, transport, project), this.options.provider, this.options.model, spec, { ...this.options, signal }), () => transport.close(), this.options.timeoutMs);
     } catch (error) {
       await transport.close().catch(() => undefined);
       await rm(project, { recursive: true, force: true });

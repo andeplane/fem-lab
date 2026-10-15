@@ -92,7 +92,7 @@ async function optional(remote: RemoteEngine, command: string, input: Record<str
 }
 
 /** One real provider turn against one fresh host process/page, followed by independent reads. */
-export async function evaluateCase(remote: RemoteEngine, provider: Provider, model: string, spec: EvalCase, options: { maxTokens: number; maxRounds: number; timeoutMs: number }): Promise<EvalEvidence> {
+export async function evaluateCase(remote: RemoteEngine, provider: Provider, model: string, spec: EvalCase, options: { maxTokens: number; maxRounds: number; timeoutMs: number; signal?: AbortSignal }): Promise<EvalEvidence> {
   const definitions = await remote.definitions();
   const registry = new RemoteRegistry(remote, definitions);
   const tools = definitions.tools ?? toToolDefinitions(registry as unknown as Registry);
