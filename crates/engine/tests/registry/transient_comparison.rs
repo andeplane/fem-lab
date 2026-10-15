@@ -289,3 +289,223 @@ fn sampled_difference_full_solve_replay_has_exact_journal_hashes_and_retained_ti
     );
     assert_eq!((rejected.code, rejected.where_.as_deref()), (ErrorCode::NotFound, Some("left.resultId")));
 }
+
+#[test]
+fn sampled_difference_same_retained_result_keeps_distinct_frame_identity_after_a_live_edit() {
+    let mut e = engine();
+    frame_ramp(&mut e, 2, 2, 0.2, 1.0, 2);
+    let id = read(&mut e, json!({"query":"query.result"}))["resultId"].as_str().unwrap().to_owned();
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"12 W/m^3"}"#);
+    assert!(frames(&mut e, &id).stale);
+    let before = e.export_file();
+    let catalogue = read(&mut e, json!({"query":"query.results"}));
+    for onto in ["left", "right"] {
+        let field = difference(
+            &mut e,
+            json!({"resultId":id,"field":"temperature","component":0,"sample":{"kind":"frame","index":1}}),
+            json!({"resultId":id,"field":"temperature","component":0,"sample":{"kind":"time","time":"800 ms","sampling":"exact"}}),
+            onto,
+        );
+        assert!(!field.interpolated);
+        assert_eq!(field.left.result_id, field.right.result_id);
+        assert_eq!(field.left.sample.as_ref().unwrap().frame.index, 1);
+        assert_eq!(field.right.sample.as_ref().unwrap().frame.index, 2);
+        for value in field.values {
+            close(value.unwrap(), -0.4, 1e-10);
+        }
+    }
+    assert_eq!(e.export_file(), before);
+    assert_eq!(read(&mut e, json!({"query":"query.results"})), catalogue);
+}
+
+#[test]
+fn sampled_difference_amplitude_bar_projects_the_independent_affine_displacement_at_both_orders() {
+    for order in [1, 2] {
+        for nx in [2, 4, 8] {
+            let mut e = engine();
+            frame_box(&mut e, nx, order);
+            ok(&mut e, r#"{"cmd":"material.add","name":"mat","E":"200 GPa","nu":0,"rho":"1000 kg/m^3"}"#);
+            ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#);
+            ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"bar.xmax","total":["1000 N","0 N","0 N"]}"#);
+            ok(
+                &mut e,
+                r#"{"cmd":"step.add","name":"pull","procedure":"static","constraints":["root"],"loads":["tip"],"dt":"0.2 s","tEnd":"1 s","outputEvery":2,"amplitude":{"kind":"table","t":["0 s","1 s"],"value":[0,1]}}"#,
+            );
+            let left = solve_id(&mut e, "pull");
+            let left_coords = e.mesh().unwrap().mesh.coords.clone();
+            ok(
+                &mut e,
+                &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2*nx,"ny":1,"nz":1}},"order":order})
+                    .to_string(),
+            );
+            ok(
+                &mut e,
+                r#"{"cmd":"step.add","name":"pull","procedure":"static","constraints":["root"],"loads":["tip"],"dt":"0.4 s","tEnd":"0.9 s","outputEvery":1,"amplitude":{"kind":"table","t":["0 s","0.9 s"],"value":[0,0.9]}}"#,
+            );
+            let right = solve_id(&mut e, "pull");
+            let right_coords = e.mesh().unwrap().mesh.coords.clone();
+            let before = e.export_file();
+            for (onto, coords) in [("left", &left_coords), ("right", &right_coords)] {
+                let field = difference(
+                    &mut e,
+                    json!({"resultId":left,"field":"displacement","sample":{"kind":"frame","index":1}}),
+                    json!({"resultId":right,"field":"displacement","sample":{"kind":"time","time":"300 ms","sampling":"exact"}}),
+                    onto,
+                );
+                assert!(field.interpolated);
+                assert_eq!(field.coverage.inside_nodes, field.node_count);
+                for (point, row) in coords.chunks_exact(3).zip(field.values.chunks_exact(3)) {
+                    // F=1000 N, E=200 GPa, A=.01 m^2; g_left=.4, g_right=.3.
+                    close(row[0].unwrap(), 1000.0 * (0.4 - 0.3) * point[0] / (200e9 * 0.01), 1e-15);
+                    close(row[1].unwrap(), 0.0, 1e-15);
+                    close(row[2].unwrap(), 0.0, 1e-15);
+                }
+            }
+            assert_eq!(e.export_file(), before);
+        }
+    }
+}
+
+// Independent separation-of-variables solution for k=rho=cp=L=q=1, T(0)=0,
+// zero-temperature end faces and insulated sides. No numerical solve supplies the oracle.
+fn forced_slab_exact(x: f64, time: f64) -> f64 {
+    let pi = std::f64::consts::PI;
+    x * (1.0 - x) / 2.0
+        - (1..100)
+            .step_by(2)
+            .map(|n| {
+                let k = n as f64 * pi;
+                4.0 * libm::sin(k * x) * libm::exp(-k * k * time) / (k * k * k)
+            })
+            .sum::<f64>()
+}
+
+fn slab_solve(e: &mut Engine, nx: usize, order: u8, dt: f64, theta: f64, end: f64, every: u32) -> (String, Vec<f64>) {
+    ok(
+        e,
+        &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":nx,"ny":1,"nz":1}},"order":order}).to_string(),
+    );
+    ok(e, &json!({"cmd":"step.add","name":"slab","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"dt":format!("{dt} s"),"tEnd":format!("{end} s"),"theta":theta,"initial":"0 K","outputEvery":every}).to_string());
+    (solve_id(e, "slab"), e.mesh().unwrap().mesh.coords.clone())
+}
+
+fn forced_slab_difference_errors(nx: usize, order: u8, dt: f64, theta: f64, temporal: bool) -> [f64; 2] {
+    let mut e = engine();
+    frame_box(&mut e, nx, order);
+    ok(&mut e, r#"{"cmd":"material.add","name":"mat","rho":"1 kg/m^3","k":"1 W/(m*K)","cp":"1 J/(kg*K)"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"1 W/m^3"}"#);
+    let left_end = if temporal { 0.2 } else { 0.15 };
+    let right_dt = if temporal { dt } else { 2.0 * dt };
+    let left_every = if temporal { 1 } else { (0.05 / dt).round() as u32 };
+    let right_every = if temporal { 1 } else { (0.05 / right_dt).round() as u32 };
+    let (left, left_coords) = slab_solve(&mut e, nx, order, dt, theta, left_end, left_every);
+    let (right, right_coords) = slab_solve(&mut e, 2 * nx, order, right_dt, theta, 0.2, right_every);
+    let before = e.export_file();
+    let pairs = if temporal { vec![(0.1, 0.2)] } else { vec![(0.05, 0.1), (0.1, 0.15)] };
+    let mut errors = [0.0f64; 2];
+    for (lt, rt) in pairs {
+        for (i, (onto, coords)) in [("left", &left_coords), ("right", &right_coords)].into_iter().enumerate() {
+            let field = difference(
+                &mut e,
+                json!({"resultId":left,"field":"temperature","component":0,"sample":{"kind":"time","time":format!("{} ms",lt*1000.0),"sampling":"exact"}}),
+                json!({"resultId":right,"field":"temperature","component":0,"sample":{"kind":"time","time":format!("{} ms",rt*1000.0),"sampling":"exact"}}),
+                onto,
+            );
+            assert!(field.interpolated);
+            close(field.left.sample.as_ref().unwrap().frame.time_si, lt, 1e-15);
+            close(field.right.sample.as_ref().unwrap().frame.time_si, rt, 1e-15);
+            assert_eq!(field.coverage.inside_nodes, field.node_count);
+            for (point, value) in coords.chunks_exact(3).zip(&field.values) {
+                let expected = forced_slab_exact(point[0], lt) - forced_slab_exact(point[0], rt);
+                errors[i] = errors[i].max((value.unwrap() - expected).abs());
+            }
+        }
+    }
+    assert_eq!(e.export_file(), before);
+    errors
+}
+
+#[test]
+fn sampled_difference_forced_slab_has_independent_spatial_and_temporal_refinement() {
+    for order in [1, 2] {
+        let spatial: Vec<_> =
+            [8, 16, 32].into_iter().map(|n| forced_slab_difference_errors(n, order, 0.00001, 0.5, false)).collect();
+        for onto in 0..2 {
+            assert!(spatial[0][onto] < 0.002, "order{order} spatial {spatial:?}");
+            assert!(spatial.windows(2).all(|pair| pair[1][onto] < pair[0][onto]), "order{order} spatial {spatial:?}");
+            let rate = femlab_engine::post::convergence::observed_rate(
+                &[0.125, 0.0625, 0.03125],
+                &[spatial[0][onto], spatial[1][onto], spatial[2][onto]],
+            );
+            // Quadratic projection to fine noncoincident nodes is third order;
+            // values on the coarse nodal grid retain the fourth-order nodal rate.
+            let minimum = if order == 1 {
+                1.8
+            } else if onto == 0 {
+                3.5
+            } else {
+                2.8
+            };
+            println!("sampled Fourier order{order} onto{onto} spatial rate {rate}: {spatial:?}");
+            assert!(rate >= minimum, "order{order} onto{onto} spatial rate{rate}: {spatial:?}");
+        }
+        let temporal: Vec<_> =
+            [0.02, 0.01, 0.005].into_iter().map(|dt| forced_slab_difference_errors(32, order, dt, 1.0, true)).collect();
+        println!("sampled Fourier order{order} backward-Euler errors: {temporal:?}");
+        for onto in 0..2 {
+            assert!(temporal[0][onto] < 0.01, "order{order} temporal {temporal:?}");
+            assert!(
+                temporal[0][onto] / temporal[1][onto] > 1.7 && temporal[1][onto] / temporal[2][onto] > 1.7,
+                "order{order} onto{onto} temporal {temporal:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sampled_difference_partial_overlap_keeps_outside_nodes_missing_on_both_retained_meshes() {
+    for order in [1, 2] {
+        for nx in [2, 4, 8] {
+            let mut e = engine();
+            frame_ramp(&mut e, nx, order, 0.2, 1.0, 2);
+            let left = read(&mut e, json!({"query":"query.result"}))["resultId"].as_str().unwrap().to_owned();
+            let left_coords = e.mesh().unwrap().mesh.coords.clone();
+            ok(
+                &mut e,
+                r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","0.1 m","0.1 m"],"at":["0.5 m","0 m","0 m"]}"#,
+            );
+            ok(
+                &mut e,
+                &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2*nx,"ny":1,"nz":1}},"order":order})
+                    .to_string(),
+            );
+            let right = solve_id(&mut e, "warm");
+            let right_coords = e.mesh().unwrap().mesh.coords.clone();
+            let before = e.export_file();
+            for (onto, coords) in [("left", &left_coords), ("right", &right_coords)] {
+                let field = difference(
+                    &mut e,
+                    json!({"resultId":left,"field":"temperature","component":0,"sample":{"kind":"frame","index":1}}),
+                    json!({"resultId":right,"field":"temperature","component":0,"sample":{"kind":"frame","index":2}}),
+                    onto,
+                );
+                let mut outside = Vec::new();
+                for (i, (point, value)) in coords.chunks_exact(3).zip(&field.values).enumerate() {
+                    let uncovered = if onto == "left" { point[0] < 0.5 } else { point[0] > 1.0 };
+                    if uncovered {
+                        assert_eq!(*value, None);
+                        outside.push(i as u32);
+                    } else {
+                        close(value.unwrap(), -0.4, 1e-10);
+                    }
+                }
+                assert!(!outside.is_empty());
+                assert_eq!(field.coverage.outside_nodes, outside);
+                assert_eq!(field.coverage.inside_nodes + outside.len(), field.node_count);
+            }
+            assert_eq!(e.export_file(), before);
+        }
+    }
+}

@@ -2718,5 +2718,40 @@ both target meshes, checked bit-exactly across thread counts and independently
 against `Delta T=t_left−t_right K`. Skip-solves replay reports missing ids.
 Invalid index/time/dimensions, historical derived fields, final-only History and
 evicted ids fail without changing the authoritative file or retained catalogue.
-The rest of #286's Fourier/refinement, Node-WASM and two-pane playback/browser
-acceptance remains required by its linked implementation plan before closing it.
+The same-id fixture selects 0.4/0.8 s from one stale retained solve after a live
+source edit. The direct-layout path must still give −0.4 K and distinct frame
+identities, preserving the file and catalogue. Shifted uniform-heating bodies
+repeat both orders and 2/4/8 versus twice those cells: overlap values give −0.4 K,
+while every outside node remains null on both targets, with exact coverage ids.
+
+An amplitude-driven axial bar uses `F=1000 N`, `E=200 GPa`, `nu=0`, and
+`A=0.01 m²`. Consistent end traction and root restraint give
+`u_x(x,t)=F*a(t)*x/(E*A)`. Unequal 0/0.4/0.8/1 s and 0/0.3/0.6/0.9 s
+schedules select amplitudes 0.4 and 0.3 on both orders and 2/4/8 versus twice
+those cells. Every target node must give `Delta u_x=5e-8*x m` within
+`1e-15 m`, with zero transverse components; no numerical reference solve is
+used for this affine projection patch.
+
+The forced-slab E5 pointwise solution is
+`T(x,t)=x*(1-x)/2 − sum_(odd n) 4*sin(n*pi*x)*exp(−n²*pi²*t)/(n*pi)³ K`
+for `k=rho=cp=L=q=1`, initially zero, zero-temperature end faces and insulated
+sides. Each field difference is checked at every node against the two continuum
+values at 0.05/0.10 s and 0.10/0.15 s. The 50 odd terms n=1..99 have a
+conservative tail bound `4*exp(−a*101²)/(pi³*101³*(1−exp(−203*a)))` for
+each operand, where `a=pi²*0.05`; the two-operand tail is below `1e-2192 K`.
+No finer engine solve supplies the answer.
+
+Spatial refinement uses 8/16/32 versus 16/32/64 axial cells, Crank–Nicolson
+left dt=1e-5 s and right dt=2e-5 s, retained strides 5000/2500, and endpoints
+0.15/0.20 s. Both target errors decrease and the coarsest stays below 0.002 K.
+Observed linear rates are 2.006 on coarse target nodes and 1.918 on projected
+fine nodes (both gates >=1.8); quadratic rates are 3.965 on coarse nodes
+(gate >=3.5) and 2.984 on fine noncoincident nodes (gate >=2.8). The latter is
+the expected third-order quadratic interpolation error, rather than the
+fourth-order nodal error. Finest linear errors are 2.937e-5/1.178e-4 K and
+quadratic errors 7.283e-9/5.926e-7 K. Backward-Euler dt=0.02/0.01/0.005 s
+on 32/64 cells compares 0.10/0.20 s at both orders and on both targets; the
+coarsest error stays below 0.01 K and every halving reduces it by >1.7.
+
+Node-WASM, two-pane scrubbing/playback/browser and full strict coverage
+acceptance remain required by #286's linked plan before closing it.
