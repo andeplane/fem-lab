@@ -175,6 +175,8 @@ test('@cpu capability information preserves solve blockers and Assistant alignme
     const viewport = (await page.locator('.comparison-canvases').boundingBox())!;
     expect(drawer.y).toBe(workspace.y);
     expect(drawer.height).toBe(workspace.height);
+    expect(Number.isInteger(status.height)).toBe(true);
+    expect(Number.isInteger(viewport.y)).toBe(true);
     expect(status.y + status.height).toBeLessThanOrEqual(viewport.y);
     expect(viewport.height).toBeGreaterThan(100);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);

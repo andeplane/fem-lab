@@ -1415,12 +1415,14 @@ textarea:focus {
   display: flex;
   flex: none;
   flex-wrap: wrap;
+  min-height: 32px;
   gap: 4px 10px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border-panel);
   background: var(--bg-panel);
   color: var(--text-low);
   font-size: 12px;
+  line-height: 18px;
 }
 .banner.error {
   background: var(--red-bg);
