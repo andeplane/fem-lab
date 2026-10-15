@@ -2932,3 +2932,26 @@ near-buckling/zero-preload cases remain separate physical controls. No FV52 refe
 selected or accepted by this prerequisite.
 
 Primary numerical convention: [SLEPc norm-based generalized-eigenproblem convergence](https://slepc.upv.es/release/manualpages/EPS/EPSConv.html).
+
+### Imported multi-material regions (#652)
+
+`registry/imported_regions.rs` checks a one-metre, 0.1 × 0.1 m axial bar with a shared
+interface at x = 0.5 m, E₁ = 200 GPa, E₂ = 100 GPa, ν = 0, and F = 1000 N. Independently
+authored Tet4 and Hex8 sources each run at 2, 4 and 8 axial cells. Exact series compliance
+is F/A × (L₁/E₁ + L₂/E₂), giving tip displacement 7.5 × 10⁻⁷ m, interface displacement
+2.5 × 10⁻⁷ m and constant axial stress 100000 Pa. Every participating node is checked
+against the piecewise linear displacement, all other stress components against zero, and
+root resultant against −1000 N. Shared interface node identities are counted explicitly;
+material regions do not duplicate nodes. These piecewise affine solutions are reproduced
+at all three refinements; no nonzero asymptotic error-rate claim is made.
+
+Separate registry cases verify disconnected valid components, exact assembly provenance,
+source-name identity, editable assignments, rename/dependency guards, portable save/open
+and replay. Existing geometric invalidity and non-overlap acceptance guards remain active.
+
+The imported-region temperature case additionally applies the source owner's uniform
+10 K increment to both material regions at 2/4/8 axial cells. With α = 10⁻⁵ K⁻¹ and
+three symmetry-plane constraints, the independent free-expansion solution is
+u = α ΔT x in every component, with zero elastic stress. Every participating coordinate
+is checked. This verifies aggregate Body targeting across material blocks using the
+existing thermoelastic procedure; it introduces no new kernel or convergence-rate claim.

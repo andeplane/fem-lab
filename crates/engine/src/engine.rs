@@ -54,14 +54,23 @@ fn constraint_drives(constraint: &Constraint, heat: bool) -> bool {
 
 /// A reference to a Body is knowable without meshing; the size of its selected Set is not.
 fn set_targets_body(model: &Model, on: &str, body: &str) -> bool {
+    // The selected imported source owner is an aggregate: a named region
+    // selector targets that source too. This is only a pre-mesh reference
+    // check, never a claim of complete rigid-mode restraint.
+    let overlaps = |selected: &str| {
+        selected == body
+            || model
+                .imported_source()
+                .is_some_and(|source| source.body == body && source.regions.contains_key(selected))
+    };
     if let Some(set) = model.sets.iter().find(|s| s.name == on) {
         match &set.source {
-            SetSource::Face { of, .. } => of == body,
-            SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
+            SetSource::Face { of, .. } => overlaps(of),
+            SetSource::Region { where_: RegionPredicate::Body { name } } => overlaps(name),
             SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
         }
     } else {
-        on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+        set_refers_to(on, body)
     }
 }
 
@@ -420,7 +429,7 @@ impl Engine {
         let implicit = m.implicit_body();
         let selected_body = implicit.or_else(|| m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()));
         let has_geometry = !m.bodies.is_empty() || implicit.is_some();
-        if let Some(body) = implicit.filter(|body| m.material_of_body(body).is_none()) {
+        for body in m.meshed_body_names().into_iter().filter(|body| m.material_of_body(body).is_none()) {
             w.push(Warning {
                 step: None,
                 code: "model.no-material".into(),
@@ -579,7 +588,7 @@ impl Engine {
                 .iter()
                 .map(|b| b.name.as_str())
                 .filter(|body| selected_body.is_none_or(|name| *body == name))
-                .chain(implicit)
+                .chain(m.meshed_body_names())
             {
                 if let Some(material) = m.material_of_body(body) {
                     assigned.insert(material);
@@ -688,8 +697,8 @@ impl Engine {
                         .bodies
                         .iter()
                         .map(|body| body.name.as_str())
-                        .chain(implicit)
                         .filter(|body| selected_body.is_none_or(|selected| *body == selected))
+                        .chain(m.meshed_body_names())
                     {
                         let materials = m.material_of_body(body).into_iter().chain(
                             m.section_of_body(body)
@@ -1047,7 +1056,7 @@ impl Engine {
                 // assignment; it is named here like any other and kept on the Model.
                 let implicit = self.model.implicit_body().map(str::to_string);
                 for b in bodies {
-                    if implicit.as_deref() == Some(b.as_str()) {
+                    if implicit.as_deref() == Some(b.as_str()) || self.model.is_imported_region(b) {
                         continue;
                     }
                     let known = self.model.names(ObjectKind::Body);
@@ -1055,6 +1064,11 @@ impl Engine {
                 }
                 if implicit.is_some_and(|b| bodies.contains(&b)) {
                     self.model.mesher_material = Some(material.clone());
+                }
+                for name in
+                    bodies.iter().filter(|name| self.model.is_imported_region(name)).cloned().collect::<Vec<_>>()
+                {
+                    self.model.imported_region_assignments.entry(name).or_default().material = Some(material.clone());
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.material = Some(material.clone());
@@ -1075,6 +1089,13 @@ impl Engine {
                 if self.model.mesher_material.as_deref() == Some(name) {
                     users.extend(self.model.implicit_body());
                 }
+                users.extend(
+                    self.model
+                        .imported_region_assignments
+                        .iter()
+                        .filter(|(_, a)| a.material.as_deref() == Some(name))
+                        .map(|(name, _)| name.as_str()),
+                );
                 if !users.is_empty() {
                     return Err(in_use("material", name, &users, "bodies"));
                 }
@@ -1116,6 +1137,13 @@ impl Engine {
                     self.model.mesher_section = Some(section.clone());
                     self.model.mesher_orientation = *orientation;
                 }
+                for name in
+                    bodies.iter().filter(|name| self.model.is_imported_region(name)).cloned().collect::<Vec<_>>()
+                {
+                    let assignment = self.model.imported_region_assignments.entry(name).or_default();
+                    assignment.section = Some(section.clone());
+                    assignment.orientation = *orientation;
+                }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.section = Some(section.clone());
                     b.orientation = *orientation;
@@ -1136,6 +1164,13 @@ impl Engine {
                 if self.model.mesher_section.as_deref() == Some(name) {
                     users.extend(self.model.implicit_body());
                 }
+                users.extend(
+                    self.model
+                        .imported_region_assignments
+                        .iter()
+                        .filter(|(_, a)| a.section.as_deref() == Some(name))
+                        .map(|(name, _)| name.as_str()),
+                );
                 if !users.is_empty() {
                     return Err(in_use("section", name, &users, "bodies"));
                 }
@@ -1179,6 +1214,20 @@ impl Engine {
                     .suggest("model.new, then model.setIdealisation with solid3d and mesh.set"));
                 }
                 self.check_imported_sets(&settings)?;
+                let new_regions = match &settings {
+                    crate::model::MesherSettings::Imported(s) => {
+                        s.regions.keys().cloned().collect::<std::collections::BTreeSet<_>>()
+                    }
+                    _ => Default::default(),
+                };
+                if let Some(source) = self.model.imported_source() {
+                    for name in source.regions.keys().filter(|name| !new_regions.contains(*name)) {
+                        self.check_body_unused(name)?;
+                    }
+                }
+                for name in &new_regions {
+                    self.check_geometry_name(name, GeometryOwner::MesherBody)?;
+                }
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
@@ -1194,6 +1243,7 @@ impl Engine {
                     self.model.mesher_section = None;
                     self.model.mesher_orientation = None;
                 }
+                self.model.imported_region_assignments.retain(|name, _| new_regions.contains(name));
                 self.model.mesh = Some(MeshSettings {
                     mesher: settings,
                     order,
@@ -1823,7 +1873,7 @@ impl Engine {
         let m = &self.model;
         let owner = if m.body(name).is_some() {
             Some(GeometryOwner::Body)
-        } else if m.implicit_body() == Some(name) {
+        } else if m.mesher_body_names().contains(&name) {
             Some(GeometryOwner::MesherBody)
         } else if m.cuts.iter().any(|c| c.name == name) {
             Some(GeometryOwner::Cut)
@@ -1886,10 +1936,22 @@ impl Engine {
     fn geometry_remove(&mut self, name: &str) -> Result<Output, Error> {
         self.check_source_set_edit(name)?;
         let m = &self.model;
+        if m.is_imported_region(name) {
+            self.check_body_unused(name)?;
+            return Err(Error::new(ErrorCode::Unsupported, "imported region memberships belong to the source")
+                .at("name")
+                .suggest("mesh.set with a replacement imported source"));
+        }
         if m.body(name).is_some() || m.implicit_body() == Some(name) {
             self.check_body_unused(name)?;
+            if let Some(source) = m.imported_source().filter(|s| s.body == name) {
+                for region in source.regions.keys() {
+                    self.check_body_unused(region)?;
+                }
+            }
             if self.model.implicit_body() == Some(name) {
                 self.model.mesh = None;
+                self.model.imported_region_assignments.clear();
                 self.model.mesher_material = None;
                 self.model.mesher_section = None;
                 self.model.mesher_orientation = None;
@@ -2052,7 +2114,7 @@ impl Engine {
                 .suggest("retry model.rename with another name"));
         }
         let geometry_owner = match kind {
-            ObjectKind::Body if self.model.implicit_body() == Some(name) => Some(GeometryOwner::MesherBody),
+            ObjectKind::Body if self.model.mesher_body_names().contains(&name) => Some(GeometryOwner::MesherBody),
             ObjectKind::Body => Some(GeometryOwner::Body),
             ObjectKind::Set => Some(GeometryOwner::Set),
             _ => None,
@@ -2064,6 +2126,9 @@ impl Engine {
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
+                if let Some(assignment) = m.imported_region_assignments.remove(name) {
+                    m.imported_region_assignments.insert(to.into(), assignment);
+                }
                 if let Some(mesh) = &mut m.mesh {
                     mesh.mesher.rename_body(name, to);
                 }
@@ -2140,6 +2205,11 @@ impl Engine {
                 if m.mesher_material.as_deref() == Some(name) {
                     m.mesher_material = Some(to.into());
                 }
+                for assignment in m.imported_region_assignments.values_mut() {
+                    if assignment.material.as_deref() == Some(name) {
+                        assignment.material = Some(to.into());
+                    }
+                }
                 for section in &mut m.sections {
                     for ply in &mut section.plies {
                         if ply.material == name {
@@ -2149,6 +2219,11 @@ impl Engine {
                 }
             }
             ObjectKind::Section => {
+                for assignment in m.imported_region_assignments.values_mut() {
+                    if assignment.section.as_deref() == Some(name) {
+                        assignment.section = Some(to.into());
+                    }
+                }
                 if m.mesher_section.as_deref() == Some(name) {
                     m.mesher_section = Some(to.into());
                 }
@@ -2272,7 +2347,7 @@ impl Engine {
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
-                if m.implicit_body() == Some(name) {
+                if m.mesher_body_names().contains(&name) {
                     return Err(Error::new(
                         ErrorCode::Unsupported,
                         "a mesher-defined Body cannot be duplicated: the Model has one mesher geometry slot",
@@ -2328,12 +2403,12 @@ impl Engine {
 }
 
 fn set_refers_to(set: &str, prefix: &str) -> bool {
-    set.rsplit_once('.').is_some_and(|(p, _)| p == prefix)
+    set.strip_prefix(prefix).is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 fn rename_set_ref(set: &str, from: &str, to: &str) -> String {
-    match set.rsplit_once('.') {
-        Some((p, tag)) if p == from => format!("{to}.{tag}"),
+    match set.strip_prefix(from).and_then(|suffix| suffix.strip_prefix('.')) {
+        Some(tag) => format!("{to}.{tag}"),
         _ => set.to_string(),
     }
 }
@@ -2350,7 +2425,7 @@ fn upsert<T: Clone>(items: &mut Vec<T>, item: T, name_of: fn(&T) -> &str, kind: 
     }
 }
 
-fn check_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     if name.is_empty() || name.contains('.') || name.contains(char::is_whitespace) || name.contains(':') {
         return Err(Error::schema(format!(
             "'{name}' is not a valid name: use letters, digits, '_' or '-' (no dots, spaces or colons)"
