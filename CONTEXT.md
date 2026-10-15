@@ -358,8 +358,11 @@ subscription. Pending cannot enable Checkout. See ADR 0032.
 fixed for that subscription and preserved across tier changes. Catalog aliases map
 each use to the same tier allowance. It is independent of a tax ID. See ADR 0033.
 
-**AI token credit** — A versioned billing unit weighted by model and token category,
-separate from a raw LLM token or the browser's supplier-cost estimate.
+**AI credit** — The public `usd-milli-v1` budget unit: USD 0.001 of supplier usage,
+separate from a raw LLM token. Exact integer subcredits still meter each model and
+token category. Explicit API negotiation preserves the earlier weighted-token
+credit responses for cached clients; display rounding never changes a debit.
+See ADR 0039.
 
 **Reviewed free eligibility** — An operator-approved person reference and retained
 keyed email fingerprints bound to one active Account. Login is not approval. An

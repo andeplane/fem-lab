@@ -27,6 +27,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private exports and durable del
     await expect(service.export('Bearer a',{accountId:b.id})).rejects.toMatchObject({code:'invalid-export'});
     expect(await service.export('Bearer a',{})).toEqual({status:'queued'});expect(await service.export('Bearer a',{})).toEqual({status:'queued'});
     expect((await service.recover()).exported).toBe(1);const call=objects.write.mock.calls[0] as unknown as [string,string,Date],data=JSON.parse(call[1]);expect(data.account.id).toBe(a.id);expect(JSON.stringify(data)).not.toContain('b@example.com');expect(data.credit_grants).toHaveLength(1);expect(data).not.toHaveProperty('prompts');
+    expect(data.creditAccounting).toEqual({storedUnit:'subcredit',subcreditsPerLegacyCredit:30,publicCreditUnit:'usd-milli-v1',subcreditsPerPublicCredit:40000});
+    expect(data.credit_grants[0].amount).toBe('6000000');
     expect(await service.export('Bearer a',{})).toEqual({status:'ready',url:'https://storage.example.com/signed'});expect((objects.url.mock.calls[0] as unknown as [string,Date])[1]).toEqual(new Date(clock.getTime()+900000));
     clock=new Date(clock.getTime()+86400001);expect(await service.export('Bearer a',{})).toEqual({status:'queued'});expect(objects.remove).not.toHaveBeenCalled();expect((await service.recover()).expired).toBe(1);expect(objects.remove).toHaveBeenCalledWith(call[0]);
   });

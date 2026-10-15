@@ -1,9 +1,10 @@
 import {useEffect,useRef,useState} from 'preact/hooks';
-import type {FreeAllowance,PurchaseUse} from '@femlab/registry';
+import {PUBLIC_PLAN_CREDITS,type FreeAllowance,type PurchaseUse} from '@femlab/registry';
 import type {UiState} from '../store';
 import {Cmd,type Dispatch} from './cmd';
 import {useDialogFocus} from './Dialog';
-const PLANS=[{id:'plus',name:'Plus',price:49,credits:10_000_000},{id:'pro',name:'Pro',price:149,credits:16_000_000},{id:'studio',name:'Studio',price:499,credits:50_000_000}] as const;
+import {formatAiCredits} from '../account/credits';
+const PLANS=[{id:'plus',name:'Plus',price:49,credits:PUBLIC_PLAN_CREDITS.plus},{id:'pro',name:'Pro',price:149,credits:PUBLIC_PLAN_CREDITS.pro},{id:'studio',name:'Studio',price:499,credits:PUBLIC_PLAN_CREDITS.studio}] as const;
 const FREE_STATUS:Record<FreeAllowance['status'],string>={
   'review-required':'Free monthly AI requires an eligibility review. Contact support to request a review.',
   eligible:'Eligibility approved. You can claim this UTC calendar month’s free allowance.',
@@ -32,9 +33,9 @@ export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
       <small>A password is not required. Open the email link in this browser.</small>
     </div>:<>
       <div class="account-identity"><span>{a.email}</span><Cmd dispatch={dispatch} cmd="account.refresh" class="tbutton">Refresh</Cmd><Cmd dispatch={dispatch} cmd="account.signOut" class="tbutton">Sign out</Cmd></div>
-      {usage?<div class="account-balance"><span class="eyebrow">{usage.plan.toUpperCase()} · AI CREDITS</span><strong>{usage.availableCredits.toLocaleString()}</strong><span>available of {usage.totalCredits.toLocaleString()} · {usage.reservedCredits.toLocaleString()} reserved</span>{usage.totalCredits>0?<small>Current allowance ends {new Date(usage.periodEndsAt).toLocaleString(undefined,{timeZone:'UTC',dateStyle:'medium',timeStyle:'short',hourCycle:'h23'})} UTC. Credits do not roll over.</small>:null}</div>:<p>Loading your allowance…</p>}
+      {usage?<div class="account-balance"><span class="eyebrow">{usage.plan.toUpperCase()} · AI CREDITS</span><strong>{formatAiCredits(usage.availableCredits)}</strong><span>available of {formatAiCredits(usage.totalCredits)} · {formatAiCredits(usage.reservedCredits)} reserved</span>{usage.totalCredits>0?<small>Current allowance ends {new Date(usage.periodEndsAt).toLocaleString(undefined,{timeZone:'UTC',dateStyle:'medium',timeStyle:'short',hourCycle:'h23'})} UTC. Credits do not roll over.</small>:null}</div>:<p>Loading your allowance…</p>}
       <section class="account-free" aria-label="Free monthly AI allowance"><h3>Free monthly AI allowance</h3>
-        {free?<p>Approved free accounts can claim {free.credits.toLocaleString()} weighted AI credits each UTC calendar month. Unused credits expire; claims do not happen automatically.</p>:null}
+        {free?<p>Approved free accounts can claim {formatAiCredits(free.credits)} AI credits each UTC calendar month. Unused credits expire; claims do not happen automatically.</p>:null}
         <p role="status">{FREE_STATUS[freeStatus]??FREE_STATUS.unavailable}</p>
         {free&&!hasPaidPlan?<small>This claim period ends {new Date(free.periodEndsAt).toLocaleString(undefined,{timeZone:'UTC',dateStyle:'medium',timeStyle:'short',hourCycle:'h23'})} UTC. Credits do not roll over.</small>:null}
         <Cmd dispatch={dispatch} cmd="account.claimFreeAllowance" class="tbutton outline" disabled={a.status!=='active'||freeStatus!=='eligible'||hasPaidPlan||billing?.reviewRequired}>Claim this month’s free allowance</Cmd>
@@ -42,7 +43,7 @@ export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
       </section>
       <p class="account-credit-note">Credits account for model cost: output and larger models use more credits. The service checks your remaining allowance before each request.</p>
       {!hasPaidPlan&&managedCheckout?<div class="account-purchase-use"><label>Subscription use<select value={purchaseUse} onChange={e=>setPurchaseUse(e.currentTarget.value as PurchaseUse|'')} aria-describedby="purchase-use-note"><option value="">Choose personal or business use</option><option value="personal">Personal use</option><option value="business">Business use</option></select></label><small id="purchase-use-note">Choose how you will use your subscription. This choice stays the same for this subscription.</small></div>:null}
-      <div class="account-plans">{PLANS.map(p=><div key={p.id} class="account-plan"><h3>{p.name}</h3><strong>${p.price}<small> USD / month</small></strong><p>{p.credits.toLocaleString()} AI credits / paid period</p><Cmd dispatch={dispatch} cmd={hasPaidPlan?'account.changePlan':'account.checkout'} args={!hasPaidPlan&&managedCheckout?{plan:p.id,purchaseUse}:{plan:p.id}} class="tbutton outline" disabled={!billing?.available||usage?.plan===p.id||billing.reviewRequired||(!hasPaidPlan&&(!checkoutModeReady||(managedCheckout&&!purchaseUse)))}>{usage?.plan===p.id?'Current plan':hasPaidPlan?'Change next period':'Choose plan'}</Cmd></div>)}</div>
+      <div class="account-plans">{PLANS.map(p=><div key={p.id} class="account-plan"><h3>{p.name}</h3><strong>${p.price}<small> USD / month</small></strong><p>{formatAiCredits(p.credits)} AI credits / paid period</p><Cmd dispatch={dispatch} cmd={hasPaidPlan?'account.changePlan':'account.checkout'} args={!hasPaidPlan&&managedCheckout?{plan:p.id,purchaseUse}:{plan:p.id}} class="tbutton outline" disabled={!billing?.available||usage?.plan===p.id||billing.reviewRequired||(!hasPaidPlan&&(!checkoutModeReady||(managedCheckout&&!purchaseUse)))}>{usage?.plan===p.id?'Current plan':hasPaidPlan?'Change next period':'Choose plan'}</Cmd></div>)}</div>
       <p class="account-credit-note">Hafreager kode &amp; koblinger sells and provides FEM Lab subscriptions. USD list prices exclude applicable tax. {managedCheckout?'Stripe Managed Payments handles the transaction as merchant of record. ':null}Checkout shows payment terms, applicable tax and total.</p>
       {!billing?.available?<p role="status">New purchases and plan changes are currently unavailable.</p>:null}
       {billing?.canManage?<Cmd dispatch={dispatch} cmd="account.portal" class="tbutton">Manage subscription and payment</Cmd>:null}
