@@ -745,6 +745,7 @@ describe('the shell', () => {
     expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
     // The composer's field and the project-name field carry the Command they feed.
     expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'account.open',
       'chat.send',
       'chat.send',
       'project.new',
