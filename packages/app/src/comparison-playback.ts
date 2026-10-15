@@ -33,7 +33,7 @@ export class ComparisonPlayback {
   private interval: { startSi: number; endSi: number } | null = null;
   private common = { wall: 0, anchor: 0, playhead: 0, speed: 1, playing: false };
   private timer: unknown;
-  private ticking = false;
+  private ticking: { current(): boolean } | undefined;
 
   constructor(private readonly transport: Pick<EngineTransport, 'query'>, private readonly clock: PlaybackClock | undefined,
     private readonly presentation: ComparisonPlaybackPresentation) {}
@@ -155,25 +155,26 @@ export class ComparisonPlayback {
     return next?.index === index ? next.promise : this.seek(this.runs[side]!.catalogue, { kind: 'frame', index });
   }
   private queue(): void {
-    if (!this.clock || this.timer !== undefined || this.ticking || !Object.values(this.runs).some(run => run.playing)) return;
-    const epoch = this.epoch, requests = { ...this.requests };
-    this.timer = this.clock.schedule(() => { this.timer = undefined; void this.tick().catch(error => { if (epoch !== this.epoch || requests.left !== this.requests.left || requests.right !== this.requests.right) return; this.pause(); this.presentation.failed(error); }); }, 30);
+    if (!this.clock || this.timer !== undefined || this.ticking?.current() || !Object.values(this.runs).some(run => run.playing)) return;
+    this.timer = this.clock.schedule(() => { this.timer = undefined; void this.tick(); }, 30);
   }
   private async tick(): Promise<void> {
-    if (!this.clock || this.ticking) return;
-    this.ticking = true;
+    if (!this.clock || this.ticking?.current()) return;
     const epoch = this.epoch, requests = { ...this.requests };
     const sides = (['left', 'right'] as const).filter(side => this.runs[side]?.playing);
     const current = () => epoch === this.epoch && sides.every(side => this.requests[side] === requests[side]);
+    if (!sides.length) return;
+    const tick = { current }; this.ticking = tick;
+    let failedSide: Side | null = null;
     try {
-      if (!sides.length) return;
       const updates: Partial<Record<Side, FrameResult>> = {}, catalogues: Partial<Record<Side, FramesResult>> = {}, times: Partial<Record<Side, number>> = {};
       const common = this.mode === 'synchronized' ? Math.min(this.interval!.endSi, this.commonTime()) : null;
       await Promise.all(sides.map(async side => {
         const run = this.runs[side]!, end = run.catalogue.frames.at(-1)!.timeSi;
         const time = common ?? Math.min(end, this.time(run)); times[side] = time;
         const index = this.held(run.catalogue, time);
-        updates[side] = index === run.frame.sample.frame.index ? run.frame : await this.required(side, index);
+        try { updates[side] = index === run.frame.sample.frame.index ? run.frame : await this.required(side, index); }
+        catch (error) { failedSide = side; throw error; }
         catalogues[side] = run.catalogue;
       }));
       if (!current()) return;
@@ -188,7 +189,27 @@ export class ComparisonPlayback {
       }
       if (common !== null) { this.common.playhead = common; this.common.playing = common < this.interval!.endSi; }
       this.changed();
-    } finally { this.ticking = false; this.queue(); }
+    } catch (error) {
+      const affected = (failedSide ? [failedSide] : sides).filter(side => this.current(side, epoch, requests[side]));
+      if (!affected.length) return;
+      this.stop();
+      if (this.mode === 'synchronized') {
+        this.common.playhead = Math.min(this.interval!.endSi, this.commonTime()); this.common.playing = false;
+        // Pause the old shared clock, but do not invalidate a newer pane selection that
+        // is still preparing its own independent run.
+        for (const run of Object.values(this.runs)) { run.playhead = Math.min(run.catalogue.frames.at(-1)!.timeSi, this.time(run)); run.playing = false; }
+      }
+      for (const side of affected) {
+        this.requests[side]++;
+        const run = this.runs[side];
+        if (run) { run.playhead = Math.min(run.catalogue.frames.at(-1)!.timeSi, this.time(run)); run.playing = false; }
+      }
+      this.changed(); this.presentation.failed(error);
+    } finally {
+      // A retired read cannot clear a newer generation's in-flight ownership.
+      if (this.ticking === tick) this.ticking = undefined;
+      this.queue();
+    }
   }
   private changed(): void {
     const pane = (side: Side): ComparisonPlaybackPane | null => { const run = this.runs[side]; return run ? { resultId: run.catalogue.resultId, sample: run.frame.sample, playing: run.playing, speed: run.speed, playheadSi: run.playhead } : null; };

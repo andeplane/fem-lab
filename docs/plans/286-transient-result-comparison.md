@@ -225,7 +225,11 @@ the parent first-entry camera correction; the stronger complete-body bounds gate
 `view.playComparison` now has the typed independent/shared-clock boundary. Deferred clock and
 controller tests cover irregular schedules, actual held times, shared shorter-endpoint stopping,
 independent remainder, speed/pause continuity, atomic pairs, concurrent independent selections,
-primary-field restrictions and late mode/session replies. The focused 36-case host suite and
+primary-field restrictions and late mode/session replies. Review exposed two additional clock
+races: an unresolved retired read blocked its replacement generation, and an unrelated right
+selection suppressed a still-current left error. Both deferred regressions fail on the original
+clock step and pass with generation-owned tick locks and participating-pane error ownership;
+new right playback continues while the failed left pane pauses. The focused 38-case host suite and
 registry 134 cases pass; registry coverage is 100% on all four measures, and both typechecks pass.
 This step is callable through the registered host Command; playback UI, transactional scrub
 preview/cancel, production playback/lifecycle checks, cross-runtime replay and the final full

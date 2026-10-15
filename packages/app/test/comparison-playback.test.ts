@@ -193,4 +193,40 @@ describe('independently retained comparison clocks', () => {
     await late.advance(500); late.playback.invalidate(); next.reject(new FemError('not-found', 'old backend'));
     await settle(); expect(late.failed).not.toHaveBeenCalled(); expect(late.state()).toBeNull(); expect(late.scheduled.size).toBe(0);
   });
+
+  it('lets a replacement generation play while an obsolete generation still awaits a frame, without overlapping current ticks', async () => {
+    const s = setup(), old = deferred<FrameResult>(), fresh = deferred<FrameResult>();
+    s.query.mockImplementation(input => input.query === 'query.frame' && input.resultId === 'left' && input.sample?.kind === 'frame' && input.sample.index === 1 ? old.promise : s.answer(input));
+    await s.playback.select({ mode: 'independent', pane: 'left', resultId: 'left', playing: true });
+    await s.advance(500);
+    expect(s.scheduled.size).toBe(0);
+    s.configure({ mode: 'sideBySide', left: { resultId: 'left', field: 'temperature', component: 0 }, right: { resultId: 'right', field: 'temperature', component: 0 } });
+    s.query.mockImplementation(input => input.query === 'query.frame' && input.resultId === 'left' && input.sample?.kind === 'frame' && input.sample.index === 1 ? fresh.promise : s.answer(input));
+    await s.playback.select({ mode: 'independent', pane: 'left', resultId: 'left', playing: true });
+    expect(s.scheduled.size).toBe(1);
+    await s.advance(500);
+    expect(s.scheduled.size).toBe(0);
+    old.resolve(frame('left', 1)); await settle();
+    expect(s.commits).toEqual([{ left: 0 }, { left: 0 }]); expect(s.scheduled.size).toBe(0);
+    await s.advance(100); expect(s.scheduled.size).toBe(0);
+    fresh.resolve(frame('left', 1)); await settle();
+    expect(s.commits).toEqual([{ left: 0 }, { left: 0 }, { left: 1 }]); expect(s.scheduled.size).toBe(1);
+    expect(s.query.mock.calls.filter(([input]) => input.query === 'query.frame' && input.resultId === 'left' && input.sample?.kind === 'frame' && input.sample.index === 1)).toHaveLength(2);
+  });
+
+  it('reports a still-current left tick failure after a newer unrelated right selection, preserving that valid work', async () => {
+    for (const rightPlaying of [false, true]) {
+      const s = setup(), pending = deferred<FrameResult>();
+      s.query.mockImplementation(input => input.query === 'query.frame' && input.resultId === 'left' && input.sample?.kind === 'frame' && input.sample.index === 1 ? pending.promise : s.answer(input));
+      await s.playback.select({ mode: 'independent', pane: 'left', resultId: 'left', playing: true });
+      await s.advance(500);
+      await s.playback.select({ mode: 'independent', pane: 'right', resultId: 'right', playing: rightPlaying, sample: { kind: 'frame', index: 2 } });
+      pending.reject(new FemError('not-found', "retained Result 'left' evicted")); await settle();
+      expect(s.failed).toHaveBeenCalledTimes(1); expect(s.failed.mock.calls[0]?.[0]).toMatchObject({ code: 'not-found' });
+      expect(s.state()?.left?.playing).toBe(false);
+      expect(s.state()?.right).toMatchObject({ playing: rightPlaying, sample: { frame: { index: 2 } } });
+      expect(s.displayed.right?.values).toEqual([301.2, 0, 0]); expect(s.scheduled.size).toBe(rightPlaying ? 1 : 0);
+      if (rightPlaying) { await s.advance(650); expect(s.displayed.right?.values).toEqual([302.4, 0, 0]); expect(s.scheduled.size).toBe(0); }
+    }
+  });
 });
