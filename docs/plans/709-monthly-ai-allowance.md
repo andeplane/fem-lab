@@ -2,6 +2,11 @@
 
 Issue [#709](https://github.com/andeplane/fem-lab/issues/709).
 
+Historical allocation change: the weighted-credit quantities below are the legacy
+unit. [#728](728-credit-scale.md) presents the same paid allocations as
+7,500/12,000/37,500 `usd-milli-v1` credits. [#712](712-free-monthly-allowance.md)
+subsequently introduced reviewed monthly free funding and its separate pool.
+
 Increase Plus from 4,000,000 to 10,000,000 weighted credits per confirmed paid
 period at its existing $49 monthly price. This provides a $7.50 supplier-cost
 baseline, within the requested $5–$10 range. Pro stays at 16,000,000 credits
