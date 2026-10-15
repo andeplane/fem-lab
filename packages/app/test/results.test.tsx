@@ -240,10 +240,23 @@ describe('the Results tab', () => {
 });
 
 describe('the probe readout', () => {
-  it('names the value, the node and the point in Results, and the face otherwise', () => {
-    expect(probeLine(null)).toBe('');
-    expect(probeLine({ face: 'beam.top', body: 'beam', point: [0, 0.412, 1.388], node: null, value: null })).toBe('beam.top · x 0.000 y 0.412 z 1.388 m');
-    expect(probeLine({ face: null, body: null, point: [0, 0, 0], node: 1342, value: 12.4 })).toBe('12.4 · node 1342 · x 0.000 y 0.000 z 0.000 m');
+  it('labels already-converted fields and converts the SI point into the chosen length unit', () => {
+    const mm = { value: 1000, unit: 'mm' };
+    const point: [number, number, number] = [1, 0.05, 0.1];
+    expect(probeLine(null, mm, null)).toBe('');
+    expect(probeLine({ face: null, body: null, point, node: 1342, value: -0.1901 }, mm, { label: 'uz', unit: 'mm' }))
+      .toBe('uz -0.1901 mm · node 1342 · x 1000 y 50 z 100 mm');
+    expect(probeLine({ face: null, body: null, point, node: 1342, value: 12.4 }, mm, { label: 'σ_vM', unit: 'MPa' }))
+      .toBe('σ_vM 12.4 MPa · node 1342 · x 1000 y 50 z 100 mm');
+    expect(probeLine({ face: null, body: null, point, node: 1, value: 0 }, { value: 1, unit: 'm' }, { label: 'εxx', unit: '' }))
+      .toBe('εxx 0 (1) · node 1 · x 1 y 0.05 z 0.1 m');
+  });
+
+  it('keeps geometry picks dimensional before a Result, including small coordinates', () => {
+    expect(probeLine({ face: 'beam.top', body: 'beam', point: [0, 0.412, 1.388], node: null, value: null }, { value: 1000, unit: 'mm' }, null))
+      .toBe('beam.top · x 0 y 412 z 1388 mm');
+    expect(probeLine({ face: null, body: 'beam', point: [0, 0.00001, -0.00002], node: null, value: null }, { value: 1, unit: 'm' }, null))
+      .toBe('beam · x 0 y 1.000e-5 z -2.000e-5 m');
   });
 });
 

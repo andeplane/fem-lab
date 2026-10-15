@@ -3,7 +3,7 @@ import { AccountPanel } from './Account';
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
 // Playwright smoke can hold the DOM against `registry.list()`.
-import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/registry';
+import type { CommandDef, EngineSchema, JsonSchema, Registry, Valued } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
@@ -13,7 +13,7 @@ import type { ResultComparison } from '../result-comparison';
 import { lazy } from '../lazy';
 import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
-import type { Viewer } from '../viewer/viewer';
+import type { Pick as ViewerPick, Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ComparisonControls, ComparisonPaneChrome } from './ResultComparison';
 import { ComparisonPlaybackControls } from './ComparisonPlayback';
@@ -227,10 +227,12 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 }
 
 /** The design's bottom-left readout: the contoured value, the node, and where it is. */
-export function probeLine(p: { face: string | null; body: string | null; point: [number, number, number]; node: number | null; value: number | null } | null): string {
+export function probeLine(p: ViewerPick | null, length: Valued, field: { label: string; unit: string } | null): string {
   if (!p) return '';
-  const where = `x ${p.point[0].toFixed(3)} y ${p.point[1].toFixed(3)} z ${p.point[2].toFixed(3)} m`;
-  const who = p.value === null ? (p.face ?? p.body ?? '—') : `${formatNumber(p.value)}`;
+  const point = p.point.map(value => formatNumber(value * length.value));
+  const where = `x ${point[0]} y ${point[1]} z ${point[2]} ${length.unit}`;
+  // The renderer's scalar is already in the legend's display unit; only the SI point converts.
+  const who = p.value === null || field === null ? (p.face ?? p.body ?? '—') : `${field.label} ${formatNumber(p.value)} ${field.unit || '(1)'}`;
   return p.node === null ? `${who} · ${where}` : `${who} · node ${p.node} · ${where}`;
 }
 
@@ -502,11 +504,12 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
   );
 }
 
-function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef; comparison?: ResultComparison; side?: 'left' | 'right' }) {
+function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'left' }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef; query: Query; comparison?: ResultComparison; side?: 'left' | 'right' }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
+  const probeEpoch = useRef(0);
   const [broken, setBroken] = useState('');
-  useEffect(() => { setProbe(''); }, [s.transient?.generation, s.transient?.frame.index]);
+  useEffect(() => { probeEpoch.current++; setProbe(''); }, [s.revision, s.fieldKey, s.legend, s.viewMode, s.result?.resultId, s.transient?.generation, s.transient?.frame.index]);
   const comparing = s.viewMode === 'results' && s.resultComparison.configuration.mode !== 'single';
   const paneName = s.resultComparison.configuration.mode === 'difference' ? 'difference' : side;
   const pane = comparing ? s.resultComparison[paneName] : null;
@@ -542,8 +545,18 @@ function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: {
             at: p.point.map(value => ({ value, unit: 'm' })), ...(p.body ? { body: p.body } : {}), ...(p.face ? { face: p.face } : {}) }).catch(() => undefined);
           return;
         }
-        const frame = store.state.transient?.frame;
-        setProbe(`${probeLine(p)}${p && frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
+        const epoch = ++probeEpoch.current;
+        setProbe('');
+        if (p) {
+          const state = store.state;
+          const unit = state.model?.units.length ?? 'm';
+          const field = state.viewMode === 'results' && state.legend ? { label: choiceOf(state.fieldKey, state.result).label, unit: state.legend.unit } : null;
+          const frame = state.transient?.frame;
+          // Geometry-only picks need the same engine-owned conversion before any solve exists.
+          void query({ query: 'query.convert', quantity: { value: 1, unit: 'm' }, to: unit }).then(value => {
+            if (!gone && epoch === probeEpoch.current) setProbe(`${probeLine(p, value as Valued, field)}${frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
+          }).catch(error => { if (!gone && epoch === probeEpoch.current) store.fail(error); });
+        }
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
       v.onCameraChange(() => comparison?.cameraChanged(side));
@@ -567,7 +580,7 @@ function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: {
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch, store, comparison, side]);
+  }, [viewer, dispatch, store, query, comparison, side]);
 
   useEffect(() => { if (!comparing) viewer.current?.setSelection(s.selection); }, [viewer, s.selection, comparing]);
   useEffect(() => { if (!comparing) viewer.current?.setHover(s.hover); }, [viewer, s.hover, comparing]);
@@ -751,8 +764,8 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
                   <ComparisonControls s={s} dispatch={dispatch} query={read} />
                   <ComparisonPlaybackControls s={s} store={store} dispatch={dispatch} query={read} preview={comparison} />
                   <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>
-                    <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} comparison={comparison} />
-                    {rightViewer && s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? <ViewerPane s={s} store={store} dispatch={dispatch} viewer={rightViewer} comparison={comparison} side="right" /> : null}
+                    <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} query={read} comparison={comparison} />
+                    {rightViewer && s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? <ViewerPane s={s} store={store} dispatch={dispatch} viewer={rightViewer} query={read} comparison={comparison} side="right" /> : null}
                   </div>
                 </div>
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
