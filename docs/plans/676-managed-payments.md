@@ -21,11 +21,14 @@ Common activation evidence remains `taxCollectionDecisionConfirmed` and
 owner-registration flag. Managed mode instead requires:
 
 - `managedPaymentsAccountEnabled`
-- `managedPaymentsTermsAccepted`
 - `managedPaymentsEligibilityConfirmed`
 
 Live mode retains `stagingCheckoutVerified` and `webhookVerified`, with
-`managedPaymentsCheckoutVerified` additionally required for the managed route.
+`managedPaymentsTermsAccepted` and `managedPaymentsCheckoutVerified` additionally
+required for the managed route. Test-mode classification verifies a candidate
+fixture catalog, not the owner's legal classification; test-mode account readiness
+does not represent acceptance of a live legal contract. Live classification remains
+unconfirmed until the owner explicitly reviews it.
 These are evidence gates, not legal decisions made by software. No public catalog
 manifest, Stripe setting, key permission, terms acceptance or deployment changes
 as part of this code preparation. The existing restricted runtime key scopes are

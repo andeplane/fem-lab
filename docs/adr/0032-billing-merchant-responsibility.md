@@ -23,9 +23,11 @@ hosted Checkout, server-owned prices, stable idempotency parameters and a fixed
 integration identifier. Portal, webhook and recovery access survive disabled new
 purchases.
 
-Managed activation requires recorded account enablement, terms acceptance, product
-eligibility, classification and policy readiness. Production additionally needs
-route-specific test Checkout evidence. Selecting this mode does not accept legal
+Managed activation requires recorded account enablement, product eligibility,
+classification and policy readiness. Production additionally needs terms acceptance
+and route-specific test Checkout evidence. Test classification verifies a candidate
+fixture catalog and does not establish the owner's legal classification or consent.
+Selecting this mode does not accept legal
 terms or select a tax code. Products and destinations must meet Stripe's
 [eligibility](https://docs.stripe.com/payments/managed-payments/eligibility) and
 [tax coverage](https://docs.stripe.com/payments/managed-payments/tax-compliance)

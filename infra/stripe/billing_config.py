@@ -11,7 +11,7 @@ spec = importlib.util.spec_from_file_location('stripe_key_installer', ROOT / 'in
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 GATES = ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed')
-MANAGED_GATES = ('managedPaymentsAccountEnabled', 'managedPaymentsTermsAccepted', 'managedPaymentsEligibilityConfirmed')
+MANAGED_GATES = ('managedPaymentsAccountEnabled', 'managedPaymentsEligibilityConfirmed')
 
 
 def resolve(environment, project, run, previous_enabled=False, activation='preserve', root=ROOT, verify=installer.validate_prices):
@@ -39,7 +39,7 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
             raise ValueError('Managed Payments requires taxMode=automatic.')
         gates = GATES + (('taxClassificationConfirmed',) if tax_mode == 'automatic' else ()) + (('stagingCheckoutVerified', 'webhookVerified') if mode == 'live' else ())
         if merchant_mode == 'managed':
-            gates += MANAGED_GATES + (('managedPaymentsCheckoutVerified',) if mode == 'live' else ())
+            gates += MANAGED_GATES + (('managedPaymentsTermsAccepted', 'managedPaymentsCheckoutVerified') if mode == 'live' else ())
         missing = [gate for gate in gates if catalog.get(gate) is not True]
         if missing:
             raise ValueError('Billing activation requires recorded acceptance: ' + ', '.join(missing))
