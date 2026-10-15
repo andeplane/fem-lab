@@ -60,7 +60,7 @@ try {
       assert.equal(conversion.report.analysis.material, 'STEEL');
       assert.equal(conversion.report.analysis.step, 'AXIAL');
       assert.equal(conversion.report.analysis.finalEquilibriumOnly, true);
-      assert.equal(conversion.commands[2].formulation, 'full');
+      assert.equal(conversion.commands[2].formulation, fixture.includes('hex') ? 'mean-dilatation' : 'full');
       assert.ok(conversion.commands.every(command => command.cmd !== 'solve.run'));
       assert.ok(!JSON.stringify(conversion.commands).includes('-0.0'));
       for (const threads of [1, 4]) assert.deepEqual(nativeQueries(empty, threads, [conversionQuery]), [conversion]);
@@ -99,7 +99,7 @@ try {
       assert.deepEqual(JSON.parse(await engine.replay_hashes(JSON.stringify(model.journal.entries), false, true)), hashes);
       fieldsEqual(queries.map(input => query(engine, input)), expected);
 
-      const badText = text.replace('*END STEP', '*OUTPUT\n*END STEP');
+      const badText = text.replace('*END STEP', '*USER ELEMENT\n*END STEP');
       const bad = request(badText, conversionQuery.unitLength);
       const installed = engine.export_file();
       let failure;
