@@ -4,6 +4,7 @@ import { SessionRuntime } from './session-runtime';
 import type { SessionRequest } from './session-protocol';
 
 const engine = new BrowserEngine({
+  // Select the shared-memory runtime by host capability, including one-thread solves.
   canThread: self.crossOriginIsolated === true && typeof SharedArrayBuffer === 'function',
   portable: async () => ({
     module: await import('./generated/wasm/femlab_engine_wasm.js'),
