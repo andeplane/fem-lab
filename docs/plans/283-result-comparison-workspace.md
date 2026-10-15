@@ -32,6 +32,9 @@ The default is the existing single-Result workflow. A comparison configuration p
 Result ids and fields; new solves, Model edits and catalogue ordering cannot replace either.
 Each pane shows solve id, Step, solved revision, current/stale status, node/element counts,
 field/component, its own legend and any unavailable/evicted diagnostic.
+Comparison controls stay mounted with empty operands and a disabled Compare action before
+the first solve. Filling the catalogue must not move the single-view canvas or change its
+camera; existing physical boundary picks stay at the same screen coordinates.
 
 Side-by-side has two real Viewer instances, each loaded with that id's exact retained surface
 and field. Camera position, target, up and projection are shared in world coordinates; orbit
@@ -117,12 +120,16 @@ as scripts/AI. These are host capabilities, never Journal entries or a new engin
 | Concurrent per-pane legend updates, hide/pick ordering, interrupted first load, camera actions during preparation/mounting, late Model edits/eviction, session disposal and screenshot replacement fences | Deferred typed transport regressions in `packages/app/test/result-comparison.test.ts`. |
 | Retained nulls on triangles and line elements, scientific missing picks, shared camera span/zoom and disposal | `packages/app/test/sheet-viewer-lifecycle.test.ts` exercises real three.js geometry/controls with only the GPU boundary replaced. |
 | UI/AI/script parity, physical quantities, exact pane/id targets, unsupported headless host and existing camera compatibility | `packages/registry/test/result-comparison.test.ts` plus the exhaustive host registry samples and coverage gate. |
+| Empty catalogue to first retained Result preserves single-view layout, camera and physical boundary picks | `packages/app/test/result-comparison-ui.test.tsx` preserves the mounted empty controls; the existing meshed Sheet Chromium case asserts the unchanged canvas rectangle/public camera and all original undeformed/deformed boundary picks. |
 | Existing single-Result fields, playback, selection, session replacement and accepted account UI | The complete app suite includes `results.test.tsx`, `transient-results.test.ts`, `main-session.test.ts` and `account-ui.test.tsx`; leaving comparison restores the existing workflow. |
 
-The engine, Cargo/build inputs and generated engine schema are unchanged from the authentic
-`d0cd3769` runtime producer. Final verification uses its complete eight-file browser/Node
-bindings (artifact `11930522380`, WASM SHA256 `cb8408f4…`), after byte-level source and binding
-checks. Renderer surfaces stage coordinates in f32; nodal scientific values remain f64. A
+The historical full-suite checkpoint on `e11a0285` used the authentic `d0cd3769` runtime
+(artifact `11930522380`, WASM SHA256 `cb8408f4…`). Subsequent accepted #588 changes require
+their own source-matching runtime: the `d1369d45` composition uses the complete eight-file
+browser/Node bindings from actual CI producer `0354c081` (artifact `11939961014`, WASM SHA256
+`3636cbd2…`, raw schema SHA256 `32b1e71d…`), after byte-level engine/Cargo/build/codegen/schema
+and binding checks. These source scopes remain separate in the evidence receipts.
+Renderer surfaces stage coordinates in f32; nodal scientific values remain f64. A
 comparison pick returns the staged surface node coordinate with physical units and the
 scientific nodal value, rather than claiming a new exact-coordinate interpolation Query.
 Chromium screenshots and raster bounds establish browser acceptance; they do not claim

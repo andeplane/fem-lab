@@ -55,7 +55,8 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
   };
   const a = resolve(left), b = resolve(right);
   const input: ComparisonConfiguration | null = a && b ? mode === 'difference' ? { mode, left: a, right: b, onto } : { mode, left: a, right: b } : null;
-  if (!records.length && configuration.mode === 'single') return null;
+  // Keep this strip mounted before the first solve: filling the retained catalogue must
+  // not move or resize the single-Result canvas and invalidate its framing and picks.
   const operandForm = (side: 'left' | 'right', operand: ComparisonOperandInput, set: (next: ComparisonOperandInput) => void) => {
     const options = choices(operand), selected = resolve(operand);
     return <fieldset>

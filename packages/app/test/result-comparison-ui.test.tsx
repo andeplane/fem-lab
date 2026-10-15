@@ -17,6 +17,30 @@ function setup() {
   const query = vi.fn(async (input: Parameters<Query>[0]) => ({ ...RESULT, resultId: input['resultId'], extremes: [RESULT.extremes[0]!, { ...RESULT.extremes[0]!, field: 'vonMises' }] }));
   return { store, dispatch, root, query };
 }
+it('keeps the empty comparison strip mounted as the first retained Result fills its disabled controls', async () => {
+  const { store, dispatch, root, query } = setup();
+  const catalogue = store.state.resultComparison.catalogue;
+  store.set({ resultComparison: { ...store.state.resultComparison, catalogue: { ...catalogue, records: [] } } });
+  await act(async () => render(<ComparisonControls s={store.state} dispatch={dispatch} query={query} />, root));
+  await afterEffects();
+  const strip = root.querySelector('.comparison-controls');
+  const operands = [...root.querySelectorAll('.comparison-operands fieldset')];
+  expect(strip).not.toBeNull(); expect(operands).toHaveLength(2);
+  expect(root.querySelector<HTMLButtonElement>('.comparison-actions .apply')?.disabled).toBe(true);
+  expect(root.querySelector('[aria-label="left Result"]')?.textContent).toContain('Select Result');
+  expect(query).not.toHaveBeenCalled();
+
+  const first = catalogue.records[1]!;
+  store.set({ resultComparison: { ...store.state.resultComparison, catalogue: { ...catalogue, records: [first] } } });
+  await act(async () => render(<ComparisonControls s={store.state} dispatch={dispatch} query={query} />, root));
+  await waitFor(() => root.querySelector<HTMLSelectElement>('[aria-label="left field"]')?.options.length === 5);
+  expect(root.querySelector('.comparison-controls')).toBe(strip);
+  expect([...root.querySelectorAll('.comparison-operands fieldset')]).toEqual(operands);
+  expect(root.querySelector<HTMLButtonElement>('.comparison-actions .apply')?.disabled).toBe(false);
+  expect(query).toHaveBeenCalledExactlyOnceWith({ query: 'query.result', resultId: first.id });
+  root.querySelector<HTMLButtonElement>('.comparison-actions [aria-pressed="true"]')!.click();
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.compareResults', mode: 'single' });
+});
 it('submits two explicit solve identities and independent engine field components, with an explicit difference target', async () => {
   const { store, dispatch, root, query } = setup();
   await act(async () => render(<ComparisonControls s={store.state} dispatch={dispatch} query={query} />, root));

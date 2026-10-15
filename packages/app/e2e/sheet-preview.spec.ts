@@ -96,7 +96,7 @@ test('@cpu unmeshed transformed Sheet outlines are visible and named outer/hole 
   expect(journal.entries.map(e => e.cmd)).toEqual(commands);
 });
 
-test('@cpu meshed Sheet boundaries survive order, visibility and Results transitions', async ({ page }) => {
+test('@cpu meshed Sheet boundaries survive order, visibility and Results transitions', async ({ page }, info) => {
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -131,14 +131,24 @@ test('@cpu meshed Sheet boundaries survive order, visibility and Results transit
   await selected(page, outer.x, outer.y, 'plate.right');
   await selected(page, hole.x, hole.y, 'plate.hole');
 
+  const cameraBeforeFirstResult = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
   await page.evaluate(async () => {
     await window.fem.solve.run({ step: 'static' });
     await window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 0 });
   });
   await expect(page.locator('button[data-cmd="view.setMode"][aria-pressed="true"]')).toHaveText('results');
+  // Filling the retained catalogue must not insert controls that change this established
+  // single-view rectangle/camera. The same physical edge coordinates stay meaningful.
+  const rectAfterFirstResult = await canvas.boundingBox();
+  const cameraAfterFirstResult = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
+  expect(rectAfterFirstResult).toEqual(rect);
+  expect(cameraAfterFirstResult).toEqual(cameraBeforeFirstResult);
+  console.info('single Result first-solve framing', { rectBefore: rect, rectAfter: rectAfterFirstResult, cameraBefore: cameraBeforeFirstResult, cameraAfter: cameraAfterFirstResult });
   // This first hit makes three.js cache the undeformed outline bounds. Moving the boundary
   // outside those bounds must refresh both culling and raycast caches.
   await selected(page, hole.x, hole.y, 'plate.hole', false);
+  await page.screenshot({ path: info.outputPath('single-result-first-solve-stable-layout.png') });
+  await info.attach('single-result-first-solve-stable-layout', { path: info.outputPath('single-result-first-solve-stable-layout.png'), contentType: 'image/png' });
   const [ux, uy] = await page.evaluate(async () => {
     const component = async (n: number) => {
       const p = (await window.fem.query.probe({ field: 'displacement', component: n, at: ['2 m', '11 m', '0 m'] })) as unknown as {
