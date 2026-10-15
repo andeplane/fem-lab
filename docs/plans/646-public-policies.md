@@ -9,10 +9,13 @@ pages; landing also exposes the existing `account.open` Command. Replace landing
 copy that incorrectly said hosted AI never sends data off the page.
 
 The seller name is the Stripe account explicitly chosen by the user, Hafreager
-kode & koblinger. The approved support email is andershaf@gmail.com. No address,
-organisation number, tax registration or legal certification is invented. Owner
-confirmation of those business details, tax treatment and operational retention
-remains part of launch configuration; these pages do not establish compliance.
+kode & koblinger. The approved support email is andershaf@gmail.com. The Norwegian
+business register confirms organisation number NO938680582, sole proprietorship
+(ENK), and registered business address Gunnar Schjelderups vei 19B, 0485 Oslo,
+Norway. The record reports no VAT registration, so the number has no MVA suffix.
+This does not determine VAT obligations or authorize a tax registration. Owner
+confirmation of tax treatment, customer markets and operational retention remains
+part of launch configuration; these pages do not establish compliance.
 
 Terms describe the existing $49/$149/$499 monthly individual plans, weighted
 credits, paid-period expiry, no automatic overages, next-period plan changes,
@@ -29,6 +32,8 @@ no automated ledger expiry; the notice says so rather than promising a purge.
 
 Primary sources checked 15 October 2026:
 
+- [Brønnøysund Register Centre entity 938680582](https://data.brreg.no/enhetsregisteret/api/enheter/938680582): live API response confirms the exact business name, organisation number, ENK legal form, registered business address, and `registrertIMvaregisteret: false`. No telephone number is inferred or published.
+- [Altinn website and business-document information requirements](https://info.altinn.no/starte-og-drive/drive-bedrift/juridiske-og-regulatoriske-krav/krav-til-informasjon-om-foretaket-pa-nettsider-og-forretningsdokumenter): identifies business name and organisation number disclosures and the MVA suffix for VAT-registered businesses.
 - [Norwegian Consumer Council withdrawal guidance](https://www.forbrukerradet.no/angrar-du-pa-eit-kjop-nynorsk/): notice and the initial 14-day service withdrawal period.
 - [Norwegian Directorate of Health information-rights guidance](https://www.helsedirektoratet.no/normen/rettigheter-ved-behandling-av-helse-og-personopplysninger/retten-til-informasjon-om-behandling-av-personopplysninger/retten-til-informasjon-etter-personvernlovgivingen): controller, purposes, recipients, retention and rights disclosure. This implements the general transparency elements; FEM Lab is not presented as a health service.
 - [OpenAI API data controls](https://developers.openai.com/api/docs/guides/your-data): `store: false` is distinct from abuse monitoring and API data is not used for training by default. Do not claim zero retention.
