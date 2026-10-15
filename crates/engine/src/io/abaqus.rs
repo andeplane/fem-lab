@@ -821,10 +821,6 @@ fn source_location(
 }
 
 impl Builder {
-    pub(crate) fn finish(self, body: &str, digest: &str, scale: f64) -> Result<MeshDeck, Error> {
-        self.finish_source(body, digest, scale, BTreeMap::new(), None)
-    }
-
     pub(crate) fn finish_source(
         self,
         body: &str,

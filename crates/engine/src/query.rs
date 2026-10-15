@@ -301,14 +301,14 @@ pub enum Query {
     /// by F/L². Structural instances, labels, exact Sets and surfaces are normalized by
     /// the typed deck reader. The report records all translated analysis Steps and notes
     /// recognized requests whose output/increment execution differs from FEM Lab.
-    /// Mesh mode supports flat and part/assembly/instance solid meshes and supplied INCLUDE
-    /// bundles, retaining source identity and exact Sets. It never discards analysis data.
-    /// Static mode currently accepts one flat homogeneous isotropic linear elastic material,
-    /// one whole solid section, translational BOUNDARY and CLOAD, and one STATIC Step.
-    /// Other analysis definitions are rejected; broader static mapping is tracked separately.
-    /// Optional positive unitTime is validated; DENSITY remains explicitly unsupported.
+    /// Static mode imports constant isotropic materials and exact nonoverlapping solid
+    /// section regions covering every element, direct or solid symbolic BOUNDARY,
+    /// CLOAD and uniform DLOAD Pn / DSLOAD P pressure. Multiple small-displacement static
+    /// Steps retain effective inherited loads/supports; OP=NEW resets that family's state,
+    /// OP=MOD updates it. Conflicting repeated definitions within one Step fail explicitly.
+    /// Each Step configures its final linear equilibrium, without source increment history.
     /// Unsupported physics/formulations/parameters fail rather than being discarded.
-    /// Neither mode infers missing physical units.
+    /// Mesh mode configures no analysis. Neither mode infers missing physical units.
     /// Input and serialized response are bounded to 16 MiB; hosts must privately prepare
     /// all returned Commands through Candidate and publish one validated replacement.
     #[serde(rename = "query.convertAbaqus", rename_all = "camelCase")]

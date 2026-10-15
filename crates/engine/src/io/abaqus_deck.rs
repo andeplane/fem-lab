@@ -32,6 +32,13 @@ pub(crate) struct DeckBlock {
 
 pub(crate) struct NormalizedDeck {
     pub mesh: MeshDeck,
+    pub analysis: Vec<DeckBlock>,
+    assembly: Option<String>,
+    node_ids: BTreeMap<(DeckScope, u32), u32>,
+    element_ids: BTreeMap<(DeckScope, u32), u32>,
+    node_sets: BTreeMap<(DeckScope, String), String>,
+    element_sets: BTreeMap<(DeckScope, String), String>,
+    surfaces: BTreeMap<(DeckScope, String), String>,
 }
 
 /// A qualified reference is a sequence of labels, with dots inside quotes left untouched.
@@ -82,6 +89,118 @@ fn scoped_name(scope: &DeckScope, name: &str) -> String {
     match scope {
         DeckScope::Instance(instance) => format!("\"{instance}\".\"{name}\""),
         DeckScope::Model | DeckScope::Assembly => name.to_string(),
+    }
+}
+
+impl NormalizedDeck {
+    fn reference(
+        &self,
+        scope: &DeckScope,
+        text: &str,
+        line: usize,
+        keyword: &str,
+    ) -> Result<(DeckScope, String), Error> {
+        let mut path = components(text, line, keyword)?;
+        if self.assembly.as_ref().is_some_and(|a| path.len() > 1 && path[0] == *a) {
+            path.remove(0);
+        }
+        match path.as_slice() {
+            [item] => Ok((
+                match scope {
+                    DeckScope::Model if self.assembly.is_some() => DeckScope::Assembly,
+                    other => other.clone(),
+                },
+                item.clone(),
+            )),
+            [instance, item] if !matches!(scope, DeckScope::Instance(_)) => {
+                Ok((DeckScope::Instance(instance.clone()), item.clone()))
+            }
+            _ => Err(malformed(
+                line,
+                keyword,
+                "target",
+                "reference must name an item in the current scope or an instance-qualified item",
+            )),
+        }
+    }
+
+    pub(crate) fn node_set_target(
+        &self,
+        scope: &DeckScope,
+        text: &str,
+        line: usize,
+        keyword: &str,
+    ) -> Result<Option<String>, Error> {
+        let reference = self.reference(scope, text, line, keyword)?;
+        if numeric_reference(text) {
+            return Ok(None);
+        }
+        self.node_sets
+            .get(&reference)
+            .cloned()
+            .map(Some)
+            .ok_or_else(|| malformed(line, keyword, "NSET", format!("node set {text} is not defined in this scope")))
+    }
+
+    pub(crate) fn node_target(
+        &self,
+        scope: &DeckScope,
+        text: &str,
+        line: usize,
+        keyword: &str,
+    ) -> Result<Vec<u32>, Error> {
+        self.target(scope, text, line, keyword, true)
+    }
+
+    pub(crate) fn element_target(
+        &self,
+        scope: &DeckScope,
+        text: &str,
+        line: usize,
+        keyword: &str,
+    ) -> Result<Vec<u32>, Error> {
+        self.target(scope, text, line, keyword, false)
+    }
+
+    fn target(
+        &self,
+        scope: &DeckScope,
+        text: &str,
+        line: usize,
+        keyword: &str,
+        nodes: bool,
+    ) -> Result<Vec<u32>, Error> {
+        let reference = self.reference(scope, text, line, keyword)?;
+        if numeric_reference(text) {
+            let id = abaqus::label(&reference.1, line, keyword, "target")?;
+            let map = if nodes { &self.node_ids } else { &self.element_ids };
+            return map.get(&(reference.0, id)).copied().map(|id| vec![id]).ok_or_else(|| {
+                malformed(line, keyword, "target", format!("source label {text} is not defined in this scope"))
+            });
+        }
+        let (names, sets) = if nodes {
+            (&self.node_sets, &self.mesh.source.node_sets)
+        } else {
+            (&self.element_sets, &self.mesh.source.element_sets)
+        };
+        let mapped = names
+            .get(&reference)
+            .ok_or_else(|| malformed(line, keyword, "target", format!("set {text} is not defined in this scope")))?;
+        Ok(sets[mapped].clone())
+    }
+
+    pub(crate) fn surface_target(
+        &self,
+        scope: &DeckScope,
+        text: &str,
+        line: usize,
+        keyword: &str,
+    ) -> Result<String, Error> {
+        let reference = self.reference(scope, text, line, keyword)?;
+        self.surfaces
+            .get(&reference)
+            .cloned()
+            .ok_or_else(|| malformed(line, keyword, "surface", format!("surface {text} is not defined in this scope")))
     }
 }
 
@@ -239,7 +358,6 @@ struct ExpansionCount {
 impl ExpansionCount {
     const LIMIT: Self = Self { nodes: 250_000, elements: 250_000, memberships: 1_000_000 };
 }
-
 /// Presentation metadata may be inherited repeatedly without adding mesh entities.
 /// Bound both owned UTF-8 and empty metadata records before retaining another copy.
 struct PresentationBudget {
@@ -403,6 +521,25 @@ pub(crate) fn normalize(
     normalize_mesh_sources(text, body, unit_length, digest, None, &BTreeMap::new())
 }
 
+pub(crate) fn normalize_sources(
+    text: &str,
+    body: &str,
+    unit_length: &Q<Length>,
+    digest: &str,
+    source_name: Option<&str>,
+    source_files: &BTreeMap<String, String>,
+) -> Result<NormalizedDeck, Error> {
+    normalize_deck(
+        text,
+        body,
+        unit_length,
+        digest,
+        source_name,
+        source_files,
+        NormalizationPolicy { allow_analysis: true, expansion_limit: ExpansionCount::LIMIT },
+    )
+}
+
 pub(crate) fn normalize_mesh_sources(
     text: &str,
     body: &str,
@@ -411,7 +548,80 @@ pub(crate) fn normalize_mesh_sources(
     source_name: Option<&str>,
     source_files: &BTreeMap<String, String>,
 ) -> Result<NormalizedDeck, Error> {
-    normalize_deck(text, body, unit_length, digest, source_name, source_files, ExpansionCount::LIMIT)
+    normalize_deck(
+        text,
+        body,
+        unit_length,
+        digest,
+        source_name,
+        source_files,
+        NormalizationPolicy { allow_analysis: false, expansion_limit: ExpansionCount::LIMIT },
+    )
+}
+
+struct NormalizationPolicy {
+    allow_analysis: bool,
+    expansion_limit: ExpansionCount,
+}
+
+struct AnalysisBudget {
+    records: CollectionBudget,
+    bytes: usize,
+    byte_limit: usize,
+}
+impl Default for AnalysisBudget {
+    fn default() -> Self {
+        Self { records: CollectionBudget::default(), bytes: 0, byte_limit: 64 * 1024 * 1024 }
+    }
+}
+impl AnalysisBudget {
+    fn payload(&mut self, block: &DeckBlock, scope: Option<&DeckScope>) -> Result<(), Error> {
+        let scope_bytes = match scope.unwrap_or(&block.scope) {
+            DeckScope::Instance(name) => name.len(),
+            DeckScope::Model | DeckScope::Assembly => 0,
+        };
+        let parameter_bytes: usize =
+            block.keyword.parameters.iter().map(|(key, value)| key.len() + value.as_ref().map_or(0, String::len)).sum();
+        let record_bytes: usize = block
+            .records
+            .iter()
+            .map(|record| record.raw.len() + record.fields.iter().map(String::len).sum::<usize>())
+            .sum();
+        let bytes = scope_bytes + block.keyword.name.len() + parameter_bytes + record_bytes;
+        if bytes > self.byte_limit.saturating_sub(self.bytes) {
+            return Err(malformed(
+                block.keyword.line,
+                "INPUT",
+                "analysis bytes",
+                format!("expanded analysis exceeds {} bytes of retained text", self.byte_limit),
+            ));
+        }
+        self.bytes += bytes;
+        Ok(())
+    }
+}
+
+/// Reserve repeated scoped analysis records and their owned text before cloning them,
+/// independently of mesh admission. Continued keywords must not multiply unbounded payloads.
+fn append_analysis(
+    out: &mut Vec<DeckBlock>,
+    budget: &mut AnalysisBudget,
+    blocks: &[DeckBlock],
+    scope: Option<&DeckScope>,
+) -> Result<(), Error> {
+    for block in blocks.iter().filter(|block| !mesh_keyword(&block.keyword.name)) {
+        budget.payload(block, scope).map_err(|error| located(error, block.keyword.source.as_deref()))?;
+        budget.records.keyword(block.keyword.line).map_err(|error| located(error, block.keyword.source.as_deref()))?;
+        for record in &block.records {
+            budget.records.record(record.line).map_err(|error| located(error, record.source.as_deref()))?;
+        }
+        let mut copy = block.clone();
+        if let Some(scope) = scope {
+            copy.scope = scope.clone();
+        }
+        out.push(copy);
+    }
+    Ok(())
 }
 
 fn normalize_deck(
@@ -421,8 +631,9 @@ fn normalize_deck(
     digest: &str,
     source_name: Option<&str>,
     source_files: &BTreeMap<String, String>,
-    expansion_limit: ExpansionCount,
+    policy: NormalizationPolicy,
 ) -> Result<NormalizedDeck, Error> {
+    let NormalizationPolicy { allow_analysis, expansion_limit } = policy;
     let scale = abaqus::check_input(text, body, unit_length, digest)?;
     let expanded = expand_sources(text, source_name, source_files)?;
     let mut parts: BTreeMap<String, Vec<DeckBlock>> = BTreeMap::new();
@@ -434,11 +645,29 @@ fn normalize_deck(
     let mut part: Option<String> = None;
     let mut instance: Option<usize> = None;
     let mut assembly_closed = false;
+    let mut history_started = false;
     for mut block in expanded {
         let line = block.keyword.line;
         let source = block.keyword.source.clone();
         let handled = (|| {
             let key = block.keyword.name.as_str();
+            if history_started
+                && (mesh_keyword(key)
+                    || ["PART", "ENDPART", "ASSEMBLY", "ENDASSEMBLY", "INSTANCE", "ENDINSTANCE"].contains(&key))
+            {
+                return Err(malformed(line, key, "scope", "mesh and assembly definitions must precede all Steps"));
+            }
+            if key == "STEP" {
+                if part.is_some() || in_assembly || instance.is_some() {
+                    return Err(malformed(
+                        line,
+                        key,
+                        "scope",
+                        "STEP must be outside part, instance and assembly definitions",
+                    ));
+                }
+                history_started = true;
+            }
             match key {
                 "PART" => {
                     block.keyword.only(&["NAME"])?;
@@ -530,7 +759,7 @@ fn normalize_deck(
                     }
                 }
                 _ => {
-                    if !mesh_keyword(&block.keyword.name) {
+                    if !allow_analysis && !mesh_keyword(&block.keyword.name) {
                         return Err(unsupported(
                             line,
                             &block.keyword.name,
@@ -572,6 +801,22 @@ fn normalize_deck(
         return Err(malformed(1, "INPUT", "scope", "assembly models cannot also contain a flat model-level mesh"));
     }
 
+    for blocks in parts.values() {
+        for block in blocks {
+            if !mesh_keyword(&block.keyword.name) && block.keyword.name != "SOLIDSECTION" {
+                return Err(located(
+                    unsupported(
+                        block.keyword.line,
+                        &block.keyword.name,
+                        "part",
+                        "this part-level capability cannot be imported",
+                    ),
+                    block.keyword.source.as_deref(),
+                ));
+            }
+        }
+    }
+
     let mut global = Builder::default();
     let mut presentation_budget = PresentationBudget::default();
     let mut node_ids = BTreeMap::new();
@@ -582,6 +827,9 @@ fn normalize_deck(
     let mut node_identities = BTreeMap::new();
     let mut element_identities = BTreeMap::new();
     let mut regions = BTreeMap::new();
+    let mut analysis = Vec::new();
+    let mut analysis_budget = AnalysisBudget::default();
+    let mut history = &[][..];
     let mut part_counts = BTreeMap::new();
     for (name, blocks) in &parts {
         let local = local_mesh(blocks, scale)?;
@@ -592,6 +840,7 @@ fn normalize_deck(
     }
     let mut local_plans = Vec::new();
     if assembly.is_none() {
+        append_analysis(&mut analysis, &mut analysis_budget, &model_blocks, None)?;
         local_plans.push((
             DeckScope::Model,
             None,
@@ -612,6 +861,10 @@ fn normalize_deck(
         presentation_budget
             .append(&mut global, presentation.headings, presentation.preprint, 1)
             .map_err(|e| located(e, source_name))?;
+        let history_start =
+            model_blocks.iter().position(|block| block.keyword.name == "STEP").unwrap_or(model_blocks.len());
+        append_analysis(&mut analysis, &mut analysis_budget, &model_blocks[..history_start], None)?;
+        history = &model_blocks[history_start..];
         for (instance_name, instance) in &instances {
             transform([0.0; 3], &instance.position, instance.line, instance.source.as_deref())?;
             let inherited = &parts[&instance.part];
@@ -683,6 +936,10 @@ fn normalize_deck(
             memberships: global.memberships,
         };
         check_expansion(current, minimum, expansion_limit, line).map_err(|e| located(e, source.as_deref()))?;
+        if matches!(scope, DeckScope::Instance(_)) {
+            append_analysis(&mut analysis, &mut analysis_budget, inherited, Some(&scope))?;
+            append_analysis(&mut analysis, &mut analysis_budget, additions, Some(&scope))?;
+        }
         // Only the current instance is parsed; previous instances have already been flattened.
         let mut combined = inherited.to_vec();
         combined.extend_from_slice(additions);
@@ -842,8 +1099,10 @@ fn normalize_deck(
             .map_err(|e| located(e, source.as_deref()))?;
     }
     // Assembly nodes and sets are handled against the complete instance identity map below.
+    let assembly_mesh: Vec<_> =
+        assembly_blocks.iter().filter(|block| mesh_keyword(&block.keyword.name)).cloned().collect();
     add_assembly(
-        &assembly_blocks,
+        &assembly_mesh,
         &assembly,
         &mut global,
         &mut node_ids,
@@ -874,7 +1133,9 @@ fn normalize_deck(
             .collect(),
     };
     let mesh = global.finish_source(body, digest, scale, regions, Some(Box::new(provenance)))?;
-    Ok(NormalizedDeck { mesh })
+    append_analysis(&mut analysis, &mut analysis_budget, &assembly_blocks, None)?;
+    append_analysis(&mut analysis, &mut analysis_budget, history, None)?;
+    Ok(NormalizedDeck { mesh, analysis, assembly, node_ids, element_ids, node_sets, element_sets, surfaces })
 }
 
 fn assembly_reference(
@@ -1479,7 +1740,10 @@ mod tests {
             &digest,
             Some("Main.inp"),
             &sources,
-            ExpansionCount { nodes: 7, elements: 2, memberships: 100 },
+            NormalizationPolicy {
+                allow_analysis: false,
+                expansion_limit: ExpansionCount { nodes: 7, elements: 2, memberships: 100 },
+            },
         )
         .err()
         .unwrap();
@@ -1515,5 +1779,194 @@ mod tests {
             .contains("keyword records"));
         let query = "*ELEMENT,TYPE=UNSUPPORTED\nnot connectivity\n*INCLUDE,INPUT=nodes.inc\n";
         assert_eq!(source_dependencies(query, None, &BTreeMap::new()).unwrap(), ["nodes.inc"]);
+    }
+    #[test]
+    fn typed_scoped_resolvers_distinguish_sets_labels_and_quoted_numeric_names() {
+        let text = include_str!("../../tests/fixtures/abaqus/assembly-two-instances.inp");
+        let digest = crate::hash::sha256_hex(text.as_bytes());
+        let deck = normalize_sources(text, "mesh", &Q::text("1 m"), &digest, None, &BTreeMap::new()).unwrap();
+        assert_eq!(
+            deck.node_target(&DeckScope::Model, "\"Assembly A\".\"second instance\".\"Root, = Face\"", 1, "BOUNDARY")
+                .unwrap(),
+            [5, 6, 7]
+        );
+        assert_eq!(deck.node_target(&DeckScope::Assembly, "\"second instance\".20", 1, "CLOAD").unwrap(), [6]);
+        assert_eq!(deck.node_set_target(&DeckScope::Model, "\"second instance\".20", 1, "CLOAD").unwrap(), None);
+        assert!(deck
+            .node_set_target(&DeckScope::Instance("second instance".into()), "TIP", 1, "BOUNDARY")
+            .unwrap()
+            .is_some());
+        assert_eq!(deck.element_target(&DeckScope::Model, "BOTH", 1, "DLOAD").unwrap(), [1, 2]);
+        assert_eq!(deck.surface_target(&DeckScope::Model, "BOTTOMS", 1, "DSLOAD").unwrap(), "BOTTOMS");
+        for target in ["UNKNOWN", "\"second instance\".999", "A.B.C.D"] {
+            assert!(deck.node_target(&DeckScope::Model, target, 1, "BOUNDARY").is_err());
+        }
+        assert!(deck.surface_target(&DeckScope::Model, "UNKNOWN", 1, "DSLOAD").is_err());
+        assert!(deck.node_set_target(&DeckScope::Model, "UNKNOWN", 1, "BOUNDARY").is_err());
+        assert!(deck.element_target(&DeckScope::Model, "UNKNOWN", 1, "DLOAD").is_err());
+        let quoted = text.replace("NSET=TIP", "NSET=\"12\"");
+        let deck = normalize_sources(
+            &quoted,
+            "mesh",
+            &Q::text("1 m"),
+            &crate::hash::sha256_hex(quoted.as_bytes()),
+            None,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(deck.node_target(&DeckScope::Model, "\"second instance\".\"12\"", 1, "CLOAD").unwrap(), [8]);
+        assert!(deck.node_set_target(&DeckScope::Model, "\"second instance\".\"12\"", 1, "CLOAD").unwrap().is_some());
+    }
+
+    #[test]
+    fn malformed_structural_scopes_and_mesh_after_history_are_never_normalized_away() {
+        for text in [
+            "*END PART\n",
+            "*END INSTANCE\n",
+            "*END ASSEMBLY\n",
+            "*PART, NAME=P\n",
+            "*PART,NAME=P\n*END PART\n",
+            "*ASSEMBLY,NAME=A\n*END ASSEMBLY\n",
+            "*INSTANCE,NAME=I,PART=P\n",
+            "*PART,NAME=P\n*END PART\n*PART,NAME=P\n",
+            "*PART,NAME=P\n*STEP\n",
+            "*ASSEMBLY,NAME=A\n*ASSEMBLY,NAME=B\n",
+            "*PART,NAME=P\n*END PART\n*ASSEMBLY,NAME=A\n*INSTANCE,NAME=I,PART=UNKNOWN\n",
+        ] {
+            assert!(
+                normalize_sources(
+                    text,
+                    "mesh",
+                    &Q::text("1 m"),
+                    &crate::hash::sha256_hex(text.as_bytes()),
+                    None,
+                    &BTreeMap::new()
+                )
+                .is_err(),
+                "{text}"
+            );
+        }
+        let fixture = include_str!("../../tests/fixtures/abaqus/assembly-two-instances.inp");
+        for suffix in [
+            "*STEP,NAME=S\n*STATIC\n*END STEP\n*NODE\n1,0,0,0\n",
+            "*STEP,NAME=S\n*STATIC\n*END STEP\n*PART,NAME=LATE\n",
+        ] {
+            let text = format!("{fixture}{suffix}");
+            let error = normalize_sources(
+                &text,
+                "mesh",
+                &Q::text("1 m"),
+                &crate::hash::sha256_hex(text.as_bytes()),
+                None,
+                &BTreeMap::new(),
+            )
+            .err()
+            .unwrap();
+            assert!(error.cause.contains("must precede"));
+        }
+    }
+    #[test]
+    fn static_normalization_rejects_mesh_history_and_nested_steps_at_the_authored_source() {
+        let fixture = include_str!("../../tests/fixtures/abaqus/assembly-two-instances.inp");
+        for suffix in [
+            "*NODE\n999,0,0,0\n",
+            "*ELEMENT,TYPE=C3D4\n999,1,2,3,4\n",
+            "*NSET,NSET=LATE\n1\n",
+            "*ELSET,ELSET=LATE\n1\n",
+            "*SURFACE,NAME=LATE\n1,S1\n",
+            "*HEADING\nlate\n",
+            "*PREPRINT\n",
+            "*PART,NAME=LATE\n",
+            "*ASSEMBLY,NAME=LATE\n",
+            "*INSTANCE,NAME=LATE,PART=P\n",
+            "*ENDPART\n",
+            "*ENDASSEMBLY\n",
+            "*ENDINSTANCE\n",
+        ] {
+            let text = format!("{fixture}*STEP,NAME=S\n*STATIC\n*END STEP\n{suffix}");
+            let error = normalize_sources(
+                &text,
+                "mesh",
+                &Q::text("1 m"),
+                &crate::hash::sha256_hex(text.as_bytes()),
+                Some("authored.inp"),
+                &BTreeMap::new(),
+            )
+            .err()
+            .unwrap();
+            assert!(error.cause.contains("must precede all Steps"), "{suffix}: {error:?}");
+            assert!(error.where_.as_deref().unwrap().starts_with("authored.inp: line "), "{error:?}");
+        }
+        for scope in [
+            "*PART,NAME=P\n",
+            "*ASSEMBLY,NAME=A\n",
+            "*PART,NAME=P\n*ENDPART\n*ASSEMBLY,NAME=A\n*INSTANCE,NAME=I,PART=P\n",
+        ] {
+            let text = format!("{scope}*STEP\n*STATIC\n");
+            let error = normalize_sources(
+                &text,
+                "mesh",
+                &Q::text("1 m"),
+                &crate::hash::sha256_hex(text.as_bytes()),
+                Some("authored.inp"),
+                &BTreeMap::new(),
+            )
+            .err()
+            .unwrap();
+            assert!(error.cause.contains("STEP must be outside"), "{scope}: {error:?}");
+            assert!(error.where_.as_deref().unwrap().contains("*STEP scope"));
+        }
+    }
+
+    #[test]
+    fn scoped_analysis_is_admitted_before_copying_repeated_keywords_or_records() {
+        let blocks =
+            blocks("*MATERIAL,NAME=A\n*ELASTIC\n1,.3\n", None, &mut CollectionBudget::default(), true).unwrap();
+        let mut out = Vec::new();
+        let mut budget = AnalysisBudget {
+            records: CollectionBudget { entity_limit: 1, ..CollectionBudget::default() },
+            ..AnalysisBudget::default()
+        };
+        assert!(append_analysis(&mut out, &mut budget, &blocks, None).unwrap_err().cause.contains("keyword records"));
+        assert_eq!(out.len(), 1);
+        let mut out = Vec::new();
+        let mut budget = AnalysisBudget {
+            records: CollectionBudget { record_limit: 0, ..CollectionBudget::default() },
+            ..AnalysisBudget::default()
+        };
+        assert!(append_analysis(&mut out, &mut budget, &blocks[1..], None).unwrap_err().cause.contains("data records"));
+        assert!(out.is_empty());
+        let scope = DeckScope::Instance("retained instance".into());
+        append_analysis(&mut out, &mut AnalysisBudget::default(), &blocks, Some(&scope)).unwrap();
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|block| block.scope == scope));
+    }
+
+    #[test]
+    fn scoped_analysis_admits_owned_payload_before_cloning_repeated_blocks() {
+        let source_blocks =
+            blocks("*MATERIAL,NAME=LongMaterialLabel\n", None, &mut CollectionBudget::default(), true).unwrap();
+        let scope = DeckScope::Instance("long instance label".into());
+        let mut budget = AnalysisBudget { byte_limit: 1, ..AnalysisBudget::default() };
+        let mut out = Vec::new();
+        assert!(append_analysis(&mut out, &mut budget, &source_blocks, Some(&scope))
+            .unwrap_err()
+            .cause
+            .contains("retained text"));
+        assert!(out.is_empty());
+        let mut budget = AnalysisBudget::default();
+        append_analysis(&mut out, &mut budget, &source_blocks, Some(&scope)).unwrap();
+        assert_eq!(
+            budget.bytes,
+            "MATERIAL".len() + "NAME".len() + "LongMaterialLabel".len() + "long instance label".len()
+        );
+        budget.byte_limit = budget.bytes;
+        assert!(append_analysis(&mut out, &mut budget, &source_blocks, Some(&scope)).is_err());
+        assert_eq!(out.len(), 1);
+        let blocks = blocks("*ELASTIC\n1,.3\n", None, &mut CollectionBudget::default(), true).unwrap();
+        let mut budget = AnalysisBudget::default();
+        let mut out = Vec::new();
+        append_analysis(&mut out, &mut budget, &blocks, None).unwrap();
+        assert_eq!(budget.bytes, "ELASTIC".len() + "1,.3".len() + "1".len() + ".3".len());
     }
 }

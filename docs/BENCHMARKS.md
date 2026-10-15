@@ -2498,6 +2498,28 @@ Native one/three-thread replay and native/WASM conversion/hash parity are separa
 checks. Only final linear equilibrium is imported; an Abaqus increment history is
 explicitly outside this supported slice.
 
+### Abaqus static comparison load cases and section regions (#654)
+
+The authored text fixtures in the existing registry test module use no FEM Lab mesher
+or analysis writer. These cases supplement, rather than replace, the #503 oracles above.
+
+| Registry test | Independent answer and refinement gate |
+|---|---|
+| `abaqus_static_surface_and_element_pressures_match_bar_oracles_at_three_refinements` | Both DSLOAD surface P and DLOAD element P4 on a 1 m bar, A=0.01 m², E=200 GPa, ν=0, at 2/4/8 axial cells. Right-face p=−100 kPa acts outward, giving F=+1000 N, δ=5e−7 m within 1e−16 m, and reaction −1000 N within 1e−8 N. |
+| `abaqus_static_exact_material_regions_preserve_shared_interface_and_series_compliance` | Two half-length regions with E1=200 GPa and E2=100 GPa share the same original interface nodes. At 1/2/4 axial cells per half, A=0.01 m² and F=1000 N give δ=(F/A)(0.5/E1+0.5/E2)=7.5e−7 m within 1e−16 m. Every element has σxx=1e5 Pa within 1e−6 Pa; reaction is −1000 N within 1e−8 N. Node count proves no interface duplication. |
+| `abaqus_static_multiple_load_cases_inherit_modify_and_reset_effective_state` | Six source Steps independently give axial resultants +1000,+1000,+2000,−500,+1000,−500 N through inherited CLOAD, modified CLOAD, reset CLOAD, pressure and reset pressure. δ=FL/(EA) and reaction −F retain the same absolute bar tolerances; save/open preserves the authoritative model and Journal. |
+| `abaqus_static_overlapping_named_pressures_keep_independent_source_load_identity` | Two distinct named surfaces cover the same right face. Their −50 kPa pressures add to +1000 N; changing only the first source surface to −100 kPa gives +1500 N; DSLOAD OP=NEW with +50 kPa on the second gives −500 N. Each Step satisfies δ=FL/(EA) within 1e−16 m and reaction −F within 1e−8 N. Distinct surface loads are never flattened into one per-face update. |
+| `abaqus_static_empty_new_blocks_really_remove_inherited_families` | Empty OP=NEW blocks remove inherited CLOAD, DLOAD and DSLOAD families. The same bar alternates between exact zero displacement and δ=5e−7 m under +1000 N pressure, within 1e−16 m. Empty BOUNDARY OP=NEW yields a visibly unconstrained final case; that case is retained but not claimed solvable. |
+| `abaqus_static_density_requires_explicit_time_and_preserves_coherent_mass_units` | Source ρ=7.8e−9 with mm/N/s gives 7800 kg/m³; mm/N/ms gives 0.0078 kg/m³. Each agrees with ρSI=ρsource F T²/L⁴ within 1e−14 relative. Missing time is a schema error without mutation. |
+
+The pressure and series-bar solutions lie exactly in the finite-element spaces, so
+all three meshes must reproduce the answer; these are not claimed convergence rates.
+Unsupported pressure types, invalid face numbers, ambiguous same-step updates, mixed
+OP values and invalid time dimensions/scales are rejected without changing the active
+Model/Journal. This establishes linear final-equilibrium mapping only, not Abaqus
+increment histories, nonlinear loading, arbitrary element formulations or physical validation.
+The independent unmodified vendor-export corpus and composed host loading belong to #656.
+
 ### Original quadratic-element query measurements (#524)
 
 Public Commands build a quarter annulus with radii `r=1 m`, `R=2 m`, quadratic
