@@ -94,15 +94,18 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await window.fem.dispatch({ cmd: 'project.open', id: first.id });
   expect((await window.fem.query.model()).bodies).toHaveLength(1);
   expect(mounted.props!.store.state.model?.name).toBe('first edited');
-  expect(drawings.at(-1)!.fit).toHaveBeenCalledTimes(1);
+  // Replacement Fit waits until the Result and shell have published their overlays.
+  await vi.waitFor(() => expect(drawings.at(-1)!.fit).toHaveBeenCalledTimes(1));
   expect((await window.fem.query.journal()).entries).toHaveLength(3);
   const reopened = mounted.props!;
   mounted.afterReady = viewer => viewer.setCamera(custom);
   await window.fem.dispatch({ cmd: 'project.open', id: first.id });
   mounted.afterReady = null;
+  await new Promise(resolve => setTimeout(resolve, 0));
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
   expect(await window.fem.registry.query({ query: 'query.view' })).toEqual(custom);
   reopened.viewer.onBounds?.();
+  await new Promise(resolve => setTimeout(resolve, 0));
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
   expect(await window.fem.registry.query({ query: 'query.view' })).toEqual(custom);
   await window.fem.dispatch({ cmd: 'project.delete', id: second.id });
