@@ -128,7 +128,7 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     await page.locator('.tab', { hasText: 'checks' }).click();
     await expect(page.locator('.checks')).toContainText('min scaled Jacobian');
     await expect(page.locator('.checks')).toContainText('degrees of freedom');
-    await expect(page.locator('.surface.pass')).toContainText('Nothing blocks a solve');
+    await expect(page.locator('.surface.pass')).toContainText('No current pre-solve blockers are reported.');
     await shot(page, '13-checks');
   });
 });
