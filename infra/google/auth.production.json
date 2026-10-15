@@ -1,0 +1,15 @@
+{
+  "auth": {
+    "providers": {
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "FEM Lab",
+        "supportEmail": "andershaf@gmail.com",
+        "authorizedRedirectUris": [
+          "https://femlab.app/__/auth/handler",
+          "https://femlab-app.web.app/__/auth/handler",
+          "https://femlab-app.firebaseapp.com/__/auth/handler"
+        ]
+      }
+    }
+  }
+}

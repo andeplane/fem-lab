@@ -1,9 +1,11 @@
+import { grantFreeFixture } from './free-fixture';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { postgresAccounts } from '../src/accounts';
 import { creditLedger } from '../src/ledger';
+import { approveTrial } from '../src/trials';
 import { migrate } from '../src/migrations';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgres', () => {
@@ -20,22 +22,40 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
     try { await migrate(connection, migrations); } finally { connection.release(); }
   });
   afterAll(async () => { await pool.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
-  it('concurrent account reads mint one free allowance per UTC month and no rollover', async () => {
+  it('only explicit approval mints a grant and a new calendar month does not renew it', async () => {
     const account = await accounts.provision({ uid: 'monthly', email: 'monthly@example.com' });
-    await Promise.all(Array.from({ length: 24 }, () => ledger.ensureFree(account.id)));
+    expect((await ledger.balance(account.id)).availableCredits).toBe(0);
+    await Promise.all(Array.from({ length: 24 }, () => grantFreeFixture(ledger, account.id, clock)));
     expect((await ledger.balance(account.id)).availableCredits).toBe(200000);
     expect(Number((await pool.query('SELECT count(*) AS n FROM credit_grants WHERE account_id=$1', [account.id])).rows[0].n)).toBe(1);
     clock = new Date('2026-11-01T00:00:00Z');
     expect((await ledger.balance(account.id)).availableCredits).toBe(0);
-    await ledger.ensureFree(account.id);
-    expect((await ledger.balance(account.id)).availableCredits).toBe(200000);
+    expect(Number((await pool.query('SELECT count(*) AS n FROM credit_grants WHERE account_id=$1', [account.id])).rows[0].n)).toBe(1);
+  });
+  it('operator invitations cannot renew, double-grant, or move to a recreated identity', async () => {
+    clock = new Date('2026-11-15T12:00:00Z');
+    const account = await accounts.provision({uid:'invited',email:'reviewed@example.com'});
+    const results = await Promise.all(Array.from({length:24},()=>approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)));
+    expect(results.filter(result=>!result.replay)).toHaveLength(1);
+    expect(await ledger.balance(account.id)).toMatchObject({availableCredits:200000,periodEndsAt:'2026-12-15T12:00:00.000Z'});
+    await expect(approveTrial(pool,account.id,'another-review',()=>clock,randomUUID)).rejects.toMatchObject({code:'trial-already-approved'});
+    clock = new Date('2026-12-16T12:00:00Z');
+    expect(await approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)).toMatchObject({replay:true,expiresAt:'2026-12-15T12:00:00.000Z'});
+    expect((await ledger.balance(account.id)).availableCredits).toBe(0);
+    await pool.query("UPDATE accounts SET status='deleted',email='' WHERE id=$1",[account.id]);
+    await expect(approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)).rejects.toMatchObject({code:'account-inactive'});
+    const recreated = await accounts.provision({uid:'recreated',email:'reviewed@example.com'});
+    await expect(approveTrial(pool,recreated.id,'review-645',()=>clock,randomUUID)).rejects.toMatchObject({code:'trial-already-approved'});
+    expect((await ledger.balance(recreated.id)).availableCredits).toBe(0);
+    await expect(approveTrial(pool,'invalid','review',()=>clock,randomUUID)).rejects.toThrow('account UUID');
+    clock = new Date('2026-11-01T00:00:00Z');
   });
   it('deduplicates paid sources, rejects a changed account/period/plan, and expires the allowance', async () => {
     const account = await accounts.provision({ uid: 'paid', email: 'paid@example.com' });
     const other = await accounts.provision({ uid: 'other', email: 'other@example.com' });
     const input = { accountId: account.id, source: 'stripe:invoice:one', plan: 'plus' as const, startsAt: new Date('2026-11-01T00:00:00Z'), expiresAt: new Date('2026-12-01T00:00:00Z') };
     await Promise.all(Array.from({ length: 16 }, () => ledger.grant(input)));
-    await ledger.ensureFree(account.id);
+    await grantFreeFixture(ledger, account.id, clock);
     expect(await ledger.balance(account.id)).toMatchObject({ plan: 'plus', availableCredits: 4000000, periodEndsAt: '2026-12-01T00:00:00.000Z' });
     expect((await ledger.balance(other.id)).availableCredits).toBe(0);
     for (const change of [{ accountId: other.id }, { plan: 'pro' as const }, { expiresAt: new Date('2026-12-02T00:00:00Z') }]) {
@@ -47,7 +67,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
   it('database constraints enforce owner linkage, unique debit sources and immutable money', async () => {
     const account = await accounts.provision({ uid: 'debit', email: 'debit@example.com' });
     const other = await accounts.provision({ uid: 'different', email: 'different@example.com' });
-    await ledger.ensureFree(account.id);
+    await grantFreeFixture(ledger, account.id, clock);
     const grant = (await pool.query('SELECT id FROM credit_grants WHERE account_id=$1', [account.id])).rows[0];
     const values = [randomUUID(), account.id, grant.id, 'settlement:request-1', '-300', clock];
     const insert = "INSERT INTO credit_entries(id,account_id,grant_id,source,amount,kind,created_at) VALUES($1,$2,$3,$4,$5,'usage',$6)";

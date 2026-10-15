@@ -592,3 +592,17 @@ it('requires an explicit valid execution policy for every engine and host defini
 });
 
 it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});
+
+it('forwards explicit subscription use while preserving legacy direct checkout and fixed plan-change use',async()=>{
+  const {registry,host}=make();
+  await registry.dispatch({cmd:'account.checkout',plan:'plus'});
+  expect(host.account!.checkout).toHaveBeenLastCalledWith('plus',undefined);
+  for(const purchaseUse of ['personal','business']){
+    await registry.dispatch({cmd:'account.checkout',plan:'pro',purchaseUse});
+    expect(host.account!.checkout).toHaveBeenLastCalledWith('pro',purchaseUse);
+  }
+  for(const purchaseUse of ['',null,'other'])await expect(registry.dispatch({cmd:'account.checkout',plan:'plus',purchaseUse})).rejects.toMatchObject({code:'schema'});
+  expect(host.account!.checkout).toHaveBeenCalledTimes(3);
+  await expect(registry.dispatch({cmd:'account.changePlan',plan:'studio',purchaseUse:'business'})).rejects.toMatchObject({code:'schema'});
+  expect(host.account!.changePlan).not.toHaveBeenCalled();
+});
