@@ -98,17 +98,17 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let (mut mesh, body_of_block, mut body_faces) = match &settings.mesher {
         MesherSettings::Imported(source) => {
             if settings.order != 1
-                || settings.formulation != crate::command::Formulation::Full
+                || settings.formulation == crate::command::Formulation::IncompatibleModes
                 || settings.simplices
                 || settings.refinement.is_some()
                 || !model.bodies.is_empty()
             {
                 return Err(Error::new(
                     ErrorCode::Unsupported,
-                    "imported sources require an unchanged first-order, full-integration source as the only Body",
+                    "imported sources require unchanged authored interpolation and full or mean-dilatation integration as the only source",
                 )
                 .at("mesher")
-                .suggest("mesh.set with order 1, formulation full and no split/refinement"));
+                .suggest("mesh.set with order 1, formulation full or mean-dilatation and no split/refinement"));
             }
             let (part, labels) = crate::imported::build(source)?;
             source_labels = labels;

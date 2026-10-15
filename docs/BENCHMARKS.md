@@ -2498,6 +2498,28 @@ Native one/three-thread replay and native/WASM conversion/hash parity are separa
 checks. Only final linear equilibrium is imported; an Abaqus increment history is
 explicitly outside this supported slice.
 
+### Abaqus static comparison load cases and section regions (#654)
+
+The authored text fixtures in the existing registry test module use no FEM Lab mesher
+or analysis writer. These cases supplement, rather than replace, the #503 oracles above.
+
+| Registry test | Independent answer and refinement gate |
+|---|---|
+| `abaqus_static_surface_and_element_pressures_match_bar_oracles_at_three_refinements` | Both DSLOAD surface P and DLOAD element P4 on a 1 m bar, A=0.01 m², E=200 GPa, ν=0, at 2/4/8 axial cells. Right-face p=−100 kPa acts outward, giving F=+1000 N, δ=5e−7 m within 1e−16 m, and reaction −1000 N within 1e−8 N. |
+| `abaqus_static_exact_material_regions_preserve_shared_interface_and_series_compliance` | Two half-length regions with E1=200 GPa and E2=100 GPa share the same original interface nodes. At 1/2/4 axial cells per half, A=0.01 m² and F=1000 N give δ=(F/A)(0.5/E1+0.5/E2)=7.5e−7 m within 1e−16 m. Every element has σxx=1e5 Pa within 1e−6 Pa; reaction is −1000 N within 1e−8 N. Node count proves no interface duplication. |
+| `abaqus_static_multiple_load_cases_inherit_modify_and_reset_effective_state` | Six source Steps independently give axial resultants +1000,+1000,+2000,−500,+1000,−500 N through inherited CLOAD, modified CLOAD, reset CLOAD, pressure and reset pressure. δ=FL/(EA) and reaction −F retain the same absolute bar tolerances; save/open preserves the authoritative model and Journal. |
+| `abaqus_static_overlapping_named_pressures_keep_independent_source_load_identity` | Two distinct named surfaces cover the same right face. Their −50 kPa pressures add to +1000 N; changing only the first source surface to −100 kPa gives +1500 N; DSLOAD OP=NEW with +50 kPa on the second gives −500 N. Each Step satisfies δ=FL/(EA) within 1e−16 m and reaction −F within 1e−8 N. Distinct surface loads are never flattened into one per-face update. |
+| `abaqus_static_empty_new_blocks_really_remove_inherited_families` | Empty OP=NEW blocks remove inherited CLOAD, DLOAD and DSLOAD families. The same bar alternates between exact zero displacement and δ=5e−7 m under +1000 N pressure, within 1e−16 m. Empty BOUNDARY OP=NEW yields a visibly unconstrained final case; that case is retained but not claimed solvable. |
+| `abaqus_static_density_requires_explicit_time_and_preserves_coherent_mass_units` | Source ρ=7.8e−9 with mm/N/s gives 7800 kg/m³; mm/N/ms gives 0.0078 kg/m³. Each agrees with ρSI=ρsource F T²/L⁴ within 1e−14 relative. Missing time is a schema error without mutation. |
+
+The pressure and series-bar solutions lie exactly in the finite-element spaces, so
+all three meshes must reproduce the answer; these are not claimed convergence rates.
+Unsupported pressure types, invalid face numbers, ambiguous same-step updates, mixed
+OP values and invalid time dimensions/scales are rejected without changing the active
+Model/Journal. This establishes linear final-equilibrium mapping only, not Abaqus
+increment histories, nonlinear loading, arbitrary element formulations or physical validation.
+The independent unmodified vendor-export corpus and composed host loading belong to #656.
+
 ### Original quadratic-element query measurements (#524)
 
 Public Commands build a quarter annulus with radii `r=1 m`, `R=2 m`, quadratic
@@ -2955,3 +2977,94 @@ three symmetry-plane constraints, the independent free-expansion solution is
 u = α ΔT x in every component, with zero elastic stress. Every participating coordinate
 is checked. This verifies aggregate Body targeting across material blocks using the
 existing thermoelastic procedure; it introduces no new kernel or convergence-rate claim.
+
+### Original imported quadratic solids (#655)
+
+`registry::imported_quadratic` uses directly authored Abaqus-order C3D10/Tet10 and
+C3D20/Hex20 sources. The 1 m × 0.1 m × 0.1 m bars, E=200 GPa, ν=0, carry 1000 N
+end traction: u_tip=FL/(EA)=5e−7 m, σxx=F/A=100000 Pa and total root reaction
+−1000 N. Both formulations are checked at 2/4/8 axial cells and 1/4 Engine threads,
+including all midside identities, surface integration, exact replay and save/open.
+This is an affine patch family, not a claimed nonzero displacement convergence rate.
+
+A determinant-one original-geometry shear G=(x,y,z+x(1−x)/4) gives curved shared
+Tet10 and Hex20 interfaces. Two reference tetrahedra have total volume 1/3 m³;
+two reference cubes have volume 2 m³. Their exact midside bulge is 1/16 m.
+Prescribed physical u=(1e−4 x,0,0) gives σxx=20 MPa for E=200 GPa, ν=0 on that
+retained curved geometry. Geometry tests also cover SI scaling, an affine rotation,
+folded Jacobians, a genuine overlap outside nodal AABBs, and a valid quartic implicit
+interface that must return an inconclusive certificate rather than be straightened.
+
+The independently authored quadratic annulus sectors span radii 1 and 2 m, angle
+π/2 and height 1 m. At n=2/4/8 angular sectors, Green's theorem gives the exact
+original-polynomial volume n sin(δ)(4−cos(δ)), δ=π/(4n). It converges to 3π/4 m³
+with known fourth-order geometry error (observed rate required 3.9–4.1). No geometric
+mesher/exporter supplies this source. This is geometry convergence, separate from
+field approximation and from external-solver comparison corpus #656.
+
+The exact source certificate also checks a genuinely cubic shared interface. For
+`G(u,v,w)=((1+u)(1+v/8),v+v²/8,2+2u+w)`,
+`det DG=(1+v/8)(1+v/4)>0`. Let `U=2x-z,V=z/8`; the cubic
+`q=U²/8+UV-yV²` composes exactly to
+`-w(1+v/8)[(1+u)(1+v/4)/4+w*v/64]`. Its bracket stays positive
+on the paired tetrahedra (`u,v>=0`, `|w|<=1`), so its zero set is precisely their
+unchanged curved common face. The original CalculiX beam10p cells 50/60 provide a
+separate rounded-coordinate regression: no exact quadric exists through their
+whole common Tri6 polynomial, while a cubic identity does.
+
+Two adverse geometric controls retain the conservative proof boundary. The exact
+shear `G=(x,y,z+3x²)` has determinant one everywhere, while its center-normalized
+symmetric Jacobian loses positive definiteness near a reference corner; both
+Tet10 and Hex20 must return inconclusive rather than assert invalidity or admit
+an unproved map. Separately, `G(u,v,w)=(u,-w-(u-1/2)²,v)` has determinant one and
+meets the identity tetrahedron precisely on `x=1/2,y=0,0<=z<=1/2`. Only two
+midside nodes coincide. This segment cuts a face interior and is not a complete
+reference edge; its parabolic separator's nodal zeros must not become a false
+conforming-contact certificate.
+A positive control applies the determinant-one shear to tetrahedra in opposite
+y/z quadrants: their complete shared quadratic edge is
+`y=0,z=x(1-x)/4`, with midside node `(1/2,0,1/16)` retained.
+
+## Explicit mean-dilatation Hex8 (issue #673)
+
+`mean-dilatation` is the eight-point Hex8 with volume-averaged trace of strain, matching
+the small-strain B-bar definition used for Abaqus C3D8. Full integration and saved
+Full Journals retain their previous pointwise strain. Other supported solid kinds keep
+full integration in a mixed source.
+
+- On `[-1,1]^3`, the exact nodal field `u=(xy,0,0)` has B-bar strain
+  `(2y/3,-y/3,-y/3,x,0,0)` in engineering Voigt order. Its energy is `28 mu/9`;
+  pointwise full integration adds `4 K/3`. This distinguishes the formulation without a
+  second implementation as its oracle.
+- On `F=(xi,eta,zeta(1+b xi)+a xi eta)`, `a=.3,b=.2`, with nodal
+  `u=(eta zeta,0,0)`, the exact physical-volume mean divergence is `-a/3`, while the
+  centroid divergence is zero. Recovered normal/shear strain is checked against the
+  analytical derivatives and isotropic stress, including the nonconstant Jacobian weight.
+- Every constant strain, rigid translation and rigid rotation is reproduced on a
+  distorted Hex8. Its stiffness is symmetric with exactly six zero eigenvalues and
+  eighteen positive eigenvalues: no unstabilized hourglass modes.
+- Interpolate `u=(xy,0,0)` on a unit cube at 2, 4 and 8 subdivisions per axis. The B-bar
+  strain's exact L2 error is `h/6`; the observed strain rate is one under halving h.
+- Other supported element kinds produce the identical full-integration matrix under
+  `mean-dilatation`. A Hex8 finite-deformation request returns structured unsupported.
+
+The unchanged source-published Abaqus/CAE Job-11 case (275 nodes, 160 C3D8 cells,
+source SHA-256 `4c68bd4b4fa0f27423a65854c49f0f2109f26e187222db302b077340433225af`)
+compares all 825 displacement components against the author report. The independent
+corpus declared `1e-13 m + 2e-6 * max(abs(U_reference))` before this fix: `7.16712e-10 m`.
+The actual public native CLI with B-bar reaches a maximum error `4.980294e-10 m`,
+compared with `1.500332e-5 m` under the retained Full formulation. Original node coordinates
+and identities agree exactly, the reaction sums to 4 MN within `1e-4 N`, and native runs
+at 1 and 4 threads have identical displacement arrays. The network-free Rust regression
+uses the separately LGPLv3-licensed originals and transcribed author probes in
+`tests/fixtures/third-party/brief-finite-element-net/case06/`.
+
+A stricter per-token diagnostic retains four components just outside half a printed digit
+plus `1e-12 m`: `5.134347e-11 m` error versus `5.1e-11 m` allowed. Casting the computed
+values to IEEE binary32 makes all 825 meet that stricter policy, consistent with a
+single-precision stored author result; the original storage precision is unknown. Neither
+the author values nor either declared tolerance is changed.
+
+The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
+checking the closed-form extension, Poisson contraction and recovered stress through the
+actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.

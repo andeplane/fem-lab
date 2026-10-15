@@ -463,6 +463,10 @@ pub enum Formulation {
     IncompatibleModes,
     /// Full integration: the textbook linear element, which locks in bending.
     Full,
+    /// Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.
+    /// Other element kinds retain full integration. This is the Abaqus C3D8 formulation,
+    /// not uniformly reduced integration; finite-deformation Hex8 steps are unsupported.
+    MeanDilatation,
 }
 
 /// How a 3D world is reduced, if at all.
@@ -732,9 +736,9 @@ pub enum MesherSpec {
     /// memberships. Coordinates carry length units; connectivity is in source node labels,
     /// never dense indices. Unused authored nodes and exact memberships survive in the Model,
     /// with explicit unused-label reporting; only participating nodes have FE DOFs/Results.
-    /// Loads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard
-    /// full integration. Requires solid3d,
-    /// order 1, formulation full and no simplices/refinement; sweeping and size studies are
+    /// Loads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full
+    /// integration or explicit mean-dilatation (B-bar). Requires solid3d,
+    /// unchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are
     /// unsupported. Original cell maps and contacts require a conservative exact certificate;
     /// uncertified geometry returns unsupported, without claiming invalidity or simplifying
     /// warped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.
@@ -778,12 +782,15 @@ pub struct ImportedNodeSpec {
     pub at: [Q<Length>; 3],
 }
 
-/// Only the explicitly supported standard, first-order 3D solids.
+/// Authored 3D solid families; interpolation and source connectivity are retained.
+/// Hex8 uses the explicit mesh formulation; other kinds retain standard full integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ImportedElementKind {
     Tet4,
     Hex8,
+    Tet10,
+    Hex20,
 }
 
 impl ImportedElementKind {
@@ -791,6 +798,8 @@ impl ImportedElementKind {
         match self {
             Self::Tet4 => femlab_geometry::ElementKind::Tet4,
             Self::Hex8 => femlab_geometry::ElementKind::Hex8,
+            Self::Tet10 => femlab_geometry::ElementKind::Tet10,
+            Self::Hex20 => femlab_geometry::ElementKind::Hex20,
         }
     }
 }
@@ -801,7 +810,7 @@ pub struct ImportedElement {
     /// Positive original element label, at most 999999999.
     pub label: u32,
     pub kind: ImportedElementKind,
-    /// Source node labels in Abaqus connectivity order, exactly four or eight.
+    /// Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.
     pub nodes: Vec<u32>,
 }
 
@@ -810,7 +819,7 @@ pub struct ImportedElement {
 pub struct ImportedFace {
     /// Original element label.
     pub element: u32,
-    /// Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
+    /// Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.
     pub face: u8,
 }
 
@@ -1788,6 +1797,9 @@ pub enum Command {
 
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
+    /// `formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
+    /// strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
+    /// retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
     /// `formulation: full` is the textbook linear element that locks in bending: keep the
     /// default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
     /// owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
@@ -1800,7 +1812,8 @@ pub enum Command {
     /// mesher is the one that meshes a curved solid freely. `formulation` has no effect when
     /// `simplices` is true, or under the `tet` mesher, because simplex elements have no
     /// incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
-    /// default to full integration, and require order 1, solid3d, no simplex split/refinement.
+    /// default to full integration, and require solid3d, no simplex split/refinement.
+    /// Their element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.
     /// Removing or emptying a referenced imported Set fails without mutation.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
@@ -1808,8 +1821,8 @@ pub enum Command {
         /// Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and
         /// Sets.
         mesher: MesherSpec,
-        /// Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-        /// 1.
+        /// Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+        /// Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         order: Option<u8>,
         /// Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for

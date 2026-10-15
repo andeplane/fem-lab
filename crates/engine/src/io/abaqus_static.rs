@@ -1,155 +1,91 @@
-//! Strict homogeneous small-displacement Abaqus analysis conversion. The shared reader owns
-//! syntax, source labels and original-cell validation; this module returns ordinary Commands.
-//! It does not construct an Engine, publish a Model, infer units or run a solve.
+//! Abaqus small-displacement static analysis translation over the checked typed deck.
+//! Source labels, instance transforms and exact Sets are resolved before analysis mapping.
+//! Conversion emits ordinary portable Commands and never solves or mutates an Engine.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::abaqus::{
-    self, fields, label, malformed, name, scalar, unsupported, Active as MeshActive, Builder, Keyword, MeshDeck,
-    Record, Records,
-};
-use crate::command::{Command, Dof, Procedure};
+use super::abaqus::{self, malformed, name, scalar, unsupported, Keyword};
+use super::abaqus_deck::{self, DeckBlock, DeckRecord, NormalizedDeck};
+use crate::command::{Command, Dof, ImportedFace, Procedure};
 use crate::error::Error;
-use crate::query::{AbaqusConversion, AbaqusImportMode, AbaqusSetKind, AbaqusSetMapping, AbaqusStaticAnalysis};
-use crate::units::{Force, Length, Stress, Q};
+use crate::query::{
+    AbaqusConversion, AbaqusImportMode, AbaqusImportNote, AbaqusSectionMapping, AbaqusSetKind, AbaqusSetMapping,
+    AbaqusStaticAnalysis,
+};
+use crate::units::{Density, Force, Length, Stress, Time, Q};
 
-pub const CONVERSION_VERSION: &str = "abaqus-static/1";
+pub const CONVERSION_VERSION: &str = "abaqus-static/3";
 const SUGGESTION: &str = "query.convertAbaqus with mode static, a supported deck, explicit unitLength and unitForce";
 
+type Nodal = BTreeMap<(u32, u8), f64>;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum Target {
-    Node(u32),
-    Set(String),
+enum PressureTarget {
+    Face(ImportedFace),
+    Surface(String),
 }
-
-impl Target {
-    fn parse(text: &str, line: usize, keyword: &str) -> Result<Self, Error> {
-        if text.starts_with('+') || text.as_bytes().first().is_some_and(u8::is_ascii_digit) {
-            Ok(Self::Node(label(text, line, keyword, "target")?))
-        } else {
-            Ok(Self::Set(name(text, line, keyword, "target")?))
-        }
-    }
-
-    fn nodes<'a>(&'a self, mesh: &'a MeshDeck, line: usize, keyword: &str) -> Result<&'a [u32], Error> {
-        let nodes = match self {
-            Self::Node(id) => std::slice::from_ref(id),
-            Self::Set(set) => mesh
-                .source
-                .node_sets
-                .get(set)
-                .map(Vec::as_slice)
-                .ok_or_else(|| malformed(line, keyword, "target", format!("NSET {set} is not defined")))?,
-        };
-        // Every Set produced by the shared Builder is nonempty, and direct targets contain
-        // exactly one source label. Validation below also rejects retained unused nodes.
-        for id in nodes {
-            if mesh.source_labels.nodes.binary_search(id).is_err() {
-                return Err(malformed(
-                    line,
-                    keyword,
-                    &format!("target source node {id}"),
-                    "load/support nodes must exist and participate in an imported element",
-                ));
-            }
-        }
-        Ok(nodes)
-    }
-
-    fn qualified(&self, body: &str) -> String {
-        match self {
-            Self::Node(id) => format!("{body}.node_{id}"),
-            Self::Set(set) => format!("{body}.nset_{set}"),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Value {
-    target: Target,
-    dof: u8,
-    value: f64,
-    line: usize,
-}
+type Pressure = BTreeMap<(u8, PressureTarget), f64>;
 
 #[derive(Debug)]
 struct Material {
+    source_file: Option<String>,
     name: String,
     line: usize,
     elastic: Option<(f64, f64)>,
+    density: Option<f64>,
 }
-
 #[derive(Debug)]
 struct Section {
-    elements: String,
+    source_file: Option<String>,
+    elements: Vec<u32>,
+    source: String,
     material: String,
     line: usize,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    Model,
-    Step,
-    End,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Kind {
-    Material,
-    Elastic,
-    Section,
-    Boundary { model_data: bool },
-    Load,
-    Step,
-    Static,
-    End,
-}
-
-struct AnalysisActive {
-    keyword: Keyword,
-    kind: Kind,
-    records: usize,
-}
-
-impl AnalysisActive {
-    fn finish(&self) -> Result<(), Error> {
-        let needs_data = match self.kind {
-            Kind::Elastic | Kind::Boundary { .. } | Kind::Load => true,
-            Kind::Material | Kind::Section | Kind::Step | Kind::Static | Kind::End => false,
-        };
-        if needs_data && self.records == 0 {
-            return Err(malformed(self.keyword.line, &self.keyword.name, "data", "this keyword needs a data record"));
-        }
-        Ok(())
-    }
-}
-
-enum Active {
-    Mesh(MeshActive),
-    Analysis(AnalysisActive),
-}
-
-impl Active {
-    fn finish(&self) -> Result<(), Error> {
-        match self {
-            Self::Mesh(active) => active.finish(),
-            Self::Analysis(active) => active.finish(),
-        }
-    }
+#[derive(Debug)]
+struct Step {
+    source_file: Option<String>,
+    name: String,
+    line: usize,
+    boundaries: Nodal,
+    forces: Nodal,
+    pressures: Pressure,
 }
 
 struct Analysis {
-    phase: Phase,
-    material: Option<Material>,
-    section: Option<Section>,
-    step: Option<(String, usize)>,
-    elastic_seen: bool,
-    static_seen: bool,
-    boundaries: Vec<Value>,
-    loads: Vec<Value>,
+    materials: BTreeMap<String, Material>,
+    current_material: Option<String>,
+    sections: Vec<Section>,
+    steps: Vec<Step>,
+    current: Option<Step>,
+    procedure: bool,
+    history_started: bool,
+    boundaries: Nodal,
+    forces: Nodal,
+    pressures: Pressure,
+    numeric_nodes: BTreeSet<u32>,
+    updates: BTreeMap<u8, BTreeSet<(u32, u8)>>,
+    pressure_updates: BTreeSet<(u8, PressureTarget)>,
+    operations: BTreeMap<u8, String>,
+    expanded: usize,
+    notes: Vec<AbaqusImportNote>,
     length: f64,
     force: f64,
     stress: f64,
+    time: Option<f64>,
+}
+
+fn data<'a>(record: &'a DeckRecord, keyword: &str, min: usize, max: usize) -> Result<Vec<&'a str>, Error> {
+    // CAE emits omitted trailing defaults explicitly, including a bare comma for a
+    // default 3D SOLID SECTION. Preserve interior blanks but do not make that ordinary
+    // export syntax an extra material/load parameter.
+    let mut count = record.fields.len();
+    while count > min && record.fields[count - 1].is_empty() {
+        count -= 1;
+    }
+    if !(min..=max).contains(&count) {
+        return Err(malformed(record.line, keyword, "record", format!("expected {min}..{max} comma-separated fields")));
+    }
+    Ok(record.fields[..count].iter().map(String::as_str).collect())
 }
 
 fn dof(text: &str, line: usize, keyword: &str, field: &str) -> Result<u8, Error> {
@@ -161,461 +97,909 @@ fn dof(text: &str, line: usize, keyword: &str, field: &str) -> Result<u8, Error>
 }
 
 impl Analysis {
-    fn start(&mut self, keyword: Keyword, mesh: &mut Builder) -> Result<Active, Error> {
-        let line = keyword.line;
-        let key = keyword.name.as_str();
-        if self.phase == Phase::End {
-            return Err(unsupported(line, key, "keyword", "only comments may follow the single END STEP"));
-        }
-        let kind = match key {
-            "MATERIAL" => {
-                self.model_data(&keyword)?;
-                keyword.only(&["NAME"])?;
-                if self.material.is_some() {
-                    return Err(unsupported(line, key, "NAME", "only one homogeneous MATERIAL is supported"));
-                }
-                let material = name(keyword.required("NAME")?, line, key, "NAME")?;
-                self.material = Some(Material { name: material, line, elastic: None });
-                Kind::Material
-            }
-            "ELASTIC" => {
-                self.model_data(&keyword)?;
-                keyword.only(&["TYPE"])?;
-                if keyword.value("TYPE")?.is_some_and(|value| value != "ISOTROPIC") {
-                    return Err(unsupported(line, key, "TYPE", "only constant isotropic ELASTIC is supported"));
-                }
-                if self.material.is_none() {
-                    return Err(malformed(line, key, "material", "ELASTIC must follow MATERIAL"));
-                }
-                if self.elastic_seen {
-                    return Err(unsupported(
-                        line,
-                        key,
-                        "data",
-                        "material tables or repeated ELASTIC definitions are unsupported",
-                    ));
-                }
-                self.elastic_seen = true;
-                Kind::Elastic
-            }
-            "SOLIDSECTION" => {
-                self.model_data(&keyword)?;
-                keyword.only(&["ELSET", "MATERIAL"])?;
-                if self.section.is_some() {
-                    return Err(unsupported(
-                        line,
-                        key,
-                        "section",
-                        "exactly one homogeneous SOLID SECTION is supported",
-                    ));
-                }
-                self.section = Some(Section {
-                    elements: name(keyword.required("ELSET")?, line, key, "ELSET")?,
-                    material: name(keyword.required("MATERIAL")?, line, key, "MATERIAL")?,
-                    line,
-                });
-                Kind::Section
-            }
-            "BOUNDARY" => {
-                keyword.only(&["TYPE"])?;
-                if keyword.value("TYPE")?.is_some_and(|value| value != "DISPLACEMENT") {
-                    return Err(unsupported(line, key, "TYPE", "only direct TYPE=DISPLACEMENT is supported"));
-                }
-                if self.phase == Phase::Step {
-                    self.procedure(&keyword)?;
-                }
-                Kind::Boundary { model_data: self.phase == Phase::Model }
-            }
-            "CLOAD" => {
-                keyword.only(&[])?;
-                self.procedure(&keyword)?;
-                Kind::Load
-            }
-            "STEP" => {
-                keyword.only(&["NAME", "NLGEOM"])?;
-                if self.phase != Phase::Model {
-                    return Err(unsupported(line, key, "step", "only one STEP is supported"));
-                }
-                if keyword.value("NLGEOM")?.is_some_and(|value| value != "NO") {
-                    return Err(unsupported(line, key, "NLGEOM", "only small-displacement NLGEOM=NO is supported"));
-                }
-                let step = name(keyword.value("NAME")?.unwrap_or("STATIC"), line, key, "NAME")?;
-                self.step = Some((step, line));
-                self.phase = Phase::Step;
-                Kind::Step
-            }
-            "STATIC" => {
-                keyword.only(&[])?;
-                if self.phase != Phase::Step {
-                    return Err(malformed(line, key, "step", "STATIC must be inside STEP"));
-                }
-                if self.static_seen {
-                    return Err(unsupported(line, key, "procedure", "only one STATIC procedure is supported"));
-                }
-                self.static_seen = true;
-                Kind::Static
-            }
-            "ENDSTEP" => {
-                keyword.only(&[])?;
-                self.procedure(&keyword)?;
-                self.phase = Phase::End;
-                Kind::End
-            }
-            _ => {
-                self.model_data(&keyword)?;
-                return mesh.start(keyword).map(Active::Mesh);
-            }
-        };
-        Ok(Active::Analysis(AnalysisActive { keyword, kind, records: 0 }))
-    }
-
-    fn model_data(&self, keyword: &Keyword) -> Result<(), Error> {
-        if self.phase != Phase::Model {
-            return Err(unsupported(keyword.line, &keyword.name, "keyword", "model data must precede STEP"));
+    fn model_data(&self, key: &Keyword) -> Result<(), Error> {
+        if self.history_started {
+            return Err(unsupported(key.line, &key.name, "keyword", "model data must precede STEP"));
         }
         Ok(())
     }
-
-    fn procedure(&self, keyword: &Keyword) -> Result<(), Error> {
-        if self.phase != Phase::Step || !self.static_seen {
-            return Err(malformed(
-                keyword.line,
-                &keyword.name,
-                "step",
-                "this history keyword must follow STATIC inside STEP",
-            ));
+    fn history(&self, key: &Keyword) -> Result<(), Error> {
+        if self.current.is_none() || !self.procedure {
+            return Err(malformed(key.line, &key.name, "step", "this history keyword must follow STATIC inside STEP"));
         }
         Ok(())
     }
-
-    fn record(&mut self, active: &mut AnalysisActive, record: Record<'_>) -> Result<(), Error> {
-        let key = active.keyword.name.as_str();
-        match active.kind {
-            Kind::Material | Kind::Step | Kind::End => {
-                return Err(malformed(record.line, key, "data", "this keyword accepts no data records"));
+    fn operation(&mut self, key: &Keyword, family: u8) -> Result<(), Error> {
+        let op = key.value("OP")?.unwrap_or("MOD");
+        if op != "MOD" && op != "NEW" {
+            return Err(unsupported(key.line, &key.name, "OP", "OP must be MOD or NEW"));
+        }
+        if let Some(previous) = self.operations.get(&family) {
+            if previous != op {
+                return Err(unsupported(
+                    key.line,
+                    &key.name,
+                    "OP",
+                    "all blocks of this load/boundary family in a step must use the same OP",
+                ));
             }
-            Kind::Elastic => {
-                if active.records > 0 {
-                    return Err(unsupported(record.line, key, "data", "temperature/dependency tables are unsupported"));
-                }
-                let values = fields(record, key, 2, 2)?;
-                let young = scalar(values[0], record.line, key, "E", self.stress)?;
-                let poisson = scalar(values[1], record.line, key, "nu", 1.0)?;
-                if young <= 0.0 || poisson <= -1.0 || poisson >= 0.5 {
-                    return Err(malformed(
-                        record.line,
-                        key,
-                        "E/nu",
-                        "isotropic elasticity requires E > 0 and -1 < nu < 0.5",
-                    ));
-                }
-                self.material.as_mut().expect("ELASTIC start requires MATERIAL").elastic = Some((young, poisson));
-            }
-            Kind::Section => {
-                if active.records > 0 {
-                    return Err(unsupported(
-                        record.line,
-                        key,
-                        "data",
-                        "only one default solid attribute record is supported",
-                    ));
-                }
-                let values = fields(record, key, 1, 1)?;
-                // Blank lines are already skipped by Records. Any actual attribute record
-                // must contain precisely the default 1.0 value.
-                if scalar(values[0], record.line, key, "attribute", 1.0)? != 1.0 {
-                    return Err(unsupported(
-                        record.line,
-                        key,
-                        "attribute",
-                        "only the empty/default solid attribute is supported",
-                    ));
-                }
-            }
-            Kind::Boundary { model_data } => {
-                let values = fields(record, key, 2, 4)?;
-                let target = Target::parse(values[0], record.line, key)?;
-                let first = dof(values[1], record.line, key, "first DOF")?;
-                let last = if values.get(2).is_none_or(|value| value.is_empty()) {
-                    first
-                } else {
-                    dof(values[2], record.line, key, "last DOF")?
-                };
-                if last < first {
-                    return Err(malformed(record.line, key, "DOF range", "last DOF must be at least the first DOF"));
-                }
-                let value = match values.get(3).filter(|value| !value.is_empty()) {
-                    Some(value) => scalar(value, record.line, key, "magnitude", self.length)?,
-                    None => 0.0,
-                };
-                if model_data && value != 0.0 {
-                    return Err(unsupported(
-                        record.line,
-                        key,
-                        "magnitude",
-                        "model-data BOUNDARY must be zero; put nonzero displacements inside STEP",
-                    ));
-                }
-                for dof in first..=last {
-                    self.boundaries.push(Value { target: target.clone(), dof, value, line: record.line });
-                }
-            }
-            Kind::Load => {
-                let values = fields(record, key, 3, 3)?;
-                self.loads.push(Value {
-                    target: Target::parse(values[0], record.line, key)?,
-                    dof: dof(values[1], record.line, key, "DOF")?,
-                    value: scalar(values[2], record.line, key, "magnitude", self.force)?,
-                    line: record.line,
-                });
-            }
-            Kind::Static => {
-                if active.records > 0 {
-                    return Err(unsupported(
-                        record.line,
-                        key,
-                        "data",
-                        "only one default increment record is supported",
-                    ));
-                }
-                let values = fields(record, key, 1, 4)?;
-                for (index, value) in values.iter().enumerate() {
-                    if value.is_empty() {
-                        continue;
-                    }
-                    let expected = [Some(1.0), Some(1.0), Some(1e-5), None][index];
-                    let actual = scalar(value, record.line, key, &format!("increment field {}", index + 1), 1.0)?;
-                    // Abaqus uses zero as the default for initial/period/minimum. With
-                    // the only supported period and initial both 1, these resolve to
-                    // 1, 1 and 1e-5. A specified maximum remains unsupported.
-                    let zero_default = actual == 0.0 && index < 3;
-                    if !zero_default && Some(actual) != expected {
-                        return Err(unsupported(
-                            record.line,
-                            key,
-                            &format!("increment field {}", index + 1),
-                            "only absent/default STATIC increments are supported; no increment history is imported",
-                        ));
-                    }
+        } else {
+            self.operations.insert(family, op.into());
+            if op == "NEW" {
+                match family {
+                    0 => self.boundaries.clear(),
+                    1 => self.forces.clear(),
+                    _ => self.pressures.retain(|(kind, _), _| *kind != family),
                 }
             }
         }
-        active.records += 1;
         Ok(())
     }
-
-    fn finish(
-        self,
-        mut mesh: MeshDeck,
-        model_name: &str,
-        input_bytes: usize,
-        digest: &str,
-    ) -> Result<AbaqusConversion, Error> {
-        if self.phase != Phase::End {
-            let line = self.step.as_ref().map_or(1, |(_, line)| *line);
-            return Err(malformed(line, "STEP", "end", "one complete STEP/STATIC/END STEP is required"));
-        }
-        let material = self.material.ok_or_else(|| malformed(1, "MATERIAL", "material", "one MATERIAL is required"))?;
-        let (young, poisson) = material.elastic.ok_or_else(|| {
-            malformed(material.line, "MATERIAL", "ELASTIC", "the MATERIAL needs one isotropic ELASTIC record")
-        })?;
-        let section =
-            self.section.ok_or_else(|| malformed(1, "SOLIDSECTION", "section", "one SOLID SECTION is required"))?;
-        if section.material != material.name {
-            return Err(malformed(
-                section.line,
-                "SOLIDSECTION",
-                "MATERIAL",
-                format!("material {} is not defined", section.material),
-            ));
-        }
-        let members = mesh.source.element_sets.get(&section.elements).ok_or_else(|| {
-            malformed(section.line, "SOLIDSECTION", "ELSET", format!("ELSET {} is not defined", section.elements))
-        })?;
-        // The shared source validator already proves unique, defined element memberships.
-        // Equal cardinality therefore proves that this subset covers every element.
-        if members.len() != mesh.source.elements.len() {
-            return Err(malformed(
-                section.line,
-                "SOLIDSECTION",
-                "ELSET",
-                "the single section must cover every imported element exactly once",
-            ));
-        }
-        let mut nodes = BTreeSet::new();
-        let mut prescribed = BTreeMap::new();
-        let mut constraints = BTreeMap::new();
-        for value in self.boundaries {
-            let key = (value.target.clone(), value.dof);
-            // Resolve each unique target/DOF only once. Repeating a large NSET cannot turn
-            // the bounded input into unbounded node-by-record work. The first occurrence
-            // has already checked its memberships, so equal repeats need no second walk.
-            if constraints.get(&key).is_some_and(|previous| *previous == value.value) {
-                continue;
-            }
-            for id in value.target.nodes(&mesh, value.line, "BOUNDARY")? {
-                if let Some((previous, line)) = prescribed.insert((*id, value.dof), (value.value, value.line)) {
-                    if previous != value.value {
-                        return Err(malformed(
-                            value.line,
-                            "BOUNDARY",
-                            &format!("node {id} DOF {}", value.dof),
-                            format!("prescribed value conflicts with line {line}"),
-                        ));
-                    }
-                }
-            }
-            if let Target::Node(id) = &value.target {
-                nodes.insert(*id);
-            }
-            // Exact repeated targets deduplicate. Equal overlapping Sets remain exact Sets;
-            // the existing constraint resolver owns their DOFs once, without double reactions.
-            constraints.insert(key, value.value);
-        }
-        let mut loaded = BTreeMap::new();
-        let mut loads = BTreeMap::new();
-        for value in self.loads {
-            let members = value.target.nodes(&mesh, value.line, "CLOAD")?;
-            for id in members {
-                if let Some(line) = loaded.insert((*id, value.dof), value.line) {
-                    return Err(unsupported(
-                        value.line,
-                        "CLOAD",
-                        &format!("node {id} DOF {}", value.dof),
-                        format!("overlapping CLOAD updates with line {line} are unsupported"),
-                    ));
-                }
-            }
-            let total = value.value * members.len() as f64;
-            if !total.is_finite() {
+    fn active_nodes(deck: &NormalizedDeck, block: &DeckBlock, text: &str, line: usize) -> Result<Vec<u32>, Error> {
+        let nodes = deck.node_target(&block.scope, text, line, &block.keyword.name)?;
+        for label in &nodes {
+            if deck.mesh.source_labels.nodes.binary_search(label).is_err() {
                 return Err(malformed(
-                    value.line,
-                    "CLOAD",
+                    line,
+                    &block.keyword.name,
+                    &format!("target source node {label}"),
+                    "load/support nodes must participate in an imported element",
+                ));
+            }
+        }
+        Ok(nodes)
+    }
+    fn boundary(&mut self, deck: &NormalizedDeck, block: &DeckBlock) -> Result<(), Error> {
+        let key = &block.keyword;
+        key.only(&["TYPE", "OP"])?;
+        if key.value("TYPE")?.is_some_and(|v| v != "DISPLACEMENT") {
+            return Err(unsupported(key.line, &key.name, "TYPE", "only TYPE=DISPLACEMENT is supported"));
+        }
+        let model = !self.history_started;
+        if model {
+            if key.value("OP")?.is_some() {
+                return Err(unsupported(
+                    key.line,
+                    &key.name,
+                    "OP",
+                    "OP is history data and cannot be used on model-data BOUNDARY",
+                ));
+            }
+        } else {
+            self.history(key)?;
+            self.operation(key, 0)?;
+        }
+        if block.records.is_empty() {
+            if !model && key.value("OP")? == Some("NEW") {
+                return Ok(());
+            }
+            return Err(malformed(key.line, &key.name, "data", "BOUNDARY needs a data record"));
+        }
+        for record in &block.records {
+            let values = data(record, &key.name, 2, 4)?;
+            let nodes = Self::active_nodes(deck, block, values[0], record.line)?;
+            if deck.node_set_target(&block.scope, values[0], record.line, &key.name)?.is_none() {
+                self.numeric_nodes.extend(nodes.iter().copied());
+            }
+            let symbolic = values[1].to_ascii_uppercase();
+            let (dofs, value) = match symbolic.as_str() {
+                "ENCASTRE" | "PINNED" => (vec![1, 2, 3], 0.0),
+                "XSYMM" => (vec![1], 0.0),
+                "YSYMM" => (vec![2], 0.0),
+                "ZSYMM" => (vec![3], 0.0),
+                "XASYMM" => (vec![2, 3], 0.0),
+                "YASYMM" => (vec![1, 3], 0.0),
+                "ZASYMM" => (vec![1, 2], 0.0),
+                _ => {
+                    let first = dof(values[1], record.line, &key.name, "first DOF")?;
+                    let last = if values.get(2).is_none_or(|v| v.is_empty()) {
+                        first
+                    } else {
+                        dof(values[2], record.line, &key.name, "last DOF")?
+                    };
+                    if last < first {
+                        return Err(malformed(
+                            record.line,
+                            &key.name,
+                            "DOF range",
+                            "last DOF must be at least the first DOF",
+                        ));
+                    }
+                    let value = values
+                        .get(3)
+                        .filter(|v| !v.is_empty())
+                        .map_or(Ok(0.0), |v| scalar(v, record.line, &key.name, "magnitude", self.length))?;
+                    ((first..=last).collect(), value)
+                }
+            };
+            if symbolic.chars().any(|c| c.is_ascii_alphabetic()) && values.len() != 2 {
+                return Err(malformed(
+                    record.line,
+                    &key.name,
+                    "record",
+                    "symbolic boundary takes exactly a target and boundary type",
+                ));
+            }
+            if model && value != 0.0 {
+                return Err(unsupported(record.line, &key.name, "magnitude", "model-data BOUNDARY must be zero"));
+            }
+            for node in nodes {
+                for dof in &dofs {
+                    let target = (node, *dof);
+                    let seen = self.updates.entry(0).or_default();
+                    if seen.contains(&target) && self.boundaries.get(&target).is_some_and(|old| *old != value) {
+                        return Err(malformed(
+                            record.line,
+                            &key.name,
+                            "target",
+                            "conflicting prescribed values within the same step",
+                        ));
+                    }
+                    seen.insert(target);
+                    self.boundaries.insert(target, value);
+                }
+            }
+        }
+        Ok(())
+    }
+    fn cload(&mut self, deck: &NormalizedDeck, block: &DeckBlock) -> Result<(), Error> {
+        let key = &block.keyword;
+        key.only(&["OP"])?;
+        self.history(key)?;
+        self.operation(key, 1)?;
+        if block.records.is_empty() {
+            if key.value("OP")? == Some("NEW") {
+                return Ok(());
+            }
+            return Err(malformed(key.line, &key.name, "data", "CLOAD needs a data record"));
+        }
+        for record in &block.records {
+            let fields = data(record, &key.name, 3, 3)?;
+            let nodes = Self::active_nodes(deck, block, fields[0], record.line)?;
+            if deck.node_set_target(&block.scope, fields[0], record.line, &key.name)?.is_none() {
+                self.numeric_nodes.extend(nodes.iter().copied());
+            }
+            let axis = dof(fields[1], record.line, &key.name, "DOF")?;
+            let value = scalar(fields[2], record.line, &key.name, "magnitude", self.force)?;
+            if !(value * nodes.len() as f64).is_finite() {
+                return Err(malformed(
+                    record.line,
+                    &key.name,
                     "Set total",
                     "nodal magnitude times Set cardinality must be finite",
                 ));
             }
-            if let Target::Node(id) = &value.target {
-                nodes.insert(*id);
+            for node in nodes {
+                let target = (node, axis);
+                if !self.updates.entry(1).or_default().insert(target) {
+                    return Err(unsupported(
+                        record.line,
+                        &key.name,
+                        "target",
+                        "overlapping CLOAD definitions within one step are ambiguous; combine them explicitly",
+                    ));
+                }
+                self.forces.insert(target, value);
             }
-            loads.insert((value.target, value.dof), total);
         }
-        mesh.source.node_targets = nodes.iter().copied().collect();
-        mesh.source.provenance.as_mut().expect("shared reader sets checked provenance").conversion_version =
-            CONVERSION_VERSION.into();
-        let body = mesh.source.body.clone();
-        let mut response = abaqus::conversion_from_mesh(mesh, model_name, input_bytes, digest);
-        response.report.mode = AbaqusImportMode::Static;
-        response.report.conversion_version = CONVERSION_VERSION.into();
-        response.report.unit_force = Some(Q::new(self.force, "N"));
-        response.report.analysis_configured = true;
-        for id in nodes {
-            response.report.sets.push(AbaqusSetMapping {
-                kind: AbaqusSetKind::Node,
-                source: id.to_string(),
-                target: format!("{body}.node_{id}"),
-                count: 1,
-            });
+        Ok(())
+    }
+    fn pressure(&mut self, deck: &NormalizedDeck, block: &DeckBlock) -> Result<(), Error> {
+        let key = &block.keyword;
+        key.only(&["OP"])?;
+        self.history(key)?;
+        let family = if key.name == "DLOAD" { 2 } else { 3 };
+        self.operation(key, family)?;
+        if block.records.is_empty() {
+            if key.value("OP")? == Some("NEW") {
+                return Ok(());
+            }
+            return Err(malformed(key.line, &key.name, "data", "pressure needs a data record"));
         }
-        response.commands.push(Command::MaterialAdd {
-            name: material.name.clone(),
+        for record in &block.records {
+            let values = data(record, &key.name, 3, 3)?;
+            let value = scalar(values[2], record.line, &key.name, "pressure", self.stress)?;
+            let targets = if family == 3 {
+                if !values[1].eq_ignore_ascii_case("P") {
+                    return Err(unsupported(
+                        record.line,
+                        &key.name,
+                        "load type",
+                        "only uniform surface pressure P is supported",
+                    ));
+                }
+                let surface = deck.surface_target(&block.scope, values[0], record.line, &key.name)?;
+                vec![PressureTarget::Surface(surface)]
+            } else {
+                let face = values[1]
+                    .strip_prefix('P')
+                    .or_else(|| values[1].strip_prefix('p'))
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .ok_or_else(|| {
+                        unsupported(
+                            record.line,
+                            &key.name,
+                            "load type",
+                            "only uniform face pressures P1..P6 are supported",
+                        )
+                    })?;
+                let elements = deck.element_target(&block.scope, values[0], record.line, &key.name)?;
+                let kinds: BTreeMap<_, _> = deck.mesh.source.elements.iter().map(|e| (e.label, e.kind)).collect();
+                for element in &elements {
+                    if face == 0 || face as usize > kinds[element].geometry().n_faces() {
+                        return Err(malformed(
+                            record.line,
+                            &key.name,
+                            "face",
+                            format!("invalid face P{face} on element {element}"),
+                        ));
+                    }
+                }
+                elements.into_iter().map(|element| PressureTarget::Face(ImportedFace { element, face })).collect()
+            };
+            for target in targets {
+                if !self.pressure_updates.insert((family, target.clone())) {
+                    return Err(unsupported(
+                        record.line,
+                        &key.name,
+                        "target",
+                        "overlapping pressure updates within the same load family and step are unsupported",
+                    ));
+                }
+                self.pressures.insert((family, target), value);
+            }
+        }
+        Ok(())
+    }
+    fn block(&mut self, deck: &NormalizedDeck, block: &DeckBlock) -> Result<(), Error> {
+        let key = &block.keyword;
+        match key.name.as_str() {
+            "MATERIAL" => {
+                self.model_data(key)?;
+                key.only(&["NAME"])?;
+                let id = name(key.required("NAME")?, key.line, &key.name, "NAME")?;
+                if !id.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+                    return Err(malformed(key.line, &key.name, "NAME", "MATERIAL names must begin with a letter"));
+                }
+                if self.materials.contains_key(&id) {
+                    return Err(malformed(key.line, &key.name, "NAME", "duplicate MATERIAL name"));
+                }
+                self.current_material = Some(id.clone());
+                self.materials.insert(
+                    id.clone(),
+                    Material {
+                        source_file: key.source.as_deref().map(str::to_string),
+                        name: id,
+                        line: key.line,
+                        elastic: None,
+                        density: None,
+                    },
+                );
+            }
+            "ELASTIC" => {
+                self.model_data(key)?;
+                key.only(&["TYPE"])?;
+                if key.value("TYPE")?.is_some_and(|v| v != "ISOTROPIC") {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "TYPE",
+                        "only constant isotropic ELASTIC is supported",
+                    ));
+                }
+                let current = self
+                    .current_material
+                    .as_ref()
+                    .ok_or_else(|| malformed(key.line, &key.name, "material", "ELASTIC must follow MATERIAL"))?;
+                let material = self.materials.get_mut(current).expect("current material exists");
+                if material.elastic.is_some() || block.records.len() > 1 {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "data",
+                        "repeated ELASTIC or material tables are unsupported",
+                    ));
+                }
+                let record = block
+                    .records
+                    .first()
+                    .ok_or_else(|| malformed(key.line, &key.name, "data", "ELASTIC needs a data record"))?;
+                let values = data(record, &key.name, 2, 2)?;
+                let young = scalar(values[0], record.line, &key.name, "E", self.stress)?;
+                let poisson = scalar(values[1], record.line, &key.name, "nu", 1.0)?;
+                if young <= 0.0 || !(0.0..0.5).contains(&poisson) {
+                    return Err(malformed(
+                        record.line,
+                        &key.name,
+                        "E/nu",
+                        "isotropic elasticity requires E > 0 and 0 <= nu < 0.5",
+                    ));
+                }
+                material.elastic = Some((young, poisson));
+            }
+            "DENSITY" => {
+                self.model_data(key)?;
+                key.only(&[])?;
+                let current = self
+                    .current_material
+                    .as_ref()
+                    .ok_or_else(|| malformed(key.line, &key.name, "material", "DENSITY must follow MATERIAL"))?;
+                let material = self.materials.get_mut(current).expect("current material exists");
+                if material.density.is_some() || block.records.len() > 1 {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "data",
+                        "only one constant DENSITY record is supported",
+                    ));
+                }
+                let time = self.time.ok_or_else(|| {
+                    Error::schema("DENSITY requires explicit unitTime; source density scales by F T²/L⁴")
+                        .at("unitTime")
+                        .suggest("query.convertAbaqus with unitTime, for example 1 s")
+                })?;
+                let record = block
+                    .records
+                    .first()
+                    .ok_or_else(|| malformed(key.line, &key.name, "data", "DENSITY needs a data record"))?;
+                let values = data(record, &key.name, 1, 1)?;
+                let density =
+                    scalar(values[0], record.line, &key.name, "density", self.stress * (time / self.length).powi(2))?;
+                if density <= 0.0 {
+                    return Err(malformed(record.line, &key.name, "density", "DENSITY must be finite and positive"));
+                }
+                material.density = Some(density);
+            }
+            "SOLIDSECTION" => {
+                self.model_data(key)?;
+                key.only(&["ELSET", "MATERIAL"])?;
+                let source = name(key.required("ELSET")?, key.line, &key.name, "ELSET")?;
+                let elements = deck
+                    .element_target(&block.scope, key.required("ELSET")?, key.line, &key.name)
+                    .map_err(|error| error.at(format!("line {} *{} ELSET", key.line, key.name)))?;
+                let material = name(key.required("MATERIAL")?, key.line, &key.name, "MATERIAL")?;
+                if block.records.len() > 1 {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "data",
+                        "only one default solid attribute record is supported",
+                    ));
+                }
+                if let Some(record) = block.records.first() {
+                    let fields = data(record, &key.name, 1, 1)?;
+                    if !fields[0].is_empty() && scalar(fields[0], record.line, &key.name, "attribute", 1.0)? != 1.0 {
+                        return Err(unsupported(
+                            record.line,
+                            &key.name,
+                            "attribute",
+                            "3D solid sections accept only the default attribute",
+                        ));
+                    }
+                }
+                self.sections.push(Section {
+                    source_file: key.source.as_deref().map(str::to_string),
+                    elements,
+                    source,
+                    material,
+                    line: key.line,
+                });
+            }
+            "BOUNDARY" => return self.boundary(deck, block),
+            "CLOAD" => return self.cload(deck, block),
+            "DLOAD" | "DSLOAD" => return self.pressure(deck, block),
+            "OUTPUT" | "NODEOUTPUT" | "ELEMENTOUTPUT" | "ENERGYOUTPUT" | "NODEPRINT" | "ELPRINT" | "NODEFILE"
+            | "ELFILE" | "ENERGYPRINT" | "ENERGYFILE" => {
+                self.history(key)?;
+                // These keywords select source solver output; they do not change the
+                // physical problem. Keep their complete request visible in the report,
+                // rather than requiring users to strip ordinary CAE export boilerplate.
+                let request = serde_json::to_string(&(
+                    &key.parameters,
+                    block.records.iter().map(|record| &record.fields).collect::<Vec<_>>(),
+                ))
+                .expect("output request consists only of strings");
+                self.notes.push(AbaqusImportNote {
+                    source: key.source.as_deref().map(str::to_string),
+                    line: key.line,
+                    keyword: key.name.clone(),
+                    cause: format!("Source output request {request}; FEM Lab retains its standard result fields and does not reproduce Abaqus output files or output frequency."),
+                });
+            }
+            "RESTART" => {
+                self.history(key)?;
+                key.only(&["WRITE", "FREQUENCY", "OVERLAY", "NUMBERINTERVAL", "TIMEMARKS"])?;
+                if !key.flag("WRITE")? {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "mode",
+                        "only output-only RESTART,WRITE is recognized; restart input is unsupported",
+                    ));
+                }
+                if !block.records.is_empty() {
+                    return Err(malformed(
+                        block.records[0].line,
+                        &key.name,
+                        "data",
+                        "RESTART,WRITE takes no data records",
+                    ));
+                }
+                self.notes.push(AbaqusImportNote {
+                    source: key.source.as_deref().map(str::to_string), line: key.line, keyword: key.name.clone(),
+                    cause: "Source restart-file output requested; no Abaqus restart file is produced. Save the ordinary FEM Lab model and Journal for portable reopening.".into(),
+                });
+            }
+            "STEP" => {
+                key.only(&["NAME", "NLGEOM", "INC", "AMPLITUDE"])?;
+                if self.current.is_some() {
+                    return Err(malformed(key.line, &key.name, "step", "nested STEP is invalid"));
+                }
+                if key.value("NLGEOM")?.is_some_and(|v| v != "NO") {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "NLGEOM",
+                        "only small-displacement NLGEOM=NO is supported",
+                    ));
+                }
+                if let Some(value) = key.value("INC")? {
+                    if value.parse::<u32>().ok().filter(|v| *v > 0).is_none() {
+                        return Err(malformed(key.line, &key.name, "INC", "INC must be a positive integer"));
+                    }
+                }
+                if key.value("AMPLITUDE")?.is_some_and(|v| v != "RAMP" && v != "STEP") {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "AMPLITUDE",
+                        "only RAMP or STEP is supported for final linear equilibrium",
+                    ));
+                }
+                let id = key.value("NAME")?.map_or_else(
+                    || {
+                        Ok(if self.steps.is_empty() {
+                            "STATIC".into()
+                        } else {
+                            format!("STATIC_{}", self.steps.len() + 1)
+                        })
+                    },
+                    |v| name(v, key.line, &key.name, "NAME"),
+                )?;
+                if self.steps.iter().any(|s| s.name == id) {
+                    return Err(malformed(key.line, &key.name, "NAME", "duplicate STEP name"));
+                }
+                self.current = Some(Step {
+                    source_file: key.source.as_deref().map(str::to_string),
+                    name: id,
+                    line: key.line,
+                    boundaries: BTreeMap::new(),
+                    forces: BTreeMap::new(),
+                    pressures: BTreeMap::new(),
+                });
+                self.history_started = true;
+                self.procedure = false;
+                self.operations.clear();
+                self.updates.clear();
+                self.pressure_updates.clear();
+            }
+            "STATIC" => {
+                key.only(&["DIRECT"])?;
+                if self.current.is_none() {
+                    return Err(malformed(key.line, &key.name, "step", "STATIC must be inside STEP"));
+                }
+                if self.procedure {
+                    return Err(malformed(
+                        key.line,
+                        &key.name,
+                        "procedure",
+                        "only one STATIC procedure is permitted in each STEP",
+                    ));
+                }
+                if key.parameters.contains_key("DIRECT") && key.parameters["DIRECT"].is_some() {
+                    return Err(malformed(key.line, &key.name, "DIRECT", "DIRECT takes no value"));
+                }
+                if block.records.len() > 1 {
+                    return Err(unsupported(
+                        key.line,
+                        &key.name,
+                        "data",
+                        "STATIC accepts one increment-control record",
+                    ));
+                }
+                if let Some(record) = block.records.first() {
+                    let values = data(record, &key.name, 1, 4)?;
+                    for (i, value) in values.iter().enumerate() {
+                        if !value.is_empty() {
+                            let x = scalar(value, record.line, &key.name, &format!("increment field {}", i + 1), 1.0)?;
+                            if x < 0.0 {
+                                return Err(malformed(
+                                    record.line,
+                                    &key.name,
+                                    "increments",
+                                    "increment controls must be nonnegative",
+                                ));
+                            }
+                        }
+                    }
+                }
+                self.procedure = true;
+                self.notes.push(AbaqusImportNote {source:key.source.as_deref().map(str::to_string),line:key.line,keyword:key.name.clone(),cause:"Imported final small-displacement equilibrium; Abaqus increment history and solver settings are not reproduced.".into()});
+            }
+            "ENDSTEP" => {
+                key.only(&[])?;
+                self.history(key)?;
+                self.expanded = self
+                    .expanded
+                    .saturating_add(self.boundaries.len())
+                    .saturating_add(self.forces.len())
+                    .saturating_add(self.pressures.len())
+                    .saturating_add(self.materials.len())
+                    .saturating_add(self.sections.len());
+                if self.expanded > crate::imported::MAX_SOURCE_MEMBERSHIPS {
+                    return Err(malformed(key.line, &key.name, "expanded analysis state", "inherited analysis state exceeds 1000000 retained assignments; split the source analysis into smaller comparison decks"));
+                }
+                let mut step = self.current.take().expect("history checks current step");
+                step.boundaries = self.boundaries.clone();
+                step.forces = self.forces.clone();
+                step.pressures = self.pressures.clone();
+                self.steps.push(step);
+                self.procedure = false;
+            }
+            _ => {
+                return Err(unsupported(
+                    key.line,
+                    &key.name,
+                    "keyword",
+                    "this analysis keyword is not translated; no physical definition has been discarded",
+                ))
+            }
+        }
+        if matches!(key.name.as_str(), "MATERIAL" | "STEP" | "ENDSTEP") && !block.records.is_empty() {
+            return Err(malformed(block.records[0].line, &key.name, "data", "this keyword accepts no data records"));
+        }
+        Ok(())
+    }
+}
+
+fn step_command(name: &str, constraint_names: Vec<String>, load_names: Vec<String>) -> Command {
+    Command::StepAdd {
+        name: name.to_owned(),
+        procedure: Procedure::Static,
+        constraints: constraint_names,
+        loads: load_names,
+        output: None,
+        after: None,
+        n_modes: None,
+        shift: None,
+        dt: None,
+        t_end: None,
+        theta: None,
+        output_every: None,
+        dt_factor: None,
+        amplitude: None,
+        initial: None,
+        alpha: None,
+        rayleigh_alpha: None,
+        rayleigh_beta: None,
+        initial_velocity: None,
+        increments: None,
+        max_cutbacks: None,
+        nonlinear_tolerance: None,
+        nonlinear_max_iterations: None,
+        f_start: None,
+        f_stop: None,
+        points: None,
+        sweep: None,
+        damping_ratio: None,
+        damping_ratios: None,
+        psd: None,
+    }
+}
+
+fn install_nodal_set(mesh: &mut abaqus::MeshDeck, nodes: Vec<u32>, ordinal: usize) -> String {
+    if nodes.len() == 1 && mesh.source.node_targets.contains(&nodes[0]) {
+        return format!("{}.node_{}", mesh.source.body, nodes[0]);
+    }
+    if let Some((name, _)) = mesh.source.node_sets.iter().find(|(_, members)| **members == nodes) {
+        return format!("{}.nset_{name}", mesh.source.body);
+    }
+    let mut name = format!("FEMLAB_IMPORT_TARGET_{ordinal}");
+    while mesh.source.node_sets.contains_key(&name) {
+        name.push('_');
+    }
+    mesh.source.node_sets.insert(name.clone(), nodes);
+    format!("{}.nset_{name}", mesh.source.body)
+}
+
+fn located(mut error: Error, source: Option<&str>) -> Error {
+    if let Some(source) = source {
+        if let Some(location) = &error.where_ {
+            if location.starts_with("line ") {
+                error.where_ = Some(format!("{source}: {location}"));
+            }
+        }
+    }
+    error
+}
+
+fn callable_names(sources: &[&str], prefix: &str) -> BTreeMap<String, String> {
+    let valid = |name: &str| {
+        !name.is_empty() && !name.contains('.') && !name.contains(':') && !name.contains(char::is_whitespace)
+    };
+    let mut used: BTreeSet<String> = sources.iter().filter(|name| valid(name)).map(|name| (*name).to_owned()).collect();
+    let mut mapped = BTreeMap::new();
+    for (index, name) in sources.iter().copied().enumerate() {
+        let mut target = name.to_owned();
+        if !valid(name) {
+            target = format!("{prefix}_{}", index + 1);
+            while used.contains(&target) {
+                target.push('_');
+            }
+            used.insert(target.clone());
+        }
+        mapped.insert(name.to_owned(), target);
+    }
+    mapped
+}
+
+fn finish(
+    analysis: Analysis,
+    mut mesh: abaqus::MeshDeck,
+    model_name: &str,
+    bytes: usize,
+    digest: &str,
+) -> Result<AbaqusConversion, Error> {
+    if analysis.current.is_some() || analysis.steps.is_empty() {
+        return Err(located(
+            malformed(
+                analysis.current.as_ref().map_or(1, |s| s.line),
+                "STEP",
+                "end",
+                "at least one complete STEP/STATIC/END STEP is required",
+            ),
+            analysis.current.as_ref().and_then(|s| s.source_file.as_deref()),
+        ));
+    }
+    if analysis.materials.is_empty() {
+        return Err(malformed(1, "MATERIAL", "material", "at least one MATERIAL is required"));
+    }
+    if analysis.sections.is_empty() {
+        return Err(malformed(1, "SOLIDSECTION", "section", "every source element needs a SOLID SECTION"));
+    }
+    let material_names =
+        callable_names(&analysis.materials.keys().map(String::as_str).collect::<Vec<_>>(), "abaqus_material");
+    let step_names =
+        callable_names(&analysis.steps.iter().map(|step| step.name.as_str()).collect::<Vec<_>>(), "abaqus_step");
+    let mut covered = BTreeSet::new();
+    let mut assignments = Vec::new();
+    let mut section_reports = Vec::new();
+    mesh.source.regions.clear();
+    mesh.source.node_targets = analysis.numeric_nodes.iter().copied().collect();
+    for (index, section) in analysis.sections.iter().enumerate() {
+        if !analysis.materials.contains_key(&section.material) {
+            return Err(located(
+                malformed(
+                    section.line,
+                    "SOLIDSECTION",
+                    "MATERIAL",
+                    format!("material {} is not defined", section.material),
+                ),
+                section.source_file.as_deref(),
+            ));
+        }
+        for element in &section.elements {
+            if !covered.insert(*element) {
+                return Err(located(
+                    malformed(
+                        section.line,
+                        "SOLIDSECTION",
+                        "ELSET",
+                        format!("element {element} has overlapping section assignments"),
+                    ),
+                    section.source_file.as_deref(),
+                ));
+            }
+        }
+        let region = if analysis.sections.len() == 1 {
+            mesh.source.body.clone()
+        } else {
+            format!("{}_section_{}", mesh.source.body, index + 1)
+        };
+        if analysis.sections.len() > 1 {
+            mesh.source.regions.insert(region.clone(), section.elements.clone());
+        }
+        section_reports.push(AbaqusSectionMapping {
+            section_elset: section.source.clone(),
+            source_material: section.material.clone(),
+            material: material_names[&section.material].clone(),
+            body: region.clone(),
+            elements: section.elements.len() as u32,
+        });
+        assignments.push((material_names[&section.material].clone(), region));
+    }
+    if covered.len() != mesh.source.elements.len() {
+        let missing = mesh
+            .source
+            .elements
+            .iter()
+            .find(|element| !covered.contains(&element.label))
+            .expect("different coverage cardinality leaves an uncovered checked source element");
+        return Err(located(malformed(
+            analysis.sections[0].line,
+            "SOLIDSECTION",
+            "ELSET",
+            format!("source element {} has no section; section assignments must cover every imported element exactly once", missing.label),
+        ), analysis.sections[0].source_file.as_deref()));
+    }
+    let mut commands = Vec::new();
+    for material in analysis.materials.values() {
+        let (young, poisson) = material.elastic.ok_or_else(|| {
+            located(
+                malformed(
+                    material.line,
+                    "MATERIAL",
+                    "ELASTIC",
+                    "each MATERIAL needs one constant isotropic ELASTIC definition",
+                ),
+                material.source_file.as_deref(),
+            )
+        })?;
+        commands.push(Command::MaterialAdd {
+            name: material_names[&material.name].clone(),
             e: Some(Q::<Stress>::new(young, "Pa")),
             nu: Some(poisson),
             orthotropic: None,
             orientation: None,
-            rho: None,
+            rho: material.density.map(|value| Q::<Density>::new(value, "kg/m^3")),
             alpha: None,
             k: None,
             cp: None,
             yield_: None,
             plasticity: None,
-            source: Some(format!("Abaqus input SHA-256 {digest}")),
+            source: Some(format!("Abaqus MATERIAL {} input SHA-256 {digest}", material.name)),
         });
-        response.commands.push(Command::MaterialAssign { material: material.name.clone(), bodies: vec![body.clone()] });
+    }
+    for (material, body) in assignments {
+        commands.push(Command::MaterialAssign { material, bodies: vec![body] });
+    }
+    let mut reports = Vec::new();
+    let mut ordinal = 0;
+    for (index, step) in analysis.steps.iter().enumerate() {
+        let prefix = if analysis.steps.len() == 1 { "abaqus".into() } else { format!("abaqus_step_{}", index + 1) };
         let mut constraint_names = Vec::new();
-        for (index, ((target, dof), value)) in constraints.into_iter().enumerate() {
-            let name = format!("abaqus_boundary_{}", index + 1);
-            constraint_names.push(name.clone());
-            response.commands.push(Command::ConstraintPrescribe {
-                name,
-                on: target.qualified(&body),
-                dof: [Dof::Ux, Dof::Uy, Dof::Uz][usize::from(dof - 1)],
-                value: Q::new(value, "m"),
-            });
-        }
         let mut load_names = Vec::new();
-        for (index, ((target, dof), total)) in loads.into_iter().enumerate() {
-            let name = format!("abaqus_cload_{}", index + 1);
+        // Group identical nodal values without changing per-node load semantics. f64 bits
+        // make grouping deterministic and preserve signed zero at the schema boundary.
+        for (family, values) in [(0, &step.boundaries), (1, &step.forces)] {
+            let mut groups: BTreeMap<(u8, u64), Vec<u32>> = BTreeMap::new();
+            for ((node, axis), value) in values {
+                groups.entry((*axis, value.to_bits())).or_default().push(*node);
+            }
+            for ((axis, bits), nodes) in groups {
+                ordinal += 1;
+                let count = nodes.len();
+                let on = install_nodal_set(&mut mesh, nodes, ordinal);
+                let value = f64::from_bits(bits);
+                if family == 0 {
+                    let name = format!("{prefix}_boundary_{}", constraint_names.len() + 1);
+                    constraint_names.push(name.clone());
+                    commands.push(Command::ConstraintPrescribe {
+                        name,
+                        on,
+                        dof: [Dof::Ux, Dof::Uy, Dof::Uz][usize::from(axis - 1)],
+                        value: Q::new(value, "m"),
+                    });
+                } else {
+                    let total = value * count as f64;
+                    if !total.is_finite() {
+                        return Err(malformed(step.line, "CLOAD", "Set total", "nodal load total must be finite"));
+                    }
+                    let name = format!("{prefix}_cload_{}", load_names.len() + 1);
+                    load_names.push(name.clone());
+                    let mut vector = [0.0; 3];
+                    vector[usize::from(axis - 1)] = total;
+                    commands.push(Command::LoadForce { name, on, total: vector.map(|v| Q::new(v, "N")) });
+                }
+            }
+        }
+        let mut groups: BTreeMap<u64, Vec<ImportedFace>> = BTreeMap::new();
+        for ((_, target), value) in &step.pressures {
+            match target {
+                PressureTarget::Face(face) => groups.entry(value.to_bits()).or_default().push(*face),
+                PressureTarget::Surface(surface) => {
+                    // DSLOAD identity is the named surface, not its current face union.
+                    // Distinct overlapping surfaces retain additive loads across Steps.
+                    let name = format!("{prefix}_pressure_{}", load_names.len() + 1);
+                    load_names.push(name.clone());
+                    commands.push(Command::LoadPressure {
+                        name,
+                        on: format!("{}.surface_{surface}", mesh.source.body),
+                        value: Q::new(*value, "Pa"),
+                    });
+                }
+            }
+        }
+        for (bits, faces) in groups {
+            ordinal += 1;
+            let mut surface = format!("FEMLAB_IMPORT_PRESSURE_{ordinal}");
+            while mesh.source.surfaces.contains_key(&surface) {
+                surface.push('_');
+            }
+            mesh.source.surfaces.insert(surface.clone(), faces);
+            let name = format!("{prefix}_pressure_{}", load_names.len() + 1);
             load_names.push(name.clone());
-            let mut vector = [0.0; 3];
-            vector[usize::from(dof - 1)] = total;
-            response.commands.push(Command::LoadForce {
+            commands.push(Command::LoadPressure {
                 name,
-                on: target.qualified(&body),
-                total: vector.map(|value| Q::new(value, "N")),
+                on: format!("{}.surface_{surface}", mesh.source.body),
+                value: Q::new(f64::from_bits(bits), "Pa"),
             });
         }
-        let step = self.step.expect("END STEP requires STEP").0;
-        response.commands.push(Command::StepAdd {
-            name: step.clone(),
-            procedure: Procedure::Static,
-            constraints: constraint_names.clone(),
-            loads: load_names.clone(),
-            output: None,
-            after: None,
-            n_modes: None,
-            shift: None,
-            dt: None,
-            t_end: None,
-            theta: None,
-            output_every: None,
-            dt_factor: None,
-            amplitude: None,
-            initial: None,
-            alpha: None,
-            rayleigh_alpha: None,
-            rayleigh_beta: None,
-            initial_velocity: None,
-            increments: None,
-            max_cutbacks: None,
-            nonlinear_tolerance: None,
-            nonlinear_max_iterations: None,
-            f_start: None,
-            f_stop: None,
-            points: None,
-            sweep: None,
-            damping_ratio: None,
-            damping_ratios: None,
-            psd: None,
-        });
-        response.report.analysis = Some(AbaqusStaticAnalysis {
-            material: material.name,
-            section_elset: section.elements,
-            step,
+        let retained_name = &step_names[&step.name];
+        commands.push(step_command(retained_name, constraint_names.clone(), load_names.clone()));
+        reports.push(AbaqusStaticAnalysis {
+            material: material_names.values().next().expect("materials checked").clone(),
+            section_elset: analysis.sections[0].source.clone(),
+            materials: material_names.values().cloned().collect(),
+            sections: section_reports.clone(),
+            source_step: step.name.clone(),
+            step: retained_name.clone(),
             constraints: constraint_names,
             loads: load_names,
             final_equilibrium_only: true,
         });
-        abaqus::check_response(&response)?;
-        Ok(response)
     }
+    mesh.source.provenance.as_mut().expect("normalized source provenance").conversion_version =
+        CONVERSION_VERSION.into();
+    crate::imported::source(&mesh.source)?;
+    let mut response = abaqus::conversion_from_mesh(mesh, model_name, bytes, digest);
+    for id in &analysis.numeric_nodes {
+        response.report.sets.push(AbaqusSetMapping {
+            kind: AbaqusSetKind::Node,
+            source: id.to_string(),
+            target: format!("{}.node_{id}", response.report.body),
+            count: 1,
+        });
+    }
+    response.report.mode = AbaqusImportMode::Static;
+    response.report.conversion_version = CONVERSION_VERSION.into();
+    response.report.unit_force = Some(Q::new(analysis.force, "N"));
+    response.report.unit_time = analysis.time.map(|value| Q::new(value, "s"));
+    response.report.analysis_configured = true;
+    response.report.analysis = reports.first().cloned();
+    response.report.analyses = reports;
+    response.report.notes.extend(analysis.notes);
+    response.commands.extend(commands);
+    abaqus::check_response(&response)?;
+    Ok(response)
 }
 
-/// Convert exactly one homogeneous isotropic static deck using explicit source length and
-/// force scales. Geometry and source locations pass through the shared strict parser.
+/// Convert all representable small-displacement static load cases without discarding
+/// materials, section regions, pressures or inherited boundary/load state. Imported Steps
+/// configure final equilibria, not the source solver's increment history. No solve is run.
+// The public registry boundary keeps source quantities and bundle inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub fn convert_static(
     text: &str,
     model_name: &str,
     body: &str,
     unit_length: &Q<Length>,
     unit_force: &Q<Force>,
+    unit_time: Option<&Q<Time>>,
+    source_name: Option<&str>,
+    source_files: &BTreeMap<String, String>,
     digest: &str,
 ) -> Result<AbaqusConversion, Error> {
     abaqus::check_model_name(model_name)?;
     let length = abaqus::check_input(text, body, unit_length, digest)?;
-    let force = unit_force.si().map_err(|error| error.at("unitForce").suggest(SUGGESTION))?;
+    let force = unit_force.si().map_err(|e| e.at("unitForce").suggest(SUGGESTION))?;
     if force <= 0.0 {
         return Err(Error::schema("unitForce must be positive").at("unitForce").suggest(SUGGESTION));
+    }
+    let time =
+        unit_time.map(|value| value.si().map_err(|error| error.at("unitTime").suggest(SUGGESTION))).transpose()?;
+    if time.is_some_and(|value| value <= 0.0) {
+        return Err(Error::schema("unitTime must be positive").at("unitTime").suggest(SUGGESTION));
     }
     let stress = force / length / length;
     if !stress.is_finite() || stress <= 0.0 {
@@ -623,70 +1007,32 @@ pub fn convert_static(
             .at("unitForce")
             .suggest(SUGGESTION));
     }
+    let mut deck = abaqus_deck::normalize_sources(text, body, unit_length, digest, source_name, source_files)?;
+    let blocks = std::mem::take(&mut deck.analysis);
     let mut analysis = Analysis {
-        phase: Phase::Model,
-        material: None,
-        section: None,
-        step: None,
-        elastic_seen: false,
-        static_seen: false,
-        boundaries: Vec::new(),
-        loads: Vec::new(),
+        materials: BTreeMap::new(),
+        current_material: None,
+        sections: Vec::new(),
+        steps: Vec::new(),
+        current: None,
+        procedure: false,
+        history_started: false,
+        boundaries: BTreeMap::new(),
+        forces: BTreeMap::new(),
+        pressures: BTreeMap::new(),
+        numeric_nodes: BTreeSet::new(),
+        updates: BTreeMap::new(),
+        pressure_updates: BTreeSet::new(),
+        operations: BTreeMap::new(),
+        expanded: 0,
+        notes: Vec::new(),
         length,
         force,
         stress,
+        time,
     };
-    let mut mesh = Builder::default();
-    let mut records = Records::new(text);
-    let mut active: Option<Active> = None;
-    while let Some(record) = records.next()? {
-        if record.text.trim_start().starts_with('*') {
-            if let Some(previous) = &active {
-                previous.finish()?;
-            }
-            active = Some(analysis.start(records.keyword(record)?, &mut mesh)?);
-        } else {
-            match active
-                .as_mut()
-                .ok_or_else(|| malformed(record.line, "INPUT", "data", "data must follow an accepted keyword"))?
-            {
-                Active::Mesh(active) => mesh.record(active, record, length)?,
-                Active::Analysis(active) => analysis.record(active, record)?,
-            }
-        }
+    for block in &blocks {
+        analysis.block(&deck, block).map_err(|error| located(error, block.keyword.source.as_deref()))?;
     }
-    if let Some(previous) = &active {
-        previous.finish()?;
-    }
-    analysis.finish(mesh.finish(body, digest, length)?, model_name, text.len(), digest)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::ErrorCode;
-
-    #[test]
-    fn translation_dofs_are_exactly_one_through_three() {
-        for value in 1..=3 {
-            assert_eq!(dof(&value.to_string(), 7, "BOUNDARY", "first DOF").unwrap(), value);
-        }
-        for text in ["0", "4", "255"] {
-            assert_eq!(dof(text, 7, "CLOAD", "DOF").unwrap_err().code, ErrorCode::Unsupported);
-        }
-        for text in ["x", "-1", "1.5", "256", ""] {
-            assert_eq!(dof(text, 7, "CLOAD", "DOF").unwrap_err().code, ErrorCode::Schema);
-        }
-    }
-
-    #[test]
-    fn translation_targets_distinguish_source_labels_from_canonical_nsets() {
-        assert_eq!(Target::parse("+42", 3, "CLOAD").unwrap(), Target::Node(42));
-        assert_eq!(Target::parse("root-side", 3, "BOUNDARY").unwrap(), Target::Set("ROOT-SIDE".into()));
-        assert_eq!(Target::Node(42).qualified("bar"), "bar.node_42");
-        assert_eq!(Target::Set("ROOT".into()).qualified("bar"), "bar.nset_ROOT");
-        assert_eq!(Target::parse("+0", 3, "CLOAD").unwrap_err().code, ErrorCode::Schema);
-        assert_eq!(Target::parse("root.side", 3, "BOUNDARY").unwrap_err().code, ErrorCode::Unsupported);
-        assert_eq!(Target::parse("", 3, "BOUNDARY").unwrap_err().code, ErrorCode::Unsupported);
-    }
+    finish(analysis, deck.mesh, model_name, text.len() + source_files.values().map(String::len).sum::<usize>(), digest)
 }

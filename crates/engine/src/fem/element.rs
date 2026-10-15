@@ -434,6 +434,22 @@ fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Re
             }
         }
     }
+    if c.formulation == Formulation::MeanDilatation && kind == ElementKind::Hex8 {
+        // B-bar retains every deviatoric/shear component and replaces only the trace by
+        // its physical-volume average. Integrate the average with the existing full rule;
+        // evaluating at the centroid is a different operator on a distorted hexahedron.
+        let volume: f64 = kin.w.iter().sum();
+        for col in 0..nt {
+            let trace = |b: &[f64], g: usize| (0..3).map(|row| b[(g * VOIGT + row) * nt + col]).sum::<f64>();
+            let mean = (0..n_gp).map(|g| kin.w[g] * trace(&kin.b, g)).sum::<f64>() / volume;
+            for g in 0..n_gp {
+                let correction = (mean - trace(&kin.b, g)) / 3.0;
+                for row in 0..3 {
+                    kin.b[(g * VOIGT + row) * nt + col] += correction;
+                }
+            }
+        }
+    }
     Ok(kin)
 }
 
@@ -1060,6 +1076,11 @@ fn tangent_and_force_of(
     state_in: &[f64],
     out: TangentOut<'_>,
 ) -> Result<f64, Error> {
+    if c.formulation == Formulation::MeanDilatation && kind == ElementKind::Hex8 {
+        return Err(Error::new(ErrorCode::Unsupported, "mean-dilatation Hex8 supports small strain only")
+            .at("formulation")
+            .suggest("step.add with procedure static, or mesh.set with formulation full"));
+    }
     // Incompatible modes are off under finite strain: the enhanced field is derived for
     // infinitesimal strain and hourglasses in compression, so this integrates fully whatever
     // the Model's Formulation says. `procedure::nonlinear` warns when that changes an answer.

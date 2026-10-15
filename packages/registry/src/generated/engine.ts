@@ -1568,8 +1568,8 @@ export type Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -3428,9 +3428,10 @@ export type SurfaceProjectionSpec =
       kind: "cylinder";
     };
 /**
- * Only the explicitly supported standard, first-order 3D solids.
+ * Authored 3D solid families; interpolation and source connectivity are retained.
+ * Hex8 uses the explicit mesh formulation; other kinds retain standard full integration.
  */
-export type ImportedElementKind = "tet4" | "hex8";
+export type ImportedElementKind = "tet4" | "hex8" | "tet10" | "hex20";
 /**
  * How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
  */
@@ -3456,7 +3457,7 @@ export type SweepSpec =
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
-export type Formulation = "incompatible-modes" | "full";
+export type Formulation = "incompatible-modes" | "full" | "mean-dilatation";
 /**
  * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
  * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
@@ -3747,6 +3748,14 @@ export type Query =
     }
   | {
       text: string;
+      sourceName?: string | null;
+      sourceFiles?: {
+        [k: string]: string | undefined;
+      };
+      query: "query.abaqusDependencies";
+    }
+  | {
+      text: string;
       name: string;
       body: string;
       mode: AbaqusImportMode;
@@ -3771,6 +3780,31 @@ export type Query =
               }
           )
         | null;
+      /**
+       * Positive seconds per source time. Required when a DENSITY is translated:
+       * source density scales by F T²/L⁴. No time or mass unit is inferred.
+       */
+      unitTime?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Logical root filename for resolving an explicitly supplied include bundle.
+       * Paths identify bundle entries only; the engine never reads a file system.
+       */
+      sourceName?: string | null;
+      /**
+       * Explicit relative source filenames and UTF-8 contents for INCLUDE resolution.
+       * Missing/cyclic/escaping references fail; the engine never fetches a file.
+       */
+      sourceFiles?: {
+        [k: string]: string | undefined;
+      };
       sha256: string;
       query: "query.convertAbaqus";
     }
@@ -3868,6 +3902,7 @@ export type QueryResult =
   | ScriptText
   | Converted
   | AbaqusConversion
+  | AbaqusDependencies
   | MaterialLibrary
   | ObjectList
   | Capabilities
@@ -6005,8 +6040,8 @@ export type QueryResult_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -8837,8 +8872,8 @@ export type ModelFile_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -10155,6 +10190,7 @@ export type ReadReply_QueryResult =
   | ScriptText
   | Converted
   | ReadReply_AbaqusConversion
+  | AbaqusDependencies
   | MaterialLibrary
   | ObjectList
   | Capabilities
@@ -11761,8 +11797,8 @@ export type ReadReply_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -14488,8 +14524,8 @@ export type DocumentSnapshot_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -16256,7 +16292,7 @@ export interface ImportedElement {
   label: number;
   kind: ImportedElementKind;
   /**
-   * Source node labels in Abaqus connectivity order, exactly four or eight.
+   * Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.
    */
   nodes: number[];
 }
@@ -16266,7 +16302,7 @@ export interface ImportedFace {
    */
   element: number;
   /**
-   * Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
+   * Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.
    */
   face: number;
 }
@@ -18274,6 +18310,9 @@ export interface AbaqusConversionReport {
   mode: AbaqusImportMode;
   sha256: string;
   conversionVersion: string;
+  /**
+   * Root plus all explicitly supplied source-file UTF-8 bytes; repeated INCLUDE expansion is bounded separately.
+   */
   inputBytes: number;
   body: string;
   /**
@@ -18297,15 +18336,41 @@ export interface AbaqusConversionReport {
           }
       )
     | null;
+  /**
+   * Explicit seconds per source time; present when supplied for material density.
+   */
+  unitTime?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
   sourceNodes: number;
   activeNodes: number;
   sourceElements: number;
   elementKind: ImportedElementKind;
   /**
+   * Every authored kind in first-source-occurrence order; `elementKind` remains the
+   * first kind for compatibility and must not be read as a homogeneous-mesh claim.
+   */
+  elementKinds?: ImportedElementKind[];
+  /**
    * Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.
    */
   analysisConfigured: boolean;
   analysis?: AbaqusStaticAnalysis | null;
+  /**
+   * All imported analysis Steps in source order; `analysis` is its first entry for
+   * compatibility. Every case contains its effective inherited supports and loads.
+   */
+  analyses?: AbaqusStaticAnalysis[];
+  /**
+   * Recognized output/solver requests whose execution differs in FEM Lab.
+   */
+  notes?: AbaqusImportNote[];
   /**
    * Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.
    *
@@ -18369,16 +18434,56 @@ export interface AbaqusConversionReport {
   }[];
 }
 /**
- * Retained homogeneous static objects. Only the final linear equilibrium is configured;
+ * Retained static load case. Only the final linear equilibrium is configured;
  * there is no Abaqus increment history and conversion never produces a solved Result.
  */
 export interface AbaqusStaticAnalysis {
+  /**
+   * First material, retained for compatibility; `materials` lists the complete case.
+   */
   material: string;
+  /**
+   * First section, retained for compatibility; `sections` gives every exact assignment.
+   */
   sectionElset: string;
+  materials?: string[];
+  sections?: AbaqusSectionMapping[];
+  /**
+   * Exact source Step label; `step` is its callable FEM Lab identifier.
+   */
+  sourceStep?: string;
   step: string;
   constraints: string[];
   loads: string[];
   finalEquilibriumOnly: boolean;
+}
+/**
+ * One source section's exact material-to-Body assignment. Shared labelled nodes retain
+ * their identity across section regions; no interface is welded or disconnected.
+ */
+export interface AbaqusSectionMapping {
+  sectionElset: string;
+  /**
+   * Exact source material label, including its quoted case and punctuation.
+   */
+  sourceMaterial: string;
+  /**
+   * Callable material identifier; differs only when the source label cannot be used
+   * as an ordinary FEM Lab object name.
+   */
+  material: string;
+  body: string;
+  elements: number;
+}
+/**
+ * A recognized source request or solver setting with an explicit import consequence.
+ * Notes never stand in for silently discarded physical definitions.
+ */
+export interface AbaqusImportNote {
+  source?: string | null;
+  line: number;
+  keyword: string;
+  cause: string;
 }
 /**
  * One authored Abaqus Set or numeric node target and its exact qualified FEM Lab name.
@@ -18388,6 +18493,12 @@ export interface AbaqusSetMapping {
   source: string;
   target: string;
   count: number;
+}
+/**
+ * Missing relative source filenames, discovered without any host I/O or Model mutation.
+ */
+export interface AbaqusDependencies {
+  missingFiles: string[];
 }
 /**
  * `query.materialLibrary` response.
