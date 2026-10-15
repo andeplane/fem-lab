@@ -192,9 +192,19 @@ Journal hashes remain exact. At the JSON-persisted query comparison only, native
 `-0` normals compare as `0`; every other scalar, field and array order remains exact.
 
 App/controller/checked-session tests, full app coverage, registry 100%, workspace types,
-codegen, production build and size gates pass. Actual Chromium CPU and service-worker
-flows pass lazy loading, import/re-import, named face/mesh, cancellation and stale project
-checks. Screenshot review found the existing fixed perspective near-plane clipping tiny
-Bodies: [#620](https://github.com/andeplane/fem-lab/issues/620) is an independent viewer
-correction and a prerequisite for the final visible millimeter-Body acceptance. A blank
-viewport is not treated as visual acceptance merely because physical queries pass.
+codegen, production build and size gates pass. Screenshot review found the existing fixed
+perspective near-plane clipping tiny Bodies: [#620](https://github.com/andeplane/fem-lab/issues/620)
+is the separate viewer correction. The blank before-image is retained. On the frozen #620
+source composed with this implementation, actual Chromium CPU and service-worker flows
+pass lazy loading, import/re-import, named face/mesh, cancellation and stale-project checks.
+The strengthened gate reads the actual WebGL drawing buffer: both the millimeter box and
+meter cylinder must have visible material pixels spanning over 20% of canvas width/height
+and remain inside its edges. Physical-query success alone cannot satisfy that gate.
+The cylinder viewport shows the retained coarse 0.5 m lattice FE boundary, with visible
+steps; it is not evidence of exact B-rep rendering. Source-cylinder accuracy is checked
+separately by the analytic/refinement measurements.
+
+The converter and FEM engine sources are unchanged by this viewer composition; the six
+analytic/native/WASM replay proofs remain applicable. The composed app's fresh coverage,
+types, codegen, production build, size and four Chromium cases pass. Final stacked-source
+CI remains required, and #351 is reviewed independently of the #620/#624 viewer/test fix.

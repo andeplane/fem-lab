@@ -156,6 +156,7 @@ jobs:
       - run: node tools/test-original-measures-replay.mjs
       - run: node tools/test-abaqus-mesh-replay.mjs
       - run: node tools/test-abaqus-static-replay.mjs
+      - run: node tools/test-step-import.mjs
       - run: node tools/test-abaqus-hosts.mjs target/release/femlab
       - run: node tools/test-quadratic-measures-replay.mjs
       - run: node tools/test-random-vibration-replay.mjs
@@ -215,6 +216,7 @@ jobs:
       - run: npm ci
       - run: python3 -m unittest discover -s tools -p 'test_release_artifacts.py'
       - run: npm run codegen:check
+      - run: node --test tools/test-step-assets.mjs
       - run: npm run typecheck
       - run: npm run test -w packages/registry
       - run: npm run test -w packages/ai

@@ -84,7 +84,8 @@ source tolerances can supersede the request. The minimum absolute deflection is 
 `geometry.cancelStep({name: 'part'})` terminates a pending conversion before publication.
 A second pending conversion conflicts, and an intervening model edit or project switch
 rejects publication. The receipt contains source/geometry hashes, SI deflections and counts;
-it is local to the current import. The Journal stores one normal `geometry.import` with
+it describes the last successful conversion in this project. Later edits or Undo can change
+or remove that geometry. The Journal stores one normal `geometry.import` with
 double-precision ASCII triangles and their hash. Saved files and Journals replay in the
 native CLI, Node and other hosts without a converter, original STEP file or file handle.
 Hosts without the converter report original-file conversion as unsupported.
