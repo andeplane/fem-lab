@@ -68,7 +68,7 @@ export default defineConfig(({ command }) => ({
     // import closure) from everything that only arrives when someone asks for it.
     manifest: true,
     rollupOptions: {
-      input:{app:resolve(import.meta.dirname,'index.html'),signin:resolve(import.meta.dirname,'signin.html')},
+      input:{index:resolve(import.meta.dirname,'index.html'),signin:resolve(import.meta.dirname,'signin.html')},
       output: {
         advancedChunks: {
           groups: [
