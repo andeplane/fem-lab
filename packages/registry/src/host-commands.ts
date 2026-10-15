@@ -91,10 +91,15 @@ export interface FolderInfo {
   agentsMd: 'AGENTS.md' | 'CLAUDE.md' | null;
   skills: string[];
 }
+/** A completed host delivery, independent of the requested filename or default destination. */
+export const FileDelivery = z.object({ name: z.string(), to: z.enum(['download', 'folder']) });
+export type FileDelivery = z.output<typeof FileDelivery>;
 export interface ScriptResult {
   diagnostics?: ScriptDiagnostic[];
   /** Successful engine Commands dispatched by this script, for attributable turn diffs. */
   journalEntries?: JournalEntry[];
+  /** Completed host file deliveries, including those before a later script error. */
+  files?: FileDelivery[];
   result: unknown;
   console: string[];
   error?: string;
@@ -269,8 +274,9 @@ const account=(ctx:HostContext):AccountServices=>{
 const paidPlan=z.enum(['plus','pro','studio']);
 
 /** Write a saved or exported file where the person asked, defaulting to the open folder. */
-async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, name: string, mime: string, data: string | Uint8Array): Promise<{ name: string; to: 'download' | 'folder' }> {
+async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, name: string, mime: string, data: string | Uint8Array): Promise<FileDelivery> {
   const dest = to ?? (ctx.folder.info() ? 'folder' : 'download');
+  if (dest === 'folder') name = assertInside(name).join('/');
   if (dest === 'download') ctx.files.download(name, mime, data);
   else if (typeof data === 'string') await ctx.folder.writeText(name, data);
   else await ctx.folder.writeBytes(name, data);
@@ -457,7 +463,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('panel.toggle', 'sessionView', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
   def('panel.resize', 'workspace', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
   def('report.print', 'sessionView', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
-  def('script.run', 'producer', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
+  def('script.run', 'producer', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error?, files? }`; files contains only completed host delivery receipts, including those before a later script error. Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
     return ctx.script.run(code, timeoutMs);
@@ -522,7 +528,7 @@ export const HOST_COMMANDS: HostDef[] = [
       ...(simplifyBelow === undefined ? {} : { simplifyBelow }),
     } as Command);
   }),
-  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. The complete saved pretty JSON must fit the 16 MiB UTF-8 file limit; refusal occurs before any file write or download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. The complete saved pretty JSON must fit the 16 MiB UTF-8 file limit; refusal occurs before any file write or download. `name` defaults to `<model name>.femlab.json`. Returns the actual delivery `{ name, to }`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
     const completeSave = ctx.files.beginSave();
 
     const file = await ctx.transport.exportFile();
@@ -530,7 +536,7 @@ export const HOST_COMMANDS: HostDef[] = [
     completeSave(file.journal);
     return receipt;
   }),
-  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. CSV table is extremes (default), reactions, path or nodal-displacements; unknown tables fail. Nodal displacements export scientific f64 coordinates and three displacement components in metres, independent of display units, with original source label, instance and part plus the normalized label. Unused authored nodes have blank displacement cells and status unused. This table pins one Result id and requires its solved Model hash to match the current document; stale or changed source identities fail before delivery, including edits during scientific reads. CSV text cells retain exact source names with standard quoting for machine-readable interchange; consumers must interpret identity columns as text. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. CSV table is extremes (default), reactions, path or nodal-displacements; unknown tables fail. Nodal displacements export scientific f64 coordinates and three displacement components in metres, independent of display units, with original source label, instance and part plus the normalized label. Unused authored nodes have blank displacement cells and status unused. This table pins one Result id and requires its solved Model hash to match the current document; stale or changed source identities fail before delivery, including edits during scientific reads. CSV text cells retain exact source names with standard quoting for machine-readable interchange; consumers must interpret identity columns as text. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads. Returns the actual delivery `{ name, to }`; a cancelled animation returns `{ cancelled: true }` with no delivery.', z.object({
     spec: z.union([
       AnimationCaptureOptions.extend({ format: z.literal('webm') }),
       z.looseObject({ format: z.literal('csv'), table: z.enum(['extremes', 'reactions', 'path', 'nodal-displacements']).optional(), step: z.string().optional(), resultId: z.string().optional() }),
@@ -555,7 +561,11 @@ export const HOST_COMMANDS: HostDef[] = [
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
     return { text };
   }),
-  def('file.write', 'workspace', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused.', z.object({ path: z.string(), text: z.string() }), ({ path, text }, ctx) => ctx.folder.writeText(assertInside(path).join('/'), text)),
+  def('file.write', 'workspace', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused. Returns the completed delivery as { name: normalizedRelativePath, to: "folder" }; a failed write has no delivery receipt.', z.object({ path: z.string(), text: z.string() }), async ({ path, text }, ctx): Promise<FileDelivery> => {
+    const name = assertInside(path).join('/');
+    await ctx.folder.writeText(name, text);
+    return { name, to: 'folder' };
+  }),
   def('folder.open', 'workspace', 'Open a folder on disk with picker: true, an opaque directory handle, or reopen: true for the remembered folder (needs a click and read/write permission); its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
   def('folder.close', 'workspace', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules are dropped, saves go back to downloads.', none, (_, ctx) => ctx.folder.close()),
   def('folder.refresh', 'workspace', 'Re-list the open folder on disk and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.folder.refresh()),

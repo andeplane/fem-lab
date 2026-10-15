@@ -321,6 +321,8 @@ describe('Registry', () => {
     const open = make(true);
     await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'folder' });
     expect(open.host.folder.writeText).toHaveBeenCalledWith('v2.json', expect.any(String));
+    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'reports\\v3.json' })).resolves.toEqual({ name: 'reports/v3.json', to: 'folder' });
+    expect(open.host.folder.writeText).toHaveBeenCalledWith('reports/v3.json', expect.any(String));
     await open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } });
     expect(open.host.folder.writeBytes).toHaveBeenCalledWith('beam.vtu', new Uint8Array([1, 2]));
     await expect(open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' }, to: 'download' })).resolves.toMatchObject({ to: 'download' });
@@ -380,7 +382,7 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });
     await expect(registry.dispatch({ cmd: 'file.read', path: 'big.txt' })).rejects.toMatchObject({ code: 'unsupported' });
     await expect(registry.dispatch({ cmd: 'file.read', path: '/etc/passwd' })).rejects.toMatchObject({ code: 'file.scope' });
-    await registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' });
+    await expect(registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' })).resolves.toEqual({ name: 'a/b.md', to: 'folder' });
     expect(host.folder.writeText).toHaveBeenCalledWith('a/b.md', 'x');
     await expect(registry.dispatch({ cmd: 'file.write', path: '../b.md', text: 'x' })).rejects.toMatchObject({ code: 'file.scope' });
   });

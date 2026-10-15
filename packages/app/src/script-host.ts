@@ -2,6 +2,7 @@
 // only bounded JSON registry calls while the run is active.
 import {
   FemError,
+  FileDelivery,
   type Ack,
   type Command,
   type JournalEntry,
@@ -81,6 +82,7 @@ export class ScriptHost {
     this.worker = worker;
     const { port1, port2 } = new MessageChannel();
     const journalEntries: JournalEntry[] = [];
+    const files: FileDelivery[] = [];
     const lines: string[] = [];
     const timers: ReturnType<typeof setTimeout>[] = [];
     const deadline = performance.now() + timeoutMs;
@@ -97,7 +99,7 @@ export class ScriptHost {
         port1.close();
         worker.terminate();
         this.worker = null;
-        resolve(journalEntries.length > 0 ? { ...result, journalEntries } : result);
+        resolve({ ...result, ...(journalEntries.length > 0 ? { journalEntries } : {}), ...(files.length > 0 ? { files } : {}) });
       };
       const timeout = (): void => settle({ result: null, console: lines, error: `the script did not finish within ${timeoutMs} ms` });
       const open = (): boolean => {
@@ -132,6 +134,10 @@ export class ScriptHost {
             if (!open()) return;
             const ack = value as Partial<Ack> | null;
             const cmd = message.value[message.kind === 'dispatch' ? 'cmd' : 'query'];
+            if (message.kind === 'dispatch' && ['file.save', 'file.export', 'file.write'].includes(String(cmd))) {
+              const delivery = FileDelivery.safeParse(value);
+              if (delivery.success) files.push(delivery.data);
+            }
             if (message.kind === 'dispatch' && typeof cmd === 'string' && !cmd.startsWith('journal.') && typeof ack?.seq === 'number' && typeof ack.hash === 'string') {
               journalEntries.push({ seq: ack.seq, cmd: message.value as Command, hashAfter: ack.hash });
             }

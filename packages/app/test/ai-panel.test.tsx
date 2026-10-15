@@ -40,7 +40,7 @@ async function mount(patch: Partial<Store['state']> = {}, access: ProjectAccess 
   document.body.append(root);
   render(<AssistantPanel registry={registry} store={store} />, root);
   await paint(); // Preact runs effects after the first paint; the chat bridge is wired in one.
-  return { root, registry, store };
+  return { root, registry, store, host };
 }
 
 const cmds = (root: HTMLElement) => [...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
@@ -85,6 +85,56 @@ describe('the assistant drawer', () => {
     const used = cmds(root);
     expect(used.length).toBeGreaterThan(8);
     expect([...new Set(used)].filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  it('shows the completed default save filename and destination rather than its requested arguments', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-only');
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) yield { type: 'tool_use', id: 'save', name: 'file_save', input: {} };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, host } = await mount();
+      host.files.download = vi.fn();
+      host.clipboard.writeText = vi.fn(async () => undefined);
+      press(await type(root, 'Save this Model'), 'Enter');
+      await vi.waitFor(() => expect(root.querySelector('.files-row .path')?.textContent).toBe('beam.femlab.json'));
+      expect(root.querySelector('.files-row')?.textContent).toContain('download');
+      expect(host.files.download).toHaveBeenCalledOnce();
+      root.querySelector<HTMLButtonElement>('.files-row [data-cmd="clipboard.copy"]')!.click();
+      await vi.waitFor(() => expect(host.clipboard.writeText).toHaveBeenCalledWith('beam.femlab.json'));
+    } finally { provider.mockRestore(); }
+  });
+
+  it('does not claim a file was written when a successful export call reports cancellation', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-only');
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) {
+          yield { type: 'tool_use', id: 'movie', name: 'file_export', input: { spec: { format: 'webm', width: 640, height: 360 } } };
+          yield { type: 'tool_use', id: 'refused', name: 'file_write', input: { path: 'missing-folder.md', text: 'x' } };
+        }
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, host } = await mount();
+      host.view.captureAnimation = async () => ({ webm: null });
+      host.files.download = vi.fn();
+      press(await type(root, 'Export a movie'), 'Enter');
+      await vi.waitFor(() => expect(JSON.parse(root.querySelector('.card[data-status="succeeded"] .out')?.textContent ?? 'null')).toEqual({ cancelled: true }));
+      await vi.waitFor(() => expect(root.querySelector('.card[data-status="failed"]')).not.toBeNull());
+      await vi.waitFor(() => expect(root.querySelector('.thinking')).toBeNull());
+      expect(root.querySelector('.files-row')).toBeNull();
+      expect(root.textContent).not.toContain('Wrote');
+      expect(host.files.download).not.toHaveBeenCalled();
+    } finally { provider.mockRestore(); }
   });
 
   it('puts a data-cmd on every button, so nothing in the drawer does something the registry cannot', async () => {

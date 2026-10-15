@@ -1987,6 +1987,11 @@ button.solve.stale {
   color: var(--text-faint);
   line-height: 1.5;
 }
+.solving-message {
+  margin-top: 6px;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
 
 .error-card {
   position: absolute;
