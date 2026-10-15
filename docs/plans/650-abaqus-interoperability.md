@@ -9,11 +9,12 @@ Implementation and evidence: [#652](https://github.com/andeplane/fem-lab/issues/
 [#656](https://github.com/andeplane/fem-lab/issues/656),
 [#657](https://github.com/andeplane/fem-lab/issues/657),
 [#673](https://github.com/andeplane/fem-lab/issues/673),
-[#681](https://github.com/andeplane/fem-lab/issues/681).
+[#681](https://github.com/andeplane/fem-lab/issues/681),
+[#691](https://github.com/andeplane/fem-lab/issues/691).
 
 **Status, 2026-10-15: in progress.** This is an acceptance plan, not a statement that
-these capabilities have shipped. The children are in progress; their separate PRs and the
-composed user workflow still require acceptance. Closing planning issue #651 does not close
+these capabilities have shipped. The foundation (#652) and independent corpus (#656) are
+merged; remaining separate PRs and the final composed validation still require acceptance. Closing planning issue #651 does not close
 #650. The [#500 plan](500-abaqus-import.md) describes the accepted first strict slice and
 remains its historical contract.
 
@@ -61,6 +62,7 @@ is compiled. This plan does not invent a second wire schema.
 | [#656](https://github.com/andeplane/fem-lab/issues/656) | Independent corpus and reference ledger, assembled alongside implementation | Exact source/license/digest/solver receipts; executable acceptance only on completed paths; remaining gaps visible |
 | [#681](https://github.com/andeplane/fem-lab/issues/681) | Data-only alternate files on NODE/ELEMENT INPUT over the same supplied-bundle contract | Inline/alternate geometry and identities agree; original filenames, hashes and source diagnostics survive; real hosts acquire the required files |
 | [#657](https://github.com/andeplane/fem-lab/issues/657) | Browser/CLI/MCP acquisition and reports over #653 supplied-bundle and #654 unit/report contracts | Real file/folder flow through inspection, solve, comparison and portable reopen; path/cancellation/admission atomicity |
+| [#691](https://github.com/andeplane/fem-lab/issues/691) | Source-labelled nodal displacement CSV through the same registry and browser export action | Scientific f64 SI fields pinned to one result and its solved Model; original part/instance/node identities, exact CSV escaping and stale-context rejection; actual import/solve/export comparison |
 
 ### Source, namespace and lifecycle contract
 
@@ -269,9 +271,44 @@ source identities; the author's exact Abaqus/CAE version and export settings are
 That provenance limitation is retained rather than inferred from the filename. No fresh
 licensed Abaqus run or general stress-recovery equivalence is claimed.
 
-The #681 NODE/ELEMENT INPUT composition has passed 23 parser tests, 53 engine Abaqus tests,
-Clippy and authentic schema/codegen checks. The native CLI's five tests also pass with five
-actual source files and source-free displacement/stress/reaction checks. Its new browser/
-MCP/WASM host acceptance and the final engine/geometry 100% software-GPU coverage gates
-remain pending. Parent #650 remains open while those integration checks and child merges
-are completed.
+The newer composed core `5701a205` and matching schema, complete browser/Node WASM
+bundle and authentic ARM CLI also pass all five unchanged corpus comparisons. The
+NODE/ELEMENT INPUT case now uses five real submitted files through the browser, CLI
+and MCP, with exact source hashes and aggregate bytes. All three hosts solve and
+reopen after the whole submission directory is deleted. The analytical bar gives
+`u_x = 5e-7 m`, `sigma_xx = 1e5 Pa` and a `-1000 N` support reaction; replay preserves
+its result fields. The browser reads exactly the requested five files and never
+reads the selected unrelated file. All nine fresh Chromium tests pass with zero
+retries, and report/complete-mesh screenshots have been inspected.
+
+Registry 158 tests and MCP 67 tests retain 100% coverage in all four Vitest metrics;
+app 1,316 tests, workspace types, codegen, production build and actual native/WASM
+host parity pass on the same runtime. These are local composed-source results,
+not a deployment claim. Final engine/geometry software-GPU coverage and child
+merges remain pending. Parent #650 stays open until those gates complete.
+
+## Direct comparison export — issue #691
+
+The host acceptance audit found that existing CSV export offers extrema, reactions and
+paths, but no nodal displacement table retaining original source labels. Scientific
+queries already retain f64 fields and source provenance; requiring users to join those
+manually does not meet the intended easy comparison workflow. #691 adds an explicit
+registry-backed browser export with coordinates/displacements in SI and separate normalized
+and original part/instance/node identities. One immutable result ID and its solved Model
+hash must govern the join. Historical or stale fields must not receive current-source
+labels; unused authored nodes must not acquire invented zero results. The frozen implementation in PR #692 passes 190 registry tests at 100% coverage,
+57 focused UI tests, production build and two actual Chromium downloads. The unchanged
+published Abaqus case compares all 825 displacement components through the CSV. Concurrent
+source edits during preparation are rejected before delivery. Independent review is complete;
+final composed validation and the separate child merge remain pending.
+
+## Local coverage preflight for the composed implementation
+
+The geometry follow-up exercises an injective but uncertifiable quadratic shear and a
+nonconforming partial contact, retaining a separate positive curved-edge control. Its
+geometry certificate reaches 100% lines/functions/regions locally without exclusions.
+The actual fresh composed import batch also passes 24 pure I/O unit tests and 73 public
+registry cases. Mesh reader, assembly/source normalizer and static translator each reach
+100% lines/functions/regions; all-target software-GPU-feature Clippy and formatting pass.
+These focused results do not replace the final full engine/geometry software-adapter
+coverage run. The existing thresholds and independent numerical tolerances stay unchanged.
