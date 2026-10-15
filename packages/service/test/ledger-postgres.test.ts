@@ -33,14 +33,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
     expect(Number((await pool.query('SELECT count(*) AS n FROM credit_grants WHERE account_id=$1', [account.id])).rows[0].n)).toBe(1);
   });
   it('operator invitations cannot renew, double-grant, or move to a recreated identity', async () => {
-    clock = new Date('2026-11-01T12:00:00Z');
+    clock = new Date('2026-11-15T12:00:00Z');
     const account = await accounts.provision({uid:'invited',email:'reviewed@example.com'});
     const results = await Promise.all(Array.from({length:24},()=>approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)));
     expect(results.filter(result=>!result.replay)).toHaveLength(1);
-    expect(await ledger.balance(account.id)).toMatchObject({availableCredits:200000,periodEndsAt:'2026-12-01T12:00:00.000Z'});
+    expect(await ledger.balance(account.id)).toMatchObject({availableCredits:200000,periodEndsAt:'2026-12-15T12:00:00.000Z'});
     await expect(approveTrial(pool,account.id,'another-review',()=>clock,randomUUID)).rejects.toMatchObject({code:'trial-already-approved'});
-    clock = new Date('2026-12-02T12:00:00Z');
-    expect(await approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)).toMatchObject({replay:true,expiresAt:'2026-12-01T12:00:00.000Z'});
+    clock = new Date('2026-12-16T12:00:00Z');
+    expect(await approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)).toMatchObject({replay:true,expiresAt:'2026-12-15T12:00:00.000Z'});
     expect((await ledger.balance(account.id)).availableCredits).toBe(0);
     await pool.query("UPDATE accounts SET status='deleted',email='' WHERE id=$1",[account.id]);
     await expect(approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)).rejects.toMatchObject({code:'account-inactive'});
