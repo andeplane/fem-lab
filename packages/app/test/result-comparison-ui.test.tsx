@@ -41,7 +41,10 @@ it('keeps the empty comparison strip mounted as the first retained Result fills 
   expect(root.querySelector('.comparison-controls')).toBe(strip);
   expect([...root.querySelectorAll('.comparison-operands fieldset')]).toEqual(operands);
   expect(root.querySelector<HTMLButtonElement>('.comparison-actions .apply')?.disabled).toBe(false);
-  expect(query).toHaveBeenCalledExactlyOnceWith({ query: 'query.result', resultId: first.id });
+  expect(query.mock.calls).toEqual([
+    [{ query: 'query.result', resultId: first.id }],
+    [{ query: 'query.frames', resultId: first.id }],
+  ]);
   root.querySelector<HTMLButtonElement>('.comparison-actions [aria-pressed="true"]')!.click();
   expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.compareResults', mode: 'single' });
 });

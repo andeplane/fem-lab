@@ -2753,5 +2753,16 @@ quadratic errors 7.283e-9/5.926e-7 K. Backward-Euler dt=0.02/0.01/0.005 s
 on 32/64 cells compares 0.10/0.20 s at both orders and on both targets; the
 coarsest error stays below 0.01 K and every halving reduces it by >1.7.
 
-Node-WASM, two-pane scrubbing/playback/browser and full strict coverage
-acceptance remain required by #286's linked plan before closing it.
+The permanent `tools/test-transient-replay.mjs` additionally records two solves for
+thermal, explicit 2D and explicit 3D cases at both orders and 2/4 versus 4/8 axial
+cells. Native one/four-thread and fresh Node-WASM full-solve replay preserve exact
+Journal hashes, catalogue/sample metadata and immutable file state. All retained
+primary frames and sampled/final/mixed/same-id/reversed differences use the uniform
+heating or rigid-fall formulas above (`1e-10 K` / `1e-12 m`). Shifted thermal bodies
+give exact null coverage on both targets. Detaching/mutating transferred difference
+values and validity arrays cannot change a subsequent read; skip-solves replay
+refuses the absent sampled ids. All twelve new comparison variants and twelve
+existing primary-History variants pass on authenticated frozen-source native/WASM.
+
+Production two-pane scrubbing/playback/browser and full strict coverage acceptance
+remain required by #286's linked plan before closing it.

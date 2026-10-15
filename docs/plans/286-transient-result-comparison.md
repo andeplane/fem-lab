@@ -248,7 +248,16 @@ side-qualified failure handling and ordered status receipts fix these while pres
 reviewed generation fences. Unavailable drawings are explicitly cleared and their diagnostic
 identifies the missing operand.
 
-The permanent replay extension and stronger complete-body browser gate remain unverified source
-until authentic current-core sampled bindings are available. Production playback/cancellation,
-stale/eviction/mode/project lifecycle checks, cross-runtime replay and the final full host/strict
-coverage remain open. #286 is incomplete until those gates are fulfilled.
+The permanent replay extension now passes all twelve existing transient variants plus twelve
+sampled-comparison variants on authenticated `7915554a` source: actual CI checkout `49903d86`
+has the identical complete tree, emitted schema and all eight binding files; the local native
+CLI matches all 322 protected source/build inputs. Thermal/explicit2D/explicit3D, both orders,
+2/4 versus 4/8 axial cells pass native one/four-thread and Node-WASM exact hashes/metadata,
+independent physical fields/differences, null coverage, detached transfer ownership and
+skip-solves refusal. The first-record UI fixture now expects the exact ordered summary and
+History capability reads; its original CI failure is preserved and all six UI cases pass.
+
+The stronger complete-body browser gate remains prepared source. Production playback/cancellation,
+stale/eviction/mode/project lifecycle checks, the next coherent parent composition and final full
+host/strict coverage remain open. These scoped runtime results are not a current-main claim.
+#286 is incomplete until those gates are fulfilled.
