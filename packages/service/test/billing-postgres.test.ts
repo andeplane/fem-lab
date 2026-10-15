@@ -40,7 +40,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   afterAll(async()=>{await db.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
   it('concurrent duplicate event/invoice delivery grants the paid period once',async()=>{
     await Promise.all(Array.from({length:24},()=>deliver()));await deliver(envelope('evt_second','invoice.payment_succeeded'));
-    expect((await ledger.balance(accountId)).availableCredits).toBe(4000000);
+    expect((await ledger.balance(accountId)).availableCredits).toBe(10000000);
     expect((await db.query('SELECT * FROM paid_periods')).rows).toHaveLength(1);
     expect((await db.query("SELECT * FROM credit_grants WHERE plan='plus'")).rows).toHaveLength(1);
     expect((await db.query('SELECT * FROM billing_leases')).rows).toHaveLength(0);
@@ -57,10 +57,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   it('failed renewal and proration invoices cannot mint new allowances',async()=>{
     await deliver();invoice={...invoice,id:'in_failed',status:'open',reason:'subscription_cycle',amountPaid:0};subscription.status='past_due';
     await deliver(envelope('evt_failed','invoice.payment_failed','in_failed'));
-    expect((await ledger.balance(accountId)).availableCredits).toBe(4000000);
+    expect((await ledger.balance(accountId)).availableCredits).toBe(10000000);
     invoice={...invoice,status:'paid',reason:'subscription_update',amountPaid:1000,lines:invoice.lines.map(line=>({...line,proration:true}))};
     await deliver(envelope('evt_upgrade','invoice.paid','in_failed'));
     expect((await db.query('SELECT * FROM paid_periods')).rows).toHaveLength(1);
+  });
+  it('retains historical allowances and grants the revised amount once per paid renewal without rollover',async()=>{
+    const old=invoice.lines[0]!,source=`paid:${subscription.id}:${old.start}`;
+    // A previously issued $3 baseline allowance is immutable after the Plus increase.
+    await db.query(`INSERT INTO credit_grants(id,account_id,source,plan,tariff_version,amount,starts_at,expires_at,created_at)
+      VALUES($1,$2,$3,'plus','2026-10-14.v1',120000000,$4,$5,$4)`,[randomUUID(),accountId,source,new Date(old.start*1000),new Date(old.end*1000)]);
+    await db.query(`INSERT INTO paid_periods(invoice_id,account_id,subscription_id,period_start,period_end,plan,grant_source)
+      VALUES($1,$2,$3,$4,$5,'plus',$6)`,[invoice.id,accountId,subscription.id,new Date(old.start*1000),new Date(old.end*1000),source]);
+    await deliver();expect((await ledger.balance(accountId)).availableCredits).toBe(4_000_000);
+    clock=new Date(old.end*1000);
+    const end=new Date('2026-12-14T12:00:00Z').getTime()/1000;
+    invoice={...invoice,id:'in_renewal',reason:'subscription_cycle',lines:[{...old,start:old.end,end}]};subscription.periodEnd=end;
+    await deliver(envelope('evt_renewal','invoice.paid','in_renewal'));
+    await deliver(envelope('evt_renewal_other','invoice.payment_succeeded','in_renewal'));
+    invoice={...invoice,id:'in_same_period'};
+    await deliver(envelope('evt_same_period','invoice.paid','in_same_period'));
+    expect(await ledger.balance(accountId)).toMatchObject({plan:'plus',totalCredits:10_000_000,availableCredits:10_000_000,periodEndsAt:'2026-12-14T12:00:00.000Z'});
+    expect((await db.query("SELECT amount FROM credit_grants WHERE account_id=$1 AND plan='plus' ORDER BY starts_at",[accountId])).rows).toEqual([{amount:'120000000'},{amount:'300000000'}]);
+    expect((await db.query('SELECT * FROM paid_periods')).rows).toHaveLength(2);
+    clock=new Date(end*1000);
+    expect(await ledger.balance(accountId)).toMatchObject({plan:'free',totalCredits:0,availableCredits:0});
   });
   it('durably acknowledges an outage and retries without storing raw customer/payment data',async()=>{
     fail=true;expect(await deliver()).toEqual({received:true});

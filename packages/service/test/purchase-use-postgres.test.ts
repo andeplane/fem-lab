@@ -246,8 +246,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('purchase-use authority and froz
   });
 
   it.each([
-    ['price_plus','plus',null,4000000],['price_pro','pro',null,16000000],['price_studio','studio',null,50000000],
-    ['price_plus_personal','plus','personal',4000000],['price_plus_business','plus','business',4000000],
+    ['price_plus','plus',null,10000000],['price_pro','pro',null,16000000],['price_studio','studio',null,50000000],
+    ['price_plus_personal','plus','personal',10000000],['price_plus_business','plus','business',10000000],
     ['price_pro_personal','pro','personal',16000000],['price_pro_business','pro','business',16000000],
     ['price_studio_personal','studio','personal',50000000],['price_studio_business','studio','business',50000000],
   ] as const)('grants %s its tier allowance exactly once and records purchase use',async(price,plan,use,credits)=>{

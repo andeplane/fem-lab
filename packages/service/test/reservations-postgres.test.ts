@@ -80,6 +80,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
     expect(results.filter(row=>row.status==='rejected')).toHaveLength(1);
     expect((await db.query("SELECT count(*) AS n FROM ai_requests WHERE state='reserved'")).rows[0].n).toBe('1');
   });
+  it('enforces the supplier month budget for paid usage independently of the free pool and paid renewal date',async()=>{
+    const accountId=await owner();
+    await ledger.grant({accountId,source:'paid-budget',plan:'plus',startsAt:clock,expiresAt:new Date('2026-11-14T12:00:00Z')});
+    await db.query('UPDATE ai_limits SET monthly_micros=6000,free_daily_micros=0');
+    const id=await admit(accountId);await a.dispatch(accountId,id);
+    await a.settle(accountId,id,{input:1000,cacheRead:0,output:1000}); // $0.00525.
+    expect(await ledger.balance(accountId)).toMatchObject({plan:'plus',availableCredits:9_993_000});
+    const denied=await prepare(accountId);
+    await expect(a.reserve(accountId,denied.id,1000)).rejects.toMatchObject({code:'spend-limit'});await a.release(accountId,denied.id);
+    clock=new Date('2026-11-01T00:00:00Z');
+    const newMonth=await admit(accountId);await a.release(accountId,newMonth);
+    expect(await ledger.balance(accountId)).toMatchObject({plan:'plus',availableCredits:9_993_000});
+    expect((await db.query("SELECT count(*) AS n FROM credit_grants WHERE account_id=$1 AND plan='plus'",[accountId])).rows[0].n).toBe('1');
+  });
   it('global concurrency, model entitlement and context bounds fail closed',async()=>{
     const one=await owner('one'),two=await owner('two');
     await expect(prepare(one,randomUUID(),'gpt-6-astra')).rejects.toMatchObject({code:'model-not-in-plan'});

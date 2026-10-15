@@ -71,7 +71,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       expect(counted).toBeUndefined();expect(generated).toBe(0);
       expect((await db.query('SELECT * FROM ai_requests')).rows).toHaveLength(0);
       expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
-      expect((await ledger.balance(paid.id)).availableCredits).toBe(4000000);
+      expect((await ledger.balance(paid.id)).availableCredits).toBe(10000000);
       await db.query('DELETE FROM ai_limits');await db.query('INSERT INTO ai_limits(id) VALUES(true)');
       expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
         .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
