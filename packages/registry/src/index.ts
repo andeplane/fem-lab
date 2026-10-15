@@ -3,6 +3,7 @@ export type { Fem } from './generated/fem';
 export { FemError, nearest, type ErrorCode } from './error';
 export {EMPTY_ACCOUNT,type AccountInfo,type AccountState,type AccountPlan,type AccountServices} from './account-types';
 export { ABAQUS_ACCEPT, MAX_ABAQUS_BYTES, readAbaqus, type AbaqusFile, type AbaqusIo, type AbaqusInput, type AbaqusText } from './abaqus-import';
+export { STEP_ACCEPT, STEP_CONVERTER_VERSION, MAX_STEP_BYTES, MAX_STEP_TRIANGLES, MAX_STEP_GEOMETRY_BYTES, readStep, stepDeflection, stepGeometry, stepCommand, type StepImportInput, type StepIo, type StepReport, type StepImportHost, type StepImportResult, type StepConversionCounts } from './step-import';
 export { Registry, type CommandDef, type QueryDef, type HostDef, type EngineSchema, type JsonSchema, type Provider, type RegistryOptions } from './registry';
 export { decodeBulk, type EngineTransport, type ImportAck, type Progress, type Surface, type FieldData, type ResultSelector, type ExportSpec, type ExportedFile, type Op, type Req, type Res, type BufferSpec, type Dtype } from './transport';
 export { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, HOST_COMMANDS, HOST_QUERIES, EXPORT_FORMATS, AnimationCaptureOptions, extremesCsv, reactionsCsv, pathCsv, dataUrlBytes, type AiProvider, type ExportFormatRow, type HostContext, type Selection, type FolderInfo, type ScriptResult, type ProjectMeta, type OpenProject, type ProjectSaveReceipt, type AutosaveState, type AutosaveVersion } from './host-commands';

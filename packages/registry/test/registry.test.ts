@@ -56,6 +56,8 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.open': { json: JSON.stringify(MODEL_FILE) },
   'file.importAbaqus': { text: '*NODE', name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 mm' },
   'geometry.importFile': { name: 'part' },
+  'geometry.importStep': { name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' },
+  'geometry.cancelStep': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
   'file.cancelAnimationCapture': {},
@@ -80,6 +82,18 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
 };
 
 describe('Registry', () => {
+  it('routes STEP import/cancel through the injected host and reports missing conversion explicitly', async () => {
+    const { registry, host, transport } = make();
+    const input = { name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' };
+    expect(await registry.dispatch({ cmd: 'geometry.importStep', ...input })).toEqual({ cancelled: true });
+    expect(host.step!.import).toHaveBeenCalledWith(input);
+    expect(await registry.dispatch({ cmd: 'geometry.cancelStep', name: 'part' })).toEqual({ cancelled: true });
+    expect(host.step!.cancel).toHaveBeenCalledWith('part');
+    host.step = undefined;
+    await expect(registry.dispatch({ cmd: 'geometry.importStep', ...input })).rejects.toMatchObject({ code: 'unsupported' });
+    expect(await registry.dispatch({ cmd: 'geometry.cancelStep', name: 'part' })).toEqual({ cancelled: false });
+    expect(transport.dispatch).not.toHaveBeenCalled();
+  });
   it('lists every schema Command and Query plus every host Command and Query', () => {
     const { registry } = make();
     const { commands, queries } = registry.list();

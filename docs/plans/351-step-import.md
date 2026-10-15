@@ -114,9 +114,10 @@ roots/faces and supported tessellated geometry, not universal STEP entity suppor
   deterministic ASCII STL encoding; do not narrow through binary STL's f32 records.
   Reject nonfinite coordinates, malformed indices and incomplete/empty output. Preserve
   supplied transformed coordinates and winding; do not infer new transforms.
-- Bound file metadata before reading, recheck actual bytes, and bound converted geometry
+- Bound STEP file metadata and the actual snapshot to **16 MiB** before conversion. Bound converted geometry
   against the existing 500,000-triangle engine ceiling and geometry payload limit before
-  dispatch. Native engine geometry checks remain authoritative for watertightness and shape
+  dispatch. The host also rejects cyclic/repeated hierarchy nodes and hierarchies above 10,000
+  nodes, instead of traversing unbounded metadata. Native engine geometry checks remain authoritative for watertightness and shape
   validity. Ordinary saves retain the existing exact 16 MiB ModelFile encoding policy.
 
 ## Admission, cancellation and publication

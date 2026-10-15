@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
 import type { AbaqusConversion, AbaqusConversionReport, ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, Query, ResultSummary } from './generated/engine';
 import { AbaqusImport, readAbaqus, type AbaqusIo } from './abaqus-import';
+import { StepImport, type StepImportHost } from './step-import';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
@@ -140,6 +141,8 @@ export interface AutosaveVersion {
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
+  /** Optional host converter. Replay of its portable geometry Commands needs no converter. */
+  step?: StepImportHost;
   /** Retained Result presentation is host-owned; headless hosts report unsupported explicitly. */
   resultComparison?: ResultComparisonHost;
   /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
@@ -489,6 +492,11 @@ export const HOST_COMMANDS: HostDef[] = [
     await captured.replace(conversion.commands, conversion.report);
     return { report: conversion.report };
   }),
+  def('geometry.importStep', 'modelWrite', 'Import a STEP .step/.stp file (at most 16 MiB) as one named Body, or re-import that Body, using a lazy cancellable host converter. Omit path for a picker; paths are scoped to the open folder. Supply explicit linearDeflection (length, at least 0.0000001 m) and angularDeflection (positive angle, at most pi rad). STEP declared units become meters independently of display units. Every source mesh/face must convert completely; errors never silently drop geometry. Multiple meshes become one Body. Exact B-rep, CAD history, original face identities and CAD materials are not retained. The Journal stores one ordinary geometry.import with f64 ASCII triangles, replayable without the converter or source file. Captures session/state before I/O: a model edit or project switch rejects publication; view changes remain valid. A second pending STEP import conflicts. Use geometry.cancelStep with the same name before publication to terminate it. Returns the checked Ack and a conversion receipt. Name durable face targets with geometry.nameFace predicates before meshing.', StepImport, async (input, ctx) => {
+    if (!ctx.step) throw new FemError('unsupported', 'this host has no STEP converter', 'geometry.importStep', 'import in the browser, then replay its portable Journal on this host');
+    return ctx.step.import(input);
+  }),
+  def('geometry.cancelStep', 'control', 'Cancel the pending STEP conversion for the explicit Body name, terminating its dedicated Worker. Returns cancelled:false when that name has no pending conversion or publication has begun. No engine Command is recorded.', z.object({ name: z.string().min(1) }), ({ name }, ctx) => ({ cancelled: ctx.step?.cancel(name) ?? false })),
   def('geometry.importFile', 'modelWrite', 'Import a geometry file from disk as a Body: with the file picker, or from a `path` relative to the open project folder. The file is read here and handed to the engine\'s geometry.import, which carries it inline, so the Journal replays on any host without the file. STL only for now, ASCII or binary, up to 32 MiB. `unitLength` says what one unit in the file means and defaults to `1 mm`, which is what most CAD tools export; check the reported bounding box if you are not sure. `featureAngle` (degrees) and `simplifyBelow` (a length) are passed straight through. Name the faces you will reuse with geometry.nameFace predicates rather than the auto `face0` numbers, which move when the file does.', z.object({
     name: z.string(),
     path: z.string().optional(),
