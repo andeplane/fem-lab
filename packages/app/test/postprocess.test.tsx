@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
+import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, hasDeformation, modeChoice, modeCount, showFieldArgs, siUnitOf } from '../src/fields';
 import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
@@ -17,6 +17,8 @@ import { resultItems } from '../src/ui/Tree';
 const v = (value: number, unit: string) => ({ value, unit });
 
 const RESULT = {
+  modeCount: 0,
+  resultId: 'result-2',
   step: 'modal',
   revision: 9,
   stale: false,
@@ -30,8 +32,8 @@ const RESULT = {
   balance: 0,
 } as unknown as ResultSummary;
 
-const modal = { ...RESULT, frequencies: [v(41.2, 'Hz'), v(258.1, 'Hz'), v(0, 'Hz')] } as ResultSummary;
-const buckling = { ...RESULT, step: 'buckle', bucklingFactors: [17.3996, 17.3996] } as ResultSummary;
+const modal = { ...RESULT, modeCount: 3, frequencies: [v(41.2, 'Hz'), v(258.1, 'Hz'), v(0, 'Hz')] } as ResultSummary;
+const buckling = { ...RESULT, step: 'buckle', modeCount: 2, bucklingFactors: [17.3996, 17.3996] } as ResultSummary;
 const transient = {
   ...RESULT,
   step: 'heat',
@@ -46,6 +48,7 @@ const transient = {
 const harmonic = {
   ...RESULT,
   step: 'sweep',
+  frequencies: modal.frequencies,
   sweep: [
     { frequency: v(10, 'Hz'), amplitude: v(0.2, 'mm'), phase: v(0.01, 'rad') },
     { frequency: v(20, 'Hz'), amplitude: v(1.8, 'mm'), phase: v(1.5, 'rad') },
@@ -112,6 +115,18 @@ describe('the field table, once a Result has modes and a yield', () => {
     expect(fieldKeyOf('utilisation', null)).toBe('utilisation');
     expect(fieldKeyOf('displacement', 2)).toBe('uz');
     expect(fieldKeyOf('displacement', null)).toBe('umag');
+  });
+
+  it('does not offer inherited frequencies as response mode fields', () => {
+    expect(modeCount(null)).toBe(0);
+    expect(modeCount(modal)).toBe(3);
+    expect(modeCount(buckling)).toBe(2);
+    expect(modeCount(harmonic)).toBe(0);
+    expect(fieldChoices(['displacement'], harmonic).map(c => c.key)).toEqual(['umag', 'ux', 'uy', 'uz']);
+    const response = { ...harmonic, extremes: [{ field: 'displacement', component: 0, min: v(0, 'm'), max: v(1, 'm'), minAt: [], maxAt: [] }] } as unknown as ResultSummary;
+    expect(available('mode:1', response, false)).toBe('umag');
+    expect(hasDeformation(response, 'umag')).toBe(true);
+    expect(hasDeformation({ ...harmonic, extremes: [] }, 'mode:1')).toBe(false);
   });
 });
 
@@ -238,6 +253,16 @@ describe('the history and the frequencies', () => {
     expect(dispatch).toHaveBeenCalledWith({ cmd: 'view.showField', field: 'mode:1' });
   });
 
+  it('retains harmonic basis frequencies without offering nonexistent shapes', () => {
+    const root = document.createElement('div');
+    render(<Frequencies s={state({ result: harmonic, fieldKey: 'umag' })} dispatch={vi.fn()} />, root);
+    expect(root.textContent).toContain('Modal basis frequencies');
+    expect(root.textContent).toContain('41.2 Hz');
+    expect(root.querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(root.querySelectorAll('[data-cmd]')).toHaveLength(0);
+    expect(root.textContent).toContain('this Result contains response fields');
+  });
+
   it('shows nothing for a Step that found no frequencies', () => {
     const root = document.createElement('div');
     render(<Frequencies s={state({ result: RESULT })} dispatch={async () => undefined} />, root);
@@ -255,6 +280,7 @@ describe('the Results group of the tree', () => {
     expect(resultItems(state({}))).toEqual([]);
     const rows = resultItems(state({ result: modal, fieldKey: 'mode:1', yieldStress: 355e6 }));
     expect(rows.map((r) => r.name)).toEqual(['σ_vM', 'mode 1', 'mode 2', 'mode 3', 'n_y', 'σ/f_y']);
+    expect(rows.every(row => row.ref === 'result:id:result-2')).toBe(true);
     expect(rows.every((r) => r.cmd === 'view.showField')).toBe(true);
     expect(rows[1]).toMatchObject({ args: { field: 'mode:1' }, active: true, summary: '41.2 Hz · mode shape' });
     expect(rows[0]!.summary).toBe('0.1 MPa … 12.4 MPa on modal');
@@ -282,6 +308,10 @@ describe('the Results group of the tree', () => {
 });
 
 describe('the deformation bar', () => {
+  const displacementResult: ResultSummary = { ...RESULT, extremes: [...RESULT.extremes, {
+    field: 'displacement', component: 0, min: v(0, 'mm'), minAt: [v(0, 'mm'), v(0, 'mm'), v(0, 'mm')],
+    max: v(0.2, 'mm'), maxAt: [v(1, 'mm'), v(2, 'mm'), v(3, 'mm')],
+  }] };
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -296,7 +326,7 @@ describe('the deformation bar', () => {
   };
 
   it('offers play, and no scrub, for a plain static Result', () => {
-    const { root } = mount({ result: RESULT });
+    const { root } = mount({ result: displacementResult });
     const bar = root.querySelector('.deform-bar')!;
     expect(bar.querySelector('[data-cmd="view.animate"]')!.textContent).toBe('▶');
     expect(bar.querySelector('input.phase')).toBeNull();
@@ -362,7 +392,7 @@ describe('the deformation bar', () => {
     const { root, store } = mount({ result: modal, fieldKey: 'mode:2', phase: 0.25 });
     // App's selection effect calls setSelection on every render, so a fake without it throws
     // after the assertions pass — which vitest reports as an unhandled error and a failed run.
-    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn(), setSelection: vi.fn() } };
+    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn(), setSelection: vi.fn(), setHover: vi.fn() } };
     const dispatch = vi.fn(async () => { throw new Error('rejected'); });
     render(<App store={store} dispatch={dispatch} viewer={viewer as never} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
     const phase = root.querySelector<HTMLInputElement>('input.phase')!;

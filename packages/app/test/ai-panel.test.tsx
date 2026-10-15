@@ -23,7 +23,7 @@ import { fakeDir } from './project-fake';
 
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
-  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : q.query === 'query.results' ? { limit: 8, records: [] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
   const viewer = { current: null };
   const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}));
@@ -72,6 +72,7 @@ describe('the assistant drawer', () => {
     document.body.innerHTML = '';
     chatBridge.pending = null;
     chatBridge.pendingDraft = null;
+    chatBridge.pendingMentions = [];
     localStorage.clear();
     sessionStorage.clear();
   });
@@ -304,6 +305,34 @@ describe('the assistant drawer', () => {
     expect(root.querySelector<HTMLInputElement>('.settings input[type=password]')!.placeholder).toBe('sk-ant-a…7f2a');
     expect([...root.querySelectorAll('.model-row option')].map((o) => o.textContent)).toContain('claude-opus-5');
     expect(root.querySelector('[data-cmd="ai.setModel"]')).not.toBeNull();
+    expect(root.textContent).toContain('key saved in this browser');
+    expect(root.textContent).not.toContain('key stored for this tab session');
+  });
+
+  it('reports a retained legacy key as tab-only when it could not be persisted', async () => {
+    sessionStorage.setItem('femlab.ai.key', 'retained-tab-key');
+    const { root } = await mount({ panels: { 'assistant.settings': true } });
+    expect(root.textContent).toContain('from sessionStorage in this tab only');
+    expect(root.textContent).toContain('key available in this tab only');
+    expect(root.textContent).not.toContain('key saved in this browser');
+  });
+
+  it('keeps a refused key draft and shows a structured save or forget failure', async () => {
+    const { root } = await mount({ panels: { 'assistant.settings': true } });
+    const refused = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('refused'); });
+    try {
+      const input = root.querySelector<HTMLInputElement>('.settings input[type=password]')!;
+      input.value = 'new-key'; input.dispatchEvent(new Event('input', { bubbles: true })); await tick();
+      root.querySelector<HTMLButtonElement>('.settings button[data-cmd="ai.setKey"]')!.click();
+      await tick();
+      expect(input.value).toBe('new-key');
+      expect(root.textContent).toContain('unsupported: browser storage could not complete saving the key');
+      expect(root.textContent).not.toContain('new-key');
+      input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); await tick();
+      root.querySelector<HTMLButtonElement>('.settings button[data-cmd="ai.setKey"]')!.click();
+      await tick();
+      expect(root.textContent).toContain('unsupported: browser storage refused to forget the key completely');
+    } finally { refused.mockRestore(); }
   });
 
   it('lists the Model objects in the mention popover and inserts one as a token', async () => {
@@ -315,6 +344,41 @@ describe('the assistant drawer', () => {
     entry.click();
     await tick();
     expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+  });
+  it('drains buffered quoted targets unchanged, deduplicates equivalent names and keeps decoded chip labels on reopen', async () => {
+    chatBridge.pendingMentions = ['body:"beam"', 'file:"notes and \\"checks\\".md"'];
+    const { root, registry, store } = await mount();
+    const refs = () => [...root.querySelectorAll('.token')].map(token => token.getAttribute('data-ref'));
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(root.querySelectorAll('.token')[1]!.textContent).toContain('@file:notes and "checks".md');
+    await registry.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root); await paint();
+    render(<AssistantPanel registry={registry} store={store} />, root); await paint();
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
+  it('drops unsent chips when replacing their owning registry, while retaining the editable draft', async () => {
+    const previous = await mount();
+    await previous.registry.dispatch({ cmd: 'chat.insertMention', ref: 'result:id:result-1' });
+    await type(previous.root, 'Compare this solve');
+    expect(previous.root.querySelector('.token')!.getAttribute('data-ref')).toBe('result:id:result-1');
+    const next = await mount();
+    render(null, next.root);
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root); await paint();
+    expect(previous.root.querySelectorAll('.token')).toHaveLength(0);
+    expect(previous.root.querySelector('textarea')!.value).toBe('Compare this solve');
+  });
+  it.each(['@result:id:result-1', '@result:"id:result-1"'])('clears a typed immutable target on registry replacement: %s', async target => {
+    const previous = await mount();
+    await type(previous.root, `Inspect ${target}`);
+    const next = await mount();
+    render(null, next.root);
+    chatBridge.pendingMentions = ['result:id:result-1'];
+    chatBridge.pendingDraft = `Inspect ${target}`;
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root); await paint();
+    expect(previous.root.querySelector('textarea')!.value).toBe('');
+    expect(previous.root.querySelectorAll('.token')).toHaveLength(0);
+    expect(chatBridge.pendingMentions).toEqual([]);
   });
 
   it('expands @selection into one token per selected object', async () => {
@@ -612,6 +676,48 @@ describe('the assistant drawer', () => {
     render(null, root);
     chatBridge.send('after the drawer closed');
     expect(chatBridge.pending).toBe('after the drawer closed');
+  });
+
+  it('keeps references made before mount and inserts each chip once', async () => {
+    chatBridge.insertMention('body:beam');
+    chatBridge.insertMention('material:steel');
+    chatBridge.insertMention('body:beam');
+    const { root, store } = await mount({ panels: { assistant: false } });
+    await tick();
+    expect(store.state.panels['assistant']).toBe(true);
+    expect([...root.querySelectorAll('.tokens .token')].map(chip => chip.textContent))
+      .toEqual(['@body:beam×', '@material:steel×']);
+    expect(chatBridge.pendingMentions).toEqual([]);
+    await type(root, 'check these');
+    expect(root.querySelectorAll('.tokens .token')).toHaveLength(2);
+  });
+
+  it('opens a collapsed drawer when inserting a reference', async () => {
+    const { root, store, registry } = await mount({ panels: { assistant: false } });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root);
+    await paint();
+    chatBridge.insertMention('body:beam');
+    await tick();
+    expect(store.state.panels['assistant']).toBe(true);
+    expect(root.querySelector('.tokens .token')?.textContent).toContain('@body:beam');
+  });
+
+  it('buffers references after unmount for the next drawer', async () => {
+    const { root } = await mount();
+    render(null, root);
+    chatBridge.insertMention('body:beam');
+    const next = await mount();
+    await tick();
+    expect(next.root.querySelector('.tokens .token')?.textContent).toContain('@body:beam');
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
+
+  it('discards buffered references when chat is cleared before mount', async () => {
+    chatBridge.insertMention('body:beam');
+    chatBridge.clear();
+    const { root } = await mount();
+    await tick();
+    expect(root.querySelectorAll('.tokens .token')).toHaveLength(0);
   });
 });
 

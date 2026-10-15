@@ -85,6 +85,8 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     await fill(page, 'name', 'steel');
     await fill(page, 'E', '210 GPa');
     await fill(page, 'nu', '0.3');
+    await expect(field(page, 'rho')).toHaveCount(0);
+    await page.getByRole('group', { name: 'Material physics', exact: true }).getByRole('button', { name: 'mass', exact: true }).click();
     await fill(page, 'rho', '7850 kg/m^3');
     await fill(page, 'source', 'EN 10025');
     await apply(page);

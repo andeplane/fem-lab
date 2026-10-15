@@ -204,10 +204,10 @@ describe('behavioral Command parity', () => {
     await tick();
     expect(revertCalls).toHaveLength(1);
     expect(revertCalls[0]!.cmd).toBe(revertDataCmd);
-    expect(revertCalls[0]).toEqual({ cmd: 'form.open', command: 'load.pressure', args: { name: 'pressure', on: 'beam.top', value: '1 MPa' } });
+    expect(revertCalls[0]).toEqual({ cmd: 'form.open', command: 'load.pressure', args: { name: 'pressure', on: 'beam.top', value: '1 MPa' }, keepInitial: true });
     const revertAfter = observable(revert.store);
     const revertExplicit = harness();
-    revertExplicit.store.openForm('load.pressure', { name: 'changed', on: 'beam.top', value: '2 MPa' });
+    revertExplicit.store.set({ form: { cmd: 'load.pressure', values: { name: 'changed', on: 'beam.top', value: '2 MPa' }, initial: { name: 'pressure', on: 'beam.top', value: '1 MPa' } } });
     await revertExplicit.registry.dispatch(revertCalls[0]!);
     expect(observable(revertExplicit.store)).toEqual(revertAfter);
     unmount(revert.root);

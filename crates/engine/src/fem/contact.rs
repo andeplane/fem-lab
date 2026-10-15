@@ -263,6 +263,7 @@ pub fn finish(
         let active = nodes.len();
         if active == 0 {
             warnings.push(Warning {
+                step: None,
                 code: "contact.open".into(),
                 text: format!(
                     "contact '{name}' ended fully open: none of the {paired} paired nodes of '{slave}' touches \

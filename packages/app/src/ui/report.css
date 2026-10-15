@@ -211,6 +211,13 @@
 }
 
 @media print {
+  :root:has(.report-screen) {
+    color-scheme: light;
+    background: #fff;
+  }
+  body:has(.report-screen) {
+    background: #fff;
+  }
   @page {
     size: A4;
     margin: 15mm 13mm;

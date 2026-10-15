@@ -12,7 +12,7 @@ import { HANDLES, done, openDb, tx } from '../db';
 export interface FileHandle {
   kind: 'file';
   name: string;
-  getFile(): Promise<{ size: number; lastModified: number; text(): Promise<string> }>;
+  getFile(): Promise<{ size: number; lastModified: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> }>;
   createWritable(): Promise<{ write(data: string | Uint8Array): Promise<void>; close(): Promise<void> }>;
 }
 export interface DirHandle {
@@ -138,6 +138,13 @@ export class ProjectFolder {
 
   async readText(path: string): Promise<string> {
     return (await (await this.fileHandle(assertInside(path))).getFile()).text();
+  }
+
+  /** Return an immutable browser File snapshot without decoding or allocating its contents. */
+  async readFile(path: string) {
+    const handle = await this.fileHandle(assertInside(path));
+    const file = await handle.getFile();
+    return { name: handle.name, size: file.size, arrayBuffer: () => file.arrayBuffer() };
   }
 
   async writeText(path: string, text: string): Promise<void> {

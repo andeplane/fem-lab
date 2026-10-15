@@ -2,20 +2,30 @@
 // with a glyph, a mono name and a one-line summary in display units, the `@` reference button and
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
+import { refOf, type Command } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import schema from '../../../registry/src/generated/runtime-schema';
 import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
+import { humanise } from './schema';
+import { procedureSummary } from './procedures';
+import { materialProperties, type MaterialProperty } from './materialSummary';
+import { loadTargets } from '../loadTargets';
 
 export interface TreeItem {
   /** The Command a click puts in the Properties form, with the object read back as its arguments. */
   cmd: string;
   args: Record<string, unknown>;
   kind: string;
+  /** The supported context target, independent of the row's display caption. */
+  ref: string;
   glyph: string;
   glyphClass: string;
   name: string;
   summary: string;
+  /** Material properties wrap individually so all configured thermal data stays visible. */
+  properties?: MaterialProperty[];
   /** `selection.set` arguments for "select in viewer"; empty for objects the viewer cannot show. */
   select: Record<string, unknown>;
   /** The `*.remove` Command for this kind, if it has one. */
@@ -86,10 +96,20 @@ const GROUP_OF: Record<string, string> = {
   'model.no-material': 'Materials',
   'model.no-section': 'Materials',
   'model.unconstrained': 'Constraints',
+  'model.no-temperature-reference': 'Constraints',
+  'material.missing-property': 'Materials',
   'model.unloaded': 'Loads',
   'model.no-step': 'Steps',
   'load.no-density': 'Loads',
 };
+
+// Keep the available kinds in step with the callable engine schema; removal is an action,
+// not a kind a person can add. Units and targets are described by each kind's form.
+const kinds = (prefix: string): string => schema.commands.oneOf
+  .map(variant => variant.properties.cmd.const)
+  .filter(name => name.startsWith(`${prefix}.`) && name !== `${prefix}.remove`)
+  .map(name => humanise(name.slice(prefix.length + 1)).toLowerCase())
+  .join(', ');
 
 type Valued = { value: number; unit: string } | undefined;
 const q = (v: Valued | null | undefined): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
@@ -130,6 +150,7 @@ export function resultItems(s: UiState): TreeItem[] {
       args: showFieldArgs(c) as Record<string, unknown>,
       run: true,
       kind: 'result',
+      ref: refOf('result', `id:${r.resultId}`),
       glyph: '◧',
       glyphClass: s.fieldKey === c.key ? 'glyph green' : 'glyph low',
       name: c.label,
@@ -171,6 +192,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
           args: { kind: 'body', name: b.name },
           run: true,
           kind: 'body',
+          ref: refOf('body', b.name),
           glyph: '◈',
           glyphClass: 'glyph low',
           name: b.name,
@@ -183,6 +205,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
           args: { kind: 'set', name: f.name },
           run: true,
           kind: 'set',
+          ref: refOf('set', f.name),
           glyph: '▣',
           glyphClass: 'glyph cyan',
           name: f.name,
@@ -194,20 +217,25 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Materials',
-      'Nothing carries stiffness yet. Every Body needs a Material before a Step can start.',
+      'Assign Materials to Bodies. Each Step uses the mechanical or thermal properties it needs.',
       { what: 'material', cmd: 'material.add' },
-      (m?.materials ?? []).map((x) => ({
-        cmd: 'form.edit',
-        args: { kind: 'material', name: x.name },
-        run: true,
-        kind: 'material',
-        glyph: '●',
-        glyphClass: 'glyph mat',
-        name: x.name,
-        summary: `${x.orthotropic ? `E1 ${q(x.orthotropic.E1)} · E2 ${q(x.orthotropic.E2)}` : `E ${q(x.E)} · ν ${x.nu}`}${x.orientation ? ` · axes ${Number(x.orientation.degrees.toPrecision(4))}°` : ''}${x.rho ? ` · ρ ${q(x.rho)}` : ''} · on ${x.assignedTo.join(', ') || 'nothing'}`,
-        select: { bodies: x.assignedTo },
-        remove: 'material.remove',
-      })),
+      (m?.materials ?? []).map((x) => {
+        const properties: MaterialProperty[] = [...materialProperties(x, m!), { key: 'assignment', text: `on ${x.assignedTo.join(', ') || 'nothing'}`, usedBy: [] }];
+        return {
+          cmd: 'form.edit',
+          args: { kind: 'material', name: x.name },
+          run: true,
+          kind: 'material',
+          ref: refOf('material', x.name),
+          glyph: '●',
+          glyphClass: 'glyph mat',
+          name: x.name,
+          summary: properties.map((property) => property.text).join(' · '),
+          properties,
+          select: { bodies: x.assignedTo },
+          remove: 'material.remove',
+        };
+      }),
     ),
     group(
       'Mesh',
@@ -216,9 +244,13 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       m?.meshSettings
         ? [
             {
-              cmd: 'mesh.set',
-              args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
+              cmd: m.meshSettings.mesher.kind === 'imported' ? 'form.edit' : 'mesh.set',
+              args: m.meshSettings.mesher.kind === 'imported'
+                ? { kind: 'body', name: m.meshSettings.mesher.body }
+                : { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
+              run: m.meshSettings.mesher.kind === 'imported',
               kind: 'mesh',
+              ref: refOf('mesh', 'mesh'),
               glyph: '▦',
               glyphClass: 'glyph low',
               name: 'mesh',
@@ -234,13 +266,14 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Constraints',
-      'Fix, symmetry or a prescribed displacement on a named face. Without one the body floats.',
+      `Available constraints: ${kinds('constraint')}. A Step chooses which are active.`,
       { what: 'constraint', cmd: 'constraint.fix' },
       (m?.constraints ?? []).map((x) => ({
         cmd: 'form.edit',
         args: { kind: 'constraint', name: x.name },
         run: true,
         kind: 'constraint',
+        ref: refOf('constraint', x.name),
         glyph: '△',
         glyphClass: 'glyph cyan',
         name: x.name,
@@ -258,6 +291,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         args: { kind: 'constraint', name: x.name },
         run: true,
         kind: 'constraint',
+        ref: refOf('constraint', x.name),
         glyph: '⋈',
         glyphClass: 'glyph cyan',
         name: x.name,
@@ -268,34 +302,37 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
     ),
     group(
       'Loads',
-      'Pressure, traction, total force, gravity or temperature on a named face — each with its total.',
+      `Available loads: ${kinds('load')}. A Step chooses which are active.`,
       { what: 'load', cmd: 'load.pressure' },
       (m?.loads ?? []).map((x) => ({
         cmd: 'form.edit',
         args: { kind: 'load', name: x.name },
         run: true,
         kind: 'load',
+        ref: refOf('load', x.name),
         glyph: x.kind === 'gravity' ? '→' : '↓',
         glyphClass: 'glyph load',
         name: x.name,
         summary: `${x.summary}${x.on ? ` on ${x.on}` : ''}`,
-        select: x.on ? { sets: [x.on] } : {},
+        // Body/global loads need their exact saved definition, absent from ModelSummary.
+        select: x.on ? { sets: [x.on] } : { refs: [refOf('load', x.name)], load: x.name },
         remove: 'load.remove',
       })),
     ),
     group(
       'Steps',
-      'Static now, modal and transient later. A Step says which Constraints and Loads are active.',
+      'Choose a procedure and its active Constraints and Loads. Steps run in the order shown.',
       { what: 'step', cmd: 'step.add' },
       (m?.steps ?? []).map((x) => ({
         cmd: 'form.edit',
         args: { kind: 'step', name: x.name },
         run: true,
         kind: 'step',
+        ref: refOf('step', x.name),
         glyph: '▶',
         glyphClass: x.solved ? 'glyph green' : 'glyph low',
         name: x.name,
-        summary: `${x.procedure} · ${x.constraints.length} constraints · ${x.loads.length} loads${x.solved ? ' · solved' : ''}`,
+        summary: `${procedureSummary(x.procedure)} · ${x.constraints.length} constraints · ${x.loads.length} loads${x.solved ? ' · solved' : ''}`,
         select: {},
         remove: 'step.remove',
       })),
@@ -348,7 +385,43 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
   );
 }
 
-export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[] }) {
+export interface HoverFrames {
+  request(callback: () => void): number;
+  cancel(handle: number): void;
+}
+const browserHoverFrames: HoverFrames = {
+  request: callback => requestAnimationFrame(callback),
+  cancel: handle => cancelAnimationFrame(handle),
+};
+
+export function ModelTree({ s, dispatch, shapes = [], hoverFrames = browserHoverFrames }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[]; hoverFrames?: HoverFrames }) {
+  const selectionRun = useRef(0);
+  const hovered = useRef<string | null>(null);
+  const pendingHover = useRef<Record<string, unknown> | null>(null);
+  const hoverFrame = useRef<number | null>(null);
+  const preview = (item: TreeItem | null) => {
+    hovered.current = item ? `${item.kind}:${item.name}` : null;
+    pendingHover.current = item ? item.select['refs'] ? { load: item.name } : item.select : {};
+    if (hoverFrame.current !== null) return;
+    hoverFrame.current = hoverFrames.request(() => {
+      hoverFrame.current = null;
+      const target = pendingHover.current;
+      pendingHover.current = null;
+      if (target) void dispatch({ cmd: 'view.hover', ...target }).catch(() => undefined);
+    });
+  };
+  const leave = (item: TreeItem) => {
+    if (hovered.current === `${item.kind}:${item.name}`) preview(null);
+  };
+  useEffect(() => () => {
+    selectionRun.current++;
+    const active = hovered.current !== null || hoverFrame.current !== null;
+    if (hoverFrame.current !== null) hoverFrames.cancel(hoverFrame.current);
+    hovered.current = null;
+    pendingHover.current = null;
+    hoverFrame.current = null;
+    if (active) void dispatch({ cmd: 'view.hover' }).catch(() => undefined);
+  }, [s.model, dispatch, hoverFrames]);
   const dragSource = useRef<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ target: string; edge: DropEdge } | null>(null);
@@ -405,6 +478,7 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                     const menuPanel = `tree.menu.${itemKey}`;
                     const visible = !s.hiddenBodies.includes(item.name);
                     const isStep = group.label === 'Steps';
+                    const showsTargets = item.kind === 'constraint' || item.kind === 'load';
                     const dropEdge = drop?.target === item.name ? drop.edge : null;
                     const classes = [
                       'row',
@@ -421,6 +495,8 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                         data-cmd={isStep ? 'step.reorder' : undefined}
                         data-step={isStep ? item.name : undefined}
                         title={isStep ? `Drag ${item.name} to change the Step run order` : undefined}
+                        onMouseEnter={showsTargets ? () => preview(item) : undefined}
+                        onMouseLeave={showsTargets ? () => leave(item) : undefined}
                         onDragStart={isStep ? (e) => {
                           if (!e.dataTransfer) return;
                           dragSource.current = item.name;
@@ -453,12 +529,37 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           cmd={item.run ? item.cmd : 'form.open'}
                           class="row-main"
                           args={item.run ? item.args : { command: item.cmd, args: item.args }}
-                          title={`${item.cmd} — ${item.name}`}
+                          title={`${item.kind === 'result' ? 'Show' : 'Edit'} ${item.name}`}
+                          onFocus={showsTargets ? () => preview(item) : undefined}
+                          onBlur={showsTargets ? () => leave(item) : undefined}
+                          onRun={() => {
+                            const request = ++selectionRun.current;
+                            const open = () => request === selectionRun.current
+                              ? dispatch(item.run ? { cmd: item.cmd, ...item.args } : { cmd: 'form.open', command: item.cmd, args: item.args })
+                              : undefined;
+                            // A superseded definition read returns no Command. It must not
+                            // start a fresh selection/edit after another form has taken over.
+                            if (showsTargets) void open()?.then(definition => {
+                              if (definition && request === selectionRun.current) {
+                                // form.edit returns the engine's exact Command. Select its
+                                // drawables explicitly so selection.set need not read it again.
+                                const targets = item.kind === 'load' ? loadTargets(definition as Command, s.model) : item.select;
+                                return dispatch({ cmd: 'selection.set', ...targets });
+                              }
+                              return undefined;
+                            }).catch(() => undefined);
+                            else void open()?.catch(() => undefined);
+                          }}
                         >
                           <span class={item.glyphClass}>{item.glyph}</span>
                           <span class="row-text">
                             <span class="mono name">{item.name}</span>
-                            <span class="summary">{item.summary}</span>
+                            <span class={`summary${item.properties ? ' material-summary' : ''}`}>
+                              {item.properties ? item.properties.map((property, index) => <span class="material-property" key={property.key}>
+                                {index > 0 ? ' · ' : ''}
+                                {property.usedBy.length ? <strong title={`Used by ${property.usedBy.join(', ')}`}>{property.text}</strong> : property.text}
+                              </span>) : item.summary}
+                            </span>
                           </span>
                         </Cmd>
                         {isStep && stepNames.length > 1 ? (
@@ -506,9 +607,10 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                           dispatch={dispatch}
                           cmd="chat.insertMention"
                           class="at"
-                          title={`reference @${item.kind}:${item.name} in chat`}
+                          title={`Reference ${item.name} in chat`}
+                          args={{ ref: item.ref }}
                           onRun={() => {
-                            const ref = `${item.kind}:${item.name}`;
+                            const ref = item.ref;
                             void dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }).catch(() => undefined));
                           }}
                         >
@@ -552,7 +654,7 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
                         class="chip-add"
                         args={{ command: group.add.cmd }}
                         pressed={adding === group.label}
-                        title={group.add.menu ? `choose what to add to ${group.label}` : `fill in ${group.add.cmd}`}
+                        title={group.add.menu ? `choose what to add to ${group.label}` : `Add ${group.add.what}`}
                         {...(group.add.menu ? { onRun: () => setAdding(adding === group.label ? null : group.label) } : {})}
                       >
                         + add {group.add.what}

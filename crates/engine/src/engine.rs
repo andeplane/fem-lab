@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{RegionPredicate, Shape, Solid};
 
-use crate::command::{Command, ContactKind, DataEncoding, ExportFormat, IdealisationSpec, MeshFormat, ObjectKind};
+use crate::command::{
+    Command, ContactKind, DataEncoding, ExportFormat, IdealisationSpec, MeshFormat, ObjectKind, Procedure,
+};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
@@ -14,8 +16,93 @@ use crate::model::{
     NamedSet, PointMass, SetSource, Step,
 };
 use crate::par::Pool;
+use crate::procedure::Reference;
 use crate::query::{Ack, Output};
 use crate::units::{Dimension, Q};
+
+/// Geometry is removed by name, so its owners share one namespace. Reissuing a
+/// definition may replace its own kind; it must never change the kind of owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GeometryOwner {
+    Body,
+    MesherBody,
+    Cut,
+    Set,
+    PointMass,
+}
+
+impl GeometryOwner {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Body => "an explicit Body",
+            Self::MesherBody => "the mesher-defined Body",
+            Self::Cut => "a cut",
+            Self::Set => "a named Set",
+            Self::PointMass => "a point mass",
+        }
+    }
+}
+
+/// Only a prescribed value in the Step's own physical field can drive its solution.
+fn constraint_drives(constraint: &Constraint, heat: bool) -> bool {
+    match &constraint.kind {
+        ConstraintKind::Temperature { value } => heat && *value != 0.0,
+        ConstraintKind::Prescribe { value, .. } => !heat && *value != 0.0,
+        _ => false,
+    }
+}
+
+/// A reference to a Body is knowable without meshing; the size of its selected Set is not.
+fn set_targets_body(model: &Model, on: &str, body: &str) -> bool {
+    // The selected imported source owner is an aggregate: a named region
+    // selector targets that source too. This is only a pre-mesh reference
+    // check, never a claim of complete rigid-mode restraint.
+    let overlaps = |selected: &str| {
+        selected == body
+            || model
+                .imported_source()
+                .is_some_and(|source| source.body == body && source.regions.contains_key(selected))
+    };
+    if let Some(set) = model.sets.iter().find(|s| s.name == on) {
+        match &set.source {
+            SetSource::Face { of, .. } => overlaps(of),
+            SetSource::Region { where_: RegionPredicate::Body { name } } => overlaps(name),
+            SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
+        }
+    } else {
+        set_refers_to(on, body)
+    }
+}
+
+/// Relative ties and contacts do not anchor a structure to its surroundings.
+fn constraint_references(constraint: &Constraint, reference: Reference) -> bool {
+    match &constraint.kind {
+        ConstraintKind::Temperature { .. } => reference == Reference::Temperature,
+        ConstraintKind::Fix { .. }
+        | ConstraintKind::Pin
+        | ConstraintKind::Prescribe { .. }
+        | ConstraintKind::Symmetry { .. } => reference == Reference::Displacement,
+        _ => false,
+    }
+}
+
+/// A positive ambient film fixes the temperature level of a steady conduction problem.
+fn load_references_temperature(load: &Load) -> bool {
+    matches!(load.kind, LoadKind::Convection { .. } | LoadKind::Radiation { .. })
+}
+
+/// Loads in the other physical field cannot drive this Step. A thermal contact only transfers
+/// heat between Bodies; it neither supplies heat nor fixes an absolute temperature.
+fn load_drives(load: &Load, heat: bool) -> bool {
+    match load.kind {
+        LoadKind::Convection { .. }
+        | LoadKind::Radiation { .. }
+        | LoadKind::HeatFlux { .. }
+        | LoadKind::HeatSource { .. } => heat,
+        LoadKind::ThermalContact { .. } => false,
+        _ => !heat,
+    }
+}
 
 /// A borrowed rendering input exposes no model mutator or active-engine pointer.
 pub enum RenderView<'a> {
@@ -289,6 +376,11 @@ impl Engine {
                 );
             let hash = if skip {
                 let before = self.model.clone();
+                if matches!(e.cmd, Command::StudyConverge { .. }) {
+                    // A restoring study still requests regeneration, even though
+                    // skipped replay would leave its original settings unchanged.
+                    self.check_imported_study()?;
+                }
                 if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
                     let (settings, h) =
                         self.study_mesh(sizes).map_err(|err| err.at(format!("journal entry {}", e.seq)))?;
@@ -299,6 +391,9 @@ impl Engine {
                     let choices = refinements
                         .as_ref()
                         .ok_or_else(|| Error::schema("skipped adaptive replay requires recorded refinements"))?;
+                    if choices.is_empty() {
+                        self.check_imported_study()?;
+                    }
                     for boxes in choices {
                         self.apply_adaptive_refinement(boxes, max_elements.unwrap_or(100_000))?;
                     }
@@ -327,12 +422,16 @@ impl Engine {
     pub fn warnings(&self) -> Vec<Warning> {
         let m = &self.model;
         let mut w = Vec::new();
+        // Compute at most once, and only when a chained procedure finds a thermal Result.
+        let mut current_result_hash = None;
         // The mapped mesher's implicit Body is geometry too: it answers "is there anything to
         // analyse yet", and it needs a material like any other Body.
         let implicit = m.implicit_body();
+        let selected_body = implicit.or_else(|| m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()));
         let has_geometry = !m.bodies.is_empty() || implicit.is_some();
-        if let Some(body) = implicit.filter(|body| m.material_of_body(body).is_none()) {
+        for body in m.meshed_body_names().into_iter().filter(|body| m.material_of_body(body).is_none()) {
             w.push(Warning {
+                step: None,
                 code: "model.no-material".into(),
                 text: format!("Body '{body}' has no material; assign one with material.assign"),
                 where_: Some(format!("body '{body}'")),
@@ -349,14 +448,18 @@ impl Engine {
                     .is_none()
         }) {
             w.push(Warning {
+                step: None,
                 code: "model.no-section".into(),
                 text: format!("Body '{body}' needs a shell thickness section; use section.add and section.assign"),
                 where_: Some(format!("body '{body}'")),
             });
         }
-        for b in &m.bodies {
+        // A one-Body mesher ignores the other geometry definitions. Whole-Model meshers
+        // (and a Model without mesh settings yet) still require every Body to be valid.
+        for b in m.bodies.iter().filter(|body| selected_body.is_none_or(|selected| body.name == selected)) {
             if m.material_of_body(&b.name).is_none() {
                 w.push(Warning {
+                    step: None,
                     code: "model.no-material".into(),
                     text: format!("Body '{}' has no material; assign one with material.assign", b.name),
                     where_: Some(format!("body '{}'", b.name)),
@@ -369,6 +472,7 @@ impl Engine {
             let is_line_under_3d = b.shape.dim() == 1 && m.idealisation.dim() == 3;
             if !is_line_under_3d && b.shape.dim() != m.idealisation.dim() {
                 w.push(Warning {
+                    step: None,
                     code: "model.ill-posed".into(),
                     text: format!(
                         "Body '{}' is {}D but the idealisation is {}D; change one with model.setIdealisation",
@@ -382,50 +486,195 @@ impl Engine {
         }
         if !has_geometry {
             w.push(Warning {
+                step: None,
                 code: "model.empty".into(),
                 text: "no geometry yet; add a body with geometry.addBox or geometry.add".into(),
                 where_: None,
             });
         }
-        if m.constraints.is_empty() && has_geometry {
+        if m.steps.is_empty() && m.constraints.is_empty() && has_geometry {
             w.push(Warning {
+                step: None,
                 code: "model.unconstrained".into(),
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
-        } else if let Some(body) = implicit {
+        } else if let Some(body) = implicit.filter(|_| m.steps.is_empty()) {
             // Box regions select geometrically across the mesh; Body regions and faces name
             // their Body explicitly. A constraint left on another Body is not a support
             // for the mapped mesher's implicit Body. This is a reference check, not a claim
             // that the selected DOFs eliminate every rigid mode.
-            let targeted = m.constraints.iter().any(|c| {
-                if let Some(set) = m.sets.iter().find(|s| s.name == c.on) {
-                    match &set.source {
-                        SetSource::Face { of, .. } => of == body,
-                        SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
-                        SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
-                    }
-                } else {
-                    c.on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
-                }
-            });
+            let targeted = m.constraints.iter().any(|c| set_targets_body(m, &c.on, body));
             if !targeted {
                 w.push(Warning {
+                    step: None,
                     code: "model.unconstrained".into(),
                     text: format!("no constraints target Body '{body}'; add supports on its Sets with constraint.fix"),
                     where_: Some(format!("body '{body}'")),
                 });
             }
         }
-        if m.loads.is_empty() && has_geometry {
+        if has_geometry
+            && m.steps.is_empty()
+            && m.loads.is_empty()
+            && !m.constraints.iter().any(|c| constraint_drives(c, false) || constraint_drives(c, true))
+        {
             w.push(Warning {
+                step: None,
                 code: "model.unloaded".into(),
-                text: "no loads yet (load.pressure, load.traction, load.gravity …)".into(),
+                text: "no driving load or nonzero prescribed value; add a load or prescribed boundary condition".into(),
                 where_: None,
             });
         }
+        for step in m.steps.iter().filter(|_| has_geometry) {
+            let requirements = step.procedure.requirements();
+            let heat = requirements.heat;
+            let transient = requirements.transient;
+            let active_constraints: Vec<_> =
+                m.constraints.iter().filter(|c| step.constraints.contains(&c.name)).collect();
+            let active_loads: Vec<_> = m.loads.iter().filter(|l| step.loads.contains(&l.name)).collect();
+            if let Some(reference) = requirements.reference {
+                let anchors: Vec<_> =
+                    active_constraints.iter().filter(|c| constraint_references(c, reference)).collect();
+                let films: Vec<_> = active_loads.iter().filter(|l| load_references_temperature(l)).collect();
+                let held = !anchors.is_empty() || (heat && !films.is_empty());
+                let targeted = selected_body.is_none_or(|body| {
+                    anchors.iter().any(|c| set_targets_body(m, &c.on, body))
+                        // A tie may transmit a support from another Body or an anchored
+                        // point. Its actual pairing and rank need the mesh, so do not reject
+                        // a possible path before those checks can run.
+                        || active_constraints.iter().any(|c| {
+                            matches!(c.kind, ConstraintKind::Bonded { .. } | ConstraintKind::Frictionless { .. }
+                                | ConstraintKind::Cyclic { .. } | ConstraintKind::Couple { .. })
+                                && c.sets().iter().any(|on| set_targets_body(m, on, body))
+                        })
+                        || (heat && films.iter().any(|l| l.kind.set().is_some_and(|on| set_targets_body(m, on, body))))
+                });
+                if !held || !targeted {
+                    let (code, text) = if heat {
+                        ("model.no-temperature-reference", format!(
+                            "{} needs a temperature reference in this Step; use constraint.temperature or load.convection on the analysed Body",
+                            requirements.name
+                        ))
+                    } else if !held {
+                        let missing = if active_constraints.is_empty() {
+                            "no constraints"
+                        } else {
+                            "no active mechanical supports"
+                        };
+                        (
+                            "model.unconstrained",
+                            format!("{missing}; a {} solve needs supports (constraint.fix)", requirements.name),
+                        )
+                    } else {
+                        ("model.unconstrained", format!(
+                            "no constraints target Body '{}'; add supports on its Sets with constraint.fix for this {} Step",
+                            selected_body.expect("an untargeted reference belongs to the selected Body"), requirements.name
+                        ))
+                    };
+                    w.push(Warning {
+                        code: code.into(),
+                        text,
+                        step: Some(step.name.clone()),
+                        where_: Some(format!("step '{}'", step.name)),
+                    });
+                }
+            }
+            // Thermal transport reads the block material; structural mass also reads every
+            // laminate ply. Unused material definitions carry no requirement for this Step.
+            let mut assigned = std::collections::BTreeSet::new();
+            for body in m
+                .bodies
+                .iter()
+                .map(|b| b.name.as_str())
+                .filter(|body| selected_body.is_none_or(|name| *body == name))
+                .chain(m.meshed_body_names())
+            {
+                if let Some(material) = m.material_of_body(body) {
+                    assigned.insert(material);
+                }
+                if let Some(section) = m.section_of_body(body).filter(|_| !heat) {
+                    assigned.extend(section.plies.iter().map(|ply| ply.material.as_str()));
+                }
+            }
+            if requirements.mass
+                && m.points.is_empty()
+                && !assigned
+                    .iter()
+                    .filter_map(|name| m.material(name))
+                    .any(|material| crate::procedure::MaterialProperty::Density.present(material))
+            {
+                w.push(Warning {
+                    step: Some(step.name.clone()),
+                    code: "material.missing-property".into(),
+                    text: format!(
+                        "{} Step '{}' has no mass: assign positive rho with material.add or add geometry.addMass",
+                        requirements.name, step.name
+                    ),
+                    where_: Some(format!("step '{}'", step.name)),
+                });
+            }
+            for material in assigned.into_iter().filter_map(|name| m.material(name)) {
+                for property in requirements.properties.iter().filter(|property| !property.present(material)) {
+                    let property = property.name();
+                    w.push(Warning {
+                        step: Some(step.name.clone()),
+                        code: "material.missing-property".into(),
+                        text: format!(
+                            "{} Step '{}' needs finite positive {property}; use material.add with {property}",
+                            requirements.name, step.name
+                        ),
+                        where_: Some(format!("material '{}'", material.name)),
+                    });
+                }
+            }
+            // These procedures form a thermal force from a predecessor's temperature. Mirror
+            // solve_run's current-Result check: an arbitrary `after` or an unrelated field is
+            // not a thermal driver, and harmonic/random response still needs external forcing.
+            let thermal_strain =
+                matches!(
+                    step.procedure,
+                    Procedure::Static
+                        | Procedure::StaticNonlinear
+                        | Procedure::Buckling
+                        | Procedure::Explicit
+                        | Procedure::Implicit
+                ) && step.after.as_deref().and_then(|name| self.results.get(name)).is_some_and(|result| {
+                    result.result.fields.contains_key(&crate::command::Field::Temperature)
+                        && result.input_hash.as_str()
+                            == current_result_hash.get_or_insert_with(|| crate::hash::result_hash(m)).as_str()
+                });
+            let inherited = (transient && step.after.is_some()) || thermal_strain;
+            let initial_heat = step.procedure == Procedure::HeatTransient && step.initial.unwrap_or(293.15) != 0.0;
+            let motion = matches!(step.procedure, Procedure::Explicit | Procedure::Implicit)
+                && step
+                    .initial_velocity
+                    .as_ref()
+                    .is_some_and(|velocities| velocities.iter().any(|v| v.value.iter().any(|x| *x != 0.0)));
+            let prescribed =
+                m.constraints.iter().any(|c| step.constraints.contains(&c.name) && constraint_drives(c, heat));
+            if requirements.driven
+                && !inherited
+                && !initial_heat
+                && !active_loads.iter().any(|l| load_drives(l, heat))
+                && !motion
+                && !prescribed
+            {
+                w.push(Warning {
+                step: Some(step.name.clone()),
+                    code: "model.unloaded".into(),
+                    text: if heat {
+                        "no heat load or nonzero prescribed temperature in this Step; use load.heatFlux or constraint.temperature"
+                    } else {
+                        "no driving load or nonzero prescribed displacement in this Step; use a load or constraint.prescribe"
+                    }.into(),
+                    where_: Some(format!("step '{}'", step.name)),
+                });
+            }
+        }
         if m.steps.is_empty() && has_geometry {
             w.push(Warning {
+                step: None,
                 code: "model.no-step".into(),
                 text: "no analysis step; add one with step.add".into(),
                 where_: None,
@@ -433,18 +682,42 @@ impl Engine {
         }
         for l in &m.loads {
             if let LoadKind::Gravity { .. } = l.kind {
-                for b in &m.bodies {
-                    let has_rho =
-                        b.material.as_deref().and_then(|n| m.material(n)).is_some_and(|mat| mat.rho.is_some());
-                    if !has_rho {
-                        w.push(Warning {
-                            code: "load.no-density".into(),
-                            text: format!(
-                                "gravity '{}' skips body '{}': its material has no density (rho)",
-                                l.name, b.name
-                            ),
-                            where_: Some(format!("load '{}'", l.name)),
-                        });
+                // Modal analysis ignores forcing, and heat ignores mechanical Loads. An
+                // unused gravity definition is not an input requirement for any Step.
+                let owners = m
+                    .steps
+                    .iter()
+                    .filter(|step| {
+                        let requirements = step.procedure.requirements();
+                        step.loads.contains(&l.name) && requirements.driven && load_drives(l, requirements.heat)
+                    })
+                    .map(|step| Some(step.name.as_str()));
+                for owner in owners.chain(std::iter::once(None).filter(|_| m.steps.is_empty())) {
+                    for body in m
+                        .bodies
+                        .iter()
+                        .map(|body| body.name.as_str())
+                        .filter(|body| selected_body.is_none_or(|selected| *body == selected))
+                        .chain(m.meshed_body_names())
+                    {
+                        let materials = m.material_of_body(body).into_iter().chain(
+                            m.section_of_body(body)
+                                .into_iter()
+                                .flat_map(|section| section.plies.iter().map(|ply| ply.material.as_str())),
+                        );
+                        let has_rho =
+                            materials.filter_map(|name| m.material(name)).any(|material| material.rho.is_some());
+                        if !has_rho {
+                            w.push(Warning {
+                                step: owner.map(str::to_owned),
+                                code: "load.no-density".into(),
+                                text: format!(
+                                    "gravity '{}' skips body '{}': its material has no density (rho)",
+                                    l.name, body
+                                ),
+                                where_: Some(format!("load '{}'", l.name)),
+                            });
+                        }
                     }
                 }
             }
@@ -542,6 +815,20 @@ impl Engine {
                 Ok(Output::None)
             }
             Command::ModelSetIdealisation { idealisation } => {
+                if !matches!(idealisation, IdealisationSpec::Solid3d)
+                    && self
+                        .model
+                        .mesh
+                        .as_ref()
+                        .is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_)))
+                {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "an imported solid source requires solid3d idealisation",
+                    )
+                    .at("idealisation")
+                    .suggest("mesh.set with a different source before changing idealisation"));
+                }
                 self.model.idealisation = match idealisation {
                     IdealisationSpec::Solid3d => Idealisation::Solid3d,
                     IdealisationSpec::PlaneStress { thickness } => {
@@ -643,14 +930,20 @@ impl Engine {
                 self.add_body(name, shape)
             }
             Command::GeometryNameFace { name, of, where_ } => {
+                self.check_source_set_edit(name)?;
                 check_name(name)?;
+                self.check_geometry_name(name, GeometryOwner::Set)
+                    .map_err(|e| e.at("name").suggest("geometry.nameFace with another name"))?;
                 self.check_body(of).map_err(|e| e.at("of"))?;
                 let pred = where_.to_si()?;
                 let set = NamedSet { name: name.clone(), source: SetSource::Face { of: of.clone(), where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
             }
             Command::GeometryNameRegion { name, where_ } => {
+                self.check_source_set_edit(name)?;
                 check_name(name)?;
+                self.check_geometry_name(name, GeometryOwner::Set)
+                    .map_err(|e| e.at("name").suggest("geometry.nameRegion with another name"))?;
                 let pred = where_.to_si()?;
                 if let femlab_geometry::RegionPredicate::Body { name: b } = &pred {
                     self.check_body(b).map_err(|e| e.at("where.name"))?;
@@ -668,17 +961,8 @@ impl Engine {
                 for (k, q) in at.iter().enumerate() {
                     point[k] = q.si().map_err(|e| e.at(format!("at[{k}]")))?;
                 }
-                // A point owns a Set of its own name, so it may not shadow one that exists.
-                if self.model.point(name).is_none()
-                    && (self.model.knows_set(name) || self.model.set_prefixes().contains(name))
-                {
-                    return Err(Error::new(
-                        ErrorCode::NameTaken,
-                        format!("'{name}' already names a Set or a Body, and a point mass owns a Set of its name"),
-                    )
-                    .at("name")
-                    .suggest("geometry.addMass with another name"));
-                }
+                self.check_geometry_name(name, GeometryOwner::PointMass)
+                    .map_err(|e| e.at("name").suggest("geometry.addMass with another name"))?;
                 self.invalidate_geometry();
                 let pm = PointMass { name: name.clone(), at: point, mass: kg };
                 Ok(upsert(&mut self.model.points, pm, |p| &p.name, ObjectKind::Set))
@@ -702,10 +986,14 @@ impl Engine {
                 let isotropic = match (e, nu) {
                     (Some(e), Some(nu)) => Some((e, nu)),
                     (None, None) => None,
-                    _ => return Err(Error::schema("E and nu go together: give both or neither").at("E")),
+                    _ => {
+                        return Err(Error::schema("E and nu go together: give both or neither")
+                            .at("E")
+                            .suggest("material.add with both E and nu, or neither for heat-only material"))
+                    }
                 };
                 let (e_si, nu) = match (isotropic, orthotropic.is_some()) {
-                    (Some(_), true) | (None, false) => {
+                    (Some(_), true) => {
                         return Err(Error::schema(
                             "give exactly one of (E, nu) for an isotropic material and orthotropic for an \
                              orthotropic one",
@@ -723,7 +1011,7 @@ impl Engine {
                         }
                         (Some(e_si), Some(*nu))
                     }
-                    (None, true) => (None, None),
+                    (None, _) => (None, None),
                 };
                 let ortho = orthotropic.as_deref().map(orthotropic_si).transpose()?;
                 if let Some(o) = &ortho {
@@ -755,6 +1043,9 @@ impl Engine {
                     plasticity,
                     source: source.clone(),
                 };
+                if mat.e.is_none() && mat.orthotropic.is_none() {
+                    thermal_only_properties(&mat)?;
+                }
                 Ok(upsert(&mut self.model.materials, mat, |m| &m.name, ObjectKind::Material))
             }
             Command::MaterialAssign { material, bodies } => {
@@ -765,7 +1056,7 @@ impl Engine {
                 // assignment; it is named here like any other and kept on the Model.
                 let implicit = self.model.implicit_body().map(str::to_string);
                 for b in bodies {
-                    if implicit.as_deref() == Some(b.as_str()) {
+                    if implicit.as_deref() == Some(b.as_str()) || self.model.is_imported_region(b) {
                         continue;
                     }
                     let known = self.model.names(ObjectKind::Body);
@@ -773,6 +1064,11 @@ impl Engine {
                 }
                 if implicit.is_some_and(|b| bodies.contains(&b)) {
                     self.model.mesher_material = Some(material.clone());
+                }
+                for name in
+                    bodies.iter().filter(|name| self.model.is_imported_region(name)).cloned().collect::<Vec<_>>()
+                {
+                    self.model.imported_region_assignments.entry(name).or_default().material = Some(material.clone());
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.material = Some(material.clone());
@@ -793,6 +1089,13 @@ impl Engine {
                 if self.model.mesher_material.as_deref() == Some(name) {
                     users.extend(self.model.implicit_body());
                 }
+                users.extend(
+                    self.model
+                        .imported_region_assignments
+                        .iter()
+                        .filter(|(_, a)| a.material.as_deref() == Some(name))
+                        .map(|(name, _)| name.as_str()),
+                );
                 if !users.is_empty() {
                     return Err(in_use("material", name, &users, "bodies"));
                 }
@@ -834,6 +1137,13 @@ impl Engine {
                     self.model.mesher_section = Some(section.clone());
                     self.model.mesher_orientation = *orientation;
                 }
+                for name in
+                    bodies.iter().filter(|name| self.model.is_imported_region(name)).cloned().collect::<Vec<_>>()
+                {
+                    let assignment = self.model.imported_region_assignments.entry(name).or_default();
+                    assignment.section = Some(section.clone());
+                    assignment.orientation = *orientation;
+                }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.section = Some(section.clone());
                     b.orientation = *orientation;
@@ -854,6 +1164,13 @@ impl Engine {
                 if self.model.mesher_section.as_deref() == Some(name) {
                     users.extend(self.model.implicit_body());
                 }
+                users.extend(
+                    self.model
+                        .imported_region_assignments
+                        .iter()
+                        .filter(|(_, a)| a.section.as_deref() == Some(name))
+                        .map(|(name, _)| name.as_str()),
+                );
                 if !users.is_empty() {
                     return Err(in_use("section", name, &users, "bodies"));
                 }
@@ -869,18 +1186,54 @@ impl Engine {
                 if let crate::model::MesherSettings::Lattice { sizes, .. } = &settings {
                     crate::mesh::validate_body_sizes(&self.model, sizes)?;
                 }
+                let imported = matches!(settings, crate::model::MesherSettings::Imported(_));
+                let formulation = formulation.unwrap_or(if imported {
+                    crate::command::Formulation::Full
+                } else {
+                    crate::command::Formulation::default()
+                });
+                if imported
+                    && (order != 1
+                        || formulation == crate::command::Formulation::IncompatibleModes
+                        || simplices.unwrap_or(false)
+                        || refinement.is_some())
+                {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "imported sources require unchanged authored interpolation (order 1), full or mean-dilatation integration and no split/refinement",
+                    )
+                    .at("mesher")
+                    .suggest("mesh.set with order 1, formulation full or mean-dilatation, simplices false and no refinement"));
+                }
+                if imported && (!self.model.bodies.is_empty() || self.model.idealisation.dim() != 3) {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "the imported mesher requires one implicit solid3d Body and no explicit Bodies",
+                    )
+                    .at("mesher")
+                    .suggest("model.new, then model.setIdealisation with solid3d and mesh.set"));
+                }
+                self.check_imported_sets(&settings)?;
+                let new_regions = match &settings {
+                    crate::model::MesherSettings::Imported(s) => {
+                        s.regions.keys().cloned().collect::<std::collections::BTreeSet<_>>()
+                    }
+                    _ => Default::default(),
+                };
+                if let Some(source) = self.model.imported_source() {
+                    for name in source.regions.keys().filter(|name| !new_regions.contains(*name)) {
+                        self.check_body_unused(name)?;
+                    }
+                }
+                for name in &new_regions {
+                    self.check_geometry_name(name, GeometryOwner::MesherBody)?;
+                }
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
                     check_name(body).map_err(|e| e.at("mesher.body"))?;
-                    if self.model.body(body).is_some() || self.model.cuts.iter().any(|c| c.name == body) {
-                        return Err(Error::new(
-                            ErrorCode::NameTaken,
-                            format!("'{body}' already names explicit geometry"),
-                        )
-                        .at("mesher.body")
-                        .suggest("retry mesh.set with another mesher.body name"));
-                    }
+                    self.check_geometry_name(body, GeometryOwner::MesherBody)
+                        .map_err(|e| e.at("mesher.body").suggest("retry mesh.set with another mesher.body name"))?;
                 }
                 if old_body != new_body {
                     if let Some(body) = old_body {
@@ -890,10 +1243,11 @@ impl Engine {
                     self.model.mesher_section = None;
                     self.model.mesher_orientation = None;
                 }
+                self.model.imported_region_assignments.retain(|name, _| new_regions.contains(name));
                 self.model.mesh = Some(MeshSettings {
                     mesher: settings,
                     order,
-                    formulation: formulation.unwrap_or_default(),
+                    formulation,
                     simplices: simplices.unwrap_or(false),
                     refinement: refinement.as_ref().map(crate::mesh::local_refinement).transpose()?,
                 });
@@ -1266,6 +1620,19 @@ impl Engine {
                         .load(l)
                         .ok_or_else(|| Error::not_found("load", l, &self.model.names(ObjectKind::Load)))?;
                 }
+                if self
+                    .model
+                    .mesh
+                    .as_ref()
+                    .is_some_and(|mesh| matches!(mesh.mesher, crate::model::MesherSettings::Imported(_)))
+                {
+                    if let Some(velocities) = initial_velocity {
+                        for (i, velocity) in velocities.iter().enumerate() {
+                            self.check_set(&velocity.on)
+                                .map_err(|error| error.at(format!("initialVelocity[{i}].on")))?;
+                        }
+                    }
+                }
                 let out = output.clone().unwrap_or_else(|| {
                     use crate::command::Field::*;
                     vec![Displacement, Stress, VonMises, Reaction]
@@ -1435,7 +1802,7 @@ impl Engine {
             }
             ExportFormat::Inp => {
                 let mesh = self.mesh()?.mesh.clone();
-                crate::io::write_inp(&mesh, &name)
+                crate::io::write_inp(&mesh, &name)?
             }
             ExportFormat::Stl => crate::io::write_stl_mesh(&self.mesh()?.mesh),
         };
@@ -1444,15 +1811,12 @@ impl Engine {
 
     fn add_body(&mut self, name: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
-        if self.model.implicit_body() == Some(name) {
-            return Err(Error::new(ErrorCode::NameTaken, format!("'{name}' is the mesher-defined Body"))
+        self.check_geometry_name(name, GeometryOwner::Body)
+            .map_err(|e| e.at("name").suggest("geometry.add with another name, or edit its existing owner"))?;
+        if self.model.mesh.as_ref().is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_))) {
+            return Err(Error::new(ErrorCode::Unsupported, "an imported source owns the only Body in this slice")
                 .at("name")
-                .suggest("edit its geometry with mesh.set or use another Body name"));
-        }
-        if self.model.cuts.iter().any(|c| c.name == name) {
-            return Err(
-                Error::new(ErrorCode::NameTaken, format!("'{name}' is already a cut")).at(format!("body '{name}'"))
-            );
+                .suggest("mesh.set with another mesher before adding explicit geometry"));
         }
         let dim = shape.dim();
         let old = self.model.body(name);
@@ -1479,11 +1843,8 @@ impl Engine {
 
     fn add_cut(&mut self, name: &str, from: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
-        if self.model.names(ObjectKind::Body).contains(&name) {
-            return Err(
-                Error::new(ErrorCode::NameTaken, format!("'{name}' is already a body")).at(format!("cut '{name}'"))
-            );
-        }
+        self.check_geometry_name(name, GeometryOwner::Cut)
+            .map_err(|e| e.at("name").suggest("geometry.subtract with another name"))?;
         if self.model.implicit_body() == Some(from) {
             return Err(Error::new(
                 ErrorCode::Unsupported,
@@ -1508,6 +1869,27 @@ impl Engine {
         Ok(if replaced { Output::Replaced { kind: ObjectKind::Body, name: name.to_string() } } else { Output::None })
     }
 
+    fn check_geometry_name(&self, name: &str, requested: GeometryOwner) -> Result<(), Error> {
+        let m = &self.model;
+        let owner = if m.body(name).is_some() {
+            Some(GeometryOwner::Body)
+        } else if m.mesher_body_names().contains(&name) {
+            Some(GeometryOwner::MesherBody)
+        } else if m.cuts.iter().any(|c| c.name == name) {
+            Some(GeometryOwner::Cut)
+        } else if m.sets.iter().any(|s| s.name == name) {
+            Some(GeometryOwner::Set)
+        } else if m.point(name).is_some() {
+            Some(GeometryOwner::PointMass)
+        } else {
+            None
+        };
+        if let Some(owner) = owner.filter(|owner| *owner != requested) {
+            return Err(Error::new(ErrorCode::NameTaken, format!("'{name}' already names {}", owner.label())));
+        }
+        Ok(())
+    }
+
     /// Removing mesher-owned geometry must obey the same references as explicit geometry.
     fn check_body_unused(&self, name: &str) -> Result<(), Error> {
         let m = &self.model;
@@ -1520,6 +1902,15 @@ impl Engine {
         for l in &m.loads {
             if l.kind.set().is_some_and(|s| set_refers_to(s, name)) || l.kind.bodies().iter().any(|body| body == name) {
                 users.push(format!("load '{}'", l.name));
+            }
+        }
+        for step in &m.steps {
+            if step
+                .initial_velocity
+                .as_ref()
+                .is_some_and(|velocities| velocities.iter().any(|v| set_refers_to(&v.on, name)))
+            {
+                users.push(format!("step '{}'", step.name));
             }
         }
         for s in &m.sets {
@@ -1543,11 +1934,24 @@ impl Engine {
     }
 
     fn geometry_remove(&mut self, name: &str) -> Result<Output, Error> {
+        self.check_source_set_edit(name)?;
         let m = &self.model;
+        if m.is_imported_region(name) {
+            self.check_body_unused(name)?;
+            return Err(Error::new(ErrorCode::Unsupported, "imported region memberships belong to the source")
+                .at("name")
+                .suggest("mesh.set with a replacement imported source"));
+        }
         if m.body(name).is_some() || m.implicit_body() == Some(name) {
             self.check_body_unused(name)?;
+            if let Some(source) = m.imported_source().filter(|s| s.body == name) {
+                for region in source.regions.keys() {
+                    self.check_body_unused(region)?;
+                }
+            }
             if self.model.implicit_body() == Some(name) {
                 self.model.mesh = None;
+                self.model.imported_region_assignments.clear();
                 self.model.mesher_material = None;
                 self.model.mesher_section = None;
                 self.model.mesher_orientation = None;
@@ -1604,8 +2008,63 @@ impl Engine {
         Err(Error::not_found("body, cut, set or point mass", name, &known))
     }
 
+    fn check_source_set_edit(&self, name: &str) -> Result<(), Error> {
+        if self.model.mesh.as_ref().is_some_and(|m| match &m.mesher {
+            crate::model::MesherSettings::Imported(s) => s.set_names().contains(name),
+            _ => false,
+        }) {
+            return Err(Error::new(ErrorCode::Unsupported, "imported Sets are immutable mesher-owned memberships")
+                .at("name")
+                .suggest("mesh.set with a replacement imported source"));
+        }
+        Ok(())
+    }
+
+    fn check_imported_sets(&self, settings: &crate::model::MesherSettings) -> Result<(), Error> {
+        let new_source = match settings {
+            crate::model::MesherSettings::Imported(source) => Some(source),
+            _ => None,
+        };
+        let usable_names = new_source.map(|s| s.nonempty_set_names()).unwrap_or_default();
+        // Every source-owned Set is qualified with an ASCII dot. All public
+        // creation/rename/duplicate paths for user Sets and point masses call
+        // check_name, which rejects dots; production file open reconstructs
+        // those Commands through Candidate::file. These namespaces therefore
+        // cannot shadow each other in a valid Model. Only source references
+        // need a replacement guard; no invalid private snapshot is admitted.
+        if let Some(MeshSettings { mesher: crate::model::MesherSettings::Imported(old), .. }) = &self.model.mesh {
+            for name in old.set_names().difference(&usable_names) {
+                let users = set_users(&self.model, name);
+                if !users.is_empty() {
+                    let users: Vec<_> = users.iter().map(String::as_str).collect();
+                    return Err(in_use("set", name, &users, "objects"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check_set(&self, set: &str) -> Result<(), Error> {
         if self.model.knows_set(set) {
+            if let Some(MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) = &self.model.mesh
+            {
+                if let Some(members) = source.node_members(set) {
+                    let participating = source.participating_labels();
+                    if members.iter().any(|label| !participating.contains(label)) {
+                        return Err(Error::new(
+                            ErrorCode::Unsupported,
+                            format!("imported Set '{set}' includes unused source nodes with no FE DOFs"),
+                        )
+                        .at("on")
+                        .suggest("mesh.set with a target Set containing participating source nodes only"));
+                    }
+                }
+                if source.set_names().contains(set) && !source.nonempty_set_names().contains(set) {
+                    return Err(Error::new(ErrorCode::SetEmpty, format!("imported Set '{set}' has no members"))
+                        .at("on")
+                        .suggest("mesh.set with a nonempty target Set"));
+                }
+            }
             return Ok(());
         }
         let mut known: Vec<String> = self.model.sets.iter().map(|s| s.name.clone()).collect();
@@ -1640,6 +2099,9 @@ impl Engine {
     }
 
     fn rename(&mut self, kind: ObjectKind, name: &str, to: &str) -> Result<Output, Error> {
+        if kind == ObjectKind::Set {
+            self.check_source_set_edit(name)?;
+        }
         check_name(to)?;
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
@@ -1651,9 +2113,22 @@ impl Engine {
                 .at(format!("{} '{to}'", kind.label()))
                 .suggest("retry model.rename with another name"));
         }
+        let geometry_owner = match kind {
+            ObjectKind::Body if self.model.mesher_body_names().contains(&name) => Some(GeometryOwner::MesherBody),
+            ObjectKind::Body => Some(GeometryOwner::Body),
+            ObjectKind::Set => Some(GeometryOwner::Set),
+            _ => None,
+        };
+        if let Some(owner) = geometry_owner {
+            self.check_geometry_name(to, owner)
+                .map_err(|e| e.at("to").suggest("retry model.rename with another name"))?;
+        }
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
+                if let Some(assignment) = m.imported_region_assignments.remove(name) {
+                    m.imported_region_assignments.insert(to.into(), assignment);
+                }
                 if let Some(mesh) = &mut m.mesh {
                     mesh.mesher.rename_body(name, to);
                 }
@@ -1692,6 +2167,13 @@ impl Engine {
                         LoadKind::Gravity { .. } | LoadKind::ThermalContact { .. } => {}
                     }
                 }
+                for step in &mut m.steps {
+                    if let Some(velocities) = &mut step.initial_velocity {
+                        for velocity in velocities {
+                            velocity.on = rename_set_ref(&velocity.on, name, to);
+                        }
+                    }
+                }
                 for s in &mut m.sets {
                     match &mut s.source {
                         SetSource::Face { of, .. } => {
@@ -1723,6 +2205,11 @@ impl Engine {
                 if m.mesher_material.as_deref() == Some(name) {
                     m.mesher_material = Some(to.into());
                 }
+                for assignment in m.imported_region_assignments.values_mut() {
+                    if assignment.material.as_deref() == Some(name) {
+                        assignment.material = Some(to.into());
+                    }
+                }
                 for section in &mut m.sections {
                     for ply in &mut section.plies {
                         if ply.material == name {
@@ -1732,6 +2219,11 @@ impl Engine {
                 }
             }
             ObjectKind::Section => {
+                for assignment in m.imported_region_assignments.values_mut() {
+                    if assignment.section.as_deref() == Some(name) {
+                        assignment.section = Some(to.into());
+                    }
+                }
                 if m.mesher_section.as_deref() == Some(name) {
                     m.mesher_section = Some(to.into());
                 }
@@ -1830,6 +2322,9 @@ impl Engine {
     }
 
     fn duplicate(&mut self, kind: ObjectKind, name: &str, as_: &str) -> Result<Output, Error> {
+        if kind == ObjectKind::Set {
+            self.check_source_set_edit(name)?;
+        }
         check_name(as_)?;
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
@@ -1840,10 +2335,19 @@ impl Engine {
             return Err(Error::new(ErrorCode::NameTaken, format!("name '{as_}' is already in use"))
                 .at(format!("{} '{as_}'", kind.label())));
         }
+        let geometry_owner = match kind {
+            ObjectKind::Body => Some(GeometryOwner::Body),
+            ObjectKind::Set => Some(GeometryOwner::Set),
+            _ => None,
+        };
+        if let Some(owner) = geometry_owner {
+            self.check_geometry_name(as_, owner)
+                .map_err(|e| e.at("as").suggest("retry model.duplicate with another name"))?;
+        }
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
-                if m.implicit_body() == Some(name) {
+                if m.mesher_body_names().contains(&name) {
                     return Err(Error::new(
                         ErrorCode::Unsupported,
                         "a mesher-defined Body cannot be duplicated: the Model has one mesher geometry slot",
@@ -1899,12 +2403,12 @@ impl Engine {
 }
 
 fn set_refers_to(set: &str, prefix: &str) -> bool {
-    set.rsplit_once('.').is_some_and(|(p, _)| p == prefix)
+    set.strip_prefix(prefix).is_some_and(|suffix| suffix.starts_with('.'))
 }
 
 fn rename_set_ref(set: &str, from: &str, to: &str) -> String {
-    match set.rsplit_once('.') {
-        Some((p, tag)) if p == from => format!("{to}.{tag}"),
+    match set.strip_prefix(from).and_then(|suffix| suffix.strip_prefix('.')) {
+        Some(tag) => format!("{to}.{tag}"),
         _ => set.to_string(),
     }
 }
@@ -1921,7 +2425,7 @@ fn upsert<T: Clone>(items: &mut Vec<T>, item: T, name_of: fn(&T) -> &str, kind: 
     }
 }
 
-fn check_name(name: &str) -> Result<(), Error> {
+pub(crate) fn check_name(name: &str) -> Result<(), Error> {
     if name.is_empty() || name.contains('.') || name.contains(char::is_whitespace) || name.contains(':') {
         return Err(Error::schema(format!(
             "'{name}' is not a valid name: use letters, digits, '_' or '-' (no dots, spaces or colons)"
@@ -1931,7 +2435,7 @@ fn check_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// The Constraints and Loads that name a Set by that exact name. A point mass owns a Set of its
+/// The Constraints, Loads and initial-velocity Steps that name a Set by that exact name. A point mass owns a Set of its
 /// own name, so removing either asks the same question and both ask it here.
 fn set_users(m: &Model, name: &str) -> Vec<String> {
     m.constraints
@@ -1939,6 +2443,14 @@ fn set_users(m: &Model, name: &str) -> Vec<String> {
         .filter(|c| c.sets().contains(&name))
         .map(|c| format!("constraint '{}'", c.name))
         .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
+        .chain(
+            m.steps
+                .iter()
+                .filter(|step| {
+                    step.initial_velocity.as_ref().is_some_and(|velocities| velocities.iter().any(|v| v.on == name))
+                })
+                .map(|step| format!("step '{}'", step.name)),
+        )
         .collect()
 }
 
@@ -1970,6 +2482,28 @@ fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<
         Some(v) => Ok(Some(v.si().map_err(|e| e.at(field))?)),
         None => Ok(None),
     }
+}
+
+/// Without elastic stiffness a Material is a conductor. Capacity is optional for steady heat,
+/// but every stated transport property must be positive; transient heat requires both rho and
+/// cp when it runs. Other known properties may be retained for later mechanical use.
+fn thermal_only_properties(mat: &Material) -> Result<(), Error> {
+    let k = mat.k.ok_or_else(|| {
+        Error::schema("a heat-only material needs conductivity k; otherwise give elastic stiffness")
+            .at("k")
+            .suggest("material.add with k, or with E and nu, or with an orthotropic block")
+    })?;
+    for (field, value) in [("k", Some(k.axes()[0])), ("rho", mat.rho), ("cp", mat.cp)] {
+        if let Some(value) = value {
+            // Quantity::si already rejects nonfinite input and unit-conversion overflow.
+            if value <= 0.0 {
+                return Err(Error::schema(format!("{field} must be finite and positive for a heat-only material"))
+                    .at(field)
+                    .suggest(format!("material.add with positive {field}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A property that is either one isotropic value or one per material axis, resolved to the three
@@ -2013,7 +2547,7 @@ fn plasticity_si(
     let schema = |cause: String, at: &str, fix: &str| Error::schema(cause).at(at).suggest(fix);
     if e_si.is_none() {
         return Err(schema(
-            "plasticity needs an isotropic material: J2 plasticity has no orthotropic form".into(),
+            "plasticity needs isotropic elastic stiffness (E and nu): J2 plasticity has no orthotropic form".into(),
             "plasticity",
             "material.add with E and nu",
         ));
@@ -2196,7 +2730,33 @@ fn si3_force(q: &[Q<crate::units::Force>; 3]) -> Result<[f64; 3], Error> {
 }
 
 /// Display helper: SI value into the Model's units for a dimension.
-pub fn display(model: &Model, value_si: f64, dim: Dimension) -> crate::query::Valued {
-    let (v, u) = model.units.resolve().fmt(value_si, dim);
-    crate::query::Valued { value: v, unit: u }
+pub fn display(model: &Model, value_si: f64, dim: Dimension) -> Result<crate::query::Valued, Error> {
+    let (v, u) = model.units.resolve().fmt(value_si, dim).map_err(|error| {
+        Error::new(
+            ErrorCode::UnitDisplay,
+            format!(
+                "cannot represent {} in display unit '{}': {}",
+                dim.name(),
+                model.units.resolve().unit(dim),
+                error.cause
+            ),
+        )
+        .at("displayUnits")
+        .suggest("model.setUnits with SI display units, for example length 'm', force 'N' and stress 'Pa'")
+    })?;
+    Ok(crate::query::Valued { value: v, unit: u })
+}
+
+/// Fixed-size vectors and bounds share one checked conversion loop. Every component is
+/// converted before an array can escape; an error leaves the caller's Model untouched.
+pub(crate) fn display_values<const N: usize>(
+    model: &Model,
+    values: [f64; N],
+    dim: Dimension,
+) -> Result<[crate::query::Valued; N], Error> {
+    let mut shown = values.map(|value| crate::query::Valued { value, unit: String::new() });
+    for value in &mut shown {
+        *value = display(model, value.value, dim)?;
+    }
+    Ok(shown)
 }

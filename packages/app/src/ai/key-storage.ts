@@ -2,6 +2,7 @@ import type { ProviderId } from './provider';
 
 /** Provider-specific slots used by the `ai.setKey` host Command. */
 export const KEY_SLOT: Record<ProviderId, string> = { anthropic: 'femlab.ai.key', openai: 'femlab.ai.key.openai' };
+const forgottenSlot = (id: ProviderId): string => `${KEY_SLOT[id]}.forgotten`;
 
 /** Accessing the storage property itself can throw in a locked-down browser. */
 export function browserStorage(kind: 'localStorage' | 'sessionStorage'): Storage | null {
@@ -12,12 +13,27 @@ export function readStorage(storage: Storage | null, slot: string): string | nul
   try { return storage?.getItem(slot) ?? null; } catch { return null; }
 }
 
-/** Keys live in `localStorage`, so one paste lasts across tabs and sessions in this browser (#485). */
-export function storeKey(id: ProviderId, key: string | null, storage: Storage | null = browserStorage('localStorage')): void {
+function writeStorage(storage: Storage | null, slot: string, value: string | null): boolean {
+  if (storage === null) return false;
   try {
-    if (key) storage?.setItem(KEY_SLOT[id], key);
-    else storage?.removeItem(KEY_SLOT[id]);
-  } catch { /* Refused storage is treated as an unavailable key. */ }
+    if (value === null) storage.removeItem(slot);
+    else storage.setItem(slot, value);
+    return true;
+  } catch { return false; }
+}
+
+/** Persist a direct-provider key; refused writes retain the existing key and report failure.
+ * Forgetting removes both copies and prevents another legacy tab from adopting the key again.
+ */
+export function storeKey(id: ProviderId, key: string | null, persistent: Storage | null = browserStorage('localStorage'), session: Storage | null = browserStorage('sessionStorage')): boolean {
+  if (key) {
+    if (!writeStorage(persistent, KEY_SLOT[id], key)) return false;
+    return session === null || writeStorage(session, KEY_SLOT[id], null);
+  }
+  const forgotten = writeStorage(persistent, forgottenSlot(id), '1');
+  const removed = writeStorage(persistent, KEY_SLOT[id], null);
+  const sessionRemoved = session === null || writeStorage(session, KEY_SLOT[id], null);
+  return forgotten && removed && sessionRemoved;
 }
 
 /** Adopt a key the earlier session-only build left in this tab's `sessionStorage`, then remove
@@ -26,7 +42,15 @@ export function storeKey(id: ProviderId, key: string | null, storage: Storage | 
 export function adoptSessionKeys(persistent: Storage | null = browserStorage('localStorage'), session: Storage | null = browserStorage('sessionStorage')): void {
   for (const id of ['anthropic', 'openai'] as const) {
     const left = readStorage(session, KEY_SLOT[id]);
-    if (left && !readStorage(persistent, KEY_SLOT[id])) storeKey(id, left, persistent);
-    try { session?.removeItem(KEY_SLOT[id]); } catch { /* Storage may be inaccessible. */ }
+    if (readStorage(persistent, KEY_SLOT[id]) || readStorage(persistent, forgottenSlot(id)) === '1') {
+      writeStorage(session, KEY_SLOT[id], null);
+    } else if (left && writeStorage(persistent, KEY_SLOT[id], left)) {
+      writeStorage(session, KEY_SLOT[id], null);
+    }
   }
+}
+
+/** Hosted builds neither read nor migrate cached direct-provider credentials. */
+export function prepareKeyStorage(hosted: boolean): void {
+  if (!hosted) adoptSessionKeys();
 }

@@ -2,6 +2,7 @@
 // settings row can always say which of the two the current key came from.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { adoptSessionKeys, defaultProvider, maskKey, resolveKey, storedModel, storeKey, KEY_SLOT } from '../src/ai/keys';
+import { prepareKeyStorage } from '../src/ai/key-storage';
 
 const memory = (): Storage => {
   const map = new Map<string, string>();
@@ -27,6 +28,8 @@ const hostile = (): Storage =>
 let storage: Storage;
 beforeEach(() => {
   storage = memory();
+  localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe('key resolution', () => {
@@ -121,13 +124,51 @@ describe('persistent key storage (#485)', () => {
     expect(storage.getItem(KEY_SLOT.anthropic)).toBe('left-a');
   });
 
-  it('removes the session copy even if persistent storage refuses the key, and never throws', () => {
+  it('retains a usable tab key when persistent migration is refused, and reports its actual source', () => {
     const session = memory();
     session.setItem(KEY_SLOT.openai, 'left-key');
     adoptSessionKeys(hostile(), session);
-    expect(session.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(session.getItem(KEY_SLOT.openai)).toBe('left-key');
+    expect(resolveKey('openai', hostile(), null, session)).toEqual({ key: 'left-key', source: 'session' });
+    expect(storeKey('openai', 'replacement', hostile(), session)).toBe(false);
+    expect(session.getItem(KEY_SLOT.openai)).toBe('left-key');
     expect(() => adoptSessionKeys(null, hostile())).not.toThrow();
     expect(resolveKey('openai', null, null).key).toBeNull();
+  });
+
+  it('forgets only the chosen provider in both stores and prevents adoption from another legacy tab', () => {
+    const first = memory(), second = memory();
+    for (const tab of [first, second]) {
+      tab.setItem(KEY_SLOT.openai, 'old-openai');
+      tab.setItem(KEY_SLOT.anthropic, 'anthropic');
+    }
+    adoptSessionKeys(storage, first);
+    expect(storeKey('openai', null, storage, first)).toBe(true);
+    adoptSessionKeys(storage, second);
+    expect(storage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(second.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(resolveKey('anthropic', storage, null, second)).toEqual({ key: 'anthropic', source: 'stored' });
+    expect(storeKey('openai', 'new-openai', storage, second)).toBe(true);
+    expect(resolveKey('openai', storage, null, second).key).toBe('new-openai');
+  });
+
+  it('reports refusal to forget instead of pretending that an inaccessible saved key was removed', () => {
+    const session = memory();
+    session.setItem(KEY_SLOT.openai, 'tab-only');
+    expect(storeKey('openai', null, hostile(), session)).toBe(false);
+    expect(session.getItem(KEY_SLOT.openai)).toBeNull();
+  });
+
+  it('leaves cached direct-provider credentials untouched in hosted boot and adopts them only in direct mode', () => {
+    sessionStorage.setItem(KEY_SLOT.openai, 'legacy-tab');
+    localStorage.setItem(KEY_SLOT.anthropic, 'existing-browser');
+    prepareKeyStorage(true);
+    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBe('legacy-tab');
+    expect(localStorage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(localStorage.getItem(KEY_SLOT.anthropic)).toBe('existing-browser');
+    prepareKeyStorage(false);
+    expect(localStorage.getItem(KEY_SLOT.openai)).toBe('legacy-tab');
+    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBeNull();
   });
 
   it('chooses the keyed provider from the persistent slots', () => {

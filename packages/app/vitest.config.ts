@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  define: { __DEV_API_KEYS__: 'null' },
+  define: { __DEV_API_KEYS__: 'null', __FIREBASE_CONFIG__: 'null', __AI_API_ORIGIN__: 'null', __GOOGLE_SIGN_IN__: 'false', __HOSTED_AI__: 'false' },
   test: {
     environment: 'happy-dom',
     include: ['test/**/*.test.{ts,tsx}'],

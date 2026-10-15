@@ -285,7 +285,7 @@
       "path": "/reactions/0/total/2/value",
       "expect": 0.0,
       "tol": 1e-09,
-      "note": "a pure moment leaves no net force at the root (the reaction balance itself is 0/0 here, see the issue filed with #65)"
+      "note": "A pure moment leaves no net force at the root; the separate force and moment conservation checks retain their physical scales (#445)."
     },
     {
       "query": {
@@ -304,6 +304,76 @@
       },
       "path": "/stale",
       "expect": false
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "static"
+      },
+      "path": "/staticEquilibrium/momentBalance",
+      "expect": 0,
+      "tol": 1e-09,
+      "note": "Support and applied couples cancel about the retained reference"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "static"
+      },
+      "path": "/staticEquilibrium/appliedMoment/0/value",
+      "expect": 1000,
+      "tol": 1e-07,
+      "note": "Applied 1 kN m is 1000 kN mm"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "static"
+      },
+      "path": "/staticEquilibrium/reactionMoments/0/total/0/value",
+      "expect": -1000,
+      "tol": 1e-07,
+      "note": "The clamp carries the opposite end couple"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "bend"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-09,
+      "note": "A7: pure moments use M/L as a dimensioned force scale"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "bend"
+      },
+      "path": "/staticEquilibrium/momentBalance",
+      "expect": 0,
+      "tol": 1e-09,
+      "note": "Support and applied couples cancel about the retained reference"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "bend"
+      },
+      "path": "/staticEquilibrium/appliedMoment/1/value",
+      "expect": 1000,
+      "tol": 1e-07,
+      "note": "Applied 1 kN m is 1000 kN mm"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "bend"
+      },
+      "path": "/staticEquilibrium/reactionMoments/0/total/1/value",
+      "expect": -1000,
+      "tol": 1e-07,
+      "note": "The clamp carries the opposite end couple"
     }
   ]
 }

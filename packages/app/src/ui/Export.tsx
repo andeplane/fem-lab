@@ -22,7 +22,7 @@ export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResu
 
 /** The `file.export` spec a row runs; CSV defaults to the extremes table. */
 export function specOf(row: ExportFormatRow, step: string | undefined, image?: { width: number; height: number }): Record<string, unknown> {
-  if (row.format === 'csv') return { format: 'csv', table: 'extremes', ...(step ? { step } : {}) };
+  if (row.format === 'csv') return { format: 'csv', table: row.table ?? 'extremes', ...(step ? { step } : {}) };
   if (row.format === 'vtu' && step) return { format: 'vtu', step };
   if (row.format === 'webm') return { format: 'webm', width: 1280, height: 720 };
   if (row.format === 'png' && image) return { format: 'png', ...image };
@@ -30,6 +30,7 @@ export function specOf(row: ExportFormatRow, step: string | undefined, image?: {
 }
 
 const line = (spec: Record<string, unknown>): string => `await fem.file.export({ spec: ${JSON.stringify(spec)} });`;
+const rowKey = (row: ExportFormatRow): string => `${row.format}:${row.table ?? ''}`;
 
 const SCALES = [1, 2];
 
@@ -144,8 +145,8 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
   };
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
   const runAll = async (): Promise<void> => {
-    for (const format of ticked) {
-      const row = EXPORT_FORMATS.find((r) => r.format === format);
+    for (const key of ticked) {
+      const row = EXPORT_FORMATS.find((r) => rowKey(r) === key);
       if (row) await dispatch({ cmd: 'file.export', spec: specOf(row, step, image()) }).catch(() => undefined);
     }
   };
@@ -166,24 +167,33 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
             {EXPORT_FORMATS.filter((r) => r.group === group).map((row) => {
               const why = unavailable(row, ctx);
               const spec = specOf(row, step, image());
+              const action = (
+                <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null || (row.format === 'webm' && s.capturingAnimation)} title={line(spec)}>
+                  export
+                </Cmd>
+              );
+              const resolution = row.format === 'png'
+                ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} />
+                : row.format === 'webm' && why === null ? <AnimationResolution s={s} dispatch={dispatch} /> : null;
               return (
-                <div key={row.format} class={why ? 'export-row off' : 'export-row'}>
+                <div key={rowKey(row)} class={why ? 'export-row off' : 'export-row'}>
                   <input
                     type="checkbox"
                     aria-label={`export ${row.name}`}
                     disabled={why !== null}
-                    checked={ticked.includes(row.format)}
-                    onChange={(e) => setTicked((t) => ((e.target as HTMLInputElement).checked ? [...t, row.format] : t.filter((x) => x !== row.format)))}
+                    checked={ticked.includes(rowKey(row))}
+                    onChange={(e) => setTicked((t) => ((e.target as HTMLInputElement).checked ? [...t, rowKey(row)] : t.filter((x) => x !== rowKey(row))))}
                   />
                   <span class="mono ext">.{row.ext}</span>
                   <span class="export-name">{row.name}</span>
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
-                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} /> : null}
-                  {row.format === 'webm' && why === null ? <AnimationResolution s={s} dispatch={dispatch} /> : null}
-                  <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null || (row.format === 'webm' && s.capturingAnimation)} title={line(spec)}>
-                    export
-                  </Cmd>
+                  {resolution ? (
+                    <div class="export-resolution-actions">
+                      {resolution}
+                      {action}
+                    </div>
+                  ) : action}
                 </div>
               );
             })}

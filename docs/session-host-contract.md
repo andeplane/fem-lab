@@ -48,6 +48,31 @@ integration binary; browser, MCP and CLI production builds do not enable it. The
 exports SessionEngine and PreparedEngine only. Test and replay tools use an isolated checked
 batch producer rather than a second unchecked WASM export.
 
+Candidate finish requires a captured, typed ModelFile encoder and byte budget. It snapshots
+once and bounds the complete actual saved UTF-8 text before creating a committable candidate,
+including each host's pretty formatting and trailing newline. Native writers can retain
+`PreparedCandidate::file_bytes()` before commit and write those exact bytes. WASM receives a
+trusted local formatting callback; that function is never posted through the Worker or
+registry transport. The encoder faithfully preserves the complete supplied ModelFile and
+performs no I/O, replay or mutation. Callback and size failures consume the candidate, so
+failure cleanup abandons its ticket before the old producer resumes. The browser and MCP
+use the registry formatter for both finish and file output; see [ADR 0027](adr/0027-prepared-model-file-byte-bound.md)
+and [#536](https://github.com/andeplane/fem-lab/issues/536).
+
+`query.document` reads the authoritative SI ModelFile, real Model hash and revision through the
+same checked Query envelope. It preserves the selected display-unit strings without formatting
+a ModelSummary, so an unreadable display unit cannot prevent an explicit file export (#591).
+`file.save` and `file.export` for Journal JSON or TypeScript use this canonical document for
+the default filename; script contents still come from `query.script`. Journal JSON keeps the
+exact 16 MiB UTF-8 save bound before file I/O. Cancelled or replaced producers cannot read
+another session's document to complete their export.
+The owner validates the captured session and live Run; a read may observe a newer state version
+within that same session and never follows a different activation. The returned file is owned,
+and reading it does not advance state or alter retained Results. Browser, MCP, batch and native
+export adapters use this read and apply their existing exact UTF-8 encoder/budget before I/O.
+Full publication snapshots and Candidate validation remain strict; successful export does not
+authorize replacement or waive an unreadable candidate summary.
+
 Registry host handlers receive engine access constrained by their declared execution policy.
 Read/view handlers can query but cannot dispatch; workspace/producer handlers cannot obtain
 engine access; writes cannot smuggle model.new through dispatch; replacement uses the private

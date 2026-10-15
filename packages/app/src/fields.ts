@@ -99,6 +99,7 @@ export const FIELD_CHOICES: FieldChoice[] = [
   ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
   ...VEC.map((a, i) => ({ key: `r${a}`, label: `θ${a}`, field: 'rotation', component: i })),
   ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
+  ...VOIGT.map((a, i) => ({ key: `sUnaveraged${a}`, label: `σ${a} unaveraged`, field: 'stressUnaveraged', component: i })),
   ...['Top', 'Bottom'].flatMap((side) => VOIGT.map((a, i) => ({ key: `s${side}${a}`, label: `σ${a} ${side.toLowerCase()}`, field: `stress${side}`, component: i }))),
   ...VOIGT.map((a, i) => ({ key: `shellM${a}`, label: `M${a} / width`, field: 'shellMoment', component: i })),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
@@ -114,11 +115,17 @@ export const DERIVED_CHOICES: FieldChoice[] = [
   { key: 'utilisation', label: 'σ/f_y', field: 'vonMises', component: 0, derived: 'utilisation' },
 ];
 
-type ModeSpectrum = Pick<ResultSummary, 'frequencies' | 'bucklingFactors'>;
+type ModeSpectrum = Pick<ResultSummary, 'modeCount' | 'frequencies' | 'bucklingFactors'>;
 
-/** Modal frequencies and buckling factors each identify one displacement mode shape. */
+/** Only shapes owned by this retained Result are fields; basis frequencies are metadata. */
 export function modeCount(result: ModeSpectrum | null | undefined): number {
-  return result?.frequencies?.length || result?.bucklingFactors?.length || 0;
+  return result?.modeCount ?? 0;
+}
+
+/** Contours move only when this retained solve has displacement or the selected mode shape. */
+export function hasDeformation(result: ResultSummary | null, fieldKey: string): boolean {
+  const mode = choiceOf(fieldKey).mode;
+  return result !== null && (result.extremes.some((e) => e.field === 'displacement') || (mode !== undefined && mode <= modeCount(result)));
 }
 
 /** The k-th mode shape, contoured by its magnitude and swept by the deformation bar. */

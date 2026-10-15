@@ -29,6 +29,85 @@ use crate::post::{Extremum, FieldData};
 use crate::query::ResultAssumption;
 use crate::solve::{SolveInfo, SolveOptions};
 
+/// What a procedure can require before a mesh exists. Presence of a reference does not
+/// prove that every connected component is restrained; the resolved system checks that.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Reference {
+    Displacement,
+    Temperature,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum MaterialProperty {
+    Conductivity,
+    Density,
+    SpecificHeat,
+}
+
+impl MaterialProperty {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Conductivity => "k",
+            Self::Density => "rho",
+            Self::SpecificHeat => "cp",
+        }
+    }
+
+    pub(crate) fn present(self, material: &crate::model::Material) -> bool {
+        let value = match self {
+            Self::Conductivity => material.k.map(|k| k.axes().into_iter().fold(f64::INFINITY, f64::min)),
+            Self::Density => material.rho,
+            Self::SpecificHeat => material.cp,
+        };
+        value.is_some_and(|v| v.is_finite() && v > 0.0)
+    }
+}
+
+pub(crate) struct Requirements {
+    pub name: &'static str,
+    pub reference: Option<Reference>,
+    pub heat: bool,
+    pub transient: bool,
+    pub driven: bool,
+    /// Structural mass may come from some Bodies or from point masses. A partly massless
+    /// model needs mesh/DOF validation; only entirely absent mass is knowable here.
+    pub mass: bool,
+    pub properties: &'static [MaterialProperty],
+}
+
+impl crate::command::Procedure {
+    /// The pre-mesh contract of the Procedure extension point. Free-free modes and free
+    /// dynamic motion are valid; transient heat gets its reference from its initial field.
+    pub(crate) fn requirements(self) -> Requirements {
+        use crate::command::Procedure;
+        use MaterialProperty::{Conductivity, Density, SpecificHeat};
+        use Reference::{Displacement, Temperature};
+        let (name, reference, heat, transient, driven, properties): (_, _, _, _, _, &[MaterialProperty]) = match self {
+            Procedure::Static => ("static", Some(Displacement), false, false, true, &[]),
+            Procedure::StaticNonlinear => ("static-nonlinear", Some(Displacement), false, false, true, &[]),
+            Procedure::Buckling => ("buckling", Some(Displacement), false, false, true, &[]),
+            Procedure::Modal => ("modal", None, false, false, false, &[Density]),
+            Procedure::Explicit => ("explicit", None, false, true, true, &[Density]),
+            Procedure::Implicit => ("implicit", None, false, true, true, &[Density]),
+            Procedure::Harmonic => ("harmonic", None, false, false, true, &[Density]),
+            Procedure::RandomVibration => ("randomVibration", None, false, false, true, &[Density]),
+            Procedure::HeatSteady => ("heat-steady", Some(Temperature), true, false, true, &[Conductivity]),
+            Procedure::HeatTransient => {
+                ("heat-transient", None, true, true, true, &[Conductivity, Density, SpecificHeat])
+            }
+        };
+        Requirements {
+            name,
+            reference,
+            heat,
+            transient,
+            driven,
+            mass: !heat && !properties.is_empty(),
+            properties: if heat { properties } else { &[] },
+        }
+    }
+}
+
 /// A scalar `g(t)` multiplying the driven part of a Step: every prescribed temperature of a
 /// transient heat Step, and every Load and prescribed displacement of a static Step.
 ///
@@ -335,6 +414,8 @@ pub(crate) fn retained_payload_bytes(frames: usize, values_per_frame: usize) -> 
 /// stay readable — and honest about being stale — after that.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepResult {
+    /// Retained SI wrench ledger for linear Cartesian static recovery only.
+    pub static_equilibrium: Option<crate::post::equilibrium::StaticEquilibrium>,
     /// Kept with the solved Result, so later model edits cannot change its reaction units.
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub fields: BTreeMap<Field, FieldData>,
@@ -504,6 +585,7 @@ pub(crate) fn time_grid(max_dt: f64, t_end: f64) -> Result<(usize, f64), Error> 
 /// rest alone, so adding a field to `StepResult` does not touch five constructors.
 pub(crate) fn blank(solver: SolveInfo) -> StepResult {
     StepResult {
+        static_equilibrium: None,
         reaction_quantity: crate::units::ReactionQuantity::Force,
         fields: BTreeMap::new(),
         ply_stresses: Vec::new(),

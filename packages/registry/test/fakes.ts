@@ -1,5 +1,6 @@
+import { EMPTY_ACCOUNT } from '../src/account-types';
 import { vi } from 'vitest';
-import type { Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
+import type { AbaqusConversion, Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
 import type { FolderInfo, HostContext, OpenProject, ProjectMeta } from '../src/host-commands';
 import type { EngineTransport } from '../src/transport';
 
@@ -7,6 +8,10 @@ export const ACK: Ack = { seq: 1, revision: 1, hash: 'h', warnings: [], output: 
 export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { name: 'beam' }, journal: { entries: [] } } as unknown as ModelFile;
 export const FOLDER: FolderInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
 export const PROJECT: ProjectMeta = { id: 'p1', name: 'beam', at: 1_700_000_000_000, createdAt: 1_700_000_000_000, commands: 9, hash: 'h', thumbnail: null };
+export const ABAQUS_CONVERSION: AbaqusConversion = {
+  report: { mode: 'mesh', sha256: 'a'.repeat(64), conversionVersion: 'abaqus/1', inputBytes: 5, body: 'bar', unitLength: { value: 0.001, unit: 'm' }, sourceNodes: 4, activeNodes: 4, sourceElements: 1, elementKind: 'tet4', analysisConfigured: false, bbox: ['0 m', '0 m', '0 m', '1 m', '1 m', '1 m'], sourceLabels: { nodes: [1, 2, 3, 4], elements: [1], unusedNodes: [] }, sets: [], headings: [], preprint: [] },
+  commands: [{ cmd: 'model.new', name: 'imported' }],
+};
 
 export const SAVED = { name: 'beam', at: 1_700_000_000_000, commands: 9 };
 export const AUTOSAVES = [
@@ -31,6 +36,7 @@ const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
+  modeCount: 0,
   resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
@@ -52,7 +58,9 @@ const REPLIES: Record<string, unknown> = {
   'query.script': { text: 'fem.model.new({ name: "beam" })' },
   'query.model': { name: 'beam', revision: 10, meshSettings: {}, warnings: [] },
   'query.result': RESULT,
+  'query.results': { limit: 8, records: [] },
   'query.path': PATH,
+  'query.convertAbaqus': ABAQUS_CONVERSION,
 };
 
 export function fakeTransport(): EngineTransport {
@@ -77,7 +85,19 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
   let open: ProjectMeta | null = PROJECT;
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
   return {
+    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
     transport,
+    step: { import: vi.fn(async () => ({ cancelled: true as const })), cancel: vi.fn(() => true) },
+    resultComparison: {
+      configure: vi.fn(), play: vi.fn(), legend: vi.fn(), visible: vi.fn(), pick: vi.fn(() => null),
+      state: vi.fn(() => ({ configuration: { mode: 'single' as const }, viewMode: 'results' as const, catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null })),
+    },
+    abaqus: { capture: vi.fn(() => ({
+      io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },
+      replace: vi.fn(async () => undefined),
+      dependencies: vi.fn(async () => ({ missingFiles: [] })),
+      convert: vi.fn(async () => ABAQUS_CONVERSION),
+    })) },
     view: {
       fit: vi.fn(),
       setCamera: vi.fn(),
@@ -90,6 +110,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       toggle: vi.fn(),
       setVisible: vi.fn(),
       highlight: vi.fn(),
+      hover: vi.fn(),
       setTheme: vi.fn(),
       animate: vi.fn(),
       playTransient: vi.fn(),

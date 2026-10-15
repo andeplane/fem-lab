@@ -5,6 +5,9 @@
 //! schema; [`Q::si`] parses, checks the dimension and converts to SI. Nothing past this module
 //! ever sees a unit string.
 //! Numeric inputs and converted outputs must be finite; unit factors must also be nonzero.
+//! Multiplicative scaling must not turn a nonzero value into zero. Surviving subnormals and
+//! ordinary f64 rounding are accepted. Input scaling is checked before adding an affine
+//! offset; cancellation at a temperature origin is a valid zero, not a scaling underflow.
 //! Dimension operations are checked against their i8 range and reject overflow before use.
 
 use std::marker::PhantomData;
@@ -183,7 +186,8 @@ impl<D: Dim> Q<D> {
     pub fn quantity(&self) -> &Quantity {
         &self.q
     }
-    /// Parse, check the dimension and convert to finite SI, rejecting numeric overflow.
+    /// Parse, check the dimension and convert to finite SI, rejecting overflow and nonzero
+    /// scaling underflow to zero.
     pub fn si(&self) -> Result<f64, Error> {
         to_si(&self.q, D::DIM).map_err(|e| e.suggest(format!("e.g. \"{}\"", D::EXAMPLE)))
     }
@@ -540,7 +544,19 @@ fn finite_value(value: f64) -> Result<f64, Error> {
     }
 }
 
+fn checked_scale(value: f64, scaled: f64) -> Result<f64, Error> {
+    if value != 0.0 && scaled == 0.0 {
+        Err(Error::new(ErrorCode::Schema, "nonzero quantity underflows to zero during unit scaling")
+            .at("value")
+            .suggest("query.convert with units in which the nonzero value fits in the numeric range"))
+    } else {
+        finite_value(scaled)
+    }
+}
+
 /// Convert a Quantity to SI, checking its dimension.
+/// Reject nonzero scaling to zero before adding the affine offset. This does not require
+/// exact arithmetic: representable subnormals, ordinary rounding and affine zeros are valid.
 pub fn to_si(q: &Quantity, expect: Dimension) -> Result<f64, Error> {
     let (value, unit) = q.split()?;
     if unit.trim().is_empty() && expect == Dimension::NONE {
@@ -558,10 +574,12 @@ pub fn to_si(q: &Quantity, expect: Dimension) -> Result<f64, Error> {
         )
         .at("value"));
     }
-    finite_value(value * p.factor + p.offset)
+    let scaled = checked_scale(value, value * p.factor)?;
+    finite_value(scaled + p.offset)
 }
 
 /// Convert an SI value to `to`, checking the dimension when `expect` is given.
+/// A nonzero offset-adjusted numerator must not scale to zero; an affine zero is valid.
 pub fn convert(value_si: f64, to: &str, expect: Option<Dimension>) -> Result<f64, Error> {
     let value_si = finite_value(value_si)?;
     let p = parse_unit(to)?;
@@ -574,15 +592,16 @@ pub fn convert(value_si: f64, to: &str, expect: Option<Dimension>) -> Result<f64
             .at("unit"));
         }
     }
-    finite_value((value_si - p.offset) / p.factor)
+    let numerator = value_si - p.offset;
+    checked_scale(numerator, numerator / p.factor)
 }
 
 /// Format an SI value in `unit` with `sig` significant digits: `"2.5 MPa"`.
-pub fn format(value_si: f64, unit: &str, sig: usize) -> String {
-    match convert(value_si, unit, None) {
-        Ok(v) => format!("{} {unit}", fmt_sig(v, sig)),
-        Err(_) => format!("{} {unit}", fmt_sig(value_si, sig)),
-    }
+/// An invalid unit or unrepresentable conversion is a structured error. Formatting never
+/// substitutes an SI value under a requested-unit label; rounding uses [`fmt_sig`].
+pub fn format(value_si: f64, unit: &str, sig: usize) -> Result<String, Error> {
+    let value = convert(value_si, unit, None)?;
+    Ok(format!("{} {unit}", fmt_sig(value, sig)))
 }
 
 /// `sig` significant digits, shortest form (no trailing zeros), plain or exponent notation.
@@ -704,38 +723,46 @@ impl UnitSet {
 
 /// The dimension a value of the given display-unit field has; used by Queries to format.
 impl ResolvedUnits {
-    pub fn fmt(&self, value_si: f64, dim: Dimension) -> (f64, String) {
-        let unit = match dim {
-            d if d == Length::DIM => self.length.as_str(),
-            d if d == Force::DIM => self.force.as_str(),
-            d if d == Power::DIM => self.power.as_str(),
-            d if d == Stress::DIM => self.stress.as_str(),
-            d if d == Mass::DIM => self.mass.as_str(),
-            d if d == Density::DIM => self.density.as_str(),
-            d if d == Time::DIM => self.time.as_str(),
-            d if d == Temperature::DIM => self.temperature.as_str(),
-            d if d == Acceleration::DIM => self.acceleration.as_str(),
-            // Frequencies are quoted in Hz by everyone, so there is no display unit to choose.
-            d if d == Frequency::DIM => return (value_si, "Hz".to_string()),
-            // A moment is the force unit times the length unit: "kN m" when those are kN and m.
+    /// Select a unit label without converting a value. `SI` is the existing sentinel for
+    /// dimensions without a configurable display unit, including dimensionless rotations.
+    pub fn unit(&self, dim: Dimension) -> String {
+        match dim {
+            d if d == Length::DIM => self.length.clone(),
+            d if d == Force::DIM => self.force.clone(),
+            d if d == Power::DIM => self.power.clone(),
+            d if d == Stress::DIM => self.stress.clone(),
+            d if d == Mass::DIM => self.mass.clone(),
+            d if d == Density::DIM => self.density.clone(),
+            d if d == Time::DIM => self.time.clone(),
+            d if d == Temperature::DIM => self.temperature.clone(),
+            d if d == Acceleration::DIM => self.acceleration.clone(),
+            d if d == Frequency::DIM => "Hz".to_string(),
             d if d == Torque::DIM => {
-                let unit = format!("{} {}", self.force, self.length);
-                return (convert(value_si, &unit, None).unwrap_or(value_si), unit);
+                let operand = |unit: &str| if lookup(unit).is_some() { unit.to_string() } else { format!("({unit})") };
+                format!("{} {}", operand(&self.force), operand(&self.length))
             }
-            Dimension([3, 0, 0, 0]) => {
-                return (value_si / powi(len_factor(&self.length), 3), format!("{}^3", self.length))
-            }
-            Dimension([2, 0, 0, 0]) => {
-                return (value_si / powi(len_factor(&self.length), 2), format!("{}^2", self.length))
-            }
-            _ => return (value_si, "SI".to_string()),
-        };
-        (convert(value_si, unit, None).unwrap_or(value_si), unit.to_string())
+            Dimension([3, 0, 0, 0]) => self.length_power(3),
+            Dimension([2, 0, 0, 0]) => self.length_power(2),
+            _ => "SI".to_string(),
+        }
     }
-}
 
-fn len_factor(unit: &str) -> f64 {
-    parse_unit(unit).map(|p| p.factor).unwrap_or(1.0)
+    /// Express a finite SI value in the selected display unit. Failure is an error, never
+    /// an SI magnitude carrying the requested unit's label.
+    pub fn fmt(&self, value_si: f64, dim: Dimension) -> Result<(f64, String), Error> {
+        let unit = self.unit(dim);
+        let value = if unit == "SI" { finite_value(value_si)? } else { convert(value_si, &unit, Some(dim))? };
+        Ok((value, unit))
+    }
+
+    fn length_power(&self, exponent: u8) -> String {
+        if lookup(&self.length).is_some() {
+            format!("{}^{exponent}", self.length)
+        } else {
+            // A valid composite Length must be grouped as one operand before exponentiation.
+            std::iter::repeat_n(format!("({})", self.length), usize::from(exponent)).collect::<Vec<_>>().join("*")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -803,6 +830,76 @@ mod tests {
         assert_eq!(Q::<Dimensionless>::new(f64::INFINITY, "").si().unwrap_err().code, ErrorCode::Schema);
         assert_eq!(convert(f64::MAX, "mN", Some(Force::DIM)).unwrap_err().code, ErrorCode::Schema);
         assert_eq!(to_si(&Quantity::Parts { value: f64::MAX, unit: "N".into() }, Force::DIM).unwrap(), f64::MAX);
+    }
+
+    #[test]
+    fn nonzero_scaling_to_zero_is_rejected_without_rejecting_subnormal_rounding() {
+        // Subnormal doubles are integer multiples of the tick lambda = 2^-1074.
+        // kN's exact factor 1000 gives an independent integer-tick conversion oracle.
+        for sign in [-1.0, 1.0] {
+            let tick = sign * f64::from_bits(1);
+            let error = Q::<Force>::new(tick, "mN").si().unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("value"));
+            assert!(error.cause.contains("underflows to zero"));
+            assert!(error.suggestion.is_some());
+            let error = convert(sign * 1e-320, "GN", Some(Force::DIM)).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("value"));
+            assert!(error.cause.contains("underflows to zero"));
+            assert!(error.suggestion.as_deref().unwrap().contains("query.convert"));
+            assert_eq!(Q::<Force>::new(tick, "kN").si().unwrap().to_bits(), (sign * f64::from_bits(1000)).to_bits());
+            for (ticks, expected) in [(501, 1), (1000, 1), (1500, 2)] {
+                let scaled = convert(sign * f64::from_bits(ticks), "kN", Some(Force::DIM)).unwrap();
+                assert_eq!(scaled.to_bits(), (sign * f64::from_bits(expected)).to_bits());
+            }
+            assert!(convert(sign * f64::from_bits(499), "kN", Some(Force::DIM)).is_err());
+            assert_eq!(Q::<Force>::new(sign * f64::from_bits(501), "mN").si().unwrap().to_bits(), tick.to_bits());
+        }
+        assert!(to_si(&Quantity::text("1e-320 uN"), Force::DIM).unwrap_err().cause.contains("underflows"));
+        for zero in [0.0, -0.0] {
+            assert_eq!(Q::<Force>::new(zero, "mN").si().unwrap(), 0.0);
+            assert_eq!(convert(zero, "GN", Some(Force::DIM)).unwrap(), 0.0);
+        }
+        // Offset cancellation represents real temperature origins; it is not scaling loss.
+        assert_eq!(si("-273.15 degC", Temperature::DIM), 0.0);
+        assert_eq!(si("0 degC", Temperature::DIM), 273.15);
+        assert_eq!(convert(273.15, "degC", Some(Temperature::DIM)).unwrap(), 0.0);
+        assert_eq!(convert(0.0, "degC", Some(Temperature::DIM)).unwrap(), -273.15);
+    }
+
+    #[test]
+    fn actual_subnormal_formatting_and_decimal_parsing_have_exact_bit_oracles() {
+        for (bits, decimal) in [
+            (1, "4.9406564584124654e-324"),
+            ((1u64 << 52) - 1, "2.2250738585072009e-308"),
+            (1u64 << 52, "2.2250738585072014e-308"),
+        ] {
+            for sign in [-1.0, 1.0] {
+                let value = sign * f64::from_bits(bits);
+                let expected = if sign < 0.0 { format!("-{decimal}") } else { decimal.into() };
+                assert_eq!(fmt_sig(value, 17), expected);
+                assert_eq!(Q::<Force>::text(&format!("{expected} N")).si().unwrap().to_bits(), value.to_bits());
+                let serialized = serde_json::to_string(&Q::<Force>::new(value, "N")).unwrap();
+                let parsed: Q<Force> = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(parsed.si().unwrap().to_bits(), value.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn checked_formatters_propagate_nonzero_scaling_underflow() {
+        let units = UnitSet { force: Some("GN".into()), ..Default::default() }.resolve();
+        for value in [-1e-320, 1e-320] {
+            let error = format(value, "GN", 17).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("value"));
+            assert!(error.cause.contains("underflows to zero"));
+            assert_eq!(units.fmt(value, Force::DIM).unwrap_err(), error);
+        }
+        assert_eq!(format(0.0, "GN", 17).unwrap(), "0 GN");
+        assert_eq!(format(273.15, "degC", 17).unwrap(), "0 degC");
+        assert_eq!(units.fmt(0.0, Force::DIM).unwrap(), (0.0, "GN".into()));
     }
 
     #[test]
@@ -911,9 +1008,11 @@ mod tests {
 
     #[test]
     fn format_and_sig_digits() {
-        assert_eq!(format(2.5e6, "MPa", 4), "2.5 MPa");
-        assert_eq!(format(0.25, "mm", 4), "250 mm");
-        assert_eq!(format(1.0, "zork", 3), "1 zork");
+        assert_eq!(format(2.5e6, "MPa", 4).unwrap(), "2.5 MPa");
+        assert_eq!(format(0.25, "mm", 4).unwrap(), "250 mm");
+        assert_eq!(format(0.0, "mm", 17).unwrap(), "0 mm");
+        assert_eq!(to_si(&Quantity::text(format(0.0, "mm", 17).unwrap()), Length::DIM).unwrap(), 0.0);
+        assert_eq!(format(1.0, "zork", 3).unwrap_err().code, ErrorCode::UnitUnknown);
         assert_eq!(fmt_sig(0.0, 3), "0");
         assert_eq!(fmt_sig(f64::NAN, 3), "NaN");
         assert_eq!(fmt_sig(123456.789, 4), "123500");
@@ -937,28 +1036,28 @@ mod tests {
         let s = UnitSet { length: Some("mm".into()), stress: Some("MPa".into()), ..Default::default() };
         s.validate().unwrap();
         let r = s.resolve();
-        assert_eq!(r.fmt(0.001, Length::DIM), (1.0, "mm".to_string()));
-        assert_eq!(r.fmt(1e6, Stress::DIM), (1.0, "MPa".to_string()));
-        assert_eq!(r.fmt(1.0, Force::DIM), (1.0, "N".to_string()));
-        assert_eq!(r.fmt(1.0, Power::DIM), (1.0, "W".to_string()));
+        assert_eq!(r.fmt(0.001, Length::DIM).unwrap(), (1.0, "mm".to_string()));
+        assert_eq!(r.fmt(1e6, Stress::DIM).unwrap(), (1.0, "MPa".to_string()));
+        assert_eq!(r.fmt(1.0, Force::DIM).unwrap(), (1.0, "N".to_string()));
+        assert_eq!(r.fmt(1.0, Power::DIM).unwrap(), (1.0, "W".to_string()));
         let power = UnitSet { power: Some("kW".into()), force: Some("kN".into()), ..Default::default() };
         power.validate().unwrap();
-        assert_eq!(power.resolve().fmt(1000.0, Power::DIM), (1.0, "kW".to_string()));
+        assert_eq!(power.resolve().fmt(1000.0, Power::DIM).unwrap(), (1.0, "kW".to_string()));
         let bad_power = UnitSet { power: Some("kN".into()), ..Default::default() };
         assert_eq!(bad_power.validate().unwrap_err().code, ErrorCode::UnitDimension);
-        assert_eq!(r.fmt(1.0, Mass::DIM).1, "kg");
-        assert_eq!(r.fmt(1.0, Density::DIM).1, "kg/m^3");
-        assert_eq!(r.fmt(1.0, Time::DIM).1, "s");
-        assert_eq!(r.fmt(1.0, Temperature::DIM).1, "K");
-        assert_eq!(r.fmt(1.0, Acceleration::DIM).1, "m/s^2");
-        let (v, u) = r.fmt(1e-9, Dimension([3, 0, 0, 0]));
+        assert_eq!(r.fmt(1.0, Mass::DIM).unwrap().1, "kg");
+        assert_eq!(r.fmt(1.0, Density::DIM).unwrap().1, "kg/m^3");
+        assert_eq!(r.fmt(1.0, Time::DIM).unwrap().1, "s");
+        assert_eq!(r.fmt(1.0, Temperature::DIM).unwrap().1, "K");
+        assert_eq!(r.fmt(1.0, Acceleration::DIM).unwrap().1, "m/s^2");
+        let (v, u) = r.fmt(1e-9, Dimension([3, 0, 0, 0])).unwrap();
         assert!((v - 1.0).abs() < 1e-9);
         assert_eq!(u, "mm^3");
-        let (v, u) = r.fmt(1e-6, Dimension([2, 0, 0, 0]));
+        let (v, u) = r.fmt(1e-6, Dimension([2, 0, 0, 0])).unwrap();
         assert!((v - 1.0).abs() < 1e-9);
         assert_eq!(u, "mm^2");
-        assert_eq!(r.fmt(3.0, Frequency::DIM), (3.0, "Hz".to_string()));
-        assert_eq!(r.fmt(3.0, ThermalExpansion::DIM), (3.0, "SI".to_string()));
+        assert_eq!(r.fmt(3.0, Frequency::DIM).unwrap(), (3.0, "Hz".to_string()));
+        assert_eq!(r.fmt(3.0, ThermalExpansion::DIM).unwrap(), (3.0, "SI".to_string()));
         let bad = UnitSet { stress: Some("mm".into()), ..Default::default() };
         let e = bad.validate().unwrap_err();
         assert_eq!(e.code, ErrorCode::UnitDimension);
@@ -976,9 +1075,67 @@ mod tests {
         };
         all.validate().unwrap();
         let r = ResolvedUnits { length: "zork".into(), ..UnitSet::default().resolve() };
-        assert_eq!(r.fmt(1.0, Dimension([3, 0, 0, 0])).0, 1.0);
+        assert_eq!(r.fmt(1.0, Dimension([3, 0, 0, 0])).unwrap_err().code, ErrorCode::UnitUnknown);
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(j, r#"{"length":"mm","stress":"MPa"}"#);
+    }
+
+    #[test]
+    fn checked_display_preserves_magnitudes_units_and_rejects_overflow() {
+        let units = UnitSet { force: Some("mN".into()), length: Some("mm".into()), ..Default::default() }.resolve();
+        for (value, dimension) in
+            [(2e307, Force::DIM), (2e307, Torque::DIM), (1e308, Area::DIM), (1e308, Dimension([3, 0, 0, 0]))]
+        {
+            assert_eq!(units.fmt(value, dimension).unwrap_err().code, ErrorCode::Schema);
+        }
+        assert_eq!(format(2e307, "mN", 17).unwrap_err().code, ErrorCode::Schema);
+        for value in [-1e307, 0.0, 1e307] {
+            let (shown, unit) = UnitSet::default().resolve().fmt(value, Force::DIM).unwrap();
+            assert_eq!(shown, value);
+            assert_eq!(unit, "N");
+            assert_eq!(to_si(&Quantity::Parts { value: shown, unit }, Force::DIM).unwrap(), value);
+        }
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert_eq!(units.fmt(value, Dimension::NONE).unwrap_err().code, ErrorCode::Schema);
+        }
+        let temperature = UnitSet { temperature: Some("degC".into()), ..Default::default() }.resolve();
+        let (value, unit) = temperature.fmt(293.15, Temperature::DIM).unwrap();
+        assert_eq!(unit, "degC");
+        assert!((value - 20.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn composite_display_units_group_complete_operands_before_derivation() {
+        let source = UnitSet { length: Some("mm*s/s".into()), force: Some("N*s/s".into()), ..Default::default() };
+        source.validate().unwrap();
+        let units = source.resolve();
+        for (value_si, dimension, expected, label) in [
+            (1e-6, Area::DIM, 1.0, "(mm*s/s)*(mm*s/s)"),
+            (1e-9, Dimension([3, 0, 0, 0]), 1.0, "(mm*s/s)*(mm*s/s)*(mm*s/s)"),
+            (1e-3, Torque::DIM, 1.0, "(N*s/s) (mm*s/s)"),
+        ] {
+            let (value, unit) = units.fmt(value_si, dimension).unwrap();
+            assert_eq!(unit, label);
+            assert!((value - expected).abs() < 1e-14);
+            assert_eq!(parse_unit(&unit).unwrap().dim, dimension);
+            assert!((to_si(&Quantity::Parts { value, unit }, dimension).unwrap() - value_si).abs() <= 1e-14 * value_si);
+        }
+    }
+
+    #[test]
+    fn grouping_composite_torque_operands_avoids_unrepresentable_intermediate_factors() {
+        let source = UnitSet {
+            force: Some("N*Gm^30/m^30".into()),
+            length: Some("Gm^5/nm^5*nm^35/m^34".into()),
+            ..Default::default()
+        };
+        source.validate().unwrap();
+        let units = source.resolve();
+        let (value, unit) = units.fmt(1.0, Torque::DIM).unwrap();
+        assert_eq!(unit, "(N*Gm^30/m^30) (Gm^5/nm^5*nm^35/m^34)");
+        assert!((value / 1e-45 - 1.0).abs() < 1e-8);
+        assert_eq!(parse_unit(&unit).unwrap().dim, Torque::DIM);
+        assert!((to_si(&Quantity::Parts { value, unit }, Torque::DIM).unwrap() - 1.0).abs() < 1e-14);
     }
 
     #[test]
@@ -1003,16 +1160,46 @@ mod tests {
 
     proptest! {
         #[test]
-        fn parse_format_identity(v in -1e6f64..1e6, idx in 0usize..24) {
+        fn actual_subnormal_parse_format_identity(bits in 1u64..(1u64 << 52), negative in any::<bool>()) {
+            let value = f64::from_bits(bits | ((negative as u64) << 63));
+            let text = super::format(value, "N", 17).unwrap();
+            prop_assert_eq!(to_si(&Quantity::text(text), Force::DIM).unwrap().to_bits(), value.to_bits());
+            let encoded = serde_json::to_string(&Quantity::Parts { value, unit: "N".into() }).unwrap();
+            let decoded: Quantity = serde_json::from_str(&encoded).unwrap();
+            prop_assert_eq!(to_si(&decoded, Force::DIM).unwrap().to_bits(), value.to_bits());
+        }
+
+        #[test]
+        fn exact_subnormal_integer_tick_conversion_identity(
+            ticks in 1u64..=((1u64 << 52) - 1) / 1000,
+            negative in any::<bool>(),
+        ) {
+            let sign = (negative as u64) << 63;
+            let value = f64::from_bits(ticks | sign);
+            let expected_si = f64::from_bits((ticks * 1000) | sign);
+            let actual_si = Q::<Force>::new(value, "kN").si().unwrap();
+            prop_assert_eq!(actual_si.to_bits(), expected_si.to_bits());
+            prop_assert_eq!(convert(actual_si, "kN", Some(Force::DIM)).unwrap().to_bits(), value.to_bits());
+        }
+
+        #[test]
+        fn parse_format_identity(magnitude in 1e-6f64..1e6, negative in any::<bool>(), idx in 0usize..24) {
+            let v = if negative { -magnitude } else { magnitude };
             let syms = ["m","mm","km","in","ft","g","kg","t","lb","s","min","h","K","N","kN","lbf","Pa","MPa","GPa","psi","ksi","Hz","J","W"];
             let unit = syms[idx];
             let p = parse_unit(unit).unwrap();
             let si_v = v * p.factor;
             let back = convert(si_v, unit, Some(p.dim)).unwrap();
-            prop_assert!((back - v).abs() <= 1e-12 * v.abs().max(1.0), "{unit}: {v} -> {back}");
-            let text = format!("{v} {unit}");
+            prop_assert!((back - v).abs() <= 1e-12 * v.abs(), "{unit}: {v} -> {back}");
+            let text = super::format(si_v, unit, 17).unwrap();
+            let shown = UnitSet { length: Some(unit.into()), ..Default::default() };
+            if p.dim == Length::DIM {
+                let (value, label) = shown.resolve().fmt(si_v, p.dim).unwrap();
+                let roundtrip = to_si(&Quantity::Parts { value, unit: label }, p.dim).unwrap();
+                prop_assert!((roundtrip - si_v).abs() <= 1e-12 * si_v.abs());
+            }
             let again = to_si(&Quantity::text(&text), p.dim).unwrap();
-            prop_assert!((again - si_v).abs() <= 1e-12 * si_v.abs().max(1.0));
+            prop_assert!((again - si_v).abs() <= 1e-12 * si_v.abs());
         }
 
         #[test]

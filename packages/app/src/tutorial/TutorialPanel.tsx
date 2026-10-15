@@ -1,5 +1,6 @@
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
 import { useStore } from '../ui/cmd';
+import { TheoryText } from '../ui/TheoryText';
 // The compact side card of DESIGN-BRIEF §5.8b: step n of m, the explanation, "do it for me",
 // Skip, Next. Not part of the `[data-cmd]`-enforced App shell (ADR 0003) — it is a self
 // contained panel the coordinator mounts once `<TutorialPanel registry={registry} store={store}
@@ -119,9 +120,22 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
 
   const doIt = async (): Promise<void> => {
     if (!runner || busy) return;
+    const active = runner;
+    const producer = owner.current;
+    const replacesModel = active.currentStep?.doIt?.cmd === 'model.new';
     setBusy(true);
     try {
-      await runner.doIt();
+      await active.doIt();
+      // The app may publish the replacement Journal before doIt resets its watermark.
+      // Observe it again through the producer that performed the replacement, so even an
+      // equal-length Journal advances and no later tutorial or session receives its result.
+      if (replacesModel && producer && owner.current === producer) {
+        const lease = await producer;
+        if (!lease.signal.aborted) {
+          const journal = await lease.registry.query({ query: 'query.journal' }) as JournalDump;
+          if (owner.current === producer && !lease.signal.aborted) active.advanceIfMatched(journal.entries);
+        }
+      }
       if (!store.dispatch) {
         const [model, journal] = await Promise.all([
           registry.query({ query: 'query.model' }) as Promise<ModelSummary>,
@@ -199,28 +213,30 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
             ×
           </button>
         </div>
-        <h3 class="tutorial-step-title">{step.title}</h3>
-        <p class="tutorial-explain">{step.explain}</p>
-        {fallback && step.expect ? (
-          <p class="tutorial-where">
-            Nothing on screen runs <code class="mono">{step.expect.cmd}</code> yet — press <kbd>⌘K</kbd>, type it and press ↵.
-          </p>
-        ) : name ? (
-          <p class="tutorial-where">
-            Click <b>{name}</b> — it is the outlined control.
-          </p>
-        ) : null}
-        {values.length > 0 ? (
-          <dl class="tutorial-values mono">
-            {values.map(([label, value]) => (
-              <>
-                <dt key={`${label}-k`}>{label}</dt>
-                <dd key={`${label}-v`}>{value}</dd>
-              </>
-            ))}
-          </dl>
-        ) : null}
-        {step.theory ? <pre class="tutorial-theory mono">{step.theory}</pre> : null}
+        <div class="tutorial-content">
+          <h3 class="tutorial-step-title">{step.title}</h3>
+          <p class="tutorial-explain">{step.explain}</p>
+          {fallback && step.expect ? (
+            <p class="tutorial-where">
+              Nothing on screen runs <code class="mono">{step.expect.cmd}</code> yet — press <kbd>⌘K</kbd>, type it and press ↵.
+            </p>
+          ) : name ? (
+            <p class="tutorial-where">
+              Click <b>{name}</b> — it is the outlined control.
+            </p>
+          ) : null}
+          {values.length > 0 ? (
+            <dl class="tutorial-values mono">
+              {values.map(([label, value]) => (
+                <>
+                  <dt key={`${label}-k`}>{label}</dt>
+                  <dd key={`${label}-v`}>{value}</dd>
+                </>
+              ))}
+            </dl>
+          ) : null}
+          {step.theory ? <div class="tutorial-theory"><TheoryText text={step.theory} /></div> : null}
+        </div>
         <div class="tutorial-actions">
           {step.doIt ? (
             <button type="button" class="tutorial-btn primary" disabled={busy} onClick={() => void doIt()}>

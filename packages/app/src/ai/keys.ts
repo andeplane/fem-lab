@@ -9,7 +9,7 @@ import type { ProviderId } from './provider';
 import { browserStorage, KEY_SLOT, readStorage } from './key-storage';
 export { KEY_SLOT, storeKey, adoptSessionKeys } from './key-storage';
 
-export type KeySource = 'stored' | 'dev' | 'none';
+export type KeySource = 'stored' | 'session' | 'dev' | 'none';
 export interface KeyInfo {
   key: string | null;
   source: KeySource;
@@ -21,9 +21,11 @@ export const PROVIDER_IDS: ProviderId[] = ['anthropic', 'openai'];
 export const MODELS: Record<ProviderId, string[]> = { anthropic: ANTHROPIC_MODELS, openai: OPENAI_MODELS };
 export const DEFAULT_MODEL: Record<ProviderId, string> = { anthropic: ANTHROPIC_DEFAULT, openai: OPENAI_DEFAULT };
 
-export function resolveKey(id: ProviderId, storage: Storage | null = browserStorage('localStorage'), dev = devApiKeys()): KeyInfo {
+export function resolveKey(id: ProviderId, storage: Storage | null = browserStorage('localStorage'), dev = devApiKeys(), session: Storage | null = browserStorage('sessionStorage')): KeyInfo {
   const stored = readStorage(storage, KEY_SLOT[id]);
   if (stored) return { key: stored, source: 'stored' };
+  const retained = readStorage(session, KEY_SLOT[id]);
+  if (retained) return { key: retained, source: 'session' };
   const injected = dev?.[id];
   if (injected) return { key: injected, source: 'dev' };
   return { key: null, source: 'none' };

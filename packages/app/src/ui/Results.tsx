@@ -4,13 +4,13 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
+import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber, hasDeformation, modeCount } from '../fields';
 import { benchmarkProvenance } from '../benchmark';
 import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
-import { blockers } from './schema';
+import { blockers, solveBlockers } from './schema';
 
 const Theory = lazy(() => import('./Theory').then((module) => module.Theory));
 
@@ -403,15 +403,16 @@ export function Sweep({ s }: { s: UiState }) {
 }
 
 /**
- * A modal Step's natural frequencies, with the Command that puts each mode shape on screen.
- * Mode `k`'s shape is the Result field `mode:k` (crates/engine/src/solve_run.rs).
+ * Natural or modal-basis frequencies. Only shapes owned by this Result get a show Command;
+ * a response can keep its basis frequencies without owning any `mode:k` fields.
  */
 export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const f = s.result?.frequencies ?? [];
+  const modes = modeCount(s.result);
   if (f.length === 0) return null;
   return (
     <>
-      <div class="section-label">Natural frequencies</div>
+      <div class="section-label">{modes > 0 ? 'Natural frequencies' : 'Modal basis frequencies'}</div>
       <div class="rtable-wrap">
         <table class="rtable">
           <thead>
@@ -431,16 +432,16 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
                 </td>
                 <td class="mono n faint">{hz.value > 0 ? `${formatNumber(1 / hz.value)} s` : '—'}</td>
                 <td>
-                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                  {i < modes && <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
                     show
-                  </Cmd>
+                  </Cmd>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div class="rule-note">A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.</div>
+      <div class="rule-note">{modes > 0 ? 'A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.' : 'These frequencies describe the modal basis; this Result contains response fields.'}</div>
     </>
   );
 }
@@ -448,6 +449,7 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
 /** A buckling Step's critical load factors, with the Command that puts each mode shape on screen. */
 export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const factors = s.result?.bucklingFactors ?? [];
+  const modes = modeCount(s.result);
   if (factors.length === 0) return null;
   return (
     <>
@@ -467,9 +469,9 @@ export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatc
                 <td class="mono">{i + 1}</td>
                 <td class="mono n">λ {formatNumber(factor)}</td>
                 <td>
-                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                  {i < modes && <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
                     show
-                  </Cmd>
+                  </Cmd>}
                 </td>
               </tr>
             ))}
@@ -483,7 +485,7 @@ export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatc
 
 /**
  * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
- * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
+ * procedure it came from, and any available displacement scaling — said here too, so
  * a person reading the numbers is not left to infer it from the legend. Everything on it is
  * already in the store: a header is no place to start a Query, and the Checks tab is where the
  * DOF count lives.
@@ -499,13 +501,14 @@ function ResultHeader({ s }: { s: UiState }) {
         {r.solver} · {Math.round(r.timeMs)} ms
       </span>
       <span class="faint">{r.stale ? `solved at rev ${r.revision}, before the edits since` : `solved at rev ${r.revision}`}</span>
-      <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span>
+      {hasDeformation(r, s.fieldKey) ? <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span> : null}
     </div>
   );
 }
 
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
-  const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
+  const step = s.model?.steps[0]?.name ?? '';
+  const next = solveBlockers(s.model, step)[0];
   if (!s.result) {
     return (
       <div class="checks">
@@ -515,7 +518,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
             {next.fixLabel}
           </Cmd>
         ) : (
-          <Cmd dispatch={dispatch} cmd="solve.run" class="chip-add" args={{ step: s.model?.steps[0]?.name ?? '' }}>
+          <Cmd dispatch={dispatch} cmd="solve.run" class="chip-add" args={{ step }} disabled={Boolean(next) || !s.ready || step === '' || s.solving !== null || s.lastError !== null} title={next ? `${next.code} ${next.text}` : undefined}>
             solve.run
           </Cmd>
         )}
@@ -548,7 +551,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
 const bytes = (n: number): string => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(0)} MB` : `${(n / 1e3).toFixed(0)} kB`);
 
 export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
-  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
+  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? []);
   const [mesh, setMesh] = useState<MeshSummary | null>(null);
   const [cost, setCost] = useState<CostEstimate | null>(null);
   const step = s.model?.steps[0]?.name ?? '';

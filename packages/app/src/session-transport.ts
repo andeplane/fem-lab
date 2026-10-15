@@ -91,7 +91,7 @@ export class SessionChannel {
   }
 }
 
-export type Replace = (origin: SessionTransport, source: ReplacementSource) => Promise<SessionTransport>;
+export type Replace = (origin: SessionTransport, source: ReplacementSource, admission?: Stamp) => Promise<SessionTransport>;
 /** One revocable producer. Only its own successful explicit replacement can advance it. */
 export class SessionTransport implements EngineTransport {
   private sequence = 0n;
@@ -100,8 +100,8 @@ export class SessionTransport implements EngineTransport {
   private sink: ((p: Progress) => void) | undefined;
   constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace, private readonly recover: (origin: SessionTransport) => Promise<void> = async origin => origin.release()) {}
   onReplacement(listener: (next: SessionTransport) => void): void { this.replacementListener = listener; }
-  async replaceWith(source: ReplacementSource): Promise<SessionTransport> {
-    return this.replace(this, source);
+  async replaceWith(source: ReplacementSource, admission?: Stamp): Promise<SessionTransport> {
+    return this.replace(this, source, admission === undefined ? undefined : structuredClone(admission));
   }
   /** Called at the activation commit, before the previous endpoint is revoked. */
   adopted(next: SessionTransport): void { this.replacementListener?.(next); }
@@ -152,6 +152,16 @@ export class SessionTransport implements EngineTransport {
       return this.accept(reply) as Ack;
     });
   }
+  /** A host conversion must retain admission from before its asynchronous input/conversion.
+   * In particular, queued writes and intervening reads must never refresh this expectedVersion. */
+  dispatchAtAdmission(input: Exclude<Command, { cmd: 'model.new' }>, admission: Stamp): Promise<Ack> {
+    const command = structuredClone(input); const captured = structuredClone(admission);
+    return this.ordered(async () => {
+      if (!sameSession(captured.session, this.stamp.session)) throw expired();
+      const reply = await this.channel.request({ op: 'dispatch', context: this.context(), expectedVersion: captured.stateVersion, command }, this.sink);
+      return this.accept(reply) as Ack;
+    });
+  }
   query(input: Query): Promise<QueryResult> {
     const query = structuredClone(input);
     return this.ordered(async () => {
@@ -180,7 +190,11 @@ export class SessionTransport implements EngineTransport {
     if (ack.output.type !== 'export') throw new FemError('internal', 'mesh.export did not return a file');
     return { filename: ack.output.filename, mime: ack.output.mime, bytes: new TextEncoder().encode(ack.output.text) };
   }
-  async exportFile(): Promise<ModelFile> { return (await this.snapshot()).file; }
+  async exportFile(): Promise<ModelFile> {
+    const document = await this.query({ query: 'query.document' });
+    if (!('file' in document)) throw new FemError('internal', 'query.document did not return a Model file');
+    return document.file;
+  }
   async importFile(file: ModelFile): Promise<ImportAck> {
     const next = await this.replaceWith({ kind: 'file', file: structuredClone(file) });
     const snapshot = await next.snapshot();
@@ -189,8 +203,11 @@ export class SessionTransport implements EngineTransport {
   async gpuSelfTest(n: number): Promise<number> {
     return this.ordered(async () => this.accept(await this.channel.request({ op: 'gpuSelfTest', context: this.context(), n })) as number);
   }
-  async reserve(): Promise<string> {
-    return this.ordered(async () => this.accept(await this.channel.request({ op: 'reserve', context: this.context(), expectedVersion: this.stamp.stateVersion })) as string);
+  async reserve(admission?: Stamp): Promise<string> {
+    return this.ordered(async () => {
+      if (admission && !sameSession(admission.session, this.stamp.session)) throw expired();
+      return this.accept(await this.channel.request({ op: 'reserve', context: this.context(), expectedVersion: admission?.stateVersion ?? this.stamp.stateVersion })) as string;
+    });
   }
   async prepare(source: ReplacementSource, options: SessionOptions): Promise<DocumentSnapshot> {
     const reply = await this.channel.request({ op: 'prepare', context: this.context(), expectedVersion: this.stamp.stateVersion, source, options });

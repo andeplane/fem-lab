@@ -64,6 +64,8 @@ impl ResolvedSet {
 /// The Mesh plus everything derived with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltMesh {
+    /// Authored labels in dense array order; empty for geometric meshers.
+    pub source_labels: crate::imported::SourceLabels,
     /// Analytic shell directors per element; empty for other meshers.
     pub directors: Vec<[[f64; 3]; 4]>,
     pub mesh: Mesh,
@@ -92,7 +94,69 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let mut directors = Vec::new();
+    let mut source_labels = crate::imported::SourceLabels::default();
     let (mut mesh, body_of_block, mut body_faces) = match &settings.mesher {
+        MesherSettings::Imported(source) => {
+            if settings.order != 1
+                || settings.formulation == crate::command::Formulation::IncompatibleModes
+                || settings.simplices
+                || settings.refinement.is_some()
+                || !model.bodies.is_empty()
+            {
+                return Err(Error::new(
+                    ErrorCode::Unsupported,
+                    "imported sources require unchanged authored interpolation and full or mean-dilatation integration as the only source",
+                )
+                .at("mesher")
+                .suggest("mesh.set with order 1, formulation full or mean-dilatation and no split/refinement"));
+            }
+            let (part, labels) = crate::imported::build(source)?;
+            source_labels = labels;
+            if dim != 3 {
+                return Err(Error::new(ErrorCode::Unsupported, "imported sources require solid3d idealisation")
+                    .at("mesher")
+                    .suggest("model.setIdealisation with solid3d"));
+            }
+            let faces = part.boundary_faces();
+            let region_owners = source.element_owners();
+            let owners = part
+                .blocks
+                .iter()
+                .map(|b| {
+                    region_owners
+                        .get(&source.elements[b.first_elem as usize].label)
+                        .copied()
+                        .unwrap_or(source.body.as_str())
+                        .to_string()
+                })
+                .collect();
+            let mut body_faces = BTreeMap::from([(source.body.clone(), faces)]);
+            for name in source.regions.keys() {
+                body_faces.insert(name.clone(), Vec::new());
+            }
+            let mut face_owners: BTreeMap<Vec<u32>, Vec<Face>> = BTreeMap::new();
+            for elem in 0..part.n_elems() as u32 {
+                for local in 0..part.kind_of(elem).n_faces() as u8 {
+                    let face = Face { elem, local };
+                    let mut nodes: Vec<_> = part.face_nodes(face).collect();
+                    nodes.sort_unstable();
+                    face_owners.entry(nodes).or_default().push(face);
+                }
+            }
+            let owner_of =
+                |e: u32| region_owners.get(&source.elements[e as usize].label).copied().unwrap_or(source.body.as_str());
+            for faces in face_owners.values() {
+                for face in faces {
+                    let owner = owner_of(face.elem);
+                    if owner != source.body
+                        && !faces.iter().any(|other| other.elem != face.elem && owner_of(other.elem) == owner)
+                    {
+                        body_faces.get_mut(owner).expect("region initialized above").push(*face);
+                    }
+                }
+            }
+            (part, owners, body_faces)
+        }
         MesherSettings::Surface { body, patches } => {
             if quadratic || settings.simplices {
                 return Err(Error::new(
@@ -162,6 +226,18 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
             elems: Vec::new(),
         });
     }
+    for (name, elems) in &mesh.elem_sets {
+        if name == "all" {
+            continue;
+        }
+        let mut nodes: Vec<_> = elems.iter().flat_map(|&e| mesh.elem_nodes(e).iter().copied()).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        sets.insert(
+            name.clone(),
+            ResolvedSet { kind: SetKind::Element, faces: Vec::new(), nodes, elems: elems.clone() },
+        );
+    }
     for named in &model.sets {
         let (resolved, probe) = match &named.source {
             SetSource::Face { of, where_ } => {
@@ -176,7 +252,14 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
                 (face_set(&mesh, resolve_face_set(&mesh, where_, Some(of_body))), where_.reference_point())
             }
             SetSource::Region { where_ } => {
-                let body_of = |e: u32| body_of_block[mesh.block_of(e).0].as_str();
+                let aggregate = matches!(where_, femlab_geometry::RegionPredicate::Body {name} if model.imported_source().is_some_and(|s| &s.body == name));
+                let body_of = |e: u32| {
+                    if aggregate {
+                        model.implicit_body().expect("imported source above")
+                    } else {
+                        body_of_block[mesh.block_of(e).0].as_str()
+                    }
+                };
                 let (nodes, elems) = resolve_region(&mesh, where_, &body_of);
                 // A region that catches no whole element is a node Set: what a nodal load wants.
                 let kind = if elems.is_empty() { SetKind::Node } else { SetKind::Element };
@@ -213,7 +296,7 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         );
         points.push(node);
     }
-    Ok(BuiltMesh { mesh, body_of_block, sets, points, directors })
+    Ok(BuiltMesh { mesh, body_of_block, sets, points, directors, source_labels })
 }
 
 /// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces
@@ -226,14 +309,15 @@ type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
 /// swept mesh is the base's.
 fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
     match m {
-        MesherSettings::Surface { .. } | MesherSettings::Lattice { .. } | MesherSettings::Tet { .. } => {
-            Err(Error::new(
-                ErrorCode::MeshFailed,
-                "a sweep needs a 2D base mesher; lattice and tet mesh whole Bodies, and surface meshes 3D shells",
-            )
-            .at("mesher.base")
-            .suggest("mesh.set with a mapped base"))
-        }
+        MesherSettings::Imported(_)
+        | MesherSettings::Surface { .. }
+        | MesherSettings::Lattice { .. }
+        | MesherSettings::Tet { .. } => Err(Error::new(
+            ErrorCode::MeshFailed,
+            "a sweep needs a 2D base mesher; lattice and tet mesh whole Bodies, and surface meshes 3D shells",
+        )
+        .at("mesher.base")
+        .suggest("mesh.set with a mapped base")),
         MesherSettings::Mapped { body, blocks } => {
             let kind = if quadratic { ElementKind::Quad8 } else { ElementKind::Quad4 };
             let part = mapped(blocks, kind).map_err(|e| {
@@ -455,6 +539,7 @@ fn positive_size(q: &Q<Length>, at: &str) -> Result<f64, Error> {
 /// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.
 pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
     match spec {
+        MesherSpec::Imported(spec) => crate::imported::source(spec).map(MesherSettings::Imported),
         MesherSpec::Surface { body, patches } => Ok(MesherSettings::Surface {
             body: body.clone().unwrap_or_else(|| "shell".into()),
             patches: patches.iter().enumerate().map(|(i, p)| surface_patch(p, i)).collect::<Result<_, _>>()?,
@@ -509,7 +594,13 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
             Ok(MesherSettings::Free { of: of.clone(), size: s, refine: boxes })
         }
         MesherSpec::Sweep { base, sweep } => {
-            Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })
+            let base = mesher_settings(base)?;
+            if matches!(base, MesherSettings::Imported(_)) {
+                return Err(Error::new(ErrorCode::Unsupported, "an imported source cannot be swept")
+                    .at("mesher.base")
+                    .suggest("mesh.set with the original imported source"));
+            }
+            Ok(MesherSettings::Sweep { base: Box::new(base), sweep: sweep_settings(sweep)? })
         }
         MesherSpec::Tet(crate::command::TetSpec { size, max_elements }) => {
             let s = size.si().map_err(|e| e.at("mesher.size"))?;
@@ -540,6 +631,7 @@ const DEFAULT_MAX_ELEMENTS: u32 = 500_000;
 pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
     let k = |n: usize| ((n as f64 * h0 / h).round() as usize).max(1);
     match m {
+        MesherSettings::Imported(source) => MesherSettings::Imported(source.clone()),
         MesherSettings::Surface { body, patches } => MesherSettings::Surface {
             body: body.clone(),
             patches: patches.iter().map(|p| femlab_geometry::SurfacePatch { n: p.n.map(k), ..p.clone() }).collect(),
@@ -669,12 +761,24 @@ fn set_empty(model: &Model, mesh: &Mesh, name: &str, probe: Option<[f64; 3]>) ->
     let (lo, hi) = mesh.bbox();
     let centre = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])];
     let point = probe.unwrap_or(centre);
-    let near = nearest_boundary_face(mesh, point).map_or("the mesh has no boundary face".to_string(), |(f, _)| {
-        let (c, _) = face_centroid_normal(mesh, f);
-        let v: Vec<String> =
-            c.iter().map(|&x| crate::units::fmt_sig(display(model, x, Length::DIM).value, 4)).collect();
-        format!("the nearest boundary face is centred at [{}] {}", v.join(", "), display(model, 0.0, Length::DIM).unit)
-    });
+    let near = match nearest_boundary_face(mesh, point) {
+        None => "the mesh has no boundary face".to_string(),
+        Some((face, _)) => {
+            let (centroid, _) = face_centroid_normal(mesh, face);
+            let shown =
+                centroid.into_iter().map(|value| display(model, value, Length::DIM)).collect::<Result<Vec<_>, Error>>();
+            let shown = match shown {
+                Ok(shown) => shown,
+                Err(error) => return error,
+            };
+            let values: Vec<_> = shown.iter().map(|value| crate::units::fmt_sig(value.value, 4)).collect();
+            format!(
+                "the nearest boundary face is centred at [{}] {}",
+                values.join(", "),
+                model.units.resolve().unit(Length::DIM)
+            )
+        }
+    };
     Error::new(ErrorCode::SetEmpty, format!("set '{name}' matched no face, node or element on the mesh; {near}"))
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace with a plane through that point, or a larger tol")

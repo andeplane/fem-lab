@@ -202,6 +202,10 @@ Scordelis–Lo (0.3024), LE3 (0.185 m) and the SS plate (0.00406 qa⁴/D) are co
 
 ## 6. Phase 4: the AI
 
+Production account-based inference follows [ADR 0028](adr/0028-hosted-ai-account-and-service-boundary.md)
+and issues #546–#557. The direct-provider description in 4.4 is the development
+adapter during migration; #554 gates the production Assistant through the hosted service.
+
 Goal: the in-page agent does the proposal's story end to end; Claude Code can drive the page.
 
 | # | Task | Done when |
@@ -218,7 +222,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 4.11 | **@-mentions**: the chat resolves `@name` to a Model object (body, face, set, material, constraint, load, step, result, Journal entry, project file) and attaches its `query.*` summary to the message; picker over the registry's object index; `@selection` resolves to the live viewer/tree selection; clicking an object with the chat focused inserts its chip; ⌘C on a selected object puts `@kind:name` on the clipboard so it pastes as a chip | an eval task phrased with `@` chips only passes; copy in viewer → paste in chat round-trips |
 | 4.12 | **Skills**: `skills/<name>/SKILL.md` (frontmatter: name, description, when) from the app's built-ins and from the project folder; `/` menu in the chat; a skill is prepended to the turn when invoked, and the AI may invoke one itself from its description | built-in skills: beam-theory check, convergence study, report, NAFEMS benchmark; a project skill overrides a built-in of the same name |
 | 4.13 | **Project folder**: open a directory via the File System Access API (Chromium, ADR 0014); the Journal, scripts, plugins and exports live in it; `AGENTS.md`/`CLAUDE.md` in the folder is read into the system prompt with a visible badge; the AI gets `file.read`/`file.write` scoped to that folder | a project rule ("all stresses in MPa, S355 yield 355 MPa") is followed without being repeated in the chat |
-| 4.14 | **Export** Commands: `file.exportVTU` (mesh + fields), `file.exportMsh` (Gmsh 4.1), `file.exportInp` (Abaqus/CalculiX), `file.exportSTL` (geometry surface), `file.exportCSV` (any table/probe/path), `file.exportPNG`/`SVG` (viewer, legend burned in), `file.exportScript`, `file.exportReport` (Markdown; PDF via print); STEP when B-rep lands (7.2) | each exporter has a round-trip or reference-file test; the UI Export menu enumerates the registry |
+| 4.14 | **Export** Commands: `file.exportVTU` (mesh + fields), `file.exportMsh` (Gmsh 4.1), `file.exportInp` (Abaqus/CalculiX), `file.exportSTL` (geometry surface), `file.exportCSV` (any table/probe/path), `file.exportPNG`/`SVG` (viewer, legend burned in), `file.exportScript`, `file.exportReport` (Markdown; PDF via print); exact STEP export is deferred under ADR 0030 | each exporter has a round-trip or reference-file test; the UI Export menu enumerates the registry |
 | 4.15 | **Images in the chat**: paste, drop or pick images (PNG/JPEG/WebP, downscaled client-side to ≤ 1568 px on the long edge, ≤ 5 MB), shown as chips with optional captions, sent as `image` content blocks (base64) alongside the text; "attach current view" adds a `query.screenshot` PNG; images live in the conversation store, never in the Journal or a Model file; the eval suite gains "build from this drawing" tasks with hand-drawn inputs | an eval task whose only geometry description is a drawing produces a Model within tolerance of the intended one |
 | 4.10 | `femlab mcp`: the CLI host serves the registry's tool definitions plus `run_script` over stdio with the MCP SDK; a running engine, headless, with dawn.node if a GPU exists (ADR 0011) | Claude Code builds and solves a cantilever through `femlab mcp` with no browser; the eval suite of 4.6 runs against both hosts |
 
@@ -249,13 +253,19 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 6.5 | **Done** (#61, #62): tie / bonded contact between bodies, node-to-face, applied by **elimination** (`TᵀKT`) rather than by penalty — a penalty parameter would multiply κ(K) and break the f32 GPU CG. Frictionless contact (#62) reuses the same machinery with an active set of inhomogeneous rows, repeated linear solves in `static` and inside the Newton loop of `static-nonlinear`; friction and large sliding stay out | two-block tie patch test (F4, F4b, F4c, F4d); frictionless patch, gap closure, lift-off and Hertz (F4h–F4l) |
 | 6.6 | Restart / rerun only changed steps (J7.4) | Journal-driven cache keyed by Model revision |
 
-## 9. Phase 7: B-rep geometry (v2) and CAD interop
+## 9. Phase 7: geometry preparation and CAD interop
+
+[ADR 0030](adr/0030-exact-cad-editing-is-deferred-and-replay-stays-portable.md) resolves
+[#352](https://github.com/andeplane/fem-lab/issues/352): general exact CAD editing is deferred
+and uncommitted, with no v2 date. [#80](https://github.com/andeplane/fem-lab/issues/80) remains
+the open capability umbrella. Existing constructive geometry and triangle import do not
+constitute delivery of its fillet/chamfer/hollowing requirements.
 
 | # | Task | Job |
 |---|---|---|
-| 7.1 | Replicad behind the geometry Commands: sketch, extrude, revolve, fillet, chamfer, shell; lazy 2.4–9 MB | J2.1 |
-| 7.2 | STEP import (Replicad `importSTEP` or `occt-import-js`); STL import straight into fTetWild | J2.3, J15.2 |
-| 7.3 | Defeature Commands: remove fillets/holes below a size (Replicad/OCCT) | J2.4 |
+| 7.1 | General existing-edge fillet/chamfer and CAD hollowing: **deferred, no committed release** (ADR 0030). Current sketches, extrusion/revolution and booleans retain their implemented engine paths | J2.1 |
+| 7.2 | STEP import through the lazy host tessellator ([#351](https://github.com/andeplane/fem-lab/issues/351), ADR 0029), issuing portable `geometry.import` triangle geometry; exact B-rep is discarded. STL uses the same imported geometry and normal mesher workflow. Exact CAD editing and STEP export remain deferred under ADR 0030 | J2.3, J15.2 |
+| 7.3 | Feature-aware CAD defeaturing: **deferred** (ADR 0030). Existing explicit cuts are editable/removable; import `simplifyBelow` is mesh simplification, not semantic fillet/hole recognition | J2.4 |
 | 7.4 | Gmsh-wasm as an optional Mesher if graded/hex/tet10-native meshing is worth GPL and 12–45 MB; decision recorded as an ADR then | J4.2, J4.4 |
 | 7.5 | Assembly of parts with ties (uses 6.5) | J2.7 |
 
@@ -345,10 +355,10 @@ Phase numbers refer to §2–§10. "Out" means deliberately out of scope with th
 | J1.4 units | 0.4 | J5.4 total force on face | 1 | J8.9 export | 1 (VTU), 5 |
 | J1.5 hand estimate | 4.5 (agent habit), 5.7 | J5.5 thermal loads | 2.6 | J8.10 compare | 5 |
 | J1.6 physics choice | 1, 2 | J5.6 time/parameter variation | 2.6, 6.4 | J9.1 analytical | 1 |
-| J2.1 primitives/booleans/fillets | 1 (boxes), 3.1, 7.1 | J5.7 remote points/couplings | 6.5 (ties); rigid couplings: 8 | J9.2 NAFEMS | 1–3, 8.1 |
+| J2.1 primitives/booleans/fillets | 1, 3.1; general fillets deferred (ADR 0030) | J5.7 remote points/couplings | 6.5 (ties); rigid couplings: 8 | J9.2 NAFEMS | 1–3, 8.1 |
 | J2.2 parametric | 1 (scripts are parametric), 8.7 | J5.8 contact | 6.5 (bonded); frictional: **Out**, contact search is a project of its own | J9.3 sanity checks | 1 |
 | J2.3 import CAD | 7.2 | J5.9 draw + total load | 1 | J9.4 convergence | 3.6 |
-| J2.4 defeature | 7.3 | J6.1 static | 1 | J9.5 cross-check | 3.8 |
+| J2.4 defeature | 7.3 (explicit cuts/mesh simplification); semantic CAD editing deferred | J6.1 static | 1 | J9.5 cross-check | 3.8 |
 | J2.5 partition | 3.1 (booleans), 7 | J6.2 modal | 2.5 | J9.6 theory shown | 11 |
 | J2.6 named faces | 1 | J6.3 buckling | 6.3 | J10.1 sweep | 8.2 |
 | J2.7 assemblies | 7.5 | J6.4 heat | 2.6 | J10.2 DOE | 8.2 |
@@ -380,7 +390,7 @@ Phase numbers refer to §2–§10. "Out" means deliberately out of scope with th
 | | | | | J13.10 skills | 4.12 |
 | | | | | J13.11 project AGENTS.md | 4.13 |
 | | | | | J13.12 images to the AI | 4.15 |
-| | | | | J15.4 export formats | 4.14, 3.8, 7.2 (STEP) |
+| | | | | J15.4 export formats | 4.14, 3.8; exact STEP export deferred (ADR 0030) |
 
 Every job has a phase or an explicit Out. The Outs: frictional contact and topology
 optimisation, each a project rather than a task. Creep and damage materials are not built in,
@@ -398,7 +408,7 @@ Phase P rather than by the core.
 | 4 AI | 1 (better after 3) | 5–8 | eval ≥ 80 % |
 | 5 post + report + share | 1 | 5–8 | report reproduces the Model |
 | 6 nonlinear | 2, 3 | 10–15 | Bathe cantilever, plastic plate |
-| 7 B-rep | 3 | 6–10 | fillet + STEP demo |
+| 7 geometry/CAD interop | 3 | STEP scope: #351; exact editing uncommitted | converted geometry replays without CAD; general fillet/chamfer/hollowing deferred (ADR 0030) |
 | 8 shells/beams, studies, library | 3, 5 | 8–12 | Scordelis–Lo; sweep plot |
 | P plugins | 1 (TS + wasm), 2 (WGSL) | 8–12 | a user UMAT in Fortran-via-wasm and in WGSL pass the same harness |
 | S server host | 0 (CLI), 2 (GPU) | 3–5 | browser Journal solves on the server byte-for-byte; 5M DOF on a workstation GPU |

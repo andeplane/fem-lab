@@ -148,6 +148,115 @@ try {
       engine.free();
     }
   }
+  // #595: saturated weld-grid keys must retain physical joints through the checked WASM ABI.
+  // Singleton Set centroids avoid the separate multi-node mean arithmetic covered by #593.
+  for (const x of [Number.MAX_VALUE, -Number.MAX_VALUE]) {
+    for (const withJoints of [false, true]) {
+      const lines = new Engine(1);
+      const at = (y, z) => [{ value: x, unit: 'm' }, `${y} m`, `${z} m`];
+      const query = q => JSON.parse(lines.query(JSON.stringify(q)));
+      try {
+        for (const command of [
+          { cmd: 'model.new', name: 'extreme line parity' },
+          { cmd: 'model.setUnits', units: { length: 'm' } },
+          { cmd: 'geometry.addLine', name: 'a', points: [at(0, 0), at(1, 0), at(2, 0)] },
+          { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' } },
+          { cmd: 'geometry.nameRegion', name: 'whole', where: { kind: 'body', name: 'a' } },
+          ...(withJoints ? [
+            { cmd: 'geometry.addLine', name: 'b', points: [at(1, 0), at(3, 0)] },
+            { cmd: 'geometry.addLine', name: 'c', points: [at(0, 3), at(1, 3)] },
+          ] : []),
+        ]) await lines.dispatch(JSON.stringify(command));
+        const before = lines.export_file();
+        const queries = [{ query: 'query.mesh' },
+          ...(withJoints ? ['a.p1', 'b.p0', 'b.p1', 'c.p0'].map(name => ({ query: 'query.set', name })) : [])];
+        const expected = queries.map(query);
+        assert.deepEqual([expected[0].nodes, expected[0].elements], withJoints ? [6, 4] : [3, 2]);
+        assert.deepEqual(expected[0].bbox.map(v => v.value), withJoints ? [x, 0, 0, x, 3, 3] : [x, 0, 0, x, 2, 0]);
+        assert.equal(expected[0].minEdge.value, 1);
+        assert.equal(expected[0].maxEdge.value, withJoints ? 2 : 1);
+        if (withJoints) {
+          assert.deepEqual({ ...expected[1], name: undefined }, { ...expected[2], name: undefined });
+          assert.deepEqual(expected[3].centroid.map(v => v.value), [x, 3, 0]);
+          assert.deepEqual(expected[4].centroid.map(v => v.value), [x, 0, 3]);
+        }
+        assert.equal(lines.export_file(), before, 'geometry reads leave Model and Journal unchanged');
+        const exported = JSON.parse(await lines.dispatch(JSON.stringify({ cmd: 'mesh.export', format: 'msh' })));
+        assert.equal(exported.output.type, 'export');
+        const file = JSON.parse(lines.export_file());
+        const input = path.join(scratch, 'extreme-line.json');
+        writeFileSync(input, JSON.stringify(file.journal.entries));
+        for (const threads of [1, 4]) {
+          const args = ['run', input, '--cpu', '--threads', String(threads), '--verify'];
+          const actual = JSON.parse(execFileSync(native, [...args, ...queries.flatMap(q => ['--query', JSON.stringify(q)])], { encoding: 'utf8' }));
+          assert.deepEqual(actual, expected);
+          assert.deepEqual(execFileSync(native, [...args, '--hashes'], { encoding: 'utf8' }).trim().split(/\r?\n/), file.journal.entries.map(e => e.hashAfter));
+          assert.equal(execFileSync(native, ['export', input, '--format', 'msh', '--cpu', '--threads', String(threads)], { encoding: 'utf8' }), exported.output.text,
+            'f64 coordinates, connectivity and Set membership match exactly');
+        }
+        const replayed = new Engine(1);
+        try {
+          assert.deepEqual(JSON.parse(await replayed.replay_hashes(JSON.stringify(file.journal.entries), true, true)), file.journal.entries.map(e => e.hashAfter));
+          assert.deepEqual(JSON.parse(replayed.query(JSON.stringify({ query: 'query.mesh' }))), expected[0]);
+        } finally { replayed.free(); }
+        const valid = lines.export_file();
+        await assert.rejects(lines.dispatch(JSON.stringify({ cmd: 'geometry.addLine', name: 'bad', points: [at(0, 0), at(0, 0)] })), error => error.cause.includes('zero length'));
+        await assert.rejects(lines.dispatch(JSON.stringify({ cmd: 'geometry.addLine', name: 'bad', points: [['1e309 m', '0 m', '0 m'], ['0 m', '1 m', '0 m']] })), error => error.code === 'schema');
+        assert.equal(lines.export_file(), valid, 'rejected geometry leaves Model and Journal unchanged');
+        console.log(`extreme line ${x < 0 ? 'negative' : 'positive'} ${withJoints ? 'joints' : 'original'}: exact native1/4 and WASM mesh/Set/f64 export/hash/replay/state parity passed`);
+      } finally { lines.free(); }
+    }
+  }
+  // #494: the same explicit line identities cross native and WASM hosts at every refinement.
+  for (const divisions of [1, 2, 4]) {
+    const bars = new Engine(1);
+    try {
+      for (const command of [
+        { cmd: 'model.new', name: 'member identity parity' },
+        { cmd: 'geometry.addLine', name: 'bars', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m'], ['2 m', '0 m', '0 m']], members: [[0, 1], [1, 2]], divisions },
+        { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
+        { cmd: 'material.assign', material: 'steel', bodies: ['bars'] },
+        { cmd: 'section.add', name: 'rod', shape: { kind: 'circle', radius: '10 mm' } },
+        { cmd: 'section.assign', section: 'rod', bodies: ['bars'] },
+        { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' }, order: 1 },
+        { cmd: 'geometry.nameRegion', name: 'all', where: { kind: 'bbox', min: ['-1 m', '-1 m', '-1 m'], max: ['3 m', '1 m', '1 m'] } },
+        { cmd: 'constraint.fix', name: 'lateral', on: 'all', dofs: ['uy', 'uz'] },
+        { cmd: 'constraint.fix', name: 'root', on: 'bars.p0', dofs: ['ux'] },
+        { cmd: 'load.force', name: 'joint', on: 'bars.p1', total: ['10 kN', '0 N', '0 N'] },
+        { cmd: 'load.force', name: 'tip', on: 'bars.p2', total: ['10 kN', '0 N', '0 N'] },
+        { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['lateral', 'root'], loads: ['joint', 'tip'], output: ['stressUnaveraged'] },
+        { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' },
+      ]) await bars.dispatch(JSON.stringify(command));
+      const queries = [{ query: 'query.surface', step: 'static' }, { query: 'query.field', step: 'static', field: 'stressUnaveraged' }];
+      const expected = queries.map(q => JSON.parse(bars.query(JSON.stringify(q))));
+      const entries = JSON.parse(bars.export_file()).journal.entries;
+      const file = path.join(scratch, 'members.json');
+      writeFileSync(file, JSON.stringify(entries));
+      for (const threads of [1, 4]) {
+        const args = ['run', file, '--cpu', '--threads', String(threads), '--verify'];
+        assert.deepEqual(execFileSync(native, [...args, '--hashes'], { encoding: 'utf8' }).trim().split(/\r?\n/), entries.map(e => e.hashAfter));
+        const actual = JSON.parse(execFileSync(native, [...args, ...queries.flatMap(q => ['--query', JSON.stringify(q)])], { encoding: 'utf8' }));
+        assert.deepEqual(actual[0], expected[0]);
+        assert.deepEqual(actual[0].edgeElement, Array.from({ length: 2 * divisions }, (_, i) => i));
+        assert.deepEqual(actual[0].edgeElementNode, Array.from({ length: 4 * divisions }, (_, i) => i));
+        const { values, ...metadata } = actual[1];
+        const { values: wasmValues, ...wasmMetadata } = expected[1];
+        assert.deepEqual(metadata, wasmMetadata);
+        assert.equal(metadata.per, 'elementNode');
+        assert.equal(values.length, 24 * divisions);
+        // Left-cut equilibrium carries both applied loads; the right cut carries only the tip.
+        values.forEach((value, i) => {
+          const force = i < 12 * divisions ? 20_000 : 10_000;
+          const exact = i % 6 === 0 ? force / (Math.PI * 0.01 ** 2) : 0;
+          assert.ok(Math.abs(value - exact) < 1e-6);
+          assert.ok(Math.abs(wasmValues[i] - exact) < 1e-6);
+        });
+        console.log(`line member identities and N/A stresses: ${divisions} subdivisions, native ${threads} threads vs WASM passed`);
+      }
+    } finally {
+      bars.free();
+    }
+  }
 } finally {
   engine.free();
   rmSync(scratch, { recursive: true, force: true });

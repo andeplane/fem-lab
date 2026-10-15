@@ -1,16 +1,14 @@
 //! `Engine::query`: the read side of the registry.
 
-use femlab_geometry::{face_centroid_normal, Face, Mesh};
+use femlab_geometry::{Face, Mesh};
 
 use crate::command::{CoupleKind, Field, ObjectKind};
-use crate::engine::{display, Engine};
+use crate::engine::{display, display_values, Engine};
 use crate::error::{Error, ErrorCode};
-use crate::model::{ConstraintKind, Idealisation, LoadKind, SetSource};
+use crate::model::{Axial, ConstraintKind, Idealisation, LoadKind, SetSource};
 use crate::post::FieldData;
 use crate::query::*;
-use crate::units::{
-    self, Acceleration, Density, Dim, Dimension, Force, HeatTransfer, Length, Mass, Stress, Temperature, Q,
-};
+use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature, Q};
 
 /// Three lengths in SI, with the field path an error names.
 pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
@@ -21,16 +19,51 @@ pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
     Ok(out)
 }
 
-fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> [Valued; 6] {
-    let d = Length::DIM;
-    [
-        display(model, lo[0], d),
-        display(model, lo[1], d),
-        display(model, lo[2], d),
-        display(model, hi[0], d),
-        display(model, hi[1], d),
-        display(model, hi[2], d),
-    ]
+fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> Result<[Valued; 6], Error> {
+    display_values(model, [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]], Length::DIM)
+}
+
+fn displayed3(model: &crate::model::Model, values: [f64; 3], dim: Dimension) -> Result<[Valued; 3], Error> {
+    display_values(model, values, dim)
+}
+
+/// Fixed-order mean of validated finite node coordinates, with constant scratch space.
+/// Keep finite divide-before-sum results exactly, including small cancellation residuals.
+#[derive(Clone, Copy, Default)]
+struct CoordinateMean {
+    mean: f64,
+    scaled_sum: f64,
+    scale: f64,
+}
+
+impl CoordinateMean {
+    fn add(&mut self, value: f64, count: f64) {
+        self.mean += value / count;
+        let scale = self.scale.max(value.abs());
+        if scale > 0.0 {
+            self.scaled_sum = self.scaled_sum * (self.scale / scale) + value / scale;
+            self.scale = scale;
+        }
+    }
+
+    fn finish(self, count: f64) -> f64 {
+        if self.mean.is_finite() {
+            self.mean
+        } else {
+            // Sets have unique u32 node ids (imported sources at most 250000): count < 2^53.
+            // Each normalized term/rescale has magnitude <= 1. The k-th rounded partial
+            // stays within exactly representable [-k,k], so sum/count stays in [-1,1].
+            // Divide ONCE after summing: rescaling then cannot overflow the finite scale.
+            (self.scaled_sum / count) * self.scale
+        }
+    }
+}
+
+fn axial_row(value: Axial, unit: &str) -> AxialRow {
+    match value {
+        Axial::Isotropic(value) => AxialRow::Isotropic(Valued { value, unit: unit.into() }),
+        Axial::Axes(values) => AxialRow::Axes(values.map(|value| Valued { value, unit: unit.into() })),
+    }
 }
 
 impl Engine {
@@ -38,6 +71,11 @@ impl Engine {
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
             Query::Model {} => self.query_model().map(QueryResult::Model),
+            Query::Document {} => Ok(QueryResult::Document(ModelDocument {
+                file: self.export_file(),
+                hash: self.model_hash(),
+                revision: self.revision(),
+            })),
             Query::Definition { kind, name } => crate::definition::command(&self.model, kind, &name)
                 .map(|command| QueryResult::Definition(ObjectDefinition { command })),
             Query::Journal { from_seq } => {
@@ -67,12 +105,70 @@ impl Engine {
             }
             Query::Script {} => Ok(QueryResult::Script(ScriptText { text: self.journal.as_script(crate::version()) })),
             Query::Convert { quantity, to } => {
-                let (value, unit) = quantity.split()?;
+                let (_, unit) = quantity.split()?;
                 let from = units::parse_unit(unit)?;
-                let si = value * from.factor + from.offset;
+                let si = units::to_si(&quantity, from.dim)?;
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
+            Query::AbaqusDependencies { text, source_name, source_files } => {
+                crate::io::abaqus_deck::source_dependencies(&text, source_name.as_deref(), &source_files)
+                    .map(|missing_files| QueryResult::AbaqusDependencies(AbaqusDependencies { missing_files }))
+            }
+            Query::ConvertAbaqus {
+                text,
+                name,
+                body,
+                mode,
+                unit_length,
+                unit_force,
+                unit_time,
+                source_name,
+                source_files,
+                sha256,
+            } => match mode {
+                AbaqusImportMode::Mesh => {
+                    if unit_force.is_some() {
+                        return Err(Error::schema("unitForce is supported only in static mode")
+                            .at("unitForce")
+                            .suggest("query.convertAbaqus with mode static"));
+                    }
+                    if unit_time.is_some() {
+                        return Err(Error::schema("unitTime is supported only in static mode")
+                            .at("unitTime")
+                            .suggest("query.convertAbaqus with mode static"));
+                    }
+                    crate::io::abaqus::convert_mesh_sources(
+                        &text,
+                        &name,
+                        &body,
+                        &unit_length,
+                        source_name.as_deref(),
+                        &source_files,
+                        &sha256,
+                    )
+                    .map(QueryResult::AbaqusConversion)
+                }
+                AbaqusImportMode::Static => {
+                    let force = unit_force.ok_or_else(|| {
+                        Error::schema("static import requires explicit unitForce")
+                            .at("unitForce")
+                            .suggest("query.convertAbaqus with mode static and unitForce, for example 1 N")
+                    })?;
+                    crate::io::abaqus_static::convert_static(
+                        &text,
+                        &name,
+                        &body,
+                        &unit_length,
+                        &force,
+                        unit_time.as_ref(),
+                        source_name.as_deref(),
+                        &source_files,
+                        &sha256,
+                    )
+                    .map(QueryResult::AbaqusConversion)
+                }
+            },
             Query::MaterialLibrary { name } => {
                 crate::material_library::query(name.as_deref()).map(QueryResult::MaterialLibrary)
             }
@@ -122,11 +218,29 @@ impl Engine {
     ///
     /// It has no Solid — the mapped mesher's blocks *are* its geometry — so its extent, its
     /// area and its faces come from the Mesh, and it has no row at all until that Mesh builds.
-    fn implicit_body_row(&mut self) -> Option<BodyRow> {
-        let name = self.model.implicit_body()?.to_string();
-        self.mesh().ok()?;
+    fn implicit_body_row(&mut self) -> Result<Option<BodyRow>, Error> {
+        let Some(name) = self.model.implicit_body().map(str::to_string) else { return Ok(None) };
+        if let Err(error) = self.mesh() {
+            if error.code == ErrorCode::UnitDisplay {
+                return Err(error);
+            }
+            return Ok(None);
+        }
         let built = self.mesh.as_ref().expect("built above");
-        let (lo, hi) = built.mesh.bbox();
+        let imported =
+            matches!(self.model.mesh.as_ref().map(|m| &m.mesher), Some(crate::model::MesherSettings::Imported(_)));
+        let (lo, hi) = if imported {
+            // The imported Body is its element-participating authored prefix.
+            // Appended point-mass nodes belong to their own Model points, and
+            // unused source coordinates remain solely in the persistent source.
+            let coordinates = &built.mesh.coords[..3 * built.source_labels.nodes.len()];
+            let lo = std::array::from_fn(|k| coordinates.chunks_exact(3).map(|p| p[k]).fold(f64::INFINITY, f64::min));
+            let hi =
+                std::array::from_fn(|k| coordinates.chunks_exact(3).map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max));
+            (lo, hi)
+        } else {
+            built.mesh.bbox()
+        };
         let dim = if built.mesh.blocks.iter().any(|b| b.kind == femlab_geometry::ElementKind::Shell4) {
             2
         } else {
@@ -134,26 +248,31 @@ impl Engine {
         };
         let measure: f64 = (0..built.mesh.n_elems() as u32).map(|e| elem_measure(&built.mesh, e)).sum();
         let prefix = format!("{name}.");
-        let faces = built.sets.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        let faces = built
+            .sets
+            .iter()
+            .filter(|(k, s)| k.starts_with(&prefix) && (!imported || s.kind == crate::mesh::SetKind::Face))
+            .map(|(k, _)| k.clone())
+            .collect();
         let m = &self.model;
-        Some(BodyRow {
+        Ok(Some(BodyRow {
             name,
             material: m.mesher_material.clone(),
-            bbox: bbox6(m, lo, hi),
-            measure: display(m, measure, Dimension([dim, 0, 0, 0])),
+            bbox: bbox6(m, lo, hi)?,
+            measure: display(m, measure, Dimension([dim, 0, 0, 0]))?,
             mass: None,
             faces,
             patches: Vec::new(),
-        })
+        }))
     }
 
     /// A line Body as a row of [`query_model`](Engine::query_model): its bounding box and the
     /// total length of its members, which is the measure a 1D Body has. `None` for a Body that
     /// is not made of line members, which is what sends it down the Solid path instead.
-    fn line_body_row(m: &crate::model::Model, b: &crate::model::Body) -> Option<BodyRow> {
+    fn line_body_row(m: &crate::model::Model, b: &crate::model::Body) -> Result<Option<BodyRow>, Error> {
         let (points, members) = match &b.shape {
             femlab_geometry::Shape::Polyline { points, members, .. } => (points, members),
-            _ => return None,
+            _ => return Ok(None),
         };
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
@@ -170,25 +289,25 @@ impl Engine {
                 libm::sqrt((0..3).map(|k| (a[k] - c[k]) * (a[k] - c[k])).sum::<f64>())
             })
             .sum();
-        Some(BodyRow {
+        Ok(Some(BodyRow {
             name: b.name.clone(),
             material: b.material.clone(),
-            bbox: bbox6(m, lo, hi),
-            measure: display(m, length, Length::DIM),
+            bbox: bbox6(m, lo, hi)?,
+            measure: display(m, length, Length::DIM)?,
             mass: None,
             faces: Vec::new(),
             patches: Vec::new(),
-        })
+        }))
     }
 
     pub(crate) fn query_model(&mut self) -> Result<ModelSummary, Error> {
         let names: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
-        let implicit = self.implicit_body_row();
+        let implicit = self.implicit_body_row()?;
         let mut bodies = Vec::with_capacity(names.len() + usize::from(implicit.is_some()));
         for n in &names {
             // A line Body has no Solid: its extent and its measure come from its own joints,
             // and it has no faces to list.
-            let line = Self::line_body_row(&self.model, self.model.body(n).expect("listed above"));
+            let line = Self::line_body_row(&self.model, self.model.body(n).expect("listed above"))?;
             if let Some(row) = line {
                 bodies.push(row);
                 continue;
@@ -208,75 +327,118 @@ impl Engine {
                 .and_then(|mn| m.material(mn))
                 .and_then(|mat| mat.rho)
                 .filter(|_| solid.dim() == 3)
-                .map(|rho| display(m, rho * solid.volume(), Mass::DIM));
+                .map(|rho| display(m, rho * solid.volume(), Mass::DIM))
+                .transpose()?;
             let patches = if b.shape.is_imported() {
                 solid
                     .triangles()
                     .face_patches()
                     .into_iter()
-                    .map(|p| ImportedPatchRow {
-                        tag: p.tag,
-                        triangle_count: p.triangle_count,
-                        area: display(m, p.area, Dimension([2, 0, 0, 0])),
-                        centroid: p.centroid.map(|x| display(m, x, Length::DIM)),
-                        mean_normal: p.mean_normal,
-                        suggested_predicate: crate::definition::face(&p.suggested_predicate),
+                    .map(|p| {
+                        let area = display(m, p.area, Dimension([2, 0, 0, 0]))?;
+                        displayed3(m, p.centroid, Length::DIM).map(|centroid| ImportedPatchRow {
+                            tag: p.tag,
+                            triangle_count: p.triangle_count,
+                            area,
+                            centroid,
+                            mean_normal: p.mean_normal,
+                            suggested_predicate: crate::definition::face(&p.suggested_predicate),
+                        })
                     })
-                    .collect()
+                    .collect::<Result<_, Error>>()?
             } else {
                 Vec::new()
             };
             bodies.push(BodyRow {
                 name: b.name.clone(),
                 material: b.material.clone(),
-                bbox: bbox6(m, lo, hi),
-                measure: display(m, measure, mdim),
+                bbox: bbox6(m, lo, hi)?,
+                measure: display(m, measure, mdim)?,
                 mass,
                 faces: solid.tags(),
                 patches,
             });
         }
         bodies.extend(implicit);
+        if let (Some(source), Some(built)) = (self.model.imported_source(), self.mesh.as_ref()) {
+            let mut elements_by_region: std::collections::BTreeMap<&str, Vec<u32>> = std::collections::BTreeMap::new();
+            for elem in 0..built.mesh.n_elems() as u32 {
+                elements_by_region.entry(built.body_of_elem(elem)).or_default().push(elem);
+            }
+            for name in source.regions.keys() {
+                let elems = &elements_by_region[name.as_str()];
+                let nodes: std::collections::BTreeSet<_> =
+                    elems.iter().flat_map(|&e| built.mesh.elem_nodes(e).iter().copied()).collect();
+                let lo = std::array::from_fn(|k| {
+                    nodes.iter().map(|&n| built.mesh.coords[n as usize * 3 + k]).fold(f64::INFINITY, f64::min)
+                });
+                let hi = std::array::from_fn(|k| {
+                    nodes.iter().map(|&n| built.mesh.coords[n as usize * 3 + k]).fold(f64::NEG_INFINITY, f64::max)
+                });
+                let measure: f64 = elems.iter().map(|&e| elem_measure(&built.mesh, e)).sum();
+                bodies.push(BodyRow {
+                    name: name.clone(),
+                    material: self.model.material_of_body(name).map(str::to_string),
+                    bbox: bbox6(&self.model, lo, hi)?,
+                    measure: display(&self.model, measure, Dimension([3, 0, 0, 0]))?,
+                    mass: None,
+                    faces: Vec::new(),
+                    patches: Vec::new(),
+                });
+            }
+        }
         let m = &self.model;
         let materials = m
             .materials
             .iter()
-            .map(|mat| MaterialRow {
-                name: mat.name.clone(),
-                e: mat.e.map(|e| display(m, e, Stress::DIM)),
-                nu: mat.nu,
-                orthotropic: mat.orthotropic.map(|o| crate::query::OrthotropicRow {
-                    e1: display(m, o.e1, Stress::DIM),
-                    e2: display(m, o.e2, Stress::DIM),
-                    e3: display(m, o.e3, Stress::DIM),
-                    g12: display(m, o.g12, Stress::DIM),
-                    g13: display(m, o.g13, Stress::DIM),
-                    g23: display(m, o.g23, Stress::DIM),
-                    nu12: o.nu12,
-                    nu13: o.nu13,
-                    nu23: o.nu23,
-                }),
-                orientation: mat.orientation.map(|o| crate::query::OrientationRow {
-                    axis: o.axis,
-                    degrees: o.angle * 180.0 / std::f64::consts::PI,
-                }),
-                rho: mat.rho.map(|r| display(m, r, Density::DIM)),
-                yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
-                plasticity: mat.plasticity.is_some(),
-                assigned_to: m
-                    .bodies
-                    .iter()
-                    .filter(|b| b.material.as_deref() == Some(&mat.name))
-                    .map(|b| b.name.clone())
-                    .chain(
-                        m.implicit_body()
-                            .filter(|_| m.mesher_material.as_deref() == Some(&mat.name))
-                            .map(str::to_string),
-                    )
-                    .collect(),
+            .map(|mat| {
+                Ok(MaterialRow {
+                    name: mat.name.clone(),
+                    e: mat.e.map(|e| display(m, e, Stress::DIM)).transpose()?,
+                    nu: mat.nu,
+                    orthotropic: mat
+                        .orthotropic
+                        .map(|o| {
+                            Ok::<_, Error>(crate::query::OrthotropicRow {
+                                e1: display(m, o.e1, Stress::DIM)?,
+                                e2: display(m, o.e2, Stress::DIM)?,
+                                e3: display(m, o.e3, Stress::DIM)?,
+                                g12: display(m, o.g12, Stress::DIM)?,
+                                g13: display(m, o.g13, Stress::DIM)?,
+                                g23: display(m, o.g23, Stress::DIM)?,
+                                nu12: o.nu12,
+                                nu13: o.nu13,
+                                nu23: o.nu23,
+                            })
+                        })
+                        .transpose()?,
+                    orientation: mat.orientation.map(|o| crate::query::OrientationRow {
+                        axis: o.axis,
+                        degrees: o.angle * 180.0 / std::f64::consts::PI,
+                    }),
+                    rho: mat.rho.map(|r| display(m, r, Density::DIM)).transpose()?,
+                    alpha: mat.alpha.map(|value| axial_row(value, "1/K")),
+                    k: mat.k.map(|value| axial_row(value, "W/(m K)")),
+                    cp: mat.cp.map(|value| Valued { value, unit: "J/(kg K)".into() }),
+                    yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)).transpose()?,
+                    plasticity: mat.plasticity.is_some(),
+                    source: mat.source.clone(),
+                    assigned_to: m
+                        .bodies
+                        .iter()
+                        .filter(|b| b.material.as_deref() == Some(&mat.name))
+                        .map(|b| b.name.clone())
+                        .chain(
+                            m.mesher_body_names()
+                                .into_iter()
+                                .filter(|name| m.material_of_body(name) == Some(&mat.name))
+                                .map(str::to_string),
+                        )
+                        .collect(),
+                })
             })
-            .collect();
-        let sets = m
+            .collect::<Result<_, Error>>()?;
+        let mut sets: Vec<SetRow> = m
             .sets
             .iter()
             .map(|s| match &s.source {
@@ -290,95 +452,122 @@ impl Engine {
                 }
             })
             .collect();
+        if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) = &m.mesh
+        {
+            if let Some(built) = &self.mesh {
+                sets.extend(built.sets.iter().filter(|(name, _)| !m.sets.iter().any(|s| &s.name == *name)).map(
+                    |(name, set)| SetRow {
+                        name: name.clone(),
+                        kind: set.kind.as_str().into(),
+                        summary: format!(
+                            "{} {}s (imported source)",
+                            source.node_members(name).map_or(set.count(), |labels| labels.len()),
+                            set.kind.as_str()
+                        ),
+                    },
+                ));
+            }
+        }
         let connections = m
             .constraints
             .iter()
-            .filter_map(|c| match &c.kind {
-                ConstraintKind::Bonded { master, tol } | ConstraintKind::Frictionless { master, tol } => {
-                    let kind = if matches!(c.kind, ConstraintKind::Bonded { .. }) { "bonded" } else { "frictionless" };
-                    Some(ConnectionRow {
+            .map(|c| {
+                Ok(match &c.kind {
+                    ConstraintKind::Bonded { master, tol } | ConstraintKind::Frictionless { master, tol } => {
+                        let kind =
+                            if matches!(c.kind, ConstraintKind::Bonded { .. }) { "bonded" } else { "frictionless" };
+                        Some(ConnectionRow {
+                            name: c.name.clone(),
+                            kind: kind.into(),
+                            master: master.clone(),
+                            slave: c.on.clone(),
+                            summary: match tol {
+                                None => format!("{kind}, pairing tolerance from the mesh size"),
+                                Some(t) => {
+                                    let v = display(m, *t, Length::DIM)?;
+                                    format!("{kind}, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
+                                }
+                            },
+                        })
+                    }
+                    ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
                         name: c.name.clone(),
-                        kind: kind.into(),
-                        master: master.clone(),
+                        kind: "cyclic".into(),
+                        master: from.clone(),
                         slave: c.on.clone(),
-                        summary: match tol {
-                            None => format!("{kind}, pairing tolerance from the mesh size"),
-                            Some(t) => {
-                                let v = display(m, *t, Length::DIM);
-                                format!("{kind}, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
-                            }
+                        summary: format!("cyclic, {angle_deg} deg"),
+                    }),
+                    ConstraintKind::Couple { point, coupling } => Some(match coupling {
+                        CoupleKind::Distributed => ConnectionRow {
+                            name: c.name.clone(),
+                            kind: "distributed".into(),
+                            master: c.on.clone(),
+                            slave: point.clone(),
+                            summary: format!("point '{point}' follows the weighted mean of '{}'", c.on),
                         },
-                    })
-                }
-                ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
-                    name: c.name.clone(),
-                    kind: "cyclic".into(),
-                    master: from.clone(),
-                    slave: c.on.clone(),
-                    summary: format!("cyclic, {angle_deg} deg"),
-                }),
-                ConstraintKind::Couple { point, coupling } => Some(match coupling {
-                    CoupleKind::Distributed => ConnectionRow {
-                        name: c.name.clone(),
-                        kind: "distributed".into(),
-                        master: c.on.clone(),
-                        slave: point.clone(),
-                        summary: format!("point '{point}' follows the weighted mean of '{}'", c.on),
-                    },
-                    CoupleKind::Rigid => ConnectionRow {
-                        name: c.name.clone(),
-                        kind: "rigid".into(),
-                        master: point.clone(),
-                        slave: c.on.clone(),
-                        summary: format!("every node of '{}' follows point '{point}'", c.on),
-                    },
-                }),
-                _ => None,
+                        CoupleKind::Rigid => ConnectionRow {
+                            name: c.name.clone(),
+                            kind: "rigid".into(),
+                            master: point.clone(),
+                            slave: c.on.clone(),
+                            summary: format!("every node of '{}' follows point '{point}'", c.on),
+                        },
+                    }),
+                    _ => None,
+                })
             })
+            .collect::<Result<Vec<_>, Error>>()?
+            .into_iter()
+            .flatten()
             .collect();
         let points = m
             .points
             .iter()
-            .map(|pt| PointRow {
-                name: pt.name.clone(),
-                at: pt.at.map(|x| display(m, x, Length::DIM)),
-                mass: display(m, pt.mass, Mass::DIM),
-                coupled_by: m
-                    .constraints
-                    .iter()
-                    .filter(|c| matches!(&c.kind, ConstraintKind::Couple { point, .. } if *point == pt.name))
-                    .map(|c| c.name.clone())
-                    .collect(),
+            .map(|pt| {
+                Ok(PointRow {
+                    name: pt.name.clone(),
+                    at: displayed3(m, pt.at, Length::DIM)?,
+                    mass: display(m, pt.mass, Mass::DIM)?,
+                    coupled_by: m
+                        .constraints
+                        .iter()
+                        .filter(|c| matches!(&c.kind, ConstraintKind::Couple { point, .. } if *point == pt.name))
+                        .map(|c| c.name.clone())
+                        .collect(),
+                })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let constraints = m
             .constraints
             .iter()
-            .filter_map(|c| {
+            .map(|c| {
                 let summary = match &c.kind {
                     // A tie, a cyclic tie or a coupling prescribes nothing and names two Sets: they are the
                     // Connections above.
                     ConstraintKind::Bonded { .. }
                     | ConstraintKind::Frictionless { .. }
                     | ConstraintKind::Cyclic { .. }
-                    | ConstraintKind::Couple { .. } => return None,
+                    | ConstraintKind::Couple { .. } => return Ok(None),
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
                     ),
                     ConstraintKind::Pin => "pin".to_string(),
                     ConstraintKind::Prescribe { dof, value } => {
-                        let v = display(m, *value, Length::DIM);
+                        let v = display(m, *value, Length::DIM)?;
                         format!("{} = {} {}", format!("{dof:?}").to_lowercase(), units::fmt_sig(v.value, 4), v.unit)
                     }
                     ConstraintKind::Symmetry { normal } => format!("symmetry, normal {normal:?}").to_lowercase(),
                     ConstraintKind::Temperature { value } => {
-                        let v = display(m, *value, Temperature::DIM);
+                        let v = display(m, *value, Temperature::DIM)?;
                         format!("temperature = {} {}", units::fmt_sig(v.value, 4), v.unit)
                     }
                 };
-                Some(ConstraintRow { name: c.name.clone(), on: c.on.clone(), summary })
+                Ok(Some(ConstraintRow { name: c.name.clone(), on: c.on.clone(), summary }))
             })
+            .collect::<Result<Vec<_>, Error>>()?
+            .into_iter()
+            .flatten()
             .collect();
         let loads = m
             .loads
@@ -386,18 +575,20 @@ impl Engine {
             .map(|l| {
                 let (kind, summary) = match &l.kind {
                     LoadKind::Pressure { value, .. } => {
-                        let v = display(m, *value, Stress::DIM);
+                        let v = display(m, *value, Stress::DIM)?;
                         ("pressure", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
-                    LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM))),
-                    LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM))),
+                    LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM)?)),
+                    LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM)?)),
                     LoadKind::Moment { total, .. } => {
-                        ("moment", format!("total {}", vec3(m, *total, crate::units::Torque::DIM)))
+                        ("moment", format!("total {}", vec3(m, *total, crate::units::Torque::DIM)?))
                     }
-                    LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM))),
+                    LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM)?)),
                     LoadKind::Convection { h, t_inf, .. } => {
-                        let hv = display(m, *h, HeatTransfer::DIM);
-                        let t = display(m, *t_inf, Temperature::DIM);
+                        // Typed Command admission stores finite h/q. These thermal
+                        // dimensions have no configurable unit; their label is always SI.
+                        let hv = Valued { value: *h, unit: "SI".into() };
+                        let t = display(m, *t_inf, Temperature::DIM)?;
                         (
                             "convection",
                             format!(
@@ -410,7 +601,7 @@ impl Engine {
                         )
                     }
                     LoadKind::Radiation { emissivity, t_inf, .. } => {
-                        let t = display(m, *t_inf, Temperature::DIM);
+                        let t = display(m, *t_inf, Temperature::DIM)?;
                         (
                             "radiation",
                             format!(
@@ -422,20 +613,20 @@ impl Engine {
                         )
                     }
                     LoadKind::HeatFlux { q, .. } => {
-                        let v = display(m, *q, crate::units::HeatFlux::DIM);
+                        let v = Valued { value: *q, unit: "SI".into() };
                         ("heatFlux", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
                     LoadKind::HeatSource { bodies, q } => {
-                        let v = display(m, *q, crate::units::HeatSource::DIM);
+                        let v = Valued { value: *q, unit: "SI".into() };
                         ("heatSource", format!("{} {} on {}", units::fmt_sig(v.value, 4), v.unit, bodies.join(", ")))
                     }
                     LoadKind::Torque { total, .. } => {
-                        let v = display(m, *total, crate::units::Torque::DIM);
+                        let v = display(m, *total, crate::units::Torque::DIM)?;
                         ("torque", format!("total {} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
                     LoadKind::Temperature { bodies, value, reference } => {
-                        let v = display(m, *value, Temperature::DIM);
-                        let r = display(m, *reference, Temperature::DIM);
+                        let v = display(m, *value, Temperature::DIM)?;
+                        let r = display(m, *reference, Temperature::DIM)?;
                         (
                             "temperature",
                             format!(
@@ -449,13 +640,13 @@ impl Engine {
                         )
                     }
                     LoadKind::ThermalContact { of, h } => {
-                        let v = display(m, *h, HeatTransfer::DIM);
+                        let v = Valued { value: *h, unit: "SI".into() };
                         ("thermalContact", format!("h = {} {} across '{of}'", units::fmt_sig(v.value, 4), v.unit))
                     }
                 };
-                LoadRow { name: l.name.clone(), kind: kind.into(), on: l.kind.set().map(str::to_string), summary }
+                Ok(LoadRow { name: l.name.clone(), kind: kind.into(), on: l.kind.set().map(str::to_string), summary })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let steps = m
             .steps
             .iter()
@@ -464,6 +655,7 @@ impl Engine {
                 procedure: crate::solve_run::procedure_name(s.procedure),
                 constraints: s.constraints.clone(),
                 loads: s.loads.clone(),
+                after: s.after.clone(),
                 solved: self.results.contains_key(&s.name),
             })
             .collect();
@@ -475,7 +667,7 @@ impl Engine {
             idealisation: match &m.idealisation {
                 Idealisation::Solid3d => "solid3d".into(),
                 Idealisation::PlaneStress { thickness } => {
-                    let t = display(m, *thickness, Length::DIM);
+                    let t = display(m, *thickness, Length::DIM)?;
                     format!("planeStress (thickness {} {})", units::fmt_sig(t.value, 4), t.unit)
                 }
                 Idealisation::PlaneStrain => "planeStrain".into(),
@@ -514,13 +706,14 @@ impl Engine {
         }
         let q = femlab_geometry::quality(mesh, 10);
         Ok(MeshSummary {
+            source_labels: if built.source_labels.nodes.is_empty() { None } else { Some(built.source_labels.clone()) },
             nodes: mesh.n_nodes() as u32,
             elements: mesh.n_elems() as u32,
             element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
             dofs: (mesh.n_nodes() * crate::fem::problem::mesh_dofs_per_node(mesh, &m.idealisation)) as u32,
-            bbox: bbox6(m, lo, hi),
-            min_edge: display(m, min_edge, Length::DIM),
-            max_edge: display(m, max_edge, Length::DIM),
+            bbox: bbox6(m, lo, hi)?,
+            min_edge: display(m, min_edge, Length::DIM)?,
+            max_edge: display(m, max_edge, Length::DIM)?,
             sets: built
                 .sets
                 .iter()
@@ -543,22 +736,70 @@ impl Engine {
 
     /// `query.set`: what a Set resolved to on the current Mesh.
     fn query_set(&mut self, name: &str) -> Result<SetInfo, Error> {
+        if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
+            &self.model.mesh
+        {
+            if let Some(labels) = source.node_members(name) {
+                if labels.is_empty() {
+                    return Err(Error::new(ErrorCode::SetEmpty, format!("source Set '{name}' has no members"))
+                        .at("name")
+                        .suggest("mesh.set with a nonempty imported Set"));
+                }
+                let mut lo = [f64::INFINITY; 3];
+                let mut hi = [f64::NEG_INFINITY; 3];
+                let mut centroid = [CoordinateMean::default(); 3];
+                let n = labels.len() as f64;
+                for &label in &labels {
+                    // source()/build validate sorted labels and every membership before
+                    // Model publication. Replacement/replay revalidate; rename changes
+                    // only the Body name and undo restores a validated snapshot. This is
+                    // therefore the position of a known-present authored node.
+                    let node = source.nodes.partition_point(|n| n.label < label);
+                    for k in 0..3 {
+                        let value = source.nodes[node].at[k];
+                        lo[k] = lo[k].min(value);
+                        hi[k] = hi[k].max(value);
+                        centroid[k].add(value, n);
+                    }
+                }
+                let participating = source.participating_labels();
+                let unused = labels.iter().filter(|label| !participating.contains(label)).copied().collect();
+                let bbox = bbox6(&self.model, lo, hi)?;
+                let centroid = centroid.map(|mean| mean.finish(n));
+                return displayed3(&self.model, centroid, Length::DIM).map(|centroid| SetInfo {
+                    count: labels.len() as u32,
+                    source_node_labels: Some(labels),
+                    unused_source_node_labels: unused,
+                    name: name.into(),
+                    kind: "node".into(),
+                    bbox,
+                    measure: Valued { value: 0.0, unit: "SI".into() },
+                    pressure_area: None,
+                    centroid,
+                });
+            }
+        }
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
         let known: Vec<&str> = built.sets.keys().map(String::as_str).collect();
         let set = built.sets.get(name).ok_or_else(|| Error::not_found("set", name, &known))?;
+        if set.count() == 0 {
+            return Err(Error::new(ErrorCode::SetEmpty, format!("set '{name}' has no members"))
+                .at("name")
+                .suggest("mesh.set with a nonempty imported Set"));
+        }
         let mesh = &built.mesh;
         let m = &self.model;
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
-        let mut centroid = [0.0; 3];
+        let mut centroid = [CoordinateMean::default(); 3];
         let n = set.nodes.len().max(1) as f64;
         for &node in &set.nodes {
             let p = mesh.node(node);
             for k in 0..3 {
                 lo[k] = lo[k].min(p[k]);
                 hi[k] = hi[k].max(p[k]);
-                centroid[k] += p[k] / n;
+                centroid[k].add(p[k], n);
             }
         }
         // A face Set measures area (length in 2D), an element Set volume (area in 2D), a node
@@ -568,27 +809,29 @@ impl Engine {
             crate::mesh::SetKind::Element => (set.elems.iter().map(|&e| elem_measure(mesh, e)).sum(), mesh.dim as i8),
             crate::mesh::SetKind::Node => (0.0, 0),
         };
-        Ok(SetInfo {
+        let bbox = bbox6(m, lo, hi)?;
+        let measure = display(m, measure, Dimension([exponent, 0, 0, 0]))?;
+        let pressure_area = if set.kind == crate::mesh::SetKind::Face {
+            let area = set
+                .faces
+                .iter()
+                .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
+                .sum();
+            Some(display(m, area, Dimension([2, 0, 0, 0]))?)
+        } else {
+            None
+        };
+        let centroid = centroid.map(|mean| mean.finish(n));
+        displayed3(m, centroid, Length::DIM).map(|centroid| SetInfo {
+            source_node_labels: None,
+            unused_source_node_labels: Vec::new(),
             name: name.to_string(),
             kind: set.kind.as_str().into(),
             count: set.count() as u32,
-            bbox: bbox6(m, lo, hi),
-            measure: display(m, measure, Dimension([exponent, 0, 0, 0])),
-            pressure_area: if set.kind == crate::mesh::SetKind::Face {
-                let area = set
-                    .faces
-                    .iter()
-                    .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
-                    .sum();
-                Some(display(m, area, Dimension([2, 0, 0, 0])))
-            } else {
-                None
-            },
-            centroid: [
-                display(m, centroid[0], Length::DIM),
-                display(m, centroid[1], Length::DIM),
-                display(m, centroid[2], Length::DIM),
-            ],
+            bbox,
+            measure,
+            pressure_area,
+            centroid,
         })
     }
 
@@ -614,7 +857,8 @@ impl Engine {
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let model = if id.is_some() { &record.model } else { &self.model };
-        let unit = display(model, 0.0, crate::solve_run::field_dimension(field, record.result.reaction_quantity)).unit;
+        let unit =
+            model.units.resolve().unit(crate::solve_run::field_dimension(field, record.result.reaction_quantity));
         Ok((f, unit, resolved, record))
     }
 
@@ -647,7 +891,7 @@ impl Engine {
             model,
             Engine::pick(&v, component),
             crate::solve_run::field_dimension(field, record.result.reaction_quantity),
-        );
+        )?;
         Ok(ProbeResult {
             sample,
             value: Valued { value: value.value, unit },
@@ -678,8 +922,12 @@ impl Engine {
             s: samples.iter().map(|(s, _)| *s).collect(),
             values: samples
                 .iter()
-                .map(|(_, v)| v.as_ref().map(|v| display(model, Engine::pick(v, component), dim).value))
-                .collect(),
+                .map(|(_, v)| {
+                    v.as_ref()
+                        .map(|v| display(model, Engine::pick(v, component), dim).map(|value| value.value))
+                        .transpose()
+                })
+                .collect::<Result<_, Error>>()?,
             unit,
         })
     }
@@ -729,6 +977,33 @@ impl Engine {
                         b.material.as_deref().unwrap_or("none")
                     ),
                 });
+            }
+        }
+        if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) = &m.mesh
+        {
+            if want(ObjectKind::Body) {
+                objects.push(ObjectRef {
+                    ref_: format!("body:{}", source.body),
+                    kind: "body".into(),
+                    name: source.body.clone(),
+                    summary: "immutable imported mesh source".into(),
+                });
+            }
+            if want(ObjectKind::Body) {
+                objects.extend(source.regions.keys().map(|name| ObjectRef {
+                    ref_: format!("body:{name}"),
+                    kind: "body".into(),
+                    name: name.clone(),
+                    summary: "imported element region".into(),
+                }));
+            }
+            if want(ObjectKind::Set) {
+                objects.extend(source.set_names().iter().map(|name| ObjectRef {
+                    ref_: format!("set:{name}"),
+                    kind: "set".into(),
+                    name: name.clone(),
+                    summary: "immutable imported membership".into(),
+                }));
             }
         }
         if want(ObjectKind::Material) {
@@ -840,59 +1115,316 @@ fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
     libm::sqrt((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2))
 }
 
-/// Area of a face (3D) or length of a boundary edge (2D).
+/// Integrate the original face map, including every quadratic mid-edge node.
+/// Curved norms are non-polynomial: line3/quad8 use three-point Gauss, tri6 the
+/// symmetric degree5 triangle rule, with accuracy established under refinement.
 fn face_measure(mesh: &Mesh, f: Face) -> f64 {
-    let p: Vec<[f64; 3]> =
-        mesh.face_nodes(f).take(mesh.kind_of(f.elem).face_kind().n_corners()).map(|n| mesh.node(n)).collect();
-    if p.len() == 2 {
-        return dist(p[0], p[1]);
+    use crate::fem::quadrature::TRI_7;
+    use crate::fem::shape::{face_dshape_of, face_rule_of};
+    use femlab_geometry::mesh::FaceKind;
+    let kind = mesh.kind_of(f.elem).face_kind();
+    let nodes: Vec<_> = mesh.face_nodes(f).collect();
+    if kind == FaceKind::Line2 {
+        return dist(mesh.node(nodes[0]), mesh.node(nodes[1]));
     }
-    let mut area = 0.0;
-    for t in 1..p.len() - 1 {
-        let u = sub(p[t], p[0]);
-        let v = sub(p[t + 1], p[0]);
-        let c = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-        area += 0.5 * libm::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
-    }
-    area
-}
-
-/// Volume of an element (area in 2D). Exact for the planar-faced cells a lattice makes: the
-/// divergence theorem over the faces in 3D, the shoelace over the corners in 2D.
-fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
-    let kind = mesh.kind_of(e);
-    if kind == femlab_geometry::ElementKind::Shell4 {
-        return face_measure(mesh, Face { elem: e, local: 1 });
-    }
-    if mesh.dim == 2 {
-        let p: Vec<[f64; 3]> = mesh.elem_nodes(e).iter().take(kind.n_corners()).map(|&n| mesh.node(n)).collect();
-        let mut a = 0.0;
-        for (i, q) in p.iter().enumerate() {
-            let r = p[(i + 1) % p.len()];
-            a += q[0] * r[1] - r[0] * q[1];
+    let mut derivatives = vec![[0.0; 2]; kind.n_nodes()];
+    let rule = if kind == FaceKind::Tri6 { TRI_7 } else { face_rule_of(kind) };
+    let mut measure = 0.0;
+    for (point, weight) in rule.points.iter().zip(rule.weights) {
+        face_dshape_of(kind, [point[0], point[1]], &mut derivatives);
+        let mut tangent = [[0.0; 3]; 2];
+        for (&node, derivative) in nodes.iter().zip(&derivatives) {
+            let position = mesh.node(node);
+            for axis in 0..2 {
+                for (component, value) in position.iter().enumerate() {
+                    tangent[axis][component] += value * derivative[axis];
+                }
+            }
         }
-        return 0.5 * a.abs();
+        let scale = if kind == FaceKind::Line3 {
+            libm::sqrt(tangent[0].iter().map(|x| x * x).sum())
+        } else {
+            cross_norm(tangent[0], tangent[1])
+        };
+        measure += weight * scale;
     }
-    let mut v = 0.0;
-    for local in 0..kind.n_faces() as u8 {
-        let face = Face { elem: e, local };
-        let (c, n) = face_centroid_normal(mesh, face);
-        v += face_measure(mesh, face) * (c[0] * n[0] + c[1] * n[1] + c[2] * n[2]) / 3.0;
-    }
-    v
+    measure
 }
 
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+fn cross_norm(u: [f64; 3], v: [f64; 3]) -> f64 {
+    let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    libm::sqrt(cross.iter().map(|x| x * x).sum())
 }
 
-fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> String {
-    let d: Vec<Valued> = v.iter().map(|x| display(m, *x, dim)).collect();
-    format!(
+/// Original volume (or intrinsic surface area), rather than a corner skin.
+/// Tet10 detJ is cubic and Hex20 detJ has degree at most5 per coordinate;
+/// the geometry rule and three-point tensor Gauss integrate those exactly.
+fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
+    use crate::fem::quadrature::{TET_27, TRI_7};
+    use crate::fem::shape::{dshape_of, rule_of};
+    use femlab_geometry::ElementKind;
+    let kind = mesh.kind_of(e);
+    // Line Body measures come from their member lengths; their element Set
+    // volume is unchanged by this solid/surface geometry correction.
+    if kind.dim() == 1 {
+        return 0.0;
+    }
+    let rule = match kind {
+        ElementKind::Tet10 => TET_27,
+        ElementKind::Tri6 => TRI_7,
+        _ => rule_of(kind),
+    };
+    let mut derivatives = vec![[0.0; 3]; kind.n_nodes()];
+    let mut measure = 0.0;
+    for (&point, weight) in rule.points.iter().zip(rule.weights) {
+        dshape_of(kind, point, &mut derivatives);
+        let mut jacobian = [[0.0; 3]; 3];
+        for (&node, derivative) in mesh.elem_nodes(e).iter().zip(&derivatives) {
+            let position = mesh.node(node);
+            for (component, row) in jacobian.iter_mut().enumerate() {
+                for axis in 0..3 {
+                    row[axis] += position[component] * derivative[axis];
+                }
+            }
+        }
+        let scale = if kind.dim() == 3 {
+            let [a, b, c] = jacobian;
+            a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])
+        } else {
+            cross_norm(
+                [jacobian[0][0], jacobian[1][0], jacobian[2][0]],
+                [jacobian[0][1], jacobian[1][1], jacobian[2][1]],
+            )
+        };
+        measure += weight * scale;
+    }
+    measure
+}
+
+fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> Result<String, Error> {
+    let d = displayed3(m, v, dim)?;
+    Ok(format!(
         "[{}, {}, {}] {}",
         units::fmt_sig(d[0].value, 4),
         units::fmt_sig(d[1].value, 4),
         units::fmt_sig(d[2].value, 4),
         d[0].unit
-    )
+    ))
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+    use femlab_geometry::{ElementBlock, ElementKind};
+    use std::collections::BTreeMap;
+
+    fn coordinate_mean(values: &[f64]) -> f64 {
+        let count = values.len().max(1) as f64;
+        let mut mean = CoordinateMean::default();
+        for &value in values {
+            mean.add(value, count);
+        }
+        mean.finish(count)
+    }
+
+    #[test]
+    fn coordinate_mean_extreme_constants_remain_finite_at_independent_counts() {
+        // A constant's mathematical mean is itself at every count. Preserve the finite
+        // seven-member baseline's one-ulp rounding, while repairing 3/100-member overflow.
+        for count in [3, 7, 10, 100] {
+            for sign in [-1.0, 1.0] {
+                let actual = coordinate_mean(&vec![sign * f64::MAX; count]);
+                let expected = if count == 7 { f64::from_bits(f64::MAX.to_bits() - 1) } else { f64::MAX };
+                assert_eq!(actual.to_bits(), (sign * expected).to_bits());
+                assert!(actual.is_finite());
+                assert!(f64::MAX - actual.abs() <= f64::MAX - f64::from_bits(f64::MAX.to_bits() - 1));
+            }
+        }
+        for values in
+            [vec![f64::MAX, -f64::MAX], vec![f64::MAX, 0.0, -f64::MAX], vec![f64::MAX, f64::MAX, -f64::MAX, -f64::MAX]]
+        {
+            assert_eq!(coordinate_mean(&values), 0.0, "symmetric coordinates have zero mean");
+        }
+    }
+
+    #[test]
+    fn coordinate_mean_preserves_finite_rounding_and_subnormal_residuals() {
+        let tick = f64::from_bits(1);
+        for (values, expected) in [
+            (vec![], 0.0),
+            (vec![0.0; 3], 0.0),
+            (vec![tick], tick),
+            (vec![3.0 * tick; 3], 3.0 * tick),
+            (vec![f64::MAX, -f64::MAX, 3.0 * tick], tick),
+            (vec![-f64::MAX, f64::MAX, -3.0 * tick], -tick),
+            (vec![1.0, f64::MAX], f64::MAX / 2.0),
+            (vec![-3.0, 0.0, 3.0], 0.0),
+        ] {
+            assert_eq!(coordinate_mean(&values).to_bits(), expected.to_bits());
+        }
+    }
+
+    fn warped_pair(n: usize) -> Mesh {
+        let mut coords = Vec::new();
+        for plane in 0..3 {
+            for z in 0..=n {
+                for y in 0..=n {
+                    let yy = y as f64 / n as f64;
+                    let zz = z as f64 / n as f64;
+                    let x = if plane == 1 { 1.0 + yy * zz / 4.0 } else { plane as f64 };
+                    coords.extend([x, yy, zz]);
+                }
+            }
+        }
+        let node = |x: usize, y: usize, z: usize| (x * (n + 1) * (n + 1) + z * (n + 1) + y) as u32;
+        let mut conn = Vec::new();
+        for x in 0..2 {
+            for z in 0..n {
+                for y in 0..n {
+                    conn.extend([
+                        node(x, y, z),
+                        node(x + 1, y, z),
+                        node(x + 1, y + 1, z),
+                        node(x, y + 1, z),
+                        node(x, y, z + 1),
+                        node(x + 1, y, z + 1),
+                        node(x + 1, y + 1, z + 1),
+                        node(x, y + 1, z + 1),
+                    ]);
+                }
+            }
+        }
+        Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![ElementBlock { kind: ElementKind::Hex8, conn, first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn original_warped_hex_volumes_and_bilinear_areas_have_independent_refinement_oracles() {
+        // For x=1+a*y*z, volume integrals are1+a/4 and1-a/4. The
+        // original face area has an independent rectangle-potential closed form.
+        let a = 0.25;
+        let r = libm::sqrt(1.0 + 2.0 * a * a);
+        let exact_area =
+            (r + (a * a + 3.0) / a * libm::asinh(a / libm::sqrt(1.0 + a * a)) - libm::atan(a * a / r) / (a * a)) / 3.0;
+        assert!((exact_area - 1.0205395019733228).abs() < 2e-15);
+        let mut previous_error = None;
+        for n in [1, 2, 4, 8] {
+            let mesh = warped_pair(n);
+            let cells = (n * n) as u32;
+            let left: f64 = (0..cells).map(|e| elem_measure(&mesh, e)).sum();
+            let right: f64 = (cells..2 * cells).map(|e| elem_measure(&mesh, e)).sum();
+            assert!((left - 17.0 / 16.0).abs() < 2e-14);
+            assert!((right - 15.0 / 16.0).abs() < 2e-14);
+            assert!((left + right - 2.0).abs() < 3e-14);
+            let area_left: f64 = (0..cells).map(|elem| face_measure(&mesh, Face { elem, local: 3 })).sum();
+            let area_right: f64 = (cells..2 * cells).map(|elem| face_measure(&mesh, Face { elem, local: 5 })).sum();
+            assert!((area_left - area_right).abs() < 2e-14);
+            let physical: f64 = (0..cells)
+                .map(|elem| {
+                    crate::fem::element::loaded_face_measure(&mesh, Face { elem, local: 3 }, &Idealisation::Solid3d)
+                })
+                .sum();
+            assert!((area_left - physical).abs() < 2e-14);
+            let error = (area_left - exact_area).abs();
+            assert!(error < 5e-6);
+            if let Some(previous) = previous_error {
+                let order = libm::log(previous / error) / libm::log(2.0);
+                assert!((3.8..4.2).contains(&order), "observed area quadrature order {order}");
+            }
+            previous_error = Some(error);
+        }
+    }
+
+    #[test]
+    fn original_linear_measures_preserve_tetrahedra_planar_faces_and_sheet_area() {
+        let tetrahedron = Mesh {
+            dim: 3,
+            coords: vec![0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.],
+            blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        assert!((elem_measure(&tetrahedron, 0) - 1.0 / 6.0).abs() < 1e-15);
+        assert!((face_measure(&tetrahedron, Face { elem: 0, local: 2 }) - libm::sqrt(3.0) / 2.0).abs() < 1e-15);
+        assert!((face_measure(&tetrahedron, Face { elem: 0, local: 0 }) - 0.5).abs() < 1e-15);
+        let sheet = Mesh {
+            dim: 2,
+            coords: vec![0., 0., 0., 2., 0., 0., 2., 3., 0., 0., 3., 0.],
+            blocks: vec![ElementBlock { kind: ElementKind::Quad4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        assert!((elem_measure(&sheet, 0) - 6.0).abs() < 3e-15);
+        assert_eq!(face_measure(&sheet, Face { elem: 0, local: 0 }), 2.0);
+        // A line face remains a length even when its containing mesh is embedded
+        // in 3D. It has one tangent, so a two-tangent area cross product is wrong.
+        let embedded_sheet = Mesh { dim: 3, ..sheet.clone() };
+        assert_eq!(face_measure(&embedded_sheet, Face { elem: 0, local: 0 }), 2.0);
+        let mut planar = warped_pair(1);
+        for point in planar.coords.chunks_exact_mut(3) {
+            if point[0] > 0.0 && point[0] < 2.0 {
+                point[0] = 1.0;
+            }
+        }
+        assert!((elem_measure(&planar, 0) - 1.0).abs() < 1e-15);
+        assert!((elem_measure(&planar, 1) - 1.0).abs() < 1e-15);
+        assert!((face_measure(&planar, Face { elem: 0, local: 3 }) - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn original_quadratic_tet_volume_integrates_the_cubic_jacobian() {
+        // The exact P2 map (u+a*u²,v+b*v²,w+c*w²), each coefficient1/4,
+        // has positive diagonal Jacobian. Its integral includes uvw/720.
+        let xi = [
+            [0., 0., 0.],
+            [1., 0., 0.],
+            [0., 1., 0.],
+            [0., 0., 1.],
+            [0.5, 0., 0.],
+            [0.5, 0.5, 0.],
+            [0., 0.5, 0.],
+            [0., 0., 0.5],
+            [0.5, 0., 0.5],
+            [0., 0.5, 0.5],
+        ];
+        let coords = xi.into_iter().flat_map(|p| p.map(|x| x + 0.25 * x * x)).collect();
+        let mesh = Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![ElementBlock { kind: ElementKind::Tet10, conn: (0..10).collect(), first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        let exact = 1.0 / 6.0 + 0.75 / 12.0 + 0.1875 / 30.0 + 0.015625 / 90.0;
+        assert!((elem_measure(&mesh, 0) - exact).abs() < 3e-15);
+    }
+
+    #[test]
+    fn original_quadratic_hex_volume_requires_more_than_two_tensor_points() {
+        // S2 map x=u(1+a*v²), y=v(1+b*u²), z=w(1+c*u²).
+        // detJ=(1+a*v²+b*u²-3ab*u²v²)(1+c*u²); u^4 needs degree4.
+        let coords = crate::fem::shape::node_xi(ElementKind::Hex20)
+            .into_iter()
+            .flat_map(|[u, v, w]| [u * (1.0 + 0.1 * v * v), v * (1.0 + 0.1 * u * u), w * (1.0 + 0.1 * u * u)])
+            .collect();
+        let mesh = Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![ElementBlock { kind: ElementKind::Hex20, conn: (0..20).collect(), first_elem: 0 }],
+            node_sets: BTreeMap::new(),
+            elem_sets: BTreeMap::new(),
+            face_sets: BTreeMap::new(),
+        };
+        let exact = 8.0 * (1.0 + 0.3 / 3.0 + (0.01 - 0.03) / 9.0 + 0.009 / 5.0);
+        assert!((elem_measure(&mesh, 0) - exact).abs() < 3e-14);
+    }
 }

@@ -91,11 +91,11 @@ other Constraint, and is removed with constraint.remove.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| point | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| kind | yes | <code>{"$ref":"#/$defs/CoupleKind"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.couple"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Coupling Constraint name to create or replace, for listing in a Step. |
+| point | yes | <code>{"type":"string"}</code> | Existing point-mass node Set created with geometry.addMass. |
+| on | yes | <code>{"type":"string"}</code> | Face Set coupled to the point displacement. |
+| kind | yes | <code>{"$ref":"#/$defs/CoupleKind"}</code> | Distributed for the face weighted mean displacement or rigid for equal point and face translations; neither transmits a moment. |
+| cmd | yes | <code>{"type":"string","const":"constraint.couple"}</code> | Registered Command identifier; use &#96;constraint.couple&#96; to select this operation. |
 
 <a id="commands-constraint-cyclic"></a>
 
@@ -115,14 +115,14 @@ Command. Refused in an explicit Step, like a bonded contact.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| from | yes | <code>{"type":"string"}</code> |  |
-| to | yes | <code>{"type":"string"}</code> |  |
-| axis | yes | <code>{"$ref":"#/$defs/Axis"}</code> |  |
-| angleDeg | yes | <code>{"type":"number","format":"double"}</code> |  |
-| through | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
-| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.cyclic"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Cyclic Constraint name to create or replace, for listing in a Step. |
+| from | yes | <code>{"type":"string"}</code> | Source sector-face node Set; must match the rotated target mesh. |
+| to | yes | <code>{"type":"string"}</code> | Target sector-face node Set reached by the specified rotation. |
+| axis | yes | <code>{"$ref":"#/$defs/Axis"}</code> | Global rotation axis relating from to to. |
+| angleDeg | yes | <code>{"type":"number","format":"double"}</code> | Signed right-handed rotation from the source to the target face, in degrees. |
+| through | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> | Global x/y/z point on the rotation axis, with length units; omitted means the origin. |
+| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> | Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal. |
+| cmd | yes | <code>{"type":"string","const":"constraint.cyclic"}</code> | Registered Command identifier; use &#96;constraint.cyclic&#96; to select this operation. |
 
 <a id="commands-constraint-fix"></a>
 
@@ -138,10 +138,10 @@ Fixing every node of a Body makes the solve trivial; fix faces, not bodies.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| dofs | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Dof"}}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.fix"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Constraint name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Named Set whose degrees of freedom are restrained. |
+| dofs | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Dof"}}</code> | Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components for a roller or partial restraint. |
+| cmd | yes | <code>{"type":"string","const":"constraint.fix"}</code> | Registered Command identifier; use &#96;constraint.fix&#96; to select this operation. |
 
 <a id="commands-constraint-pin"></a>
 
@@ -154,9 +154,9 @@ nodes it is the same as constraint.fix, because those carry no rotation.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.pin"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Constraint name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Named Set whose translations are fixed while beam-joint rotations remain free. |
+| cmd | yes | <code>{"type":"string","const":"constraint.pin"}</code> | Registered Command identifier; use &#96;constraint.pin&#96; to select this operation. |
 
 <a id="commands-constraint-prescribe"></a>
 
@@ -167,11 +167,11 @@ of "2 mm" in uy. Reactions on prescribed Sets are reported like any other constr
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| dof | yes | <code>{"$ref":"#/$defs/Dof"}</code> |  |
-| value | yes | <code>{"$ref":"#/$defs/Q_length"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.prescribe"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Constraint name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Named Set receiving the prescribed displacement. |
+| dof | yes | <code>{"$ref":"#/$defs/Dof"}</code> | Translational component ux, uy or uz to prescribe. |
+| value | yes | <code>{"$ref":"#/$defs/Q_length"}</code> | Prescribed displacement with length units; sign follows the chosen global component. |
+| cmd | yes | <code>{"type":"string","const":"constraint.prescribe"}</code> | Registered Command identifier; use &#96;constraint.prescribe&#96; to select this operation. |
 
 <a id="commands-constraint-remove"></a>
 
@@ -182,8 +182,8 @@ it first. Removing a constraint makes existing Results of that Step stale.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.remove"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Existing Constraint to remove; Steps must stop referencing it first. |
+| cmd | yes | <code>{"type":"string","const":"constraint.remove"}</code> | Registered Command identifier; use &#96;constraint.remove&#96; to select this operation. |
 
 <a id="commands-constraint-symmetry"></a>
 
@@ -196,10 +196,10 @@ itself must be halved by you.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| normal | yes | <code>{"$ref":"#/$defs/Axis"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.symmetry"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Constraint name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Named Set lying on the modelled symmetry plane. |
+| normal | yes | <code>{"$ref":"#/$defs/Axis"}</code> | Global axis normal to the symmetry plane; restrains normal translation and the corresponding beam rotations. |
+| cmd | yes | <code>{"type":"string","const":"constraint.symmetry"}</code> | Registered Command identifier; use &#96;constraint.symmetry&#96; to select this operation. |
 
 <a id="commands-constraint-temperature"></a>
 
@@ -212,10 +212,10 @@ multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driv
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"constraint.temperature"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Temperature Constraint name to create or replace, for listing in a heat Step. |
+| on | yes | <code>{"type":"string"}</code> | Named Set held at the prescribed temperature. |
+| value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> | Boundary temperature with temperature units; a transient Step scales it by its amplitude. |
+| cmd | yes | <code>{"type":"string","const":"constraint.temperature"}</code> | Registered Command identifier; use &#96;constraint.temperature&#96; to select this operation. |
 
 <a id="commands-contact-add"></a>
 
@@ -246,12 +246,12 @@ query.cost does not count.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| master | yes | <code>{"type":"string"}</code> |  |
-| slave | yes | <code>{"type":"string"}</code> |  |
-| kind | yes | <code>{"$ref":"#/$defs/ContactKind"}</code> |  |
-| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"contact.add"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Contact Constraint name to create or replace, for listing in a Step. |
+| master | yes | <code>{"type":"string"}</code> | Master face Set onto which slave nodes are projected; normally choose the coarser side. |
+| slave | yes | <code>{"type":"string"}</code> | Slave face Set whose nodes are paired to the master; normally choose the finer side. |
+| kind | yes | <code>{"$ref":"#/$defs/ContactKind"}</code> | Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide. |
+| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> | Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units; omitted means 1e-4 of the Mesh diagonal. |
+| cmd | yes | <code>{"type":"string","const":"contact.add"}</code> | Registered Command identifier; use &#96;contact.add&#96; to select this operation. |
 
 <a id="commands-contact-thermal"></a>
 
@@ -265,10 +265,10 @@ perfect thermal tie; the mechanical tie is unaffected.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| of | yes | <code>{"type":"string"}</code> |  |
-| conductance | yes | <code>{"$ref":"#/$defs/Q_heat_transfer_coefficient"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"contact.thermal"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Thermal contact Load name to create or replace, for listing in a heat Step. |
+| of | yes | <code>{"type":"string"}</code> | Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance. |
+| conductance | yes | <code>{"$ref":"#/$defs/Q_heat_transfer_coefficient"}</code> | Positive interface heat-transfer coefficient with units such as W/(m^2 K). |
+| cmd | yes | <code>{"type":"string","const":"contact.thermal"}</code> | Registered Command identifier; use &#96;contact.thermal&#96; to select this operation. |
 
 <a id="commands-geometry-add"></a>
 
@@ -282,9 +282,9 @@ resulting shape before changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| shape | yes | <code>{"$ref":"#/$defs/ShapeSpec"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.add"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Body name; reusing it replaces the shape while preserving compatible assignments and cuts. |
+| shape | yes | <code>{"$ref":"#/$defs/ShapeSpec"}</code> | Unit-bearing shape definition in global coordinates, compatible with the Model idealisation. |
+| cmd | yes | <code>{"type":"string","const":"geometry.add"}</code> | Registered Command identifier; use &#96;geometry.add&#96; to select this operation. |
 
 <a id="commands-geometry-addBox"></a>
 
@@ -298,10 +298,10 @@ the replacement without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| size | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
-| at | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.addBox"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Body name; reusing it replaces the box while preserving compatible assignments and cuts. |
+| size | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> | Positive x/y/z side lengths, each with length units. |
+| at | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> | Global x/y/z coordinates of the minimum corner; omitted means the origin. |
+| cmd | yes | <code>{"type":"string","const":"geometry.addBox"}</code> | Registered Command identifier; use &#96;geometry.addBox&#96; to select this operation. |
 
 <a id="commands-geometry-addLine"></a>
 
@@ -324,12 +324,12 @@ cuts therefore fails without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| points | yes | <code>{"type":"array","items":{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}}</code> |  |
-| members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> |  |
-| divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| kind | no | <code>{"anyOf":[{"$ref":"#/$defs/LineKind"},{"type":"null"}]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Line Body name; joint node Sets are named &lt;name>.p0, &lt;name>.p1 and so on. |
+| points | yes | <code>{"type":"array","items":{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}}</code> | Ordered global x/y/z joint coordinates, each component with length units. |
+| members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> | Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on. |
+| divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Number of equal finite elements per member; omitted means one. |
+| kind | no | <code>{"anyOf":[{"$ref":"#/$defs/LineKind"},{"type":"null"}]}</code> | Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss. |
+| cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> | Registered Command identifier; use &#96;geometry.addLine&#96; to select this operation. |
 
 <a id="commands-geometry-addMass"></a>
 
@@ -340,16 +340,17 @@ else. It contributes to the mass matrix (so it changes modal frequencies) and to
 (m·g at that point), and has no stiffness whatever, so it must be attached to the model
 with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
 The point is also a node Set of the same name, so constraint.couple, constraint.fix,
-load.force and query.set target it by name. Re-issuing with an existing name replaces
-it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
+load.force and query.set target it by name. Re-issuing an existing point-mass name
+replaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes
+it. It carries no rotary inertia — a node has no rotations —
 so it models a compact mass, not a flywheel.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| at | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
-| mass | yes | <code>{"$ref":"#/$defs/Q_mass"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.addMass"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Point-mass name and node Set name; reusing it replaces that point mass. |
+| at | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> | Global x/y/z coordinates of the mass node, each with length units. |
+| mass | yes | <code>{"$ref":"#/$defs/Q_mass"}</code> | Positive lumped mass with mass units; attach the node with constraint.couple before solving. |
+| cmd | yes | <code>{"type":"string","const":"geometry.addMass"}</code> | Registered Command identifier; use &#96;geometry.addMass&#96; to select this operation. |
 
 <a id="commands-geometry-import"></a>
 
@@ -372,15 +373,15 @@ data is the file you meant.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| format | yes | <code>{"$ref":"#/$defs/MeshFormat"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts. |
+| format | yes | <code>{"$ref":"#/$defs/MeshFormat"}</code> | Geometry file format of data; the supported format is STL. |
 | data | yes | <code>{"type":"string"}</code> | The file itself. Text as it stands, or base64 with &#96;encoding: "base64"&#96;, which is what a binary STL needs. |
-| encoding | no | <code>{"anyOf":[{"$ref":"#/$defs/DataEncoding"},{"type":"null"}]}</code> |  |
+| encoding | no | <code>{"anyOf":[{"$ref":"#/$defs/DataEncoding"},{"type":"null"}]}</code> | How data encodes the file; omitted means text, while binary STL requires base64. |
 | sha256 | no | <code>{"type":["string","null"]}</code> | Hex sha256 of the decoded file, checked before it is read. |
 | unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> | What one unit in the file means, since the format records no units. |
 | featureAngle | no | <code>{"type":["number","null"],"format":"double"}</code> | Dihedral angle in degrees above which an edge splits two face patches. |
 | simplifyBelow | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> | Collapse mesh features smaller than this before use. |
-| cmd | yes | <code>{"type":"string","const":"geometry.import"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"geometry.import"}</code> | Registered Command identifier; use &#96;geometry.import&#96; to select this operation. |
 
 <a id="commands-geometry-nameFace"></a>
 
@@ -391,13 +392,14 @@ of those) so constraints and loads can target it. Rules are re-evaluated after e
 remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
 implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
 Body's actual mesh boundary. Prefer the auto face names when one fits.
+Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| of | yes | <code>{"type":"string"}</code> |  |
-| where | yes | <code>{"$ref":"#/$defs/FacePredicate"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.nameFace"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Named face Set to create or replace, for use by Constraints and Loads. |
+| of | yes | <code>{"type":"string"}</code> | Body whose actual mesh boundary is selected, including an implicit mapped or swept Body. |
+| where | yes | <code>{"$ref":"#/$defs/FacePredicate"}</code> | Geometric predicate selecting boundary faces; re-evaluated on each remesh. |
+| cmd | yes | <code>{"type":"string","const":"geometry.nameFace"}</code> | Registered Command identifier; use &#96;geometry.nameFace&#96; to select this operation. |
 
 <a id="commands-geometry-nameRegion"></a>
 
@@ -407,18 +409,20 @@ Name a node/element Set by a region rule (a box or a whole Body), for point-like
 constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
 use a box slightly larger than the points you mean. A whole-Body rule also accepts
 the implicit Body defined by a mapped or swept mapped mesher.
+Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| where | yes | <code>{"$ref":"#/$defs/RegionPredicate"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.nameRegion"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Named region Set to create or replace, for Constraints, nodal Loads and probes. |
+| where | yes | <code>{"$ref":"#/$defs/RegionPredicate"}</code> | Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds. |
+| cmd | yes | <code>{"type":"string","const":"geometry.nameRegion"}</code> | Registered Command identifier; use &#96;geometry.nameRegion&#96; to select this operation. |
 
 <a id="commands-geometry-remove"></a>
 
 ### geometry.remove
 
-Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
+Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.
+Fails with in-use listing the constraints, loads
 (including temperature and volumetric heat sources), named selectors or free-mesher
 geometry references that still use a Body; remove or retarget those first. Removing
 a mapped or swept mapped Body clears its mesher and material association, preserving
@@ -426,8 +430,8 @@ unrelated explicit geometry and Materials.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.remove"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted first. |
+| cmd | yes | <code>{"type":"string","const":"geometry.remove"}</code> | Registered Command identifier; use &#96;geometry.remove&#96; to select this operation. |
 
 <a id="commands-geometry-subtract"></a>
 
@@ -440,10 +444,10 @@ Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.s
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| from | yes | <code>{"type":"string"}</code> |  |
-| shape | yes | <code>{"$ref":"#/$defs/ShapeSpec"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.subtract"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Cut name, also the prefix of its generated face Sets. |
+| from | yes | <code>{"type":"string"}</code> | Existing solid Body from which the shape is removed. |
+| shape | yes | <code>{"$ref":"#/$defs/ShapeSpec"}</code> | Unit-bearing cutting shape positioned in global coordinates. |
+| cmd | yes | <code>{"type":"string","const":"geometry.subtract"}</code> | Registered Command identifier; use &#96;geometry.subtract&#96; to select this operation. |
 
 <a id="commands-geometry-subtractBox"></a>
 
@@ -456,11 +460,11 @@ Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.s
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| from | yes | <code>{"type":"string"}</code> |  |
-| size | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
-| at | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"geometry.subtractBox"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Cut name, also the prefix of the resulting hole face Sets. |
+| from | yes | <code>{"type":"string"}</code> | Existing solid Body from which the box is removed. |
+| size | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> | Positive x/y/z lengths of the cutting box, each with length units. |
+| at | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> | Global x/y/z coordinates of the cutting box minimum corner. |
+| cmd | yes | <code>{"type":"string","const":"geometry.subtractBox"}</code> | Registered Command identifier; use &#96;geometry.subtractBox&#96; to select this operation. |
 
 <a id="commands-journal-redo"></a>
 
@@ -471,8 +475,8 @@ re-solves. Not recorded in the Journal; any new Command after an undo clears the
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| steps | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"journal.redo"}</code> |  |
+| steps | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Number of undone Commands to reapply; omitted means 1. |
+| cmd | yes | <code>{"type":"string","const":"journal.redo"}</code> | Registered Command identifier; use &#96;journal.redo&#96; to select this operation. |
 
 <a id="commands-journal-undo"></a>
 
@@ -485,9 +489,9 @@ nothing is undone. Use this guard for a saved turn boundary while other callers 
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| steps | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| expectedJournal | no | <code>{"type":["string","null"]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"journal.undo"}</code> |  |
+| steps | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Number of latest Commands to undo; omitted means 1. |
+| expectedJournal | no | <code>{"type":["string","null"]}</code> | Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches it. |
+| cmd | yes | <code>{"type":"string","const":"journal.undo"}</code> | Registered Command identifier; use &#96;journal.undo&#96; to select this operation. |
 
 <a id="commands-load-convection"></a>
 
@@ -499,11 +503,11 @@ so a heat Step with a convection face needs no fixed temperature to be well pose
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| h | yes | <code>{"$ref":"#/$defs/Q_heat_transfer_coefficient"}</code> |  |
-| tInf | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.convection"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Convection Load name to create or replace, for listing in a heat Step. |
+| on | yes | <code>{"type":"string"}</code> | Face Set exchanging heat with its surroundings. |
+| h | yes | <code>{"$ref":"#/$defs/Q_heat_transfer_coefficient"}</code> | Positive heat-transfer coefficient with units such as W/(m^2 K). |
+| tInf | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> | Surrounding fluid temperature with temperature units, used in h times the surface-to-fluid temperature difference. |
+| cmd | yes | <code>{"type":"string","const":"load.convection"}</code> | Registered Command identifier; use &#96;load.convection&#96; to select this operation. |
 
 <a id="commands-load-force"></a>
 
@@ -514,10 +518,10 @@ singular stresses near the node; prefer load.traction on a face unless you mean 
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_force"},"minItems":3,"maxItems":3}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.force"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Load name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Node Set over which the force is split equally. |
+| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_force"},"minItems":3,"maxItems":3}</code> | Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units. |
+| cmd | yes | <code>{"type":"string","const":"load.force"}</code> | Registered Command identifier; use &#96;load.force&#96; to select this operation. |
 
 <a id="commands-load-gravity"></a>
 
@@ -529,9 +533,9 @@ apply gravity with their lumped inertia (m_i g); static Steps use consistent bod
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| g | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_acceleration"},"minItems":3,"maxItems":3}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.gravity"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Acceleration Load name to create or replace, for listing in a Step. |
+| g | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_acceleration"},"minItems":3,"maxItems":3}</code> | Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires Material density. |
+| cmd | yes | <code>{"type":"string","const":"load.gravity"}</code> | Registered Command identifier; use &#96;load.gravity&#96; to select this operation. |
 
 <a id="commands-load-heatFlux"></a>
 
@@ -542,10 +546,10 @@ face needs no Command at all: zero flux is what a face with no boundary conditio
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| q | yes | <code>{"$ref":"#/$defs/Q_heat_flux"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.heatFlux"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Heat-flux Load name to create or replace, for listing in a heat Step. |
+| on | yes | <code>{"type":"string"}</code> | Face Set receiving the prescribed heat flux. |
+| q | yes | <code>{"$ref":"#/$defs/Q_heat_flux"}</code> | Heat input per unit area with units such as W/m^2; negative removes heat. |
+| cmd | yes | <code>{"type":"string","const":"load.heatFlux"}</code> | Registered Command identifier; use &#96;load.heatFlux&#96; to select this operation. |
 
 <a id="commands-load-heatSource"></a>
 
@@ -558,10 +562,10 @@ for a plane-stress Sheet, the volume includes its specified thickness.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| q | yes | <code>{"$ref":"#/$defs/Q_heat_source"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.heatSource"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Heat-source Load name to create or replace, for listing in a heat Step. |
+| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> | Body names receiving the volumetric source, including implicit mesher Bodies. |
+| q | yes | <code>{"$ref":"#/$defs/Q_heat_source"}</code> | Heat input per unit volume with units such as W/m^3; total power is this density times Body volume. |
+| cmd | yes | <code>{"type":"string","const":"load.heatSource"}</code> | Registered Command identifier; use &#96;load.heatSource&#96; to select this operation. |
 
 <a id="commands-load-moment"></a>
 
@@ -575,10 +579,10 @@ Model's torque unit ("5 kN m").
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_torque"},"minItems":3,"maxItems":3}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.moment"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Load name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Node Set of beam joints carrying rotational degrees of freedom. |
+| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_torque"},"minItems":3,"maxItems":3}</code> | Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units. |
+| cmd | yes | <code>{"type":"string","const":"load.moment"}</code> | Registered Command identifier; use &#96;load.moment&#96; to select this operation. |
 
 <a id="commands-load-pressure"></a>
 
@@ -587,13 +591,15 @@ Model's torque unit ("5 kN m").
 Uniform pressure on a face Set, positive into the surface (a negative value pulls).
 Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
 force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
+Shell pressureArea measures the original midsurface; physical curved shell face loads
+include the Section's top/bottom offsets.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| value | yes | <code>{"$ref":"#/$defs/Q_stress"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.pressure"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Load name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Face Set receiving the pressure. |
+| value | yes | <code>{"$ref":"#/$defs/Q_stress"}</code> | Pressure with stress units; positive acts into the surface and negative pulls outward. |
+| cmd | yes | <code>{"type":"string","const":"load.pressure"}</code> | Registered Command identifier; use &#96;load.pressure&#96; to select this operation. |
 
 <a id="commands-load-radiation"></a>
 
@@ -612,11 +618,11 @@ that runs out of them fails with solve.diverged rather than returning a wrong an
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| emissivity | yes | <code>{"type":"number","format":"double"}</code> |  |
-| tInf | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.radiation"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Radiation Load name to create or replace, for listing in a heat Step. |
+| on | yes | <code>{"type":"string"}</code> | Face Set radiating to the specified surroundings. |
+| emissivity | yes | <code>{"type":"number","format":"double"}</code> | Dimensionless surface emissivity in (0, 1]; 1 is a black body. |
+| tInf | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> | Surrounding absolute temperature with temperature units; converted to kelvin for the fourth-power radiation law. |
+| cmd | yes | <code>{"type":"string","const":"load.radiation"}</code> | Registered Command identifier; use &#96;load.radiation&#96; to select this operation. |
 
 <a id="commands-load-remove"></a>
 
@@ -627,8 +633,8 @@ first. Removing a load makes existing Results of that Step stale.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.remove"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Existing Load to remove; Steps must stop referencing it first. |
+| cmd | yes | <code>{"type":"string","const":"load.remove"}</code> | Registered Command identifier; use &#96;load.remove&#96; to select this operation. |
 
 <a id="commands-load-temperature"></a>
 
@@ -645,11 +651,11 @@ references still apply, with 293.15 K on Bodies without a temperature Load.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
-| reference | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.temperature"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Thermal-strain Load name to create or replace, for listing in a structural Step. |
+| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> | Body names receiving the temperature/reference assignment, including implicit mesher Bodies. |
+| value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> | Uniform temperature with temperature units; inherited heat Results replace this value when the Step continues a heat Step. |
+| reference | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> | Stress-free reference temperature with temperature units; omitted means 293.15 K. |
+| cmd | yes | <code>{"type":"string","const":"load.temperature"}</code> | Registered Command identifier; use &#96;load.temperature&#96; to select this operation. |
 
 <a id="commands-load-torque"></a>
 
@@ -662,10 +668,10 @@ idealisation with twist this is `unsupported`; enable it with model.setIdealisat
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| total | yes | <code>{"$ref":"#/$defs/Q_torque"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.torque"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Torque Load name to create or replace, for listing in an axisymmetric Step with twist. |
+| on | yes | <code>{"type":"string"}</code> | Face Set receiving the circumferential traction. |
+| total | yes | <code>{"$ref":"#/$defs/Q_torque"}</code> | Resultant torque about the symmetry axis, with torque units; the radial traction distribution preserves this total. |
+| cmd | yes | <code>{"type":"string","const":"load.torque"}</code> | Registered Command identifier; use &#96;load.torque&#96; to select this operation. |
 
 <a id="commands-load-traction"></a>
 
@@ -676,18 +682,22 @@ face"). Use this instead of nodal forces on solids: point loads give singular st
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| on | yes | <code>{"type":"string"}</code> |  |
-| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_force"},"minItems":3,"maxItems":3}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"load.traction"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Load name to create or replace, for listing in a Step. |
+| on | yes | <code>{"type":"string"}</code> | Face Set over which the resultant is distributed by area. |
+| total | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_force"},"minItems":3,"maxItems":3}</code> | Total global x/y/z force on the entire Set, each component with force units. |
+| cmd | yes | <code>{"type":"string","const":"load.traction"}</code> | Registered Command identifier; use &#96;load.traction&#96; to select this operation. |
 
 <a id="commands-material-add"></a>
 
 ### material.add
 
-Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
-ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one
-of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
+Define a Material: elastic stiffness is either isotropic, by Young's modulus `E` and
+Poisson's ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — never
+both. A heat-only Material omits both stiffness forms and gives positive conductivity
+`k`; `rho` and `cp`, when stated, must also be positive and are required by heat-transient.
+Heat-only Materials may retain `alpha` and `yield` for later structural use; `plasticity`
+requires isotropic stiffness, and mechanical Steps require elastic stiffness.
+`orientation` turns the material axes (wood grain, fibre direction, rolling
 direction) away from the global axes; without it they are the global axes. Density `rho`
 is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
 heat transfer; `source` records where the numbers came from. `yield` is the yield
@@ -698,32 +708,34 @@ with an existing name edits the material in place, so an omitted `orientation` o
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
-| nu | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}]}</code> |  |
-| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}]}</code> |  |
-| rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}]}</code> |  |
-| alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}]}</code> |  |
-| k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}]}</code> |  |
-| cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}]}</code> |  |
-| yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
-| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}]}</code> |  |
-| source | no | <code>{"type":["string","null"]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"material.add"}</code> |  |
+| name | yes | <code>{"type":"string","x-physics":"common"}</code> | Unique Material name; reusing a name replaces its full definition. |
+| E | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}],"x-physics":"stiffness"}</code> | Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness. |
+| nu | no | <code>{"type":["number","null"],"format":"double","x-physics":"stiffness"}</code> | Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness. |
+| orthotropic | no | <code>{"anyOf":[{"$ref":"#/$defs/Orthotropic"},{"type":"null"}],"x-physics":"anisotropy"}</code> | Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition. |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Orientation"},{"type":"null"}],"x-physics":"anisotropy"}</code> | Rotation of the Material axes from global axes; omitted means the global axes. |
+| rho | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_density"},{"type":"null"}],"x-physics":"mass"}</code> | Mass density for gravity, inertia and transient heat capacity. |
+| alpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_thermal_expansion"},{"type":"null"}],"x-physics":"expansion"}</code> | Isotropic thermal expansion per temperature change; use this or orthotropic.alpha. |
+| k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}],"x-physics":"thermal"}</code> | Isotropic thermal conductivity for heat conduction; use this or orthotropic.k. |
+| cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}],"x-physics":"thermal"}</code> | Specific heat per unit mass for transient heat conduction; used with rho. |
+| yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}],"x-physics":"plasticity"}</code> | Initial yield stress for plasticity and the reported safety factor. |
+| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}],"x-physics":"plasticity"}</code> | J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu. |
+| source | no | <code>{"type":["string","null"],"x-physics":"common"}</code> | Source or reference for these property values, retained with the Material. |
+| cmd | yes | <code>{"type":"string","const":"material.add"}</code> | Registered Command identifier; use &#96;material.add&#96; to select this operation. |
 
 <a id="commands-material-assign"></a>
 
 ### material.assign
 
-Assign a Material to one or more Bodies. Every Body needs a Material before solving;
-a Body without one is reported by query.model and blocks solve.run.
+Assign a Material to one or more Bodies. Imported element regions are editable Bodies;
+assigning the source owner supplies their default, while region assignments override it.
+Every element-owning Body needs a Material before solving; a missing assignment is
+reported by query.model and blocks solve.run.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| material | yes | <code>{"type":"string"}</code> |  |
-| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"material.assign"}</code> |  |
+| material | yes | <code>{"type":"string"}</code> | Existing Material name whose properties the target Bodies will use. |
+| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> | Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher. |
+| cmd | yes | <code>{"type":"string","const":"material.assign"}</code> | Registered Command identifier; use &#96;material.assign&#96; to select this operation. |
 
 <a id="commands-material-remove"></a>
 
@@ -734,8 +746,8 @@ that still use it; assign them another Material first with material.assign.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"material.remove"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Existing unassigned Material to remove; retarget its Bodies first if it is in use. |
+| cmd | yes | <code>{"type":"string","const":"material.remove"}</code> | Registered Command identifier; use &#96;material.remove&#96; to select this operation. |
 
 <a id="commands-mesh-export"></a>
 
@@ -748,12 +760,14 @@ point data — displacement, reaction, stress and von Mises — so ParaView colo
 Result fields require the Model state they were solved on; `result.stale` means run
 `solve.run` on that Step again before exporting it with the current Mesh.
 `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
+`inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading
+returns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| format | yes | <code>{"$ref":"#/$defs/ExportFormat"}</code> |  |
-| step | no | <code>{"type":["string","null"]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"mesh.export"}</code> |  |
+| format | yes | <code>{"$ref":"#/$defs/ExportFormat"}</code> | Output format for the host to save, such as vtu, msh, inp, stl or report. |
+| step | no | <code>{"type":["string","null"]}</code> | Step whose current Result fields are included for vtu or whose calculation note is exported for report; mesh-only formats ignore it. |
+| cmd | yes | <code>{"type":"string","const":"mesh.export"}</code> | Registered Command identifier; use &#96;mesh.export&#96; to select this operation. |
 
 <a id="commands-mesh-set"></a>
 
@@ -761,9 +775,13 @@ Result fields require the Model state they were solved on; `result.stale` means 
 
 Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
+`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
+strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
+retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
 `formulation: full` is the textbook linear element that locks in bending: keep the
-default incompatible modes or use order 2 when bending matters. Mapped geometry owns
-a Body name distinct from explicit geometry. Keeping that name preserves its material;
+default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
+owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
+Keeping that name preserves its material;
 changing/removing it requires no remaining Body references and clears its material.
 Use model.rename to change an implicit Body name while preserving its references.
 `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
@@ -771,16 +789,19 @@ Use model.rename to change an implicit Body name while preserving its references
 geometry: the selected mesher still determines the boundary approximation, and the `tet`
 mesher is the one that meshes a curved solid freely. `formulation` has no effect when
 `simplices` is true, or under the `tet` mesher, because simplex elements have no
-incompatible modes.
+incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
+default to full integration, and require solid3d, no simplex split/refinement.
+Their element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.
+Removing or emptying a referenced imported Set fails without mutation.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| mesher | yes | <code>{"$ref":"#/$defs/MesherSpec"}</code> |  |
-| order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
-| formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> |  |
-| simplices | no | <code>{"type":["boolean","null"]}</code> |  |
+| mesher | yes | <code>{"$ref":"#/$defs/MesherSpec"}</code> | Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and Sets. |
+| order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> | Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1. Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order. |
+| formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> | Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for imported sources. Simplex elements ignore this setting. |
+| simplices | no | <code>{"type":["boolean","null"]}</code> | Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and imported sources require false. |
 | refinement | no | <code>{"anyOf":[{"$ref":"#/$defs/LocalRefinementSpec"},{"type":"null"}]}</code> | Optional local size field on the resulting linear simplex mesh. A new mesh.set replaces this field; omit it to return to the base mesh. |
-| cmd | yes | <code>{"type":"string","const":"mesh.set"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"mesh.set"}</code> | Registered Command identifier; use &#96;mesh.set&#96; to select this operation. |
 
 <a id="commands-model-duplicate"></a>
 
@@ -791,13 +812,14 @@ copy references the same Constraints and Loads. Useful for "the same load case b
 twice the pressure": duplicate, then re-issue the create Command with the new value.
 A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
 slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
+A Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
-| name | yes | <code>{"type":"string"}</code> |  |
-| as | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"model.duplicate"}</code> |  |
+| kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> | Kind of existing object to copy. |
+| name | yes | <code>{"type":"string"}</code> | Existing object to copy, identified within its kind. |
+| as | yes | <code>{"type":"string"}</code> | Unused name for the copy; a copied Step keeps references to the original Constraints and Loads. |
+| cmd | yes | <code>{"type":"string","const":"model.duplicate"}</code> | Registered Command identifier; use &#96;model.duplicate&#96; to select this operation. |
 
 <a id="commands-model-new"></a>
 
@@ -809,9 +831,9 @@ at the start, never to "reset" mid-way (use journal.undo for that).
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| description | no | <code>{"type":["string","null"]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"model.new"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Display name of the new empty Model. |
+| description | no | <code>{"type":["string","null"]}</code> | Optional Model description or modelling assumptions retained with the Model. |
+| cmd | yes | <code>{"type":"string","const":"model.new"}</code> | Registered Command identifier; use &#96;model.new&#96; to select this operation. |
 
 <a id="commands-model-rename"></a>
 
@@ -819,15 +841,17 @@ at the start, never to "reset" mid-way (use journal.undo for that).
 
 Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
 rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+already exists in that kind. Bodies and Sets also share the geometry namespace with
+cuts and point masses, so their new name cannot shadow any geometry owner.
+Mapped and swept mapped Bodies also rename their mesher
 geometry, named Face/Body-region selectors and material association.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
-| name | yes | <code>{"type":"string"}</code> |  |
-| to | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"model.rename"}</code> |  |
+| kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> | Kind of existing object to rename, such as Body, Material, Constraint, Load or Step. |
+| name | yes | <code>{"type":"string"}</code> | Current name of the object of this kind. |
+| to | yes | <code>{"type":"string"}</code> | Unused new name; references to the object are updated together. |
+| cmd | yes | <code>{"type":"string","const":"model.rename"}</code> | Registered Command identifier; use &#96;model.rename&#96; to select this operation. |
 
 <a id="commands-model-setIdealisation"></a>
 
@@ -839,8 +863,8 @@ solid bodies; mixing them makes the Model ill-posed.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| idealisation | yes | <code>{"$ref":"#/$defs/IdealisationSpec"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"model.setIdealisation"}</code> |  |
+| idealisation | yes | <code>{"$ref":"#/$defs/IdealisationSpec"}</code> | Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible with the Bodies. |
+| cmd | yes | <code>{"type":"string","const":"model.setIdealisation"}</code> | Registered Command identifier; use &#96;model.setIdealisation&#96; to select this operation. |
 
 <a id="commands-model-setName"></a>
 
@@ -852,8 +876,8 @@ change the Result-validity fingerprint. Whitespace-only names are rejected.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"model.setName"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | New nonblank display name; preserves geometry and current Results. |
+| cmd | yes | <code>{"type":"string","const":"model.setName"}</code> | Registered Command identifier; use &#96;model.setName&#96; to select this operation. |
 
 <a id="commands-model-setUnits"></a>
 
@@ -861,12 +885,14 @@ change the Result-validity fingerprint. Whitespace-only names are rejected.
 
 Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
 stays SI and every input may still use any unit of the right dimension; this only
-changes how values are reported back.
+changes how values are reported back. A scalar that cannot fit in the selected unit
+produces `unit.display` when queried or reported, without altering its stored SI data.
+Choose larger or SI display units to read it; formatting never silently changes units.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| units | yes | <code>{"$ref":"#/$defs/UnitSet"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"model.setUnits"}</code> |  |
+| units | yes | <code>{"$ref":"#/$defs/UnitSet"}</code> | Display units used by Queries and the UI; physical inputs still carry their own units and storage stays SI. |
+| cmd | yes | <code>{"type":"string","const":"model.setUnits"}</code> | Registered Command identifier; use &#96;model.setUnits&#96; to select this operation. |
 
 <a id="commands-plugin-load"></a>
 
@@ -878,12 +904,12 @@ content hash. Not available yet: returns unsupported until the plugin phase land
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| kind | yes | <code>{"$ref":"#/$defs/PluginKind"}</code> |  |
-| language | yes | <code>{"$ref":"#/$defs/PluginLanguage"}</code> |  |
-| source | yes | <code>{"$ref":"#/$defs/PluginSource"}</code> |  |
-| manifest | no | <code>{}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"plugin.load"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Plugin name under which the extension is registered. |
+| kind | yes | <code>{"$ref":"#/$defs/PluginKind"}</code> | Extension Point implemented by this Plugin, such as a Material law, Element or Mesher. |
+| language | yes | <code>{"$ref":"#/$defs/PluginLanguage"}</code> | Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm. |
+| source | yes | <code>{"$ref":"#/$defs/PluginSource"}</code> | Inline Plugin code or a URL plus the required content hash, retained for reproducible loading. |
+| manifest | no | <code>{}</code> | Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported stub. |
+| cmd | yes | <code>{"type":"string","const":"plugin.load"}</code> | Registered Command identifier; use &#96;plugin.load&#96; to select this operation. |
 
 <a id="commands-section-add"></a>
 
@@ -898,15 +924,17 @@ edits the section in place. Assign it to Bodies with section.assign.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| shape | yes | <code>{"$ref":"#/$defs/SectionSpec"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"section.add"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Section name; reusing it replaces the cross-section or shell definition. |
+| shape | yes | <code>{"$ref":"#/$defs/SectionSpec"}</code> | Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies. |
+| cmd | yes | <code>{"type":"string","const":"section.add"}</code> | Registered Command identifier; use &#96;section.add&#96; to select this operation. |
 
 <a id="commands-section-assign"></a>
 
 ### section.assign
 
-Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;
+Assign a Section to one or more Bodies, including imported element regions. A region
+overrides the source owner Section; an unassigned region inherits that default.
+Every line or shell Body needs a Section before solving;
 one without it is reported by query.model warnings and blocks solve.run with
 model.no-section. A shell needs a shell thickness section, a line member needs a
 cross-section, and a solid gets its section from its geometry. `orientation` names the global
@@ -922,10 +950,10 @@ Without it ply angles use the midsurface's first parametric direction.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| section | yes | <code>{"type":"string"}</code> |  |
-| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Axis"},{"type":"null"}]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"section.assign"}</code> |  |
+| section | yes | <code>{"type":"string"}</code> | Existing Section name to assign. |
+| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> | Line or shell Body names that will use this Section. |
+| orientation | no | <code>{"anyOf":[{"$ref":"#/$defs/Axis"},{"type":"null"}]}</code> | Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the documented geometry-based convention. |
+| cmd | yes | <code>{"type":"string","const":"section.assign"}</code> | Registered Command identifier; use &#96;section.assign&#96; to select this operation. |
 
 <a id="commands-section-remove"></a>
 
@@ -936,8 +964,8 @@ that still use it; assign them another Section first with section.assign.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"section.remove"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Existing unassigned Section to remove; retarget its Bodies first if it is in use. |
+| cmd | yes | <code>{"type":"string","const":"section.remove"}</code> | Registered Command identifier; use &#96;section.remove&#96; to select this operation. |
 
 <a id="commands-solve-run"></a>
 
@@ -953,16 +981,23 @@ Direct linear solves verify their residual too: nonfinite or excessive residuals
 solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
 (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
 direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+Modal solves verify every requested eigenpair's normwise backward residual against
+`tolerance` and return solve.stalled without storing a Result when `maxIterations`
+subspace sweeps are exhausted. The reported residual is the largest requested-pair
+residual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.
+Resolved Ritz values must also stabilize to relative change 1e-10. Values unresolved
+at the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency
+warnings; their backward residual passed, but relative frequency convergence is not certified.
 On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
 assembly and triangular solves retain the engine thread count.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| step | yes | <code>{"type":"string"}</code> |  |
-| solver | no | <code>{"anyOf":[{"$ref":"#/$defs/Solver"},{"type":"null"}]}</code> |  |
-| tolerance | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"solve.run"}</code> |  |
+| step | yes | <code>{"type":"string"}</code> | Existing Step to solve; its procedure, active Constraints and Loads define the problem. |
+| solver | no | <code>{"anyOf":[{"$ref":"#/$defs/Solver"},{"type":"null"}]}</code> | Linear solver implementation; omitted means auto, which selects an available compatible backend. |
+| tolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence. |
+| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000. A modal budget must be greater than zero. |
+| cmd | yes | <code>{"type":"string","const":"solve.run"}</code> | Registered Command identifier; use &#96;solve.run&#96; to select this operation. |
 
 <a id="commands-step-add"></a>
 
@@ -975,7 +1010,10 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress, and a modal Step after a static one
 picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
 which is what a tensioned or preloaded member needs. The remaining fields belong to one
-procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+procedure each and are ignored by the others. Each field declares `x-procedures` in the
+schema (`*` means common to every procedure), so hosts can present the selected procedure
+without discarding values when it changes. The Procedure enum declares material inputs
+and result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`
 alone (default 1) to buckling, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
 `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
@@ -1003,6 +1041,14 @@ A static-nonlinear Step always steps, over `increments` equal pieces of the same
 pseudo-time, and keeps every converged one.
 Heat-steady requires a finite positive material conductivity `k`; heat-transient also
 requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
+`query.model` checks each Step's active Constraints/Loads and assigned Materials:
+static, static-nonlinear and buckling need mechanical supports; steady heat needs a
+prescribed temperature or an ambient convection/radiation boundary. Free-free modal
+and unconstrained dynamics are valid, and transient heat may be insulated. These
+pre-mesh warnings identify missing inputs; only the resolved solve can establish that
+every connected component is restrained and every selected Set contains nodes.
+Step-specific warnings carry their exact `step` identity separately from the display
+location in `where`, so hosts can scope blockers without parsing names or prose.
 `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
 on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
 Step that is linear.
@@ -1024,37 +1070,37 @@ amplitude at the frequency of peak response. Its Constraints may only hold DOFs 
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| procedure | yes | <code>{"$ref":"#/$defs/Procedure"}</code> |  |
-| constraints | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| loads | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| output | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Field"}}</code> |  |
-| after | no | <code>{"type":["string","null"]}</code> |  |
-| nModes | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| shift | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Maximum time increment of a heat-transient Step, or of a static Step with an amplitude. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
-| tEnd | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> |  |
-| theta | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| outputEvery | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
-| amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
-| initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
-| alpha | no | <code>{"type":["number","null"],"format":"double"}</code> | HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark average acceleration, no numerical damping); -0.05 is the usual choice when the mesh-frequency ringing of a sudden load should die out. |
-| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Mass-proportional Rayleigh damping α of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = α / (2ω)&#96;, most of it at low frequency). Default "0 Hz"; must be non-negative, e.g. "0.5 1/s". |
-| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Stiffness-proportional Rayleigh damping β of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = βω / 2&#96;, most of it at high frequency). Default "0 s"; must be non-negative, e.g. "1e-5 s". |
-| initialVelocity | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/InitialVelocitySpec"}}</code> | Initial velocities of an explicit or implicit Step, one uniform vector per Set of nodes; nodes in no entry start from rest. |
-| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
-| maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
-| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
-| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
-| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | First frequency of a harmonic sweep, e.g. "1 Hz". |
-| fStop | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Last frequency of a harmonic sweep; must be above fStart. |
-| points | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | How many frequencies the sweep evaluates, including both endpoints. At least 2. |
-| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}]}</code> | Frequency spacing of a harmonic sweep; default linear. |
-| dampingRatio | no | <code>{"type":["number","null"],"format":"double"}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused together with &#96;dampingRatios&#96; on the same Step. |
-| dampingRatios | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"}}</code> | Per-mode modal damping ratios &#96;[ζ₁, ζ₂, …]&#96; of a harmonic Step, e.g. &#96;[0.01, 0.02]&#96; for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past the end of the list holds the last entry, so a two-entry list on a five-mode basis gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly like &#96;dampingRatio&#96;. Refused together with &#96;dampingRatio&#96; on the same Step. |
-| psd | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/PsdPoint"}}</code> | One-sided PSD table for randomVibration. All Loads form one spatial pattern multiplied by the same zero-mean stationary random process. Use density "1 s" (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots, &#96;after&#96; naming a solved modal Step, identical constraints, and positive damping. Outputs are componentwise standard deviations, never a signed equilibrium state. |
-| cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
+| name | yes | <code>{"type":"string","x-procedures":["*"]}</code> | Analysis Step name; reusing it replaces the Step definition. |
+| procedure | yes | <code>{"$ref":"#/$defs/Procedure","x-procedures":["*"]}</code> | Analysis procedure to execute; its schema metadata identifies supported settings, required material physics and result fields. |
+| constraints | yes | <code>{"type":"array","items":{"type":"string"},"x-procedures":["*"]}</code> | Names of Constraints and mechanical Contacts active in this Step; an empty list activates none. |
+| loads | yes | <code>{"type":"array","items":{"type":"string"},"x-procedures":["*"]}</code> | Names of Loads active in this Step; an empty list activates none. |
+| output | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Field"},"x-procedures":["*"]}</code> | Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and reactions for static analysis. |
+| after | no | <code>{"type":["string","null"],"x-procedures":["*"]}</code> | Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a modal basis. |
+| nModes | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["modal","buckling"]}</code> | Number of requested modes or buckling factors; omitted means six for modal or one for buckling. |
+| shift | no | <code>{"type":["number","null"],"format":"double","x-procedures":["modal"]}</code> | Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift. |
+| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}],"x-procedures":["static","heat-transient","implicit"]}</code> | Maximum time increment of a heat-transient Step, or of a static Step with an amplitude. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
+| tEnd | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}],"x-procedures":["static","static-nonlinear","heat-transient","explicit","implicit"]}</code> | Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and static-nonlinear nominal time defaults to 1 s. |
+| theta | no | <code>{"type":["number","null"],"format":"double","x-procedures":["heat-transient"]}</code> | Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward Euler. |
+| outputEvery | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static","heat-transient","explicit","implicit","harmonic"]}</code> | Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is retained. |
+| dtFactor | no | <code>{"type":["number","null"],"format":"double","x-procedures":["explicit"]}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
+| amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}],"x-procedures":["static","static-nonlinear","heat-transient","implicit"]}</code> | Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values. |
+| initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}],"x-procedures":["heat-transient"]}</code> | Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K. |
+| alpha | no | <code>{"type":["number","null"],"format":"double","x-procedures":["implicit"]}</code> | HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark average acceleration, no numerical damping); -0.05 is the usual choice when the mesh-frequency ringing of a sudden load should die out. |
+| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["implicit","harmonic","randomVibration"]}</code> | Mass-proportional Rayleigh damping α of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = α / (2ω)&#96;, most of it at low frequency). Default "0 Hz"; must be non-negative, e.g. "0.5 1/s". |
+| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}],"x-procedures":["implicit","harmonic","randomVibration"]}</code> | Stiffness-proportional Rayleigh damping β of &#96;C = αM + βK&#96;, read by an implicit Step (directly) and a harmonic one (as &#96;ζ = βω / 2&#96;, most of it at high frequency). Default "0 s"; must be non-negative, e.g. "1e-5 s". |
+| initialVelocity | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/InitialVelocitySpec"},"x-procedures":["explicit","implicit"]}</code> | Initial velocities of an explicit or implicit Step, one uniform vector per Set of nodes; nodes in no entry start from rest. |
+| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear"]}</code> | Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
+| maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear"]}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
+| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double","x-procedures":["static-nonlinear","heat-steady","heat-transient"]}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
+| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear","heat-steady","heat-transient"]}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
+| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing. |
+| fStop | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Last frequency of a harmonic sweep; must be above fStart. |
+| points | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["harmonic"]}</code> | How many frequencies the sweep evaluates, including both endpoints. At least 2. |
+| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates logarithms of positive finite endpoints without forming their ratio. Both endpoints remain exact; frequencies can repeat when spacing is below f64 resolution. |
+| dampingRatio | no | <code>{"type":["number","null"],"format":"double","x-procedures":["harmonic","randomVibration"]}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused together with &#96;dampingRatios&#96; on the same Step. |
+| dampingRatios | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"},"x-procedures":["harmonic","randomVibration"]}</code> | Per-mode modal damping ratios &#96;[ζ₁, ζ₂, …]&#96; of a harmonic Step, e.g. &#96;[0.01, 0.02]&#96; for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past the end of the list holds the last entry, so a two-entry list on a five-mode basis gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly like &#96;dampingRatio&#96;. Refused together with &#96;dampingRatio&#96; on the same Step. |
+| psd | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/PsdPoint"},"x-procedures":["randomVibration"]}</code> | One-sided PSD table for randomVibration. All Loads form one spatial pattern multiplied by the same zero-mean stationary random process. Use density "1 s" (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots, &#96;after&#96; naming a solved modal Step, identical constraints, and positive damping. Outputs are componentwise standard deviations, never a signed equilibrium state. |
+| cmd | yes | <code>{"type":"string","const":"step.add"}</code> | Registered Command identifier; use &#96;step.add&#96; to select this operation. |
 
 <a id="commands-step-remove"></a>
 
@@ -1066,8 +1112,8 @@ Step names it in `after`; re-issue that dependent Step without the reference fir
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| name | yes | <code>{"type":"string"}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"step.remove"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> | Existing Step to remove; dependent Steps must stop referencing it in after first. |
+| cmd | yes | <code>{"type":"string","const":"step.remove"}</code> | Registered Command identifier; use &#96;step.remove&#96; to select this operation. |
 
 <a id="commands-step-reorder"></a>
 
@@ -1079,8 +1125,8 @@ later Step may inherit state (a temperature field) from an earlier one.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| order | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"step.reorder"}</code> |  |
+| order | yes | <code>{"type":"array","items":{"type":"string"}}</code> | Every Step name exactly once in execution order, keeping each Step after its named prerequisite. |
+| cmd | yes | <code>{"type":"string","const":"step.reorder"}</code> | Registered Command identifier; use &#96;step.reorder&#96; to select this operation. |
 
 <a id="commands-study-adapt"></a>
 
@@ -1099,13 +1145,13 @@ maxElements or cancellation rolls back the entire Command.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| step | yes | <code>{"type":"string"}</code> |  |
-| targetError | yes | <code>{"type":"number","format":"double"}</code> |  |
-| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| maxElements | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| step | yes | <code>{"type":"string"}</code> | Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after dependency. |
+| targetError | yes | <code>{"type":"number","format":"double"}</code> | Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a certified bound. |
+| maxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Maximum adaptive solve passes in 1..=100; omitted means 8. |
+| maxElements | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the Command. |
 | markingFraction | no | <code>{"type":["number","null"],"format":"double"}</code> | Fraction of squared error selected by bulk marking; default 0.5. |
 | refinements | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"$ref":"#/$defs/SizeBoxSpec"}}}</code> | Recorded refinement regions per iteration. Omit for a new study. The engine fills this in its Journal so replay follows the original choices; opening with skipped solves applies the same regions without solving. |
-| cmd | yes | <code>{"type":"string","const":"study.adapt"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"study.adapt"}</code> | Registered Command identifier; use &#96;study.adapt&#96; to select this operation. |
 
 <a id="commands-study-converge"></a>
 
@@ -1125,11 +1171,11 @@ dependencies and target at each mesh explicitly.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
-| step | yes | <code>{"type":"string"}</code> |  |
-| sizes | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"}}</code> |  |
-| quantity | yes | <code>{"$ref":"#/$defs/QuantityOfInterest"}</code> |  |
-| restore | no | <code>{"type":["boolean","null"]}</code> |  |
-| cmd | yes | <code>{"type":"string","const":"study.converge"}</code> |  |
+| step | yes | <code>{"type":"string"}</code> | Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency solves instead. |
+| sizes | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"}}</code> | Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and convergence rate. |
+| quantity | yes | <code>{"$ref":"#/$defs/QuantityOfInterest"}</code> | Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe location. |
+| restore | no | <code>{"type":["boolean","null"]}</code> | Whether to restore the original mesh settings after the study; omitted means true, while false retains the final solved mesh and Result. |
+| cmd | yes | <code>{"type":"string","const":"study.converge"}</code> | Registered Command identifier; use &#96;study.converge&#96; to select this operation. |
 
 ### Commands definitions
 
@@ -1669,6 +1715,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Full integration: the textbook linear element, which locks in bending.",
       "type": "string",
       "const": "full"
+    },
+    {
+      "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+      "type": "string",
+      "const": "mean-dilatation"
     }
   ]
 }
@@ -1769,6 +1820,216 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind"
       ]
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedElement</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "description": "Positive original element label, at most 999999999.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "kind": {
+      "$ref": "#/$defs/ImportedElementKind"
+    },
+    "nodes": {
+      "description": "Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "kind",
+    "nodes"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedElementKind</summary>
+
+```json
+{
+  "description": "Authored 3D solid families; interpolation and source connectivity are retained.\nHex8 uses the explicit mesh formulation; other kinds retain standard full integration.",
+  "type": "string",
+  "enum": [
+    "tet4",
+    "hex8",
+    "tet10",
+    "hex20"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedEntityIdentity</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sourceLabel": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "instance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "part": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sourceLabel"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedFace</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "element": {
+      "description": "Original element label.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "face": {
+      "description": "Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "element",
+    "face"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedNodeSpec</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "description": "Positive original node label, at most 999999999.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "at": {
+      "description": "Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "at"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedProvenance</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sha256": {
+      "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
+      "type": "string"
+    },
+    "conversionVersion": {
+      "type": "string"
+    },
+    "sourceFiles": {
+      "description": "Immutable supplied-file manifest; paths are relative names, never host file handles.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "sourceName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nodeIdentities": {
+      "description": "Original assembly identities keyed by the persistent global source label.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^\\d+$": {
+          "$ref": "#/$defs/ImportedEntityIdentity"
+        }
+      }
+    },
+    "elementIdentities": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^\\d+$": {
+          "$ref": "#/$defs/ImportedEntityIdentity"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sha256",
+    "conversionVersion"
   ]
 }
 ```
@@ -2056,6 +2317,100 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind",
         "patches"
       ]
+    },
+    {
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full\nintegration or explicit mean-dilatation (B-bar). Requires solid3d,\nunchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedNodeSpec"
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedElement"
+          }
+        },
+        "regions": {
+          "description": "Disjoint named element regions. Keys are editable Body identities; memberships use\nauthored element labels. Elements outside regions belong to the source Body.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "nodeSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "elementSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "surfaces": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ImportedFace"
+            }
+          }
+        },
+        "nodeTargets": {
+          "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportedProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "imported"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "body",
+        "nodes",
+        "elements"
+      ]
     }
   ]
 }
@@ -2146,34 +2501,43 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "type": "object",
   "properties": {
     "E1": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E2": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E3": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G12": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G13": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G23": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "nu12": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu13": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu23": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "alpha": {
       "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -2185,7 +2549,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_thermal_expansion"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "expansion"
     },
     "k": {
       "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -2197,7 +2562,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_conductivity"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "thermal"
     }
   },
   "additionalProperties": false,
@@ -2383,57 +2749,242 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Analysis procedures.",
+  "description": "Analysis procedures. The schema declares each procedure's consumed Material properties,\nrequired property groups and produced results for every host. `x-material-needs` names\nalternative stiffness laws as one requirement; `x-material-properties` includes optional\nlaws the procedure can read, rather than claiming all of them are mandatory.",
   "oneOf": [
     {
       "description": "Linear static equilibrium.",
       "type": "string",
-      "const": "static"
+      "const": "static",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness"
+      ]
     },
     {
       "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
       "type": "string",
-      "const": "static-nonlinear"
+      "const": "static-nonlinear",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "yield",
+        "plasticity",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "Cauchy stress",
+        "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "plasticity"
+      ]
     },
     {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.\n\n**Prestressed (stress-stiffened) modal analysis.** Give the Step an `after` naming a\nsolved `static` or `static-nonlinear` Step and it vibrates *about that loaded state*:\nthe stress stiffening of the preload is added to the stiffness, so a guy rope or a\ntensioned tie rings higher, a strut in compression rings lower, and a member loaded to\nits buckling load has a first frequency of zero. Use it whenever the axial force in a\nmember is a large fraction of its Euler load — cable nets, tension rods, preloaded\nbolts, slender bracing — because the unprestressed frequency of such a member is simply\nthe wrong number. Without `after` this is the ordinary modal analysis of the unloaded\nstructure, unchanged.\n\nThe preload Step's own Loads are what does the stiffening; this Step's Loads are\nignored, as they are for any modal Step. `query.result` reports `prestressFrom` naming\nthe Step the stiffening came from. Not available for the axisymmetric idealisation\n(the hoop term of a ring's stress stiffening is not written), and a preload far past the\nbuckling load is refused: past it the structure has no vibration about that state.",
       "type": "string",
-      "const": "modal"
+      "const": "modal",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "natural frequencies",
+        "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening\nthat state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`\nwith the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this\nStep's Loads by `lambda` to get the critical load.\n\nRead the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*\nthe structure buckles, never how far — so never report a displacement from it. A\n**negative** factor is not an error: it means the structure buckles under the *reversed*\nload, which matters if the load can change sign. And the factor is an **upper bound**: it\nignores imperfections, pre-buckling rotation and yielding, so a real column carries less\nthan this predicts. It is not a safety factor; treat it as the ceiling a perfect,\nperfectly elastic structure would reach. Not available for the axisymmetric idealisation,\nand it needs the direct solver: the iteration back-substitutes hundreds of times through\none factorisation, which `cpu-pcg` and `gpu-pcg` do not build.",
       "type": "string",
-      "const": "buckling"
+      "const": "buckling",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness"
+      ],
+      "x-results": [
+        "load factors",
+        "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness"
+      ]
     },
     {
       "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
       "type": "string",
-      "const": "heat-steady"
+      "const": "heat-steady",
+      "x-material-properties": [
+        "k",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "k"
+      ],
+      "x-results": [
+        "T",
+        "reaction power"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
+      ]
     },
     {
       "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
       "type": "string",
-      "const": "heat-transient"
+      "const": "heat-transient",
+      "x-material-properties": [
+        "k",
+        "orthotropic",
+        "rho",
+        "cp"
+      ],
+      "x-material-needs": [
+        "k",
+        "ρ",
+        "cp"
+      ],
+      "x-results": [
+        "T",
+        "reaction power",
+        "stored-energy rate"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
+      ]
     },
     {
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
-      "const": "explicit"
+      "const": "explicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
       "type": "string",
-      "const": "implicit"
+      "const": "implicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
       "type": "string",
-      "const": "harmonic"
+      "const": "harmonic",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "amplitude",
+        "phase",
+        "frequency response"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
       "type": "string",
-      "const": "randomVibration"
+      "const": "randomVibration",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "1σ displacement",
+        "1σ stress"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     }
   ]
 }
@@ -4037,11 +4588,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ## Queries
 
+- [query.abaqusDependencies](#queries-query-abaqusDependencies)
 - [query.capabilities](#queries-query-capabilities)
 - [query.convert](#queries-query-convert)
+- [query.convertAbaqus](#queries-query-convertAbaqus)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
 - [query.difference](#queries-query-difference)
+- [query.document](#queries-query-document)
 - [query.field](#queries-query-field)
 - [query.frame](#queries-query-frame)
 - [query.frames](#queries-query-frames)
@@ -4059,6 +4613,25 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.script](#queries-query-script)
 - [query.set](#queries-query-set)
 - [query.surface](#queries-query-surface)
+
+<a id="queries-query-abaqusDependencies"></a>
+
+### query.abaqusDependencies
+
+Inspect the supplied Abaqus bundle for missing INCLUDE and NODE/ELEMENT INPUT files.
+Uses the same bounded lexer and safe relative-path graph as conversion. This read
+performs no model/physics conversion or file/network I/O; hosts can acquire listed
+files through their captured scoped I/O and repeat until the bundle is complete.
+The actual conversion still rejects missing files and never publishes partial data.
+
+Returns: `AbaqusDependencies`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| text | yes | <code>{"type":"string"}</code> |  |
+| sourceName | no | <code>{"type":["string","null"]}</code> |  |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.abaqusDependencies"}</code> |  |
 
 <a id="queries-query-capabilities"></a>
 
@@ -4079,6 +4652,9 @@ Returns: `Capabilities`.
 
 Convert a quantity to another unit of the same dimension ("2 MPa" to "psi"); an error
 names the dimensions when they differ. Handy for checking inputs before using them.
+Rejects nonfinite values and nonzero scaling that rounds to zero, including input
+scaling before adding a temperature offset. Surviving subnormals, ordinary f64
+rounding and affine zeros (273.15 K to 0 degC) remain valid.
 
 Returns: `Converted`.
 
@@ -4087,6 +4663,43 @@ Returns: `Converted`.
 | quantity | yes | <code>{"$ref":"#/$defs/Quantity"}</code> |  |
 | to | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.convert"}</code> |  |
+
+<a id="queries-query-convertAbaqus"></a>
+
+### query.convertAbaqus
+
+Convert a bounded Abaqus text deck to checked portable Commands without mutating
+the active Model or solving. Explicit positive unitLength and static-mode unitForce
+define source units; coordinates/displacements scale by L, forces by F and stress
+by F/L². Structural instances, labels, exact Sets and surfaces are normalized by
+the typed deck reader. The report records all translated analysis Steps and notes
+recognized requests whose output/increment execution differs from FEM Lab.
+Static mode imports constant isotropic materials and exact nonoverlapping solid
+section regions covering every element, direct or solid symbolic BOUNDARY,
+CLOAD and uniform DLOAD Pn / DSLOAD P pressure. Multiple small-displacement static
+Steps retain effective inherited loads/supports; OP=NEW resets that family's state,
+OP=MOD updates it. Conflicting repeated definitions within one Step fail explicitly.
+Each Step configures its final linear equilibrium, without source increment history.
+Unsupported physics/formulations/parameters fail rather than being discarded.
+Mesh mode configures no analysis. Neither mode infers missing physical units.
+Input and serialized response are bounded to 16 MiB; hosts must privately prepare
+all returned Commands through Candidate and publish one validated replacement.
+
+Returns: `AbaqusConversion`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| text | yes | <code>{"type":"string"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> |  |
+| body | yes | <code>{"type":"string"}</code> |  |
+| mode | yes | <code>{"$ref":"#/$defs/AbaqusImportMode"}</code> |  |
+| unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> |  |
+| unitForce | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_force"},{"type":"null"}]}</code> | Mandatory in static mode; absent in mesh mode. Positive force per source force. |
+| unitTime | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Positive seconds per source time. Required when a DENSITY is translated: source density scales by F T²/L⁴. No time or mass unit is inferred. |
+| sourceName | no | <code>{"type":["string","null"]}</code> | Logical root filename for resolving an explicitly supplied include bundle. Paths identify bundle entries only; the engine never reads a file system. |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> | Explicit relative filenames and UTF-8 contents for INCLUDE and NODE/ELEMENT INPUT. Missing/cyclic/escaping references fail; the engine never fetches a file. |
+| sha256 | yes | <code>{"type":"string"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.convertAbaqus"}</code> |  |
 
 <a id="queries-query-cost"></a>
 
@@ -4129,7 +4742,10 @@ Returns: `ObjectDefinition`.
 Subtract two explicitly retained nodal fields as `left - right` on either Result's
 Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
 null values; nonfinite arithmetic is a structured error. No current Result, display
-conversion, or node-number pairing is implied.
+conversion, or node-number pairing is implied. Each operand may independently select
+a retained primary frame with the existing exact/nearest FrameSample protocol; resolved
+indices and physical times are returned. Historical derived fields are unavailable.
+Omitted samples preserve final-field comparison. There is no temporal interpolation.
 
 Returns: `DifferenceField`.
 
@@ -4140,12 +4756,29 @@ Returns: `DifferenceField`.
 | onto | yes | <code>{"$ref":"#/$defs/DifferenceOnto"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.difference"}</code> |  |
 
+<a id="queries-query-document"></a>
+
+### query.document
+
+The complete authoritative Model file and Journal in SI, with the real Model hash and
+revision. Retains selected display-unit strings without formatting a display summary;
+use this to save even when query.model reports unit.display. This read changes neither
+the Model nor retained Results. Hosts apply their exact UTF-8 save encoder and byte limit
+before writing; this Query performs no I/O or replacement validation.
+
+Returns: `ModelDocument`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| query | yes | <code>{"type":"string","const":"query.document"}</code> |  |
+
 <a id="queries-query-field"></a>
 
 ### query.field
 
 A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
-Field names include mode:k for one-based modal shapes and stressPly:k:bottom/top
+Field names include mode:k for one-based modal/buckling shapes owned by the Result
+(`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top
 for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
 are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
 that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
@@ -4266,8 +4899,11 @@ Returns: `MeshSummary`.
 
 Everything about the Model in one read: bodies with volumes and materials, imported
 face patches with paste-ready naming predicates, named Sets, constraints, loads with
-their totals, steps, mesh settings, and the well-posedness warnings that would block a
-solve. Read this before changing anything.
+their totals, steps and predecessor links, mesh settings, and the well-posedness warnings
+that would block a solve. Material properties include thermal expansion `alpha` in 1/K,
+conductivity `k` in W/(m K), specific heat `cp` in J/(kg K), and the supplied `source`.
+Expansion and conductivity preserve one isotropic value or three material-axis values.
+Read this before changing anything.
 
 Returns: `ModelSummary`.
 
@@ -4403,9 +5039,21 @@ Returns: `ScriptText`.
 ### query.set
 
 What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
-and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+and corner-node centroid. Solid volumes integrate every original shape node, including
+Tet10/Hex20 midside nodes: tetrahedron degree3 and tensor degree5 per coordinate are
+sufficient for their Jacobian determinants, up to f64 roundoff. Surface areas and edge
+lengths use original tangents. Linear triangles and lines are exact up to roundoff;
+bilinear faces use Gauss2. Curved norms are numerical, using Gauss3 for Quad8/Line3
+and symmetric triangle degree5 for Tri6.
+Curved area/length accuracy improves under refinement; no corner skin is substituted.
+Face Sets also report pressureArea from the load boundary quadrature,
 including thickness or radial weighting (plane strain: one metre of depth). Pressure
-times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
+times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
+the original midsurface area without requiring Material/Section; curved physical shell
+loads use the Section's top/bottom offsets. Builds the Mesh if needed.
+The centroid averages resolved node coordinates; authored imported NSETs include
+unused source labels. A bounded fixed-order fallback prevents a finite coordinate
+mean overflowing through rounding, while preserving existing finite mean results.
 
 Returns: `SetInfo`.
 
@@ -4435,6 +5083,22 @@ Returns: `ResultSurface`.
 ### Queries definitions
 
 Expand a definition to inspect its complete schema. Definition names are local to this section.
+
+<details>
+<summary>AbaqusImportMode</summary>
+
+```json
+{
+  "description": "The chosen strict subset; unsupported physics is rejected rather than discarded.",
+  "type": "string",
+  "enum": [
+    "mesh",
+    "static"
+  ]
+}
+```
+
+</details>
 
 <details>
 <summary>AmplitudeSpec</summary>
@@ -4528,15 +5192,18 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Display name of the new empty Model.",
           "type": "string"
         },
         "description": {
+          "description": "Optional Model description or modelling assumptions retained with the Model.",
           "type": [
             "string",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.new` to select this operation.",
           "type": "string",
           "const": "model.new"
         }
@@ -4548,13 +5215,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "replacement"
     },
     {
-      "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+      "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
       "type": "object",
       "properties": {
         "units": {
+          "description": "Display units used by Queries and the UI; physical inputs still carry their own units and storage stays SI.",
           "$ref": "#/$defs/UnitSet"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.setUnits` to select this operation.",
           "type": "string",
           "const": "model.setUnits"
         }
@@ -4570,9 +5239,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "New nonblank display name; preserves geometry and current Results.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.setName` to select this operation.",
           "type": "string",
           "const": "model.setName"
         }
@@ -4588,9 +5259,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "idealisation": {
+          "description": "Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible\nwith the Bodies.",
           "$ref": "#/$defs/IdealisationSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.setIdealisation` to select this operation.",
           "type": "string",
           "const": "model.setIdealisation"
         }
@@ -4602,19 +5275,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
+      "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Bodies and Sets also share the geometry namespace with\ncuts and point masses, so their new name cannot shadow any geometry owner.\nMapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
       "type": "object",
       "properties": {
         "kind": {
+          "description": "Kind of existing object to rename, such as Body, Material, Constraint, Load or Step.",
           "$ref": "#/$defs/ObjectKind"
         },
         "name": {
+          "description": "Current name of the object of this kind.",
           "type": "string"
         },
         "to": {
+          "description": "Unused new name; references to the object are updated together.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.rename` to select this operation.",
           "type": "string",
           "const": "model.rename"
         }
@@ -4628,19 +5305,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
+      "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.\nA Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.",
       "type": "object",
       "properties": {
         "kind": {
+          "description": "Kind of existing object to copy.",
           "$ref": "#/$defs/ObjectKind"
         },
         "name": {
+          "description": "Existing object to copy, identified within its kind.",
           "type": "string"
         },
         "as": {
+          "description": "Unused name for the copy; a copied Step keeps references to the original Constraints and Loads.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.duplicate` to select this operation.",
           "type": "string",
           "const": "model.duplicate"
         }
@@ -4658,9 +5339,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Body name; reusing it replaces the box while preserving compatible assignments and cuts.",
           "type": "string"
         },
         "size": {
+          "description": "Positive x/y/z side lengths, each with length units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -4669,6 +5352,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "at": {
+          "description": "Global x/y/z coordinates of the minimum corner; omitted means the origin.",
           "type": [
             "array",
             "null"
@@ -4680,6 +5364,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.addBox` to select this operation.",
           "type": "string",
           "const": "geometry.addBox"
         }
@@ -4696,12 +5381,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Cut name, also the prefix of the resulting hole face Sets.",
           "type": "string"
         },
         "from": {
+          "description": "Existing solid Body from which the box is removed.",
           "type": "string"
         },
         "size": {
+          "description": "Positive x/y/z lengths of the cutting box, each with length units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -4710,6 +5398,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "at": {
+          "description": "Global x/y/z coordinates of the cutting box minimum corner.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -4718,6 +5407,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.subtractBox` to select this operation.",
           "type": "string",
           "const": "geometry.subtractBox"
         }
@@ -4736,12 +5426,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Body name; reusing it replaces the shape while preserving compatible assignments and cuts.",
           "type": "string"
         },
         "shape": {
+          "description": "Unit-bearing shape definition in global coordinates, compatible with the Model idealisation.",
           "$ref": "#/$defs/ShapeSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.add` to select this operation.",
           "type": "string",
           "const": "geometry.add"
         }
@@ -4758,9 +5451,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Line Body name; joint node Sets are named <name>.p0, <name>.p1 and so on.",
           "type": "string"
         },
         "points": {
+          "description": "Ordered global x/y/z joint coordinates, each component with length units.",
           "type": "array",
           "items": {
             "type": "array",
@@ -4772,6 +5467,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           }
         },
         "members": {
+          "description": "Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on.",
           "type": [
             "array",
             "null"
@@ -4788,6 +5484,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           }
         },
         "divisions": {
+          "description": "Number of equal finite elements per member; omitted means one.",
           "type": [
             "integer",
             "null"
@@ -4796,6 +5493,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "minimum": 0
         },
         "kind": {
+          "description": "Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss.",
           "anyOf": [
             {
               "$ref": "#/$defs/LineKind"
@@ -4806,6 +5504,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.addLine` to select this operation.",
           "type": "string",
           "const": "geometry.addLine"
         }
@@ -4822,15 +5521,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Cut name, also the prefix of its generated face Sets.",
           "type": "string"
         },
         "from": {
+          "description": "Existing solid Body from which the shape is removed.",
           "type": "string"
         },
         "shape": {
+          "description": "Unit-bearing cutting shape positioned in global coordinates.",
           "$ref": "#/$defs/ShapeSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.subtract` to select this operation.",
           "type": "string",
           "const": "geometry.subtract"
         }
@@ -4848,9 +5551,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts.",
           "type": "string"
         },
         "format": {
+          "description": "Geometry file format of data; the supported format is STL.",
           "$ref": "#/$defs/MeshFormat"
         },
         "data": {
@@ -4858,6 +5563,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "type": "string"
         },
         "encoding": {
+          "description": "How data encodes the file; omitted means text, while binary STL requires base64.",
           "anyOf": [
             {
               "$ref": "#/$defs/DataEncoding"
@@ -4898,6 +5604,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.import` to select this operation.",
           "type": "string",
           "const": "geometry.import"
         }
@@ -4912,19 +5619,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
+      "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
       "type": "object",
       "properties": {
         "name": {
+          "description": "Named face Set to create or replace, for use by Constraints and Loads.",
           "type": "string"
         },
         "of": {
+          "description": "Body whose actual mesh boundary is selected, including an implicit mapped or swept Body.",
           "type": "string"
         },
         "where": {
+          "description": "Geometric predicate selecting boundary faces; re-evaluated on each remesh.",
           "$ref": "#/$defs/FacePredicate"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.nameFace` to select this operation.",
           "type": "string",
           "const": "geometry.nameFace"
         }
@@ -4938,16 +5649,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
+      "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.\nReissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.",
       "type": "object",
       "properties": {
         "name": {
+          "description": "Named region Set to create or replace, for Constraints, nodal Loads and probes.",
           "type": "string"
         },
         "where": {
+          "description": "Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds.",
           "$ref": "#/$defs/RegionPredicate"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.nameRegion` to select this operation.",
           "type": "string",
           "const": "geometry.nameRegion"
         }
@@ -4960,13 +5674,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
+      "description": "Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.\nFails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted\nfirst.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.remove` to select this operation.",
           "type": "string",
           "const": "geometry.remove"
         }
@@ -4978,13 +5694,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+      "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing an existing point-mass name\nreplaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes\nit. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
       "type": "object",
       "properties": {
         "name": {
+          "description": "Point-mass name and node Set name; reusing it replaces that point mass.",
           "type": "string"
         },
         "at": {
+          "description": "Global x/y/z coordinates of the mass node, each with length units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -4993,9 +5711,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "mass": {
+          "description": "Positive lumped mass with mass units; attach the node with constraint.couple before solving.",
           "$ref": "#/$defs/Q_mass"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.addMass` to select this operation.",
           "type": "string",
           "const": "geometry.addMass"
         }
@@ -5009,13 +5729,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's\nratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one\nof the two. `orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. `yield` is the yield\nstress the safety factor and the `plasticity` block read; `plasticity` makes the\nmaterial elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing\nwith an existing name edits the material in place, so an omitted `orientation` or\n`plasticity` clears the previous one.",
+      "description": "Define a Material: elastic stiffness is either isotropic, by Young's modulus `E` and\nPoisson's ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — never\nboth. A heat-only Material omits both stiffness forms and gives positive conductivity\n`k`; `rho` and `cp`, when stated, must also be positive and are required by heat-transient.\nHeat-only Materials may retain `alpha` and `yield` for later structural use; `plasticity`\nrequires isotropic stiffness, and mechanical Steps require elastic stiffness.\n`orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. `yield` is the yield\nstress the safety factor and the `plasticity` block read; `plasticity` makes the\nmaterial elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing\nwith an existing name edits the material in place, so an omitted `orientation` or\n`plasticity` clears the previous one.",
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "description": "Unique Material name; reusing a name replaces its full definition.",
+          "type": "string",
+          "x-physics": "common"
         },
         "E": {
+          "description": "Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -5023,16 +5746,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "stiffness"
         },
         "nu": {
+          "description": "Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-physics": "stiffness"
         },
         "orthotropic": {
+          "description": "Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orthotropic"
@@ -5040,9 +5767,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "orientation": {
+          "description": "Rotation of the Material axes from global axes; omitted means the global axes.",
           "anyOf": [
             {
               "$ref": "#/$defs/Orientation"
@@ -5050,9 +5779,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "anisotropy"
         },
         "rho": {
+          "description": "Mass density for gravity, inertia and transient heat capacity.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_density"
@@ -5060,9 +5791,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "mass"
         },
         "alpha": {
+          "description": "Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_thermal_expansion"
@@ -5070,9 +5803,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "expansion"
         },
         "k": {
+          "description": "Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_conductivity"
@@ -5080,9 +5815,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "cp": {
+          "description": "Specific heat per unit mass for transient heat conduction; used with rho.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_specific_heat"
@@ -5090,9 +5827,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "thermal"
         },
         "yield": {
+          "description": "Initial yield stress for plasticity and the reported safety factor.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
@@ -5100,9 +5839,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "plasticity": {
+          "description": "J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.",
           "anyOf": [
             {
               "$ref": "#/$defs/Plasticity"
@@ -5110,15 +5851,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
-          ]
+          ],
+          "x-physics": "plasticity"
         },
         "source": {
+          "description": "Source or reference for these property values, retained with the Material.",
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "x-physics": "common"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `material.add` to select this operation.",
           "type": "string",
           "const": "material.add"
         }
@@ -5130,19 +5875,22 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Material to one or more Bodies. Every Body needs a Material before solving;\na Body without one is reported by query.model and blocks solve.run.",
+      "description": "Assign a Material to one or more Bodies. Imported element regions are editable Bodies;\nassigning the source owner supplies their default, while region assignments override it.\nEvery element-owning Body needs a Material before solving; a missing assignment is\nreported by query.model and blocks solve.run.",
       "type": "object",
       "properties": {
         "material": {
+          "description": "Existing Material name whose properties the target Bodies will use.",
           "type": "string"
         },
         "bodies": {
+          "description": "Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `material.assign` to select this operation.",
           "type": "string",
           "const": "material.assign"
         }
@@ -5159,9 +5907,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing unassigned Material to remove; retarget its Bodies first if it is in use.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `material.remove` to select this operation.",
           "type": "string",
           "const": "material.remove"
         }
@@ -5177,12 +5927,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Section name; reusing it replaces the cross-section or shell definition.",
           "type": "string"
         },
         "shape": {
+          "description": "Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies.",
           "$ref": "#/$defs/SectionSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `section.add` to select this operation.",
           "type": "string",
           "const": "section.add"
         }
@@ -5195,19 +5948,22 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
+      "description": "Assign a Section to one or more Bodies, including imported element regions. A region\noverrides the source owner Section; an unassigned region inherits that default.\nEvery line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
       "type": "object",
       "properties": {
         "section": {
+          "description": "Existing Section name to assign.",
           "type": "string"
         },
         "bodies": {
+          "description": "Line or shell Body names that will use this Section.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "orientation": {
+          "description": "Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the\ndocumented geometry-based convention.",
           "anyOf": [
             {
               "$ref": "#/$defs/Axis"
@@ -5218,6 +5974,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `section.assign` to select this operation.",
           "type": "string",
           "const": "section.assign"
         }
@@ -5234,9 +5991,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing unassigned Section to remove; retarget its Bodies first if it is in use.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `section.remove` to select this operation.",
           "type": "string",
           "const": "section.remove"
         }
@@ -5248,13 +6007,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar\nstrain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals\nretain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
+          "description": "Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and\nSets.",
           "$ref": "#/$defs/MesherSpec"
         },
         "order": {
+          "description": "Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.\nImported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.",
           "type": [
             "integer",
             "null"
@@ -5264,6 +6025,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maximum": 255
         },
         "formulation": {
+          "description": "Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for\nimported sources. Simplex elements ignore this setting.",
           "anyOf": [
             {
               "$ref": "#/$defs/Formulation"
@@ -5274,6 +6036,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "simplices": {
+          "description": "Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and\nimported sources require false.",
           "type": [
             "boolean",
             "null"
@@ -5291,6 +6054,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `mesh.set` to select this operation.",
           "type": "string",
           "const": "mesh.set"
         }
@@ -5302,19 +6066,22 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+      "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).\n`inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading\nreturns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.",
       "type": "object",
       "properties": {
         "format": {
+          "description": "Output format for the host to save, such as vtu, msh, inp, stl or report.",
           "$ref": "#/$defs/ExportFormat"
         },
         "step": {
+          "description": "Step whose current Result fields are included for vtu or whose calculation note is exported for report;\nmesh-only formats ignore it.",
           "type": [
             "string",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `mesh.export` to select this operation.",
           "type": "string",
           "const": "mesh.export"
         }
@@ -5330,12 +6097,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set whose degrees of freedom are restrained.",
           "type": "string"
         },
         "dofs": {
+          "description": "Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components\nfor a roller or partial restraint.",
           "type": [
             "array",
             "null"
@@ -5345,6 +6115,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.fix` to select this operation.",
           "type": "string",
           "const": "constraint.fix"
         }
@@ -5361,12 +6132,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set whose translations are fixed while beam-joint rotations remain free.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.pin` to select this operation.",
           "type": "string",
           "const": "constraint.pin"
         }
@@ -5383,18 +6157,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set receiving the prescribed displacement.",
           "type": "string"
         },
         "dof": {
+          "description": "Translational component ux, uy or uz to prescribe.",
           "$ref": "#/$defs/Dof"
         },
         "value": {
+          "description": "Prescribed displacement with length units; sign follows the chosen global component.",
           "$ref": "#/$defs/Q_length"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.prescribe` to select this operation.",
           "type": "string",
           "const": "constraint.prescribe"
         }
@@ -5413,15 +6192,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set lying on the modelled symmetry plane.",
           "type": "string"
         },
         "normal": {
+          "description": "Global axis normal to the symmetry plane; restrains normal translation and the corresponding beam rotations.",
           "$ref": "#/$defs/Axis"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.symmetry` to select this operation.",
           "type": "string",
           "const": "constraint.symmetry"
         }
@@ -5439,15 +6222,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Temperature Constraint name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set held at the prescribed temperature.",
           "type": "string"
         },
         "value": {
+          "description": "Boundary temperature with temperature units; a transient Step scales it by its amplitude.",
           "$ref": "#/$defs/Q_temperature"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.temperature` to select this operation.",
           "type": "string",
           "const": "constraint.temperature"
         }
@@ -5465,18 +6252,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Contact Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "master": {
+          "description": "Master face Set onto which slave nodes are projected; normally choose the coarser side.",
           "type": "string"
         },
         "slave": {
+          "description": "Slave face Set whose nodes are paired to the master; normally choose the finer side.",
           "type": "string"
         },
         "kind": {
+          "description": "Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide.",
           "$ref": "#/$defs/ContactKind"
         },
         "tol": {
+          "description": "Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units;\nomitted means 1e-4 of the Mesh diagonal.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_length"
@@ -5487,6 +6279,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `contact.add` to select this operation.",
           "type": "string",
           "const": "contact.add"
         }
@@ -5505,22 +6298,28 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Cyclic Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "from": {
+          "description": "Source sector-face node Set; must match the rotated target mesh.",
           "type": "string"
         },
         "to": {
+          "description": "Target sector-face node Set reached by the specified rotation.",
           "type": "string"
         },
         "axis": {
+          "description": "Global rotation axis relating from to to.",
           "$ref": "#/$defs/Axis"
         },
         "angleDeg": {
+          "description": "Signed right-handed rotation from the source to the target face, in degrees.",
           "type": "number",
           "format": "double"
         },
         "through": {
+          "description": "Global x/y/z point on the rotation axis, with length units; omitted means the origin.",
           "type": [
             "array",
             "null"
@@ -5532,6 +6331,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "tol": {
+          "description": "Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_length"
@@ -5542,6 +6342,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.cyclic` to select this operation.",
           "type": "string",
           "const": "constraint.cyclic"
         }
@@ -5561,18 +6362,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Coupling Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "point": {
+          "description": "Existing point-mass node Set created with geometry.addMass.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set coupled to the point displacement.",
           "type": "string"
         },
         "kind": {
+          "description": "Distributed for the face weighted mean displacement or rigid for equal point and face translations; neither\ntransmits a moment.",
           "$ref": "#/$defs/CoupleKind"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.couple` to select this operation.",
           "type": "string",
           "const": "constraint.couple"
         }
@@ -5591,9 +6397,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Constraint to remove; Steps must stop referencing it first.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.remove` to select this operation.",
           "type": "string",
           "const": "constraint.remove"
         }
@@ -5605,19 +6413,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
+      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.\nShell pressureArea measures the original midsurface; physical curved shell face loads\ninclude the Section's top/bottom offsets.",
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set receiving the pressure.",
           "type": "string"
         },
         "value": {
+          "description": "Pressure with stress units; positive acts into the surface and negative pulls outward.",
           "$ref": "#/$defs/Q_stress"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.pressure` to select this operation.",
           "type": "string",
           "const": "load.pressure"
         }
@@ -5635,12 +6447,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set over which the resultant is distributed by area.",
           "type": "string"
         },
         "total": {
+          "description": "Total global x/y/z force on the entire Set, each component with force units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_force"
@@ -5649,6 +6464,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.traction` to select this operation.",
           "type": "string",
           "const": "load.traction"
         }
@@ -5666,12 +6482,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Node Set over which the force is split equally.",
           "type": "string"
         },
         "total": {
+          "description": "Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_force"
@@ -5680,6 +6499,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.force` to select this operation.",
           "type": "string",
           "const": "load.force"
         }
@@ -5697,12 +6517,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Node Set of beam joints carrying rotational degrees of freedom.",
           "type": "string"
         },
         "total": {
+          "description": "Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_torque"
@@ -5711,6 +6534,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.moment` to select this operation.",
           "type": "string",
           "const": "load.moment"
         }
@@ -5728,9 +6552,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Acceleration Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "g": {
+          "description": "Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires\nMaterial density.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_acceleration"
@@ -5739,6 +6565,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.gravity` to select this operation.",
           "type": "string",
           "const": "load.gravity"
         }
@@ -5755,18 +6582,22 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Thermal-strain Load name to create or replace, for listing in a structural Step.",
           "type": "string"
         },
         "bodies": {
+          "description": "Body names receiving the temperature/reference assignment, including implicit mesher Bodies.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "value": {
+          "description": "Uniform temperature with temperature units; inherited heat Results replace this value when the Step\ncontinues a heat Step.",
           "$ref": "#/$defs/Q_temperature"
         },
         "reference": {
+          "description": "Stress-free reference temperature with temperature units; omitted means 293.15 K.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_temperature"
@@ -5777,6 +6608,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.temperature` to select this operation.",
           "type": "string",
           "const": "load.temperature"
         }
@@ -5794,18 +6626,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Convection Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set exchanging heat with its surroundings.",
           "type": "string"
         },
         "h": {
+          "description": "Positive heat-transfer coefficient with units such as W/(m^2 K).",
           "$ref": "#/$defs/Q_heat_transfer_coefficient"
         },
         "tInf": {
+          "description": "Surrounding fluid temperature with temperature units, used in h times the surface-to-fluid temperature\ndifference.",
           "$ref": "#/$defs/Q_temperature"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.convection` to select this operation.",
           "type": "string",
           "const": "load.convection"
         }
@@ -5824,15 +6661,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Heat-flux Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set receiving the prescribed heat flux.",
           "type": "string"
         },
         "q": {
+          "description": "Heat input per unit area with units such as W/m^2; negative removes heat.",
           "$ref": "#/$defs/Q_heat_flux"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.heatFlux` to select this operation.",
           "type": "string",
           "const": "load.heatFlux"
         }
@@ -5850,19 +6691,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Radiation Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set radiating to the specified surroundings.",
           "type": "string"
         },
         "emissivity": {
+          "description": "Dimensionless surface emissivity in (0, 1]; 1 is a black body.",
           "type": "number",
           "format": "double"
         },
         "tInf": {
+          "description": "Surrounding absolute temperature with temperature units; converted to kelvin for the fourth-power radiation\nlaw.",
           "$ref": "#/$defs/Q_temperature"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.radiation` to select this operation.",
           "type": "string",
           "const": "load.radiation"
         }
@@ -5881,18 +6727,22 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Heat-source Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "bodies": {
+          "description": "Body names receiving the volumetric source, including implicit mesher Bodies.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "q": {
+          "description": "Heat input per unit volume with units such as W/m^3; total power is this density times Body volume.",
           "$ref": "#/$defs/Q_heat_source"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.heatSource` to select this operation.",
           "type": "string",
           "const": "load.heatSource"
         }
@@ -5910,15 +6760,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Torque Load name to create or replace, for listing in an axisymmetric Step with twist.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set receiving the circumferential traction.",
           "type": "string"
         },
         "total": {
+          "description": "Resultant torque about the symmetry axis, with torque units; the radial traction distribution preserves this\ntotal.",
           "$ref": "#/$defs/Q_torque"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.torque` to select this operation.",
           "type": "string",
           "const": "load.torque"
         }
@@ -5936,15 +6790,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Thermal contact Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "of": {
+          "description": "Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance.",
           "type": "string"
         },
         "conductance": {
+          "description": "Positive interface heat-transfer coefficient with units such as W/(m^2 K).",
           "$ref": "#/$defs/Q_heat_transfer_coefficient"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `contact.thermal` to select this operation.",
           "type": "string",
           "const": "contact.thermal"
         }
@@ -5962,9 +6820,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Load to remove; Steps must stop referencing it first.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.remove` to select this operation.",
           "type": "string",
           "const": "load.remove"
         }
@@ -5976,56 +6836,89 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress, and a modal Step after a static one\npicks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,\nwhich is what a tensioned or preloaded member needs. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`\nalone (default 1) to buckling, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,\n`rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.\nA modal Step's `after` is optional and means stress stiffening: naming a solved\n`static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the\nfrequencies are those of the *preloaded* structure (tension up, compression down, zero\nat the buckling load), and `prestressFrom` on the Result names the preload Step. Naming\na heat Step instead keeps the existing meaning, the temperature field alone, and\nstiffens nothing.\nA harmonic Step requires `after` to name a Step whose `modal` Result is current: it\nsuperposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is\nbounded by that Step's `nModes`. It drives its own Loads at each swept frequency and\nanswers a nodal amplitude and a phase lag per retained frequency; `displacement` is the\namplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero\n— a moving support is base excitation, which this procedure does not do.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress, and a modal Step after a static one\npicks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,\nwhich is what a tensioned or preloaded member needs. The remaining fields belong to one\nprocedure each and are ignored by the others. Each field declares `x-procedures` in the\nschema (`*` means common to every procedure), so hosts can present the selected procedure\nwithout discarding values when it changes. The Procedure enum declares material inputs\nand result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`\nalone (default 1) to buckling, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,\n`rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`query.model` checks each Step's active Constraints/Loads and assigned Materials:\nstatic, static-nonlinear and buckling need mechanical supports; steady heat needs a\nprescribed temperature or an ambient convection/radiation boundary. Free-free modal\nand unconstrained dynamics are valid, and transient heat may be insulated. These\npre-mesh warnings identify missing inputs; only the resolved solve can establish that\nevery connected component is restrained and every selected Set contains nodes.\nStep-specific warnings carry their exact `step` identity separately from the display\nlocation in `where`, so hosts can scope blockers without parsing names or prose.\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.\nA modal Step's `after` is optional and means stress stiffening: naming a solved\n`static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the\nfrequencies are those of the *preloaded* structure (tension up, compression down, zero\nat the buckling load), and `prestressFrom` on the Result names the preload Step. Naming\na heat Step instead keeps the existing meaning, the temperature field alone, and\nstiffens nothing.\nA harmonic Step requires `after` to name a Step whose `modal` Result is current: it\nsuperposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is\nbounded by that Step's `nModes`. It drives its own Loads at each swept frequency and\nanswers a nodal amplitude and a phase lag per retained frequency; `displacement` is the\namplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero\n— a moving support is base excitation, which this procedure does not do.",
       "type": "object",
       "properties": {
         "name": {
-          "type": "string"
+          "description": "Analysis Step name; reusing it replaces the Step definition.",
+          "type": "string",
+          "x-procedures": [
+            "*"
+          ]
         },
         "procedure": {
-          "$ref": "#/$defs/Procedure"
+          "description": "Analysis procedure to execute; its schema metadata identifies supported settings, required material physics\nand result fields.",
+          "$ref": "#/$defs/Procedure",
+          "x-procedures": [
+            "*"
+          ]
         },
         "constraints": {
+          "description": "Names of Constraints and mechanical Contacts active in this Step; an empty list activates none.",
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "x-procedures": [
+            "*"
+          ]
         },
         "loads": {
+          "description": "Names of Loads active in this Step; an empty list activates none.",
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "x-procedures": [
+            "*"
+          ]
         },
         "output": {
+          "description": "Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and\nreactions for static analysis.",
           "type": [
             "array",
             "null"
           ],
           "items": {
             "$ref": "#/$defs/Field"
-          }
+          },
+          "x-procedures": [
+            "*"
+          ]
         },
         "after": {
+          "description": "Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a\nmodal basis.",
           "type": [
             "string",
             "null"
+          ],
+          "x-procedures": [
+            "*"
           ]
         },
         "nModes": {
+          "description": "Number of requested modes or buckling factors; omitted means six for modal or one for buckling.",
           "type": [
             "integer",
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "modal",
+            "buckling"
+          ]
         },
         "shift": {
+          "description": "Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "modal"
+          ]
         },
         "dt": {
           "description": "Maximum time increment of a heat-transient Step, or of a static Step with an\namplitude. A uniform increment no larger than dt is chosen to finish exactly at\ntEnd; the Result reports the increment actually used.",
@@ -6036,9 +6929,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "static",
+            "heat-transient",
+            "implicit"
           ]
         },
         "tEnd": {
+          "description": "Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and\nstatic-nonlinear nominal time defaults to 1 s.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_time"
@@ -6046,22 +6945,41 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "static",
+            "static-nonlinear",
+            "heat-transient",
+            "explicit",
+            "implicit"
           ]
         },
         "theta": {
+          "description": "Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward\nEuler.",
           "type": [
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "heat-transient"
+          ]
         },
         "outputEvery": {
+          "description": "Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is\nretained.",
           "type": [
             "integer",
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static",
+            "heat-transient",
+            "explicit",
+            "implicit",
+            "harmonic"
+          ]
         },
         "dtFactor": {
           "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
@@ -6069,9 +6987,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "explicit"
+          ]
         },
         "amplitude": {
+          "description": "Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values.",
           "anyOf": [
             {
               "$ref": "#/$defs/AmplitudeSpec"
@@ -6079,9 +7001,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "static",
+            "static-nonlinear",
+            "heat-transient",
+            "implicit"
           ]
         },
         "initial": {
+          "description": "Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_temperature"
@@ -6089,6 +7018,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "heat-transient"
           ]
         },
         "alpha": {
@@ -6097,7 +7029,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "implicit"
+          ]
         },
         "rayleighAlpha": {
           "description": "Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step\n(directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).\nDefault \"0 Hz\"; must be non-negative, e.g. \"0.5 1/s\".",
@@ -6108,6 +7043,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "implicit",
+            "harmonic",
+            "randomVibration"
           ]
         },
         "rayleighBeta": {
@@ -6119,6 +7059,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "implicit",
+            "harmonic",
+            "randomVibration"
           ]
         },
         "initialVelocity": {
@@ -6129,16 +7074,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "items": {
             "$ref": "#/$defs/InitialVelocitySpec"
-          }
+          },
+          "x-procedures": [
+            "explicit",
+            "implicit"
+          ]
         },
         "increments": {
-          "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.\nEqual load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+          "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
           "type": [
             "integer",
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static-nonlinear"
+          ]
         },
         "maxCutbacks": {
           "description": "Halvings a static-nonlinear Step may use when an increment does not converge\n(default 5, at most 20). After the last one the Step fails with `newton.diverged`.",
@@ -6147,7 +7099,10 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static-nonlinear"
+          ]
         },
         "nonlinearTolerance": {
           "description": "Convergence tolerance for a Step that must iterate, relative in both cases: the\nsup-norm change of the solution between two passes for a radiating heat Step\n(default 1e-6), and the residual force and the displacement correction of one Newton\nincrement for static-nonlinear (default 1e-8). It is never the *linear* solver's\ntolerance, which is `solve.run`'s.",
@@ -6155,7 +7110,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "static-nonlinear",
+            "heat-steady",
+            "heat-transient"
+          ]
         },
         "nonlinearMaxIterations": {
           "description": "Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a\nheat Step (default 50); for static-nonlinear it is what makes an increment cut back\nand try again at half the load (default 20, and full Newton reaches 1e-8 in four or\nfive iterations from a good starting point).",
@@ -6164,10 +7124,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "static-nonlinear",
+            "heat-steady",
+            "heat-transient"
+          ]
         },
         "fStart": {
-          "description": "First frequency of a harmonic sweep, e.g. \"1 Hz\".",
+          "description": "First finite frequency of a harmonic sweep, e.g. \"1 Hz\"; positive for log spacing.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_frequency"
@@ -6175,6 +7140,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "harmonic"
           ]
         },
         "fStop": {
@@ -6186,6 +7154,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "harmonic"
           ]
         },
         "points": {
@@ -6195,10 +7166,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "null"
           ],
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "x-procedures": [
+            "harmonic"
+          ]
         },
         "sweep": {
-          "description": "Frequency spacing of a harmonic sweep; default linear.",
+          "description": "Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates\nlogarithms of positive finite endpoints without forming their ratio. Both endpoints\nremain exact; frequencies can repeat when spacing is below f64 resolution.",
           "anyOf": [
             {
               "$ref": "#/$defs/SweepSpacing"
@@ -6206,6 +7180,9 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ],
+          "x-procedures": [
+            "harmonic"
           ]
         },
         "dampingRatio": {
@@ -6214,7 +7191,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
             "number",
             "null"
           ],
-          "format": "double"
+          "format": "double",
+          "x-procedures": [
+            "harmonic",
+            "randomVibration"
+          ]
         },
         "dampingRatios": {
           "description": "Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`\nfor 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past\nthe end of the list holds the last entry, so a two-entry list on a five-mode basis\ngives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly\nlike `dampingRatio`. Refused together with `dampingRatio` on the same Step.",
@@ -6225,7 +7206,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "items": {
             "type": "number",
             "format": "double"
-          }
+          },
+          "x-procedures": [
+            "harmonic",
+            "randomVibration"
+          ]
         },
         "psd": {
           "description": "One-sided PSD table for randomVibration. All Loads form one spatial pattern\nmultiplied by the same zero-mean stationary random process. Use density \"1 s\"\n(1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,\n`after` naming a solved modal Step, identical constraints, and positive damping.\nOutputs are componentwise standard deviations, never a signed equilibrium state.",
@@ -6235,9 +7220,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "items": {
             "$ref": "#/$defs/PsdPoint"
-          }
+          },
+          "x-procedures": [
+            "randomVibration"
+          ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `step.add` to select this operation.",
           "type": "string",
           "const": "step.add"
         }
@@ -6256,9 +7245,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Step to remove; dependent Steps must stop referencing it in after first.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `step.remove` to select this operation.",
           "type": "string",
           "const": "step.remove"
         }
@@ -6274,12 +7265,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "order": {
+          "description": "Every Step name exactly once in execution order, keeping each Step after its named prerequisite.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `step.reorder` to select this operation.",
           "type": "string",
           "const": "step.reorder"
         }
@@ -6291,13 +7284,15 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nModal solves verify every requested eigenpair's normwise backward residual against\n`tolerance` and return solve.stalled without storing a Result when `maxIterations`\nsubspace sweeps are exhausted. The reported residual is the largest requested-pair\nresidual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.\nResolved Ritz values must also stabilize to relative change 1e-10. Values unresolved\nat the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency\nwarnings; their backward residual passed, but relative frequency convergence is not certified.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
       "type": "object",
       "properties": {
         "step": {
+          "description": "Existing Step to solve; its procedure, active Constraints and Loads define the problem.",
           "type": "string"
         },
         "solver": {
+          "description": "Linear solver implementation; omitted means auto, which selects an available compatible backend.",
           "anyOf": [
             {
               "$ref": "#/$defs/Solver"
@@ -6308,6 +7303,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "tolerance": {
+          "description": "Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum\nnormwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.",
           "type": [
             "number",
             "null"
@@ -6315,6 +7311,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "format": "double"
         },
         "maxIterations": {
+          "description": "Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.\nA modal budget must be greater than zero.",
           "type": [
             "integer",
             "null"
@@ -6323,6 +7320,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "minimum": 0
         },
         "cmd": {
+          "description": "Registered Command identifier; use `solve.run` to select this operation.",
           "type": "string",
           "const": "solve.run"
         }
@@ -6338,24 +7336,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "step": {
+          "description": "Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency\nsolves instead.",
           "type": "string"
         },
         "sizes": {
+          "description": "Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and\nconvergence rate.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
           }
         },
         "quantity": {
+          "description": "Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe\nlocation.",
           "$ref": "#/$defs/QuantityOfInterest"
         },
         "restore": {
+          "description": "Whether to restore the original mesh settings after the study; omitted means true, while false retains the\nfinal solved mesh and Result.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `study.converge` to select this operation.",
           "type": "string",
           "const": "study.converge"
         }
@@ -6373,13 +7376,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "step": {
+          "description": "Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after\ndependency.",
           "type": "string"
         },
         "targetError": {
+          "description": "Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a\ncertified bound.",
           "type": "number",
           "format": "double"
         },
         "maxIterations": {
+          "description": "Maximum adaptive solve passes in 1..=100; omitted means 8.",
           "type": [
             "integer",
             "null"
@@ -6388,6 +7394,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "minimum": 0
         },
         "maxElements": {
+          "description": "Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the\nCommand.",
           "type": [
             "integer",
             "null"
@@ -6417,6 +7424,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `study.adapt` to select this operation.",
           "type": "string",
           "const": "study.adapt"
         }
@@ -6433,6 +7441,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "steps": {
+          "description": "Number of latest Commands to undo; omitted means 1.",
           "type": [
             "integer",
             "null"
@@ -6441,12 +7450,14 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "minimum": 0
         },
         "expectedJournal": {
+          "description": "Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches\nit.",
           "type": [
             "string",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `journal.undo` to select this operation.",
           "type": "string",
           "const": "journal.undo"
         }
@@ -6461,6 +7472,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "steps": {
+          "description": "Number of undone Commands to reapply; omitted means 1.",
           "type": [
             "integer",
             "null"
@@ -6469,6 +7481,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "minimum": 0
         },
         "cmd": {
+          "description": "Registered Command identifier; use `journal.redo` to select this operation.",
           "type": "string",
           "const": "journal.redo"
         }
@@ -6483,19 +7496,26 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "object",
       "properties": {
         "name": {
+          "description": "Plugin name under which the extension is registered.",
           "type": "string"
         },
         "kind": {
+          "description": "Extension Point implemented by this Plugin, such as a Material law, Element or Mesher.",
           "$ref": "#/$defs/PluginKind"
         },
         "language": {
+          "description": "Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm.",
           "$ref": "#/$defs/PluginLanguage"
         },
         "source": {
+          "description": "Inline Plugin code or a URL plus the required content hash, retained for reproducible loading.",
           "$ref": "#/$defs/PluginSource"
         },
-        "manifest": true,
+        "manifest": {
+          "description": "Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported\nstub."
+        },
         "cmd": {
+          "description": "Registered Command identifier; use `plugin.load` to select this operation.",
           "type": "string",
           "const": "plugin.load"
         }
@@ -6706,6 +7726,17 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "format": "uint8",
       "minimum": 0,
       "maximum": 255
+    },
+    "sample": {
+      "description": "Omit for the final field. A sample selects only the retained primary field through\nquery.frame's exact/nearest resolver, with earlier ties and no extrapolation.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FrameSample"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
@@ -7019,6 +8050,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Full integration: the textbook linear element, which locks in bending.",
       "type": "string",
       "const": "full"
+    },
+    {
+      "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+      "type": "string",
+      "const": "mean-dilatation"
     }
   ]
 }
@@ -7170,6 +8206,216 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind"
       ]
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedElement</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "description": "Positive original element label, at most 999999999.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "kind": {
+      "$ref": "#/$defs/ImportedElementKind"
+    },
+    "nodes": {
+      "description": "Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "kind",
+    "nodes"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedElementKind</summary>
+
+```json
+{
+  "description": "Authored 3D solid families; interpolation and source connectivity are retained.\nHex8 uses the explicit mesh formulation; other kinds retain standard full integration.",
+  "type": "string",
+  "enum": [
+    "tet4",
+    "hex8",
+    "tet10",
+    "hex20"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedEntityIdentity</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sourceLabel": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "instance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "part": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sourceLabel"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedFace</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "element": {
+      "description": "Original element label.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "face": {
+      "description": "Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "element",
+    "face"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedNodeSpec</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "label": {
+      "description": "Positive original node label, at most 999999999.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "at": {
+      "description": "Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_length"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "label",
+    "at"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ImportedProvenance</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sha256": {
+      "description": "SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.",
+      "type": "string"
+    },
+    "conversionVersion": {
+      "type": "string"
+    },
+    "sourceFiles": {
+      "description": "Immutable supplied-file manifest; paths are relative names, never host file handles.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "sourceName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nodeIdentities": {
+      "description": "Original assembly identities keyed by the persistent global source label.",
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^\\d+$": {
+          "$ref": "#/$defs/ImportedEntityIdentity"
+        }
+      }
+    },
+    "elementIdentities": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^\\d+$": {
+          "$ref": "#/$defs/ImportedEntityIdentity"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "sha256",
+    "conversionVersion"
   ]
 }
 ```
@@ -7510,6 +8756,100 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind",
         "patches"
       ]
+    },
+    {
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full\nintegration or explicit mean-dilatation (B-bar). Requires solid3d,\nunchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedNodeSpec"
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ImportedElement"
+          }
+        },
+        "regions": {
+          "description": "Disjoint named element regions. Keys are editable Body identities; memberships use\nauthored element labels. Elements outside regions belong to the source Body.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "nodeSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "elementSets": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "surfaces": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ImportedFace"
+            }
+          }
+        },
+        "nodeTargets": {
+          "description": "Allocate <body>.node_<label> targets only for requested numeric node references.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportedProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "imported"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "body",
+        "nodes",
+        "elements"
+      ]
     }
   ]
 }
@@ -7600,34 +8940,43 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "type": "object",
   "properties": {
     "E1": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E2": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "E3": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G12": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G13": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "G23": {
-      "$ref": "#/$defs/Q_stress"
+      "$ref": "#/$defs/Q_stress",
+      "x-physics": "stiffness"
     },
     "nu12": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu13": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "nu23": {
       "type": "number",
-      "format": "double"
+      "format": "double",
+      "x-physics": "stiffness"
     },
     "alpha": {
       "description": "Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on\n`material.add`, never both.",
@@ -7639,7 +8988,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_thermal_expansion"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "expansion"
     },
     "k": {
       "description": "Conductivity along the three material axes. Give this *or* the isotropic `k` on\n`material.add`, never both.",
@@ -7651,7 +9001,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "$ref": "#/$defs/Q_conductivity"
       },
       "minItems": 3,
-      "maxItems": 3
+      "maxItems": 3,
+      "x-physics": "thermal"
     }
   },
   "additionalProperties": false,
@@ -7837,57 +9188,242 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Analysis procedures.",
+  "description": "Analysis procedures. The schema declares each procedure's consumed Material properties,\nrequired property groups and produced results for every host. `x-material-needs` names\nalternative stiffness laws as one requirement; `x-material-properties` includes optional\nlaws the procedure can read, rather than claiming all of them are mandatory.",
   "oneOf": [
     {
       "description": "Linear static equilibrium.",
       "type": "string",
-      "const": "static"
+      "const": "static",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness"
+      ]
     },
     {
       "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
       "type": "string",
-      "const": "static-nonlinear"
+      "const": "static-nonlinear",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "yield",
+        "plasticity",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness (E, ν or orthotropic)"
+      ],
+      "x-results": [
+        "u",
+        "Cauchy stress",
+        "reactions"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "plasticity"
+      ]
     },
     {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.\n\n**Prestressed (stress-stiffened) modal analysis.** Give the Step an `after` naming a\nsolved `static` or `static-nonlinear` Step and it vibrates *about that loaded state*:\nthe stress stiffening of the preload is added to the stiffness, so a guy rope or a\ntensioned tie rings higher, a strut in compression rings lower, and a member loaded to\nits buckling load has a first frequency of zero. Use it whenever the axial force in a\nmember is a large fraction of its Euler load — cable nets, tension rods, preloaded\nbolts, slender bracing — because the unprestressed frequency of such a member is simply\nthe wrong number. Without `after` this is the ordinary modal analysis of the unloaded\nstructure, unchanged.\n\nThe preload Step's own Loads are what does the stiffening; this Step's Loads are\nignored, as they are for any modal Step. `query.result` reports `prestressFrom` naming\nthe Step the stiffening came from. Not available for the axisymmetric idealisation\n(the hoop term of a ring's stress stiffening is not written), and a preload far past the\nbuckling load is refused: past it the structure has no vibration about that state.",
       "type": "string",
-      "const": "modal"
+      "const": "modal",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "natural frequencies",
+        "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening\nthat state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`\nwith the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this\nStep's Loads by `lambda` to get the critical load.\n\nRead the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*\nthe structure buckles, never how far — so never report a displacement from it. A\n**negative** factor is not an error: it means the structure buckles under the *reversed*\nload, which matters if the load can change sign. And the factor is an **upper bound**: it\nignores imperfections, pre-buckling rotation and yielding, so a real column carries less\nthan this predicts. It is not a safety factor; treat it as the ceiling a perfect,\nperfectly elastic structure would reach. Not available for the axisymmetric idealisation,\nand it needs the direct solver: the iteration back-substitutes hundreds of times through\none factorisation, which `cpu-pcg` and `gpu-pcg` do not build.",
       "type": "string",
-      "const": "buckling"
+      "const": "buckling",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness"
+      ],
+      "x-results": [
+        "load factors",
+        "mode shapes"
+      ],
+      "x-material-physics": [
+        "stiffness"
+      ]
     },
     {
       "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
       "type": "string",
-      "const": "heat-steady"
+      "const": "heat-steady",
+      "x-material-properties": [
+        "k",
+        "orthotropic"
+      ],
+      "x-material-needs": [
+        "k"
+      ],
+      "x-results": [
+        "T",
+        "reaction power"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
+      ]
     },
     {
       "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
       "type": "string",
-      "const": "heat-transient"
+      "const": "heat-transient",
+      "x-material-properties": [
+        "k",
+        "orthotropic",
+        "rho",
+        "cp"
+      ],
+      "x-material-needs": [
+        "k",
+        "ρ",
+        "cp"
+      ],
+      "x-results": [
+        "T",
+        "reaction power",
+        "stored-energy rate"
+      ],
+      "x-material-physics": [
+        "thermal",
+        "mass"
+      ]
     },
     {
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
-      "const": "explicit"
+      "const": "explicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
       "type": "string",
-      "const": "implicit"
+      "const": "implicit",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho",
+        "alpha"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "u",
+        "stress",
+        "reactions",
+        "time history"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
       "type": "string",
-      "const": "harmonic"
+      "const": "harmonic",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "amplitude",
+        "phase",
+        "frequency response"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     },
     {
       "description": "One-sided PSD response of the solved modal Step named by `after`. Produces\ncomponentwise 1σ displacement and stress, including cross-modal correlations.",
       "type": "string",
-      "const": "randomVibration"
+      "const": "randomVibration",
+      "x-material-properties": [
+        "E",
+        "nu",
+        "orthotropic",
+        "rho"
+      ],
+      "x-material-needs": [
+        "elastic stiffness",
+        "ρ"
+      ],
+      "x-results": [
+        "1σ displacement",
+        "1σ stress"
+      ],
+      "x-material-physics": [
+        "stiffness",
+        "mass"
+      ]
     }
   ]
 }

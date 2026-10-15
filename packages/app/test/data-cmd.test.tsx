@@ -2,7 +2,7 @@ import { treeGroups } from '../src/ui/Tree';
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, parseMentions, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
@@ -72,6 +72,8 @@ const journal = (...commands: Record<string, unknown>[]): JournalDump =>
 
 const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
   ({
+    modeCount: 0,
+    resultId: `r${producingSeq}`,
     step,
     revision: producingSeq + 1,
     stale,
@@ -178,6 +180,45 @@ describe('the shell', () => {
     }
     // Every panel of the design is represented, not just the top bar.
     for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
+  });
+
+  it('inserts the advertised object from every reference control in the rendered shell', async () => {
+    const referenced = new Set<string>();
+    const current = model();
+    current.bodies[0]!.bbox = [{ value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 1000, unit: 'mm' }, { value: 100, unit: 'mm' }, { value: 100, unit: 'mm' }];
+    current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
+    current.connections = [{ name: 'tie', kind: 'bonded', master: 'beam.xmin', slave: 'beam.xmax', summary: 'bonded' }];
+    current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
+    const solved = { ...result('static', false, 1), modeCount: 1, frequencies: [{ value: 83, unit: 'Hz' }] };
+    const targets = new Map([
+      ['beam', 'body:beam'], ['tip', 'set:tip'], ['steel', 'material:steel'],
+      ['mesh', 'mesh:mesh'], ['fix', 'constraint:fix'], ['tie', 'constraint:tie'], ['p', 'load:p'],
+      ['static', 'step:static'], ['mode 1', `result:id:${solved.resultId}`],
+    ]);
+    for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
+      await cleanupShells();
+      const { root, store, commands } = mount({ tab, model: current, result: solved, panels: { palette: true, examples: true } });
+      // An unapplied name edit must keep the reference on the existing object.
+      store.openForm('load.pressure', { name: 'draft-pressure', on: 'beam.top', value: '2.4 MPa' }, false, { kind: 'load', name: 'p' });
+      await afterEffects();
+      // Discover controls by the wording a person sees, independently of data-cmd. A copy
+      // handler retaining the right label or metadata must fail this behavioral check.
+      const controls = [...root.querySelectorAll<HTMLButtonElement>('button')]
+        .filter((button) => /\breference in chat\b|^reference\b|^@$/i.test(button.textContent?.trim() ?? ''));
+      expect(controls.length, tab).toBeGreaterThan(0);
+      expect(controls.some((button) => button.closest('.props')), tab).toBe(true);
+      for (const control of controls) {
+        const name = control.closest('.row')?.querySelector('.name')?.textContent?.trim() ?? '';
+        const ref = control.closest('.props') ? 'load:p' : targets.get(name);
+        expect(ref, `${tab}: ${control.outerHTML}`).toBeDefined();
+        commands.length = 0;
+        await act(async () => control.click());
+        expect(commands, `${tab}: ${control.outerHTML}`).toEqual([{ cmd: 'chat.insertMention', ref }]);
+        expect(parseMentions(`@${ref}`).chips.map((chip) => chip.ref), `${tab}: ${ref}`).toEqual([ref]);
+        referenced.add(ref!);
+      }
+    }
+    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'constraint:tie', 'load:p', 'material:steel', 'mesh:mesh', 'result:id:r1', 'set:tip', 'step:static']);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
@@ -381,6 +422,67 @@ describe('the shell', () => {
     const solve = root.querySelector<HTMLButtonElement>('button.solve')!;
     expect(solve.disabled).toBe(true);
     expect(solve.title).toContain('W-1200');
+  });
+
+  it('dispatches the valid first Step from both Solve actions while later-Step warnings remain visible', async () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'free', procedure: 'modal', constraints: [], loads: [], solved: false },
+        { name: 'later', procedure: 'static', constraints: [], loads: [], solved: false },
+      ],
+      warnings: [{ code: 'model.unconstrained', text: 'later has no supports', where: "step 'later'", step: 'later' }],
+    } as unknown as ModelSummary;
+    const { root, commands, store } = mount({ model: m, tab: 'results' });
+    const top = root.querySelector<HTMLButtonElement>('button.solve')!;
+    const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]')!;
+    expect(top.disabled).toBe(false);
+    expect(fallback.disabled).toBe(false);
+    expect(root.querySelector('.banner')).toBeNull();
+    await act(async () => { top.click(); fallback.click(); });
+    expect(commands.filter(command => command.cmd === 'solve.run')).toEqual([
+      { cmd: 'solve.run', step: 'free' }, { cmd: 'solve.run', step: 'free' },
+    ]);
+    // The complete warning list stays inspectable even when this target is ready.
+    act(() => store.set({ tab: 'checks' }));
+    expect(root.querySelector('.bottom-body .check-row')?.textContent).toContain('W-1300');
+  });
+
+  it('keeps a target/predecessor blocker on Solve and does not offer an enabled Results fallback', () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'response', procedure: 'harmonic', after: 'modal', constraints: [], loads: [], solved: false },
+        { name: 'modal', procedure: 'modal', constraints: [], loads: [], solved: false },
+      ],
+      warnings: [{ code: 'material.missing-property', text: 'modal has no mass', where: "step 'modal'", step: 'modal' }],
+    } as unknown as ModelSummary;
+    const { root } = mount({ model: m, tab: 'results' });
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.title).toContain('modal has no mass');
+    // An unmapped warning still blocks; it cannot accidentally fall through to an enabled solve.
+    const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]');
+    expect(fallback?.disabled ?? true).toBe(true);
+    if (fallback) expect(fallback.title).toContain('W-1103');
+  });
+
+  it('scopes stale Result re-solve to that Result Step rather than the first Step', async () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'unfinished', procedure: 'static', constraints: [], loads: [], solved: false },
+        { name: 'free', procedure: 'modal', constraints: [], loads: [], solved: true },
+      ],
+      warnings: [{ code: 'model.unconstrained', text: 'unfinished has no supports', step: 'unfinished' }],
+    } as unknown as ModelSummary;
+    const { root, commands, store } = mount({ model: m, result: result('free', true, 1), viewMode: 'results' });
+    const reSolve = root.querySelector<HTMLButtonElement>('.stale-banner button')!;
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.disabled).toBe(true);
+    expect(reSolve.disabled).toBe(false);
+    await act(async () => reSolve.click());
+    expect(commands.at(-1)).toEqual({ cmd: 'solve.run', step: 'free' });
+    act(() => store.set({ model: { ...m, warnings: [{ code: 'model.unconstrained', text: 'free is blocked', step: 'free' }] } as unknown as ModelSummary }));
+    expect(reSolve.disabled).toBe(true);
   });
 
   it('starts on the Journal tab and shows the Command lines', () => {
@@ -628,7 +730,7 @@ describe('the shell', () => {
   });
 
   // Issue #41: the start screen leads with the assistant composer, then New project, then the
-  // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
+  // Recent list, then the import/example/tutorial cards. Each carries its registry Command.
   it('renders the start screen in the issue’s reading order before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
@@ -643,11 +745,14 @@ describe('the shell', () => {
     expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
     // The composer's field and the project-name field carry the Command they feed.
     expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'account.open',
       'chat.send',
       'chat.send',
       'project.new',
       'project.new',
       'file.open',
+      'form.open',
+      'form.open',
       'panel.toggle',
       'panel.toggle',
     ]);

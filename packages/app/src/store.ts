@@ -1,14 +1,15 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
 import { TABS, type Tab } from './ui/tabs';
-import { getAt, setAt } from './ui/schema';
+import { getAt, setAt, type MaterialPhysics } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 import type { TransientState } from './transient';
 
@@ -44,6 +45,10 @@ export interface FormState {
   values: Record<string, unknown>;
   /** What Revert goes back to: the values the form was opened with. */
   initial: Record<string, unknown>;
+  /** Visible Material property groups; view state, never part of the engine Command. */
+  materialPhysics?: MaterialPhysics[];
+  /** Existing object being edited; unsaved field values must not change its chat reference. */
+  target?: { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
 }
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
 export type ExampleDifficulty = 1 | 2 | 3;
@@ -79,6 +84,9 @@ export function verificationState(record: AssistantVerification, state: UiState)
 }
 
 export interface UiState {
+  account: AccountState;
+  /** Two immutable solve presentations; never serialized into the Model or Journal. */
+  resultComparison: import('@femlab/registry').ResultComparisonState;
   assistantVerifications: AssistantVerification[];
 
   autosave: AutosaveState['saved'];
@@ -106,6 +114,8 @@ export interface UiState {
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
   selection: Selection;
+  /** Tree/AI hover is view state, independent of persistent selection and Journal highlighting. */
+  hover: Pick<Selection, 'bodies' | 'faces' | 'sets'>;
   pickTarget: 'face' | 'body' | 'off';
   viewMode: ViewMode;
   colormap: ColormapName;
@@ -147,6 +157,11 @@ export interface UiState {
   result: ResultSummary | null;
   /** Metadata for the bundled example that produced this Model, retained while edits stale it. */
   benchmark: ActiveBenchmark | null;
+  /** Informational import receipt, scoped to this live project; portable provenance is in its source. */
+  abaqusReport: AbaqusConversionReport | null;
+  stepImport: import('./step-import').StepImportState | null;
+  /** Immutable last-successful conversion receipt; later Model edits do not update it. */
+  stepReport: import('@femlab/registry').StepReport | null;
   /** The Step a solve is running for, `null` when none is. */
   solving: string | null;
   /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
@@ -218,8 +233,10 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 }
 
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
+export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] };
 
 export const initialState: UiState = {
+  account: structuredClone(EMPTY_ACCOUNT),
   assistantVerifications: [],
 
   autosave: null,
@@ -239,6 +256,7 @@ export const initialState: UiState = {
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
+  hover: EMPTY_HOVER,
   pickTarget: 'face',
   viewMode: 'geometry',
   colormap: 'viridis',
@@ -260,6 +278,7 @@ export const initialState: UiState = {
   },
   panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
+  resultComparison: { configuration: { mode: 'single' }, viewMode: 'geometry', catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null },
   exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],
@@ -281,6 +300,9 @@ export const initialState: UiState = {
   theme: 'dark',
   result: null,
   benchmark: null,
+  abaqusReport: null,
+  stepImport: null,
+  stepReport: null,
   solving: null,
   fieldKey: 'vonMises',
   legend: null,
@@ -316,14 +338,14 @@ const merge = (mode: 'replace' | 'add' | 'remove', cur: string[], next: string[]
 
 /** `refs` is what `@selection` expands to; `face:` for faces and Sets alike (both are Sets). */
 export function refsOf(s: Omit<Selection, 'refs'>): string[] {
-  return [...s.bodies.map((n) => `body:${n}`), ...s.faces.map((n) => `face:${n}`), ...s.sets.map((n) => `set:${n}`)];
+  return [...s.bodies.map((n) => refOf('body', n)), ...s.faces.map((n) => refOf('face', n)), ...s.sets.map((n) => refOf('set', n))];
 }
 
 export function selectionReducer(cur: Selection, input: { refs?: string[]; bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
   const mode = input.mode ?? 'replace';
   const supplied = [...(input.refs ?? []), ...refsOf({ bodies: input.bodies ?? [], faces: input.faces ?? [], sets: input.sets ?? [] })];
-  const refs = merge(mode, cur.refs, supplied);
-  const names = (kind: string) => refs.filter((ref) => ref.startsWith(`${kind}:`)).map((ref) => ref.slice(kind.length + 1));
+  const refs = merge(mode, cur.refs, supplied.map(ref => parseRef(ref)?.ref ?? ref));
+  const names = (kind: string) => refs.map(parseRef).filter(chip => chip?.kind === kind).map(chip => chip!.name);
   return { bodies: names('body'), faces: names('face'), sets: names('set'), refs };
 }
 
@@ -354,6 +376,7 @@ export class Store {
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
   private comparisonRequest = 0;
+  private hoverRequest = 0;
   private documentIdentity = {};
   private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
@@ -371,6 +394,12 @@ export class Store {
   }
 
   set(patch: Partial<UiState>): void {
+    // Targets belong to the displayed Model. A refresh/replacement must not retain an old
+    // hover, including a name reused by a different document or a deleted Load.
+    if (patch.model && patch.model !== this.state.model) {
+      this.hoverRequest++;
+      if (!('hover' in patch)) patch = { ...patch, hover: EMPTY_HOVER };
+    }
     // A comparison belongs to the complete current Journal; do not draw an old tail while
     // refresh is waiting for the next query reply.
     if (patch.journal && patch.journal !== this.state.journal && !('journalComparison' in patch)) {
@@ -382,6 +411,18 @@ export class Store {
 
   setJournalDiffQuery(query: (base: Journal) => Promise<JournalDiff>): void {
     this.journalDiffQuery = query;
+  }
+
+  /** All UI/AI producers share this fence; leaving or replacing a Model expires old replies. */
+  beginHover(): (targets: UiState['hover']) => boolean {
+    const request = ++this.hoverRequest;
+    const model = this.state.model;
+    this.set({ hover: EMPTY_HOVER });
+    return targets => {
+      if (request !== this.hoverRequest || model !== this.state.model) return false;
+      this.set({ hover: targets });
+      return true;
+    };
   }
 
   /** A reply may draw only while its request, current Journal and baseline selection still match. */
@@ -429,9 +470,11 @@ export class Store {
    * Open the Properties form on a Command, pre-filled with `values`. Every field edit comes
    * back through here with `keepInitial`, so Revert still knows where the form started.
    */
-  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false): void {
+  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false, target?: FormState['target'], materialPhysics?: MaterialPhysics[]): void {
     const initial = keepInitial && this.state.form?.cmd === cmd ? this.state.form.initial : values;
-    this.set({ form: { cmd, values, initial }, formError: null, pickInto: null });
+    const edited = target ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.target : undefined);
+    const physics = materialPhysics ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.materialPhysics : undefined);
+    this.set({ form: { cmd, values, initial, ...(edited ? { target: edited } : {}), ...(physics ? { materialPhysics: physics } : {}) }, formError: null, pickInto: null });
   }
 
   log(level: ConsoleLevel, text: string): void {

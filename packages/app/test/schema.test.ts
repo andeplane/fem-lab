@@ -4,6 +4,7 @@ import type { EngineSchema, JsonSchema } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { applyLabel, blockers, commandLine, defaultFormValues, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, missingRequired, parseQuantity, resolve, setAt, shapeKinds, siUnit, step, tsValue } from '../src/ui/schema';
+import { procedureFields, procedureInfo, procedureSummary } from '../src/ui/procedures';
 
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
@@ -11,6 +12,78 @@ const variants = doc.commands.oneOf as unknown as JsonSchema[];
 const byName = (name: string): JsonSchema => variants.find((v) => (v['properties'] as Record<string, { const?: string }>)['cmd']?.const === name)!;
 
 const flat = (fields: Field[]): Field[] => fields.flatMap((f) => (f.kind === 'object' ? [f, ...flat(f.fields)] : f.kind === 'union' ? [f, ...flat(f.variants.flatMap((v) => v.fields))] : [f]));
+
+describe('procedure contracts', () => {
+  const common = ['name', 'procedure', 'constraints', 'loads', 'output', 'after'];
+  const owned: Record<string, string[]> = {
+    static: ['dt', 'tEnd', 'outputEvery', 'amplitude'],
+    'static-nonlinear': ['tEnd', 'amplitude', 'increments', 'maxCutbacks', 'nonlinearTolerance', 'nonlinearMaxIterations'],
+    modal: ['nModes', 'shift'],
+    buckling: ['nModes'],
+    'heat-steady': ['nonlinearTolerance', 'nonlinearMaxIterations'],
+    'heat-transient': ['dt', 'tEnd', 'theta', 'outputEvery', 'amplitude', 'initial', 'nonlinearTolerance', 'nonlinearMaxIterations'],
+    explicit: ['tEnd', 'outputEvery', 'dtFactor', 'initialVelocity'],
+    implicit: ['dt', 'tEnd', 'outputEvery', 'amplitude', 'alpha', 'rayleighAlpha', 'rayleighBeta', 'initialVelocity'],
+    harmonic: ['outputEvery', 'rayleighAlpha', 'rayleighBeta', 'fStart', 'fStop', 'points', 'sweep', 'dampingRatio', 'dampingRatios'],
+    randomVibration: ['rayleighAlpha', 'rayleighBeta', 'dampingRatio', 'dampingRatios', 'psd'],
+  };
+
+  it('tags every Step field and covers the full field union without unknown procedures', () => {
+    const variant = byName('step.add');
+    const fields = fieldsOf(variant, DEFS);
+    const properties = variant['properties'] as Record<string, JsonSchema>;
+    const covered = new Set<string>();
+    for (const field of fields) {
+      const tags = properties[field.path[0]!]!['x-procedures'] as string[];
+      expect(tags.length, field.path[0]).toBeGreaterThan(0);
+      expect(tags.every(tag => tag === '*' || tag in owned)).toBe(true);
+    }
+    for (const procedure of Object.keys(owned)) {
+      for (const field of procedureFields(fields, variant, DEFS, procedure)) covered.add(field.path[0]!);
+      const info = procedureInfo(procedure);
+      expect(info.hint.length).toBeGreaterThan(0);
+      expect(info.materialNeeds.length).toBeGreaterThan(0);
+      expect(info.results.length).toBeGreaterThan(0);
+      const materialProperties = byName('material.add')['properties'] as Record<string, JsonSchema>;
+      expect(info.materialProperties.every(name => name in materialProperties)).toBe(true);
+    }
+    expect([...covered].sort()).toEqual(fields.map(field => field.path[0]!).sort());
+  });
+
+  it.each(Object.entries(owned))('shows only common and relevant fields for %s', (procedure, expected) => {
+    const variant = byName('step.add');
+    expect(procedureFields(fieldsOf(variant, DEFS), variant, DEFS, procedure).map(field => field.path[0])).toEqual([...common, ...expected]);
+  });
+
+  it('keeps unchosen or unknown procedures editable and tolerates missing presentation metadata', () => {
+    const variant = byName('step.add');
+    const fields = fieldsOf(variant, DEFS);
+    expect(procedureFields(fields, variant, DEFS, undefined)).toBe(fields);
+    expect(procedureFields(fields, variant, DEFS, 'plugin-procedure')).toBe(fields);
+    expect(procedureFields(fields, variant, { Procedure: {} }, 'static')).toBe(fields);
+    const properties = variant['properties'] as Record<string, JsonSchema>;
+    const noTag = { ...variant, properties: { ...properties, shift: {} } };
+    expect(procedureFields(fields, noTag, DEFS, 'heat-steady').map(field => field.path[0])).toContain('shift');
+    expect(procedureInfo('future', {})).toEqual({ name: 'future', hint: '', materialProperties: [], materialNeeds: [], results: [] });
+    expect(procedureSummary('future', { Procedure: { oneOf: [{ const: 'future' }] } })).toBe('future');
+  });
+
+  it('names thermal inputs and temperature output without imposing elastic stiffness', () => {
+    expect(procedureInfo('heat-steady').materialProperties).toEqual(['k', 'orthotropic']);
+    expect(procedureInfo('heat-transient').materialNeeds).toEqual(['k', 'ρ', 'cp']);
+    expect(procedureSummary('heat-transient')).toBe('heat-transient · needs k, ρ, cp · gives T, reaction power, stored-energy rate');
+    expect(procedureSummary('static')).toContain('E, ν or orthotropic');
+  });
+
+  it('declares optional thermal expansion only for procedures that consume thermal strain', () => {
+    for (const name of ['static', 'static-nonlinear', 'buckling', 'explicit', 'implicit']) {
+      expect(procedureInfo(name).materialProperties, name).toContain('alpha');
+    }
+    for (const name of ['modal', 'heat-steady', 'heat-transient', 'harmonic', 'randomVibration']) {
+      expect(procedureInfo(name).materialProperties, name).not.toContain('alpha');
+    }
+  });
+});
 
 describe('fieldsOf', () => {
   it('renders a field list for every Command in the schema, with no `json` fallback at the top level', () => {
@@ -44,7 +117,7 @@ describe('fieldsOf', () => {
     const mesher = fieldsOf(byName('mesh.set'), DEFS).find((f) => f.path[0] === 'mesher')!;
     expect(mesher.kind).toBe('union');
     if (mesher.kind !== 'union') throw new Error('unreachable');
-    expect(mesher.variants.map((v) => v.kind)).toEqual(['lattice', 'mapped', 'free', 'sweep', 'tet', 'surface']);
+    expect(mesher.variants.map((v) => v.kind)).toEqual(['lattice', 'mapped', 'free', 'sweep', 'tet', 'surface', 'imported']);
     // `LatticeSize` is a length or three counts; the form offers the length.
     expect(mesher.variants[0]!.fields[0]).toMatchObject({ kind: 'quantity', dimension: 'length', path: ['mesher', 'size'] });
   });
@@ -54,6 +127,22 @@ describe('fieldsOf', () => {
     expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'static-nonlinear', 'modal', 'buckling', 'heat-steady', 'heat-transient', 'explicit', 'implicit', 'harmonic', 'randomVibration'], multi: false });
     expect(fields.find((f) => f.path[0] === 'constraints')).toMatchObject({ kind: 'ref', refKind: 'constraint', multi: true });
     expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true, options: expect.arrayContaining(['stressTop', 'stressBottom', 'stress']) });
+  });
+
+  it('assigns every Material field exactly one physics group and a meaningful hint', () => {
+    const fields = fieldsOf(byName('material.add'), DEFS);
+    const grouped: Record<string, Field[]> = {};
+    for (const field of fields) (grouped[field.physics!] ??= []).push(field);
+    expect(Object.keys(grouped).sort()).toEqual(['anisotropy', 'common', 'expansion', 'mass', 'plasticity', 'stiffness', 'thermal']);
+    expect(Object.values(grouped).flat()).toHaveLength(fields.length);
+    expect(grouped['thermal']!.map(f => f.path[0])).toEqual(['k', 'cp']);
+    expect(grouped['common']!.map(f => f.path[0])).toEqual(['name', 'source']);
+    expect(fields.every(f => f.hint.length > 20)).toBe(true);
+    const orthotropic = fields.find(f => f.path[0] === 'orthotropic')!;
+    expect(orthotropic.kind).toBe('object');
+    if (orthotropic.kind !== 'object') throw new Error('expected a group');
+    expect(orthotropic.fields.every(f => typeof f.physics === 'string')).toBe(true);
+    expect(orthotropic.fields.find(f => f.path.at(-1) === 'k')!.physics).toBe('thermal');
   });
 
   it('unwraps an optional and keeps its dimension', () => {
@@ -203,6 +292,26 @@ describe('shapeKinds and missingRequired', () => {
 });
 
 describe('blockers', () => {
+  it('keeps the procedure-specific cause and the matching fix Command', () => {
+    const list = blockers([
+      { code: 'model.unconstrained', text: 'no supports in buckling', where: "step 'buckle'" },
+      { code: 'model.no-temperature-reference', text: 'heat-steady needs a temperature reference', where: "step 'warm'" },
+      { code: 'material.missing-property', text: 'heat-transient needs cp', where: "material 'slab'" },
+    ], true, true);
+    expect(list.map(b => [b.code, b.text, b.fixCmd, b.where])).toEqual([
+      ['W-1103', 'heat-transient needs cp', 'material.add', "material 'slab'"],
+      ['W-1300', 'no supports in buckling', 'constraint.fix', "step 'buckle'"],
+      ['W-1301', 'heat-steady needs a temperature reference', 'constraint.temperature', "step 'warm'"],
+    ]);
+  });
+  it('offers a heat load for an undriven heat Step, including in a mixed Model', () => {
+    const warning = { code: 'model.unloaded', text: 'No heat load or prescribed temperature.', where: "step 'warmup'", step: 'warmup' };
+    const steps = [{ name: 'warmup', procedure: 'heat-transient' }, { name: 'bend', procedure: 'static' }] as const;
+    expect(blockers([warning], true, true, steps)[0]).toMatchObject({ code: 'W-1400', text: warning.text, fixCmd: 'load.heatFlux' });
+    expect(blockers([{ ...warning, where: "step 'bend'", step: 'bend' }], true, true, steps)[0]).toMatchObject({ fixCmd: 'load.pressure' });
+    expect(blockers([{ ...warning, where: null, step: null }], true, true, [steps[0]])[0]).toMatchObject({ fixCmd: 'load.heatFlux' });
+  });
+
   it('maps the engine\'s warning names onto the design\'s W-codes, in order', () => {
     const list = blockers(
       [
@@ -213,7 +322,7 @@ describe('blockers', () => {
       true,
     );
     expect(list.map((b) => b.code)).toEqual(['W-1101', 'W-1500']);
-    expect(list[0]).toMatchObject({ fixCmd: 'material.assign', where: "body 'beam'" });
+    expect(list[0]).toMatchObject({ text: "Body 'beam' has no material", fixCmd: 'material.assign', where: "body 'beam'" });
   });
 
   it('adds W-1200 when there are bodies but no mesh settings, and nothing when there are no bodies', () => {

@@ -1,7 +1,10 @@
 ---
-status: proposed
+status: superseded
 date: 2026-09-05
 ---
+
+Superseded for production hosted AI by [ADR 0028](0028-hosted-ai-account-and-service-boundary.md).
+The registry/tool-execution design remains; direct provider keys are a development adapter.
 
 # The AI drives the Command registry directly; there is no server
 

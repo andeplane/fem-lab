@@ -592,6 +592,7 @@ pub async fn run(
     let locking = locking_kinds(p);
     if !locking.is_empty() {
         warnings.push(Warning {
+            step: None,
             code: "nlgeom.incompatibleModes".to_string(),
             text: format!(
                 "incompatible modes are off under finite deformation, so the {} elements integrate fully and \
@@ -602,6 +603,7 @@ pub async fn run(
         });
     }
     Ok(StepResult {
+        static_equilibrium: None,
         reaction_quantity: crate::units::ReactionQuantity::Force,
         ply_stresses: Vec::new(),
         fields,

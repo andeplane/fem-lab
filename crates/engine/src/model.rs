@@ -242,12 +242,12 @@ impl Hardening {
 #[serde(rename_all = "camelCase")]
 pub struct Material {
     pub name: String,
-    /// Isotropic stiffness; `None` exactly when `orthotropic` is given.
+    /// Isotropic stiffness; absent for orthotropic and heat-only Materials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub e: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nu: Option<f64>,
-    /// Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+    /// Orthotropic stiffness in the material axes; absent for isotropic and heat-only Materials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orthotropic: Option<Orthotropic>,
     /// Where the material axes point; `None` means they are the global axes.
@@ -587,6 +587,8 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSettings {
+    /// Checked immutable source. Coordinates are SI, memberships retain original labels.
+    Imported(crate::imported::ImportedMesh),
     Surface {
         body: String,
         patches: Vec<femlab_geometry::SurfacePatch>,
@@ -632,6 +634,14 @@ impl MesherSettings {
     /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
     pub fn rename_body(&mut self, from: &str, to: &str) {
         match self {
+            Self::Imported(source) => {
+                if source.body == from {
+                    source.body = to.into();
+                }
+                if let Some(members) = source.regions.remove(from) {
+                    source.regions.insert(to.into(), members);
+                }
+            }
             Self::Surface { body, .. } | Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
                 if body == from {
                     *body = to.into();
@@ -661,19 +671,36 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Surface { .. } | Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
+            Self::Imported(_)
+            | Self::Surface { .. }
+            | Self::Mapped { .. }
+            | Self::Lattice { .. }
+            | Self::Tet { .. } => None,
         }
     }
 
     /// The Body a mesher makes on its own, without a `geometry.add`: the mapped mesher's.
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
+            MesherSettings::Imported(source) => Some(&source.body),
             MesherSettings::Lattice { .. } => None,
             MesherSettings::Surface { body, .. } | MesherSettings::Mapped { body, .. } => Some(body),
             MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
     }
+}
+
+/// Editable assignments of an immutable imported element region.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedRegionAssignment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Axis>,
 }
 
 /// Mesh settings.
@@ -745,6 +772,8 @@ pub struct Model {
     /// like any other and the name lands here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesher_material: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub imported_region_assignments: BTreeMap<String, ImportedRegionAssignment>,
     /// Thickness Section assigned to the implicit surface Body, if present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesher_section: Option<String>,
@@ -773,6 +802,7 @@ impl Model {
             steps: vec![],
             mesh: None,
             mesher_material: None,
+            imported_region_assignments: BTreeMap::new(),
             mesher_section: None,
             mesher_orientation: None,
             plugins: vec![],
@@ -806,9 +836,37 @@ impl Model {
         self.mesh.as_ref().and_then(|m| m.mesher.implicit_body())
     }
 
-    /// The material assigned to a Body, whether that is a [`Body`] record or the mesher's
-    /// implicit Body, whose assignment lives in [`Model::mesher_material`].
+    /// Persistent imported source, if this Model uses one.
+    pub fn imported_source(&self) -> Option<&crate::imported::ImportedMesh> {
+        match &self.mesh.as_ref()?.mesher {
+            MesherSettings::Imported(source) => Some(source),
+            _ => None,
+        }
+    }
+
+    pub fn is_imported_region(&self, name: &str) -> bool {
+        self.imported_source().is_some_and(|s| s.regions.contains_key(name))
+    }
+
+    /// Implicit source owner plus separately editable region Bodies.
+    pub fn mesher_body_names(&self) -> Vec<&str> {
+        self.imported_source().map_or_else(|| self.implicit_body().into_iter().collect(), |s| s.body_names())
+    }
+
+    /// Bodies that actually own elements, excluding a fully partitioned aggregate owner.
+    pub fn meshed_body_names(&self) -> Vec<&str> {
+        self.imported_source()
+            .map_or_else(|| self.mesher_body_names(), |s| s.element_body_names().into_iter().collect())
+    }
+
     pub fn material_of_body(&self, body: &str) -> Option<&str> {
+        if self.is_imported_region(body) {
+            return self
+                .imported_region_assignments
+                .get(body)
+                .and_then(|a| a.material.as_deref())
+                .or(self.mesher_material.as_deref());
+        }
         if let Some(ply) = self.section_of_body(body).and_then(|section| section.plies.first()) {
             return Some(&ply.material);
         }
@@ -820,6 +878,14 @@ impl Model {
 
     /// Section assigned to explicit geometry or to a mesher-owned Body.
     pub fn section_of_body(&self, body: &str) -> Option<&NamedSection> {
+        if self.is_imported_region(body) {
+            let name = self
+                .imported_region_assignments
+                .get(body)
+                .and_then(|a| a.section.as_deref())
+                .or(self.mesher_section.as_deref())?;
+            return self.section(name);
+        }
         let name = match self.body(body) {
             Some(body) => body.section.as_deref(),
             None => self.mesher_section.as_deref().filter(|_| self.implicit_body() == Some(body)),
@@ -846,7 +912,7 @@ impl Model {
     /// Names of every object of a kind, in Model order.
     pub fn names(&self, kind: ObjectKind) -> Vec<&str> {
         match kind {
-            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.implicit_body()).collect(),
+            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.mesher_body_names()).collect(),
             ObjectKind::Material => self.materials.iter().map(|m| m.name.as_str()).collect(),
             ObjectKind::Section => self.sections.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Set => self.sets.iter().map(|s| s.name.as_str()).collect(),
@@ -864,7 +930,7 @@ impl Model {
             .iter()
             .map(|b| b.name.clone())
             .chain(self.cuts.iter().map(|c| c.name.clone()))
-            .chain(self.mesh.iter().filter_map(|m| m.mesher.implicit_body().map(str::to_string)))
+            .chain(self.mesher_body_names().into_iter().map(str::to_string))
             .collect()
     }
 
@@ -873,6 +939,11 @@ impl Model {
     pub fn knows_set(&self, set: &str) -> bool {
         if self.sets.iter().any(|s| s.name == set) || self.points.iter().any(|p| p.name == set) {
             return true;
+        }
+        if let Some(MeshSettings { mesher: MesherSettings::Imported(source), .. }) = &self.mesh {
+            if source.body_names().iter().any(|name| set.starts_with(&format!("{name}."))) {
+                return source.set_names().contains(set);
+            }
         }
         match set.rsplit_once('.') {
             Some((prefix, tag)) => !tag.is_empty() && self.set_prefixes().contains(prefix),

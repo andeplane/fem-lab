@@ -17,6 +17,11 @@ const schemaQueries = engineSchema.queries.oneOf.map((v) => v.properties['query'
 
 /** One valid input per host Command; a Command without a sample fails the exhaustive test below. */
 const SAMPLES: Record<string, Record<string, unknown>> = {
+  'view.compareResults': { mode: 'single' },
+  'view.playComparison': { mode: 'independent', pane: 'left', resultId: 'result-1', playing: false, sample: { kind: 'frame', index: 0 } },
+  'view.setComparisonLegend': { pane: 'left', resultId: 'r1', range: [{ value: 0, unit: 'MPa' }, { value: 10, unit: 'MPa' }] },
+  'view.setComparisonVisible': { pane: 'right', resultId: 'r2', bodies: ['beam'], on: false },
+  'view.pickComparison': { pane: 'left', resultId: 'r1', at: [{ value: 1, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }] },
   'view.fit': {},
   'view.setCamera': { position: [0, 0, 0], target: [1, 1, 1] },
   'view.preset': { view: 'iso' },
@@ -28,6 +33,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.toggle': { layer: 'mesh' },
   'view.setVisible': { bodies: ['beam'], on: false },
   'view.highlight': { faces: ['beam.top'] },
+  'view.hover': { sets: ['beam.top'] },
   'view.setTheme': { theme: 'dark' },
   'view.animate': { step: 'modes', mode: 1, playing: true },
   'view.playTransient': { step: 'heat', playing: false, sample: { kind: 'frame', index: 0 } },
@@ -48,7 +54,10 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'skill.invoke': { name: 'beam-theory-check', args: 'beam' },
   'clipboard.copy': { what: { kind: 'text', text: 'plain' } },
   'file.open': { json: JSON.stringify(MODEL_FILE) },
+  'file.importAbaqus': { text: '*NODE', name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 mm' },
   'geometry.importFile': { name: 'part' },
+  'geometry.importStep': { name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' },
+  'geometry.cancelStep': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
   'file.cancelAnimationCapture': {},
@@ -68,10 +77,23 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'example.open': { name: 'cantilever' },
   'solve.cancel': {},
   'ai.setKey': { key: null },
+  'account.open':{}, 'account.signIn':{method:'email',email:'me@example.com'},'account.signOut':{},'account.refresh':{},'account.checkout':{plan:'plus'},'account.portal':{},'account.changePlan':{plan:'pro'},'account.export':{},'account.delete':{confirm:'DELETE'},'ai.acceptDisclosure':{},
   'ai.setModel': { model: 'claude-opus-5' },
 };
 
 describe('Registry', () => {
+  it('routes STEP import/cancel through the injected host and reports missing conversion explicitly', async () => {
+    const { registry, host, transport } = make();
+    const input = { name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' };
+    expect(await registry.dispatch({ cmd: 'geometry.importStep', ...input })).toEqual({ cancelled: true });
+    expect(host.step!.import).toHaveBeenCalledWith(input);
+    expect(await registry.dispatch({ cmd: 'geometry.cancelStep', name: 'part' })).toEqual({ cancelled: true });
+    expect(host.step!.cancel).toHaveBeenCalledWith('part');
+    host.step = undefined;
+    await expect(registry.dispatch({ cmd: 'geometry.importStep', ...input })).rejects.toMatchObject({ code: 'unsupported' });
+    expect(await registry.dispatch({ cmd: 'geometry.cancelStep', name: 'part' })).toEqual({ cancelled: false });
+    expect(transport.dispatch).not.toHaveBeenCalled();
+  });
   it('lists every schema Command and Query plus every host Command and Query', () => {
     const { registry } = make();
     const { commands, queries } = registry.list();
@@ -211,10 +233,16 @@ describe('Registry', () => {
     expect(host.view.showField).toHaveBeenCalledWith({ field: '' });
     await registry.dispatch({ cmd: 'view.highlight', bodies: ['beam'] });
     expect(host.view.highlight).toHaveBeenCalledWith({ bodies: ['beam'] });
+    await registry.dispatch({ cmd: 'view.hover', load: 'gravity' });
+    expect(host.view.hover).toHaveBeenCalledWith({ load: 'gravity' });
+    await registry.dispatch({ cmd: 'view.hover' });
+    expect(host.view.hover).toHaveBeenLastCalledWith({});
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'selection.set', refs: ['load:p'] });
     expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
+    await registry.dispatch({ cmd: 'selection.set', load: 'p', refs: ['load:p'] });
+    expect(host.selection.set).toHaveBeenCalledWith({ load: 'p', refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
     await registry.dispatch({ cmd: 'script.setEditing', editing: true });
@@ -384,6 +412,11 @@ describe('Registry', () => {
   it('file.export writes the four formats the engine cannot see, and hands the rest to it', async () => {
     const { registry, host, transport } = make();
     const wrote = (): [string, string, string | Uint8Array] => (host.files.download as unknown as { mock: { calls: [string, string, string | Uint8Array][] } }).mock.calls.at(-1)!;
+    const query = vi.mocked(transport.query).getMockImplementation()!;
+    vi.mocked(transport.query).mockImplementation(async q => {
+      if (q.query === 'query.model') throw new FemError('unit.display', 'cannot format the selected display unit', 'displayUnits');
+      return query(q);
+    });
 
     await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download' });
     expect(wrote()).toEqual(['beam.ts', 'text/typescript', 'fem.model.new({ name: "beam" })']);
@@ -391,6 +424,8 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'journal' } });
     expect(wrote()[0]).toBe('beam.femlab.json');
     expect(String(wrote()[2])).toContain('"femlab/1"');
+    expect(transport.query).not.toHaveBeenCalledWith({ query: 'query.model' });
+    vi.mocked(transport.query).mockImplementation(query);
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'png' } });
     expect(host.view.screenshot).toHaveBeenCalledWith({ legend: true });
@@ -554,4 +589,20 @@ it('requires an explicit valid execution policy for every engine and host defini
     brokenQuery.queries.oneOf[0]!['x-execution'] = execution as never;
     expect(() => new Registry({ schema: brokenQuery, host: fakeHost() })).toThrow('execution policy');
   }
+});
+
+it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});
+
+it('forwards explicit subscription use while preserving legacy direct checkout and fixed plan-change use',async()=>{
+  const {registry,host}=make();
+  await registry.dispatch({cmd:'account.checkout',plan:'plus'});
+  expect(host.account!.checkout).toHaveBeenLastCalledWith('plus',undefined);
+  for(const purchaseUse of ['personal','business']){
+    await registry.dispatch({cmd:'account.checkout',plan:'pro',purchaseUse});
+    expect(host.account!.checkout).toHaveBeenLastCalledWith('pro',purchaseUse);
+  }
+  for(const purchaseUse of ['',null,'other'])await expect(registry.dispatch({cmd:'account.checkout',plan:'plus',purchaseUse})).rejects.toMatchObject({code:'schema'});
+  expect(host.account!.checkout).toHaveBeenCalledTimes(3);
+  await expect(registry.dispatch({cmd:'account.changePlan',plan:'studio',purchaseUse:'business'})).rejects.toMatchObject({code:'schema'});
+  expect(host.account!.changePlan).not.toHaveBeenCalled();
 });

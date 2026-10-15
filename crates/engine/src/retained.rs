@@ -1,5 +1,6 @@
 //! Immutable solve instances. Records own the context needed to interpret their fields.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -11,10 +12,11 @@ use crate::procedure::StepResult;
 
 struct DifferenceInput<'a> {
     record: &'a ResultRecord,
-    field: &'a crate::post::FieldData,
+    field: Cow<'a, crate::post::FieldData>,
     which: crate::command::Field,
     component: Option<u8>,
     name: &'a str,
+    sample: Option<crate::query::ResolvedFrame>,
 }
 
 /// Insertion-ordered lifetime; reads never pin a record or extend its lifetime.
@@ -55,8 +57,16 @@ fn field_location(per: crate::post::Per) -> &'static str {
 }
 
 impl Engine {
-    /// Only called after a successful solve, with its exact Mesh still installed.
-    pub(crate) fn retain_result(&mut self, step: String, result: StepResult) {
+    /// Publish a successful solve only after its complete summary can be displayed in the
+    /// retained Model units. Studies share this boundary; failed candidates consume no ID.
+    pub(crate) fn retain_result(
+        &mut self,
+        step: String,
+        mut result: StepResult,
+    ) -> Result<crate::query::ResultSummary, Error> {
+        for warning in &mut result.warnings {
+            warning.step = Some(step.clone());
+        }
         let sequence = next_sequence(&self.next_result);
         let record = Arc::new(ResultRecord {
             id: format!("result-{sequence}"),
@@ -68,6 +78,7 @@ impl Engine {
             built: self.mesh.as_ref().expect("the successful solve built its Mesh").clone(),
             result,
         });
+        let summary = self.summarize_record(&record, &self.model)?;
         self.next_result = sequence;
         self.results.insert(step, Arc::clone(&record));
         self.retained.push_back(record);
@@ -77,6 +88,7 @@ impl Engine {
                 self.results.remove(&old.step);
             }
         }
+        Ok(summary)
     }
 
     pub(crate) fn resident_result_bytes(&self) -> u64 {
@@ -192,17 +204,35 @@ impl ResultRecord {
 }
 
 fn difference_input<'a>(
+    engine: &Engine,
     record: &'a ResultRecord,
     operand: &'a crate::query::DifferenceOperand,
     path: &str,
 ) -> Result<DifferenceInput<'a>, Error> {
-    let (field, which) = record.named_field(&operand.field).map_err(|mut error| {
-        error.where_ = Some(format!("{path}.field"));
-        if error.suggestion.is_none() {
-            error.suggestion = Some("query.result lists fields retained by this solve".into());
-        }
-        error
-    })?;
+    let (field, which, sample) = if let Some(sample) = &operand.sample {
+        let which = serde_json::from_value(serde_json::Value::String(operand.field.clone())).map_err(|_| {
+            Error::new(ErrorCode::Unsupported, format!("'{}' is not a retained primary frame field", operand.field))
+                .at(format!("{path}.field"))
+                .suggest("query.frames lists retained primary fields; omit sample for a final derived field")
+        })?;
+        let (field, resolved, which) =
+            engine.sampled_frame(None, Some(&record.id), Some(which), sample).map_err(|mut error| {
+                let location = error.where_.as_deref().unwrap_or("sample");
+                let location = if location == "index" { "sample.index" } else { location };
+                error.where_ = Some(format!("{path}.{location}"));
+                error
+            })?;
+        (Cow::Owned(field), which, Some(resolved))
+    } else {
+        let (field, which) = record.named_field(&operand.field).map_err(|mut error| {
+            error.where_ = Some(format!("{path}.field"));
+            if error.suggestion.is_none() {
+                error.suggestion = Some("query.result lists fields retained by this solve".into());
+            }
+            error
+        })?;
+        (Cow::Borrowed(field), which, None)
+    };
     if field.per != crate::post::Per::Node || field.data.len() != record.built.mesh.n_nodes() * field.comps {
         return Err(Error::new(ErrorCode::Unsupported, format!("'{}' is not a supported nodal field", operand.field))
             .at(format!("{path}.field"))
@@ -218,7 +248,7 @@ fn difference_input<'a>(
         .at(format!("{path}.component"))
         .suggest("omit component for the complete field, or select an index within sourceComponents"));
     }
-    Ok(DifferenceInput { record, field, which, component: operand.component, name: &operand.field })
+    Ok(DifferenceInput { record, field, which, component: operand.component, name: &operand.field, sample })
 }
 
 fn same_field_topology(left: &femlab_geometry::Mesh, right: &femlab_geometry::Mesh) -> bool {
@@ -257,6 +287,7 @@ fn resolved_operand(input: &DifferenceInput<'_>) -> crate::query::ResolvedDiffer
         field: input.name.into(),
         component: input.component,
         source_components: input.field.comps,
+        sample: input.sample.clone(),
     }
 }
 
@@ -340,7 +371,27 @@ impl Engine {
                 })
             })
             .collect();
+        let edge_element: Vec<u32> = surface
+            .faces
+            .iter()
+            .take(surface.edges.len())
+            .map(|face| face.elem)
+            .chain(surface.line_elem.iter().copied())
+            .collect();
+        let edge_element_node = surface
+            .edges
+            .iter()
+            .chain(&surface.lines)
+            .zip(&edge_element)
+            .flat_map(|(edge, &elem)| {
+                edge.map(|node| {
+                    offsets[elem as usize]
+                        + mesh.elem_nodes(elem).iter().position(|&n| n == node).expect("edge belongs to element") as u32
+                })
+            })
+            .collect();
         Ok(crate::query::ResultSurface {
+            source_labels: if built.source_labels.nodes.is_empty() { None } else { Some(built.source_labels.clone()) },
             result_id: record.id.clone(),
             step: record.step.clone(),
             node_count: mesh.n_nodes(),
@@ -361,6 +412,8 @@ impl Engine {
             tri_sets,
             body_names: built.body_of_block.clone(),
             edges: surface.edges.iter().chain(&surface.lines).flatten().copied().collect(),
+            edge_element,
+            edge_element_node,
             edge_face: surface
                 .set_of_face
                 .iter()
@@ -388,8 +441,7 @@ impl Engine {
         let (field, which) = record.named_field(name)?;
         let unit = crate::units::UnitSet::default()
             .resolve()
-            .fmt(0.0, crate::solve_run::field_dimension(which, record.result.reaction_quantity))
-            .1;
+            .unit(crate::solve_run::field_dimension(which, record.result.reaction_quantity));
         Ok(crate::query::ResultField {
             result_id: record.id.clone(),
             step: record.step.clone(),
@@ -417,8 +469,8 @@ impl Engine {
             error.where_ = Some("right.resultId".into());
             error
         })?;
-        let left = difference_input(left_record, left_spec, "left")?;
-        let right = difference_input(right_record, right_spec, "right")?;
+        let left = difference_input(self, left_record, left_spec, "left")?;
+        let right = difference_input(self, right_record, right_spec, "right")?;
         if left.component.is_some() != right.component.is_some() {
             let path = if left.component.is_none() { "left.component" } else { "right.component" };
             return Err(Error::schema("component must be supplied for both operands or omitted for both")
@@ -462,12 +514,12 @@ impl Engine {
         let mut values = Vec::with_capacity(total_nodes * components);
         let mut outside_nodes = Vec::new();
         let sampled = (0..total_nodes).try_for_each(|node| {
-            let target_value = selected_at(target.field, node, target.component);
+            let target_value = selected_at(&target.field, node, target.component);
             let source_value = if direct {
-                Ok(Some(selected_at(source.field, node, source.component)))
+                Ok(Some(selected_at(&source.field, node, source.component)))
             } else {
                 let point = target.record.built.mesh.node(node as u32);
-                projected_at(&source.record.built.mesh, source.field, source.component, point)
+                projected_at(&source.record.built.mesh, &source.field, source.component, point)
             };
             source_value.and_then(|source_value| {
                 if let Some(source_value) = source_value {
@@ -486,6 +538,7 @@ impl Engine {
         sampled.map(|()| {
             let warnings = if left.name.starts_with("mode:") || right.name.starts_with("mode:") {
                 vec![crate::error::Warning {
+                step: None,
                     code: "result.mode-uncorrelated".into(),
                     text: "Modal signs and ordering are not correlated; values are raw left minus right without sign alignment"
                         .into(),
@@ -501,7 +554,7 @@ impl Engine {
                 comparison_result_id: target.record.id.clone(),
                 components,
                 node_count: total_nodes,
-                unit: crate::units::UnitSet::default().resolve().fmt(0.0, dimension).1,
+                unit: crate::units::UnitSet::default().resolve().unit(dimension),
                 values,
                 interpolated: !direct,
                 coverage: crate::query::DifferenceCoverage { inside_nodes, total_nodes, outside_nodes },
@@ -515,6 +568,10 @@ impl Engine {
 pub(crate) fn mesh_bytes(built: &BuiltMesh) -> u64 {
     let mesh = &built.mesh;
     let mesh_bytes = mesh.coords.len() * 8
+        + (built.source_labels.nodes.len()
+            + built.source_labels.elements.len()
+            + built.source_labels.unused_nodes.len())
+            * 4
         + std::mem::size_of_val(built.directors.as_slice())
         + mesh.blocks.iter().map(|b| b.conn.len() * 4).sum::<usize>()
         + mesh.node_sets.values().chain(mesh.elem_sets.values()).map(|s| s.len() * 4).sum::<usize>()
@@ -535,6 +592,7 @@ mod tests {
     fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
         let nodes = mesh.n_nodes();
         engine.mesh = Some(BuiltMesh {
+            source_labels: Default::default(),
             directors: Vec::new(),
             mesh,
             body_of_block: vec!["body".into()],
@@ -547,11 +605,14 @@ mod tests {
             rel_residual: 0.0,
             time_ms: 0.0,
         });
+        for axis in ["x", "y", "z"] {
+            result.scalars.insert(format!("applied_total_{axis}"), 0.0);
+        }
         result.fields.insert(
             crate::command::Field::Temperature,
             crate::post::FieldData::new(crate::post::Per::Node, 1, vec![value; nodes]),
         );
-        engine.retain_result(step.into(), result);
+        engine.retain_result(step.into(), result).unwrap();
     }
 
     #[test]
@@ -588,11 +649,13 @@ mod tests {
                     result_id: "result-1".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 &crate::query::DifferenceOperand {
                     result_id: "result-2".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 crate::query::DifferenceOnto::Right,
             )
@@ -615,11 +678,13 @@ mod tests {
                     result_id: "result-1".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 &crate::query::DifferenceOperand {
                     result_id: "result-2".into(),
                     field: "temperature".into(),
                     component: None,
+                    sample: None,
                 },
                 crate::query::DifferenceOnto::Left,
             )

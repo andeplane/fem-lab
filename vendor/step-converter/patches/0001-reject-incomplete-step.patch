@@ -1,0 +1,312 @@
+--- a/occt-import-js/src/importer.hpp
++++ b/occt-import-js/src/importer.hpp
+@@ -4,6 +4,27 @@
+ #include <vector>
+ #include <memory>
+ #include <functional>
++#include <stdexcept>
++
++// FEM Lab #351, 2026-10-15: reject incomplete conversion, report recognized geometry.
++class ConversionError : public std::runtime_error
++{
++public:
++    ConversionError (const std::string& code, const std::string& cause, const std::string& where) :
++        std::runtime_error (cause), code (code), where (where) {}
++    const std::string code;
++    const std::string where;
++};
++
++struct ConversionReport
++{
++    int roots = 0;
++    int transferredRoots = 0;
++    int sourceRoots = 0;
++    int faces = 0;
++    int triangles = 0;
++    bool checked = false;
++};
+ 
+ class Node;
+ class Importer;
+@@ -102,4 +123,6 @@
+ 
+     virtual Result LoadFile (const std::vector<std::uint8_t>& fileContent, const ImportParams& params) = 0;
+     virtual NodePtr GetRootNode () const = 0;
++
++    ConversionReport report;
+ };
+--- a/occt-import-js/src/importer-step.cpp
++++ b/occt-import-js/src/importer-step.cpp
+@@ -1,8 +1,15 @@
++// FEM Lab #351, 2026-10-15: reject incomplete root transfer and external dependencies.
+ #include "importer-step.hpp"
+ #include "importer-utils.hpp"
+ 
+ #include <TDocStd_Document.hxx>
+ #include <STEPCAFControl_Reader.hxx>
++#include <XSControl_WorkSession.hxx>
++#include <XSControl_TransferReader.hxx>
++#include <Transfer_TransientProcess.hxx>
++#include <TransferBRep.hxx>
++#include <Interface_CheckIterator.hxx>
++#include <STEPConstruct_ExternRefs.hxx>
+ 
+ ImporterStep::ImporterStep () :
+     ImporterXcaf ()
+@@ -22,11 +29,38 @@
+     std::istream inputStream (&inputBuffer);
+     IFSelect_ReturnStatus readStatus = stepReader.ReadStream (dummyFileName.c_str (), inputStream);
+     if (readStatus != IFSelect_RetDone) {
+-        return false;
++        throw ConversionError ("STEP_PARSE_FAILED", "STEP reader did not finish reading the file", "read");
++    }
++    if (!stepReader.WS ()->ModelCheckList ().IsEmpty (Standard_True)) {
++        throw ConversionError ("STEP_LOAD_CHECK_FAILED", "STEP reader reported a file integrity failure", "read");
++    }
++    report.roots = stepReader.NbRootsForTransfer ();
++    if (report.roots == 0) {
++        throw ConversionError ("STEP_NO_ROOTS", "STEP contains no recognized geometry transfer roots", "transfer");
++    }
++    // Reject before CAF attempts to resolve a filename in its virtual filesystem.
++    STEPConstruct_ExternRefs externalReferences (stepReader.WS ());
++    externalReferences.LoadExternRefs ();
++    if (externalReferences.NbExternRefs () != 0) {
++        throw ConversionError ("STEP_EXTERNAL_REFERENCE", "STEP references an external file; single-file conversion cannot account for it", "transfer");
+     }
+ 
+     if (!stepCafReader.Transfer (document)) {
+-        return false;
++        throw ConversionError ("STEP_TRANSFER_FAILED", "STEP geometry transfer did not finish", "transfer");
++    }
++    if (!stepCafReader.ExternFiles ().IsEmpty ()) {
++        throw ConversionError ("STEP_EXTERNAL_REFERENCE", "STEP references an external file; single-file conversion cannot account for it", "transfer");
++    }
++    const Handle (Transfer_TransientProcess)& process = stepReader.WS ()->TransferReader ()->TransientProcess ();
++    // OCCT can omit unsupported child faces with warnings while retaining a valid root.
++    if (!process->CheckList (Standard_False).IsEmpty (Standard_False)) {
++        throw ConversionError ("STEP_TRANSFER_CHECK_FAILED", "STEP transfer reported a geometry warning or failure", "transfer");
++    }
++    for (int root = 1; root <= report.roots; root++) {
++        if (TransferBRep::ShapeResult (process, stepReader.RootForTransfer (root)).IsNull ()) {
++            throw ConversionError ("STEP_ROOT_MISSING", "A recognized STEP root produced no geometry", "transfer");
++        }
++        report.transferredRoots++;
+     }
+ 
+     return true;
+--- a/occt-import-js/src/importer-utils.cpp
++++ b/occt-import-js/src/importer-utils.cpp
+@@ -142,5 +142,6 @@
+     }
+ 
+     BRepMesh_IncrementalMesh mesh (shape, linDeflection, Standard_False, angDeflection);
+-    return true;
++    // FEM Lab #351, 2026-10-15: never publish a partial or failed mesh.
++    return mesh.IsDone () && mesh.GetStatusFlags () == 0;
+ }
+--- a/occt-import-js/src/importer-xcaf.cpp
++++ b/occt-import-js/src/importer-xcaf.cpp
+@@ -10,6 +10,47 @@
+ #include <Quantity_Color.hxx>
+ #include <BRep_Tool.hxx>
+ #include <XCAFDoc_DocumentTool.hxx>
++#include <TopoDS_Iterator.hxx>
++#include <Poly_Triangulation.hxx>
++
++// FEM Lab #351, 2026-10-15: inspect every container, stopping at supported faces.
++// An edge/vertex inside a face is supported topology; a free one would be omitted.
++static void InspectShape (const TopoDS_Shape& shape, bool triangulated, ConversionReport& report)
++{
++    if (shape.IsNull ()) {
++        throw ConversionError ("STEP_EMPTY_TOPOLOGY", "A source shape is null", "topology");
++    }
++    if (shape.ShapeType () == TopAbs_FACE) {
++        if (!triangulated) {
++            report.faces++;
++            if (report.faces > 500000) {
++                throw ConversionError ("STEP_TRIANGLE_LIMIT", "More source faces than the 500000-triangle limit permits", "topology");
++            }
++            return;
++        }
++        TopLoc_Location location;
++        Handle (Poly_Triangulation) mesh = BRep_Tool::Triangulation (TopoDS::Face (shape), location);
++        if (mesh.IsNull () || mesh->NbNodes () == 0 || mesh->NbTriangles () == 0) {
++            throw ConversionError ("STEP_FACE_MISSING_TRIANGULATION", "A source face has no nonempty triangulation", "tessellation");
++        }
++        if (mesh->NbTriangles () > 500000 - report.triangles) {
++            throw ConversionError ("STEP_TRIANGLE_LIMIT", "Converted geometry exceeds the 500000-triangle limit", "tessellation");
++        }
++        report.triangles += mesh->NbTriangles ();
++        return;
++    }
++    if (shape.ShapeType () != TopAbs_COMPOUND && shape.ShapeType () != TopAbs_COMPSOLID &&
++        shape.ShapeType () != TopAbs_SOLID && shape.ShapeType () != TopAbs_SHELL) {
++        throw ConversionError ("STEP_UNSUPPORTED_TOPOLOGY", "Free wires, edges and vertices cannot be represented as triangle geometry", "topology");
++    }
++    TopoDS_Iterator child (shape);
++    if (!child.More ()) {
++        throw ConversionError ("STEP_EMPTY_TOPOLOGY", "A source container has no geometry", "topology");
++    }
++    for (; child.More (); child.Next ()) {
++        InspectShape (child.Value (), triangulated, report);
++    }
++}
+ 
+ static std::string GetLabelNameNoRef (const TDF_Label& label)
+ {
+@@ -328,10 +369,6 @@
+         for (TDF_ChildIterator it (mainLabel); it.More (); it.Next ()) {
+             TDF_Label childLabel = it.Value ();
+             if (IsFreeShape (childLabel, shapeTool)) {
+-                TopoDS_Shape shape = shapeTool->GetShape (childLabel);
+-                if (!TriangulateShape (shape, params)) {
+-                    continue;
+-                }
+                 children.push_back (std::make_shared<const XcafNode> (
+                     childLabel, shapeTool, colorTool
+                     ));
+@@ -385,8 +422,22 @@
+     TDF_LabelSequence labels;
+     shapeTool->GetFreeShapes (labels);
+     if (labels.IsEmpty ()) {
+-        return Importer::Result::ImportFailed;
+-    }
++        throw ConversionError ("STEP_NO_ROOTS", "Transferred document has no free geometry roots", "topology");
++    }
++
++    report.sourceRoots = labels.Length ();
++    for (int root = 1; root <= labels.Length (); root++) {
++        TopoDS_Shape shape = shapeTool->GetShape (labels.Value (root));
++        InspectShape (shape, false, report);
++    }
++    for (int root = 1; root <= labels.Length (); root++) {
++        TopoDS_Shape shape = shapeTool->GetShape (labels.Value (root));
++        if (!TriangulateShape (shape, params)) {
++            throw ConversionError ("STEP_TESSELLATION_FAILED", "A source root did not tessellate completely", "tessellation");
++        }
++        InspectShape (shape, true, report);
++    }
++    report.checked = true;
+ 
+     rootNode = std::make_shared<const XcafRootNode> (shapeTool, colorTool, params);
+     return Importer::Result::Success;
+--- a/occt-import-js/src/js-interface.cpp
++++ b/occt-import-js/src/js-interface.cpp
+@@ -5,6 +5,35 @@
+ #include "importer-iges.hpp"
+ #include "importer-brep.hpp"
+ #include <emscripten/bind.h>
++#include <Standard_Failure.hxx>
++
++// FEM Lab #351, 2026-10-15: additive, versioned completeness receipt.
++static emscripten::val MakeReceipt (const ConversionReport& report, bool complete, int meshes = 0)
++{
++    emscripten::val receipt (emscripten::val::object ());
++    receipt.set ("version", std::string ("occt-import-js-0.0.23+femlab.1"));
++    receipt.set ("complete", complete);
++    receipt.set ("roots", report.roots);
++    receipt.set ("transferredRoots", report.transferredRoots);
++    receipt.set ("sourceRoots", report.sourceRoots);
++    receipt.set ("faces", report.faces);
++    receipt.set ("meshes", meshes);
++    receipt.set ("triangles", report.triangles);
++    return receipt;
++}
++
++static emscripten::val Failed (const ConversionReport& report, const std::string& code, const std::string& cause, const std::string& where)
++{
++    emscripten::val result (emscripten::val::object ());
++    result.set ("success", false);
++    result.set ("femlab", MakeReceipt (report, false));
++    emscripten::val error (emscripten::val::object ());
++    error.set ("code", code);
++    error.set ("cause", cause);
++    error.set ("where", where);
++    result.set ("error", error);
++    return result;
++}
+ 
+ class HierarchyWriter
+ {
+@@ -14,6 +43,10 @@
+         mMeshCount (0)
+     {
+     }
++
++    int MeshCount () const { return mMeshCount; }
++    int FaceCount () const { return mFaceCount; }
++    int TriangleCount () const { return mTriangleCount; }
+ 
+     void WriteNode (const NodePtr& node, emscripten::val& nodeObj)
+     {
+@@ -57,6 +90,7 @@
+             emscripten::val brepFaceArr (emscripten::val::array ());
+ 
+             mesh.EnumerateFaces ([&](const Face& face) {
++                mFaceCount++;
+                 int triangleOffset = triangleCount;
+                 int vertexOffset = vertexCount;
+                 face.EnumerateVertices ([&](double x, double y, double z) {
+@@ -76,6 +110,7 @@
+                     indexArr.set (triangleCount * 3 + 1, vertexOffset + v1);
+                     indexArr.set (triangleCount * 3 + 2, vertexOffset + v2);
+                     triangleCount += 1;
++                    mTriangleCount++;
+                 });
+                 emscripten::val brepFaceObj (emscripten::val::object ());
+                 brepFaceObj.set ("first", triangleOffset);
+@@ -132,6 +167,8 @@
+ 
+     emscripten::val& mMeshesArr;
+     int mMeshCount;
++    int mFaceCount = 0;
++    int mTriangleCount = 0;
+ };
+ 
+ static void EnumerateNodeMeshes (const NodePtr& node, const std::function<void (const Mesh&)>& onMesh)
+@@ -147,13 +184,17 @@
+ 
+ static emscripten::val ImportFile (ImporterPtr importer, const emscripten::val& buffer, const ImportParams& params)
+ {
++    try {
++    if (buffer["length"].as<double> () > 16.0 * 1024.0 * 1024.0) {
++        throw ConversionError ("STEP_INPUT_LIMIT", "STEP input exceeds 16 MiB", "read");
++    }
+     emscripten::val resultObj (emscripten::val::object ());
+ 
+     const std::vector<uint8_t>& bufferArr = emscripten::vecFromJSArray<std::uint8_t> (buffer);
+     Importer::Result importResult = importer->LoadFile (bufferArr, params);
+     resultObj.set ("success", importResult == Importer::Result::Success);
+     if (importResult != Importer::Result::Success) {
+-        return resultObj;
++        throw ConversionError ("STEP_TRANSFER_FAILED", "Geometry import failed", "transfer");
+     }
+ 
+     int meshIndex = 0;
+@@ -164,9 +205,26 @@
+     HierarchyWriter hierarchyWriter (meshesArr);
+     hierarchyWriter.WriteNode (rootNode, rootNodeObj);
+ 
++    if (!importer->report.checked || hierarchyWriter.MeshCount () == 0 ||
++        hierarchyWriter.FaceCount () != importer->report.faces ||
++        hierarchyWriter.TriangleCount () != importer->report.triangles) {
++        throw ConversionError ("STEP_OUTPUT_MISMATCH", "Emitted meshes do not account for all checked source faces and triangles", "output");
++    }
++    resultObj.set ("femlab", MakeReceipt (importer->report, true, hierarchyWriter.MeshCount ()));
++
+     resultObj.set ("root", rootNodeObj);
+     resultObj.set ("meshes", meshesArr);
+     return resultObj;
++    } catch (const ConversionError& error) {
++        return Failed (importer->report, error.code, error.what (), error.where);
++    } catch (const Standard_Failure& error) {
++        const char* cause = error.GetMessageString ();
++        return Failed (importer->report, "STEP_KERNEL_FAILURE", cause ? cause : "OCCT raised an exception", "kernel");
++    } catch (const std::exception& error) {
++        return Failed (importer->report, "STEP_KERNEL_FAILURE", error.what (), "kernel");
++    } catch (...) {
++        return Failed (importer->report, "STEP_KERNEL_FAILURE", "Converter raised an unknown exception", "kernel");
++    }
+ }
+ 
+ static ImportParams GetImportParams (const emscripten::val& paramsVal)

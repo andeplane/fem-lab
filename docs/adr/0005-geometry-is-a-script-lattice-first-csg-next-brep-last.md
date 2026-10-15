@@ -5,6 +5,11 @@ date: 2026-09-05
 
 # Geometry is a script of primitives with named faces; lattice meshing first, CSG + tets next, B-rep last
 
+**Scope update:** [ADR 0030](0030-exact-cad-editing-is-deferred-and-replay-stays-portable.md)
+supersedes the v2 B-rep/fillet roadmap commitment below: exact CAD editing is deferred,
+with no committed release. The primitive, sketch, boolean and named-face model continues.
+The original rationale is retained as history; STEP conversion is separately tracked in #351.
+
 Geometry is defined by Commands that add primitives, combine them, and name faces; it is
 never defined by picking nodes. The Mesher behind that API changes over time while the API
 does not: v1 meshes axis-aligned primitives directly onto a structured hex8 lattice (zero

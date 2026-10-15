@@ -46,8 +46,8 @@ fn time_index(times: &[f64], time: f64, sampling: TimeSampling) -> Result<usize,
 
 impl Engine {
     /// Metadata and explicit selections read the immutable solved record.
-    fn frame_stamp(model: &crate::model::Model, index: usize, time: f64) -> FrameStamp {
-        FrameStamp { index: index as u32, time_si: time, time: display(model, time, Time::DIM) }
+    fn frame_stamp(model: &crate::model::Model, index: usize, time: f64) -> Result<FrameStamp, Error> {
+        Ok(FrameStamp { index: index as u32, time_si: time, time: display(model, time, Time::DIM)? })
     }
 
     pub(crate) fn query_frames(&self, step: Option<&str>, id: Option<&str>) -> Result<FramesResult, Error> {
@@ -65,7 +65,12 @@ impl Engine {
             components: 3,
             stored_components: history.values[0].len() / nodes,
             retained_bytes: 8 * (history.times.len() + history.values.iter().map(Vec::len).sum::<usize>()) as u64,
-            frames: history.times.iter().enumerate().map(|(i, t)| Self::frame_stamp(model, i, *t)).collect(),
+            frames: history
+                .times
+                .iter()
+                .enumerate()
+                .map(|(i, t)| Self::frame_stamp(model, i, *t))
+                .collect::<Result<_, Error>>()?,
         })
     }
 
@@ -101,13 +106,18 @@ impl Engine {
                 .at("index")
                 .suggest("query.frames lists zero-based retained indices")
         })?;
-        let resolved = ResolvedFrame {
-            result_id: record.id.clone(),
-            step: name.clone(),
-            model_hash: record.model_hash.clone(),
-            frame: Self::frame_stamp(model, index, history.times[index]),
-        };
-        Ok((vector_field(values, values.len() / nodes), resolved, selected))
+        // selected_record fences stale current units; explicit IDs use solved units. The
+        // retained history passed summary validation before publication. Compose the final
+        // checked stamp directly, preserving its Result without another unpack/rebuild.
+        Self::frame_stamp(model, index, history.times[index]).map(|frame| {
+            let resolved = ResolvedFrame {
+                result_id: record.id.clone(),
+                step: name.clone(),
+                model_hash: record.model_hash.clone(),
+                frame,
+            };
+            (vector_field(values, values.len() / nodes), resolved, selected)
+        })
     }
 
     pub(crate) fn query_frame(

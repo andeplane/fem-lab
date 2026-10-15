@@ -10,7 +10,10 @@ Progress is an **index into the Journal**, not a `seq`: the engine hands out `se
 whenever it rewrites the Journal (`model.new`, `journal.undo`, `file.restore`), so a watermark
 kept across a rewrite stranded the step for good (#87). The index is seeded from the Journal's
 length when the tutorial starts, which is also what stops a Model you already built from
-satisfying the steps of a tutorial you are only now beginning.
+satisfying the steps of a tutorial you are only now beginning. A shorter replacement resets
+the index to zero, so its initializing `model.new` is included. A successful tutorial
+`model.new` also resets the index when the old and new Journals both have one entry; the panel
+re-reads that Journal through the producer that performed the replacement (#451).
 
 ## The built-ins
 
@@ -76,7 +79,9 @@ A step:
 - **`expect: null`** makes a read-only step: Next always advances it. Use it for the closing
   theory and for steps that ask the reader to look at something rather than do something.
 - **`theory`** is a KaTeX-ready block, `$…$` inline and `$$…$$` display, on the closing step. It
-  is where the tutorial earns its keep: the Commands are discoverable, the physics is not.
+  supports paragraphs separated by blank lines, **bold**, *emphasis*, `code` spans and `- `
+  bullet lists. Raw HTML stays escaped text. It is where the tutorial earns its keep: the
+  Commands are discoverable, the physics is not.
 - **`doIt` may include `solve.run`.** It used to be forbidden because the solver was not merged;
   it now is, so every tutorial that builds a Model ends by solving it and reading the answer.
 - **Omit `doIt`** on a read-only step. Omit `highlight` when no single control emits the

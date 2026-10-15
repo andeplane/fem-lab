@@ -1,84 +1,6 @@
-// One interface over Anthropic and OpenAI (PLAN 4.4). The blocks are ours, not either SDK's, so
-// the agent loop, the transcript and the tests never learn which provider is behind them;
-// `anthropic.ts` and `openai.ts` are the only files that know a wire format.
-import type { ToolDefinition } from '@femlab/registry';
-
-export type ProviderId = 'anthropic' | 'openai';
-
-export interface TextBlock {
-  type: 'text';
-  text: string;
-}
-/** PLAN 4.15: images live in the conversation only, never in the Journal or a Model file. */
-export interface ImageBlock {
-  type: 'image';
-  mediaType: 'image/png' | 'image/jpeg' | 'image/webp';
-  base64: string;
-  /** The person's caption, shown on the chip and sent as text next to the image. */
-  caption?: string;
-}
-export interface ToolUseBlock {
-  type: 'tool_use';
-  id: string;
-  name: string;
-  input: unknown;
-}
-export interface ToolResultBlock {
-  type: 'tool_result';
-  toolUseId: string;
-  /** JSON of the Command's result, or of the structured `Error` when `isError`. */
-  content: string;
-  isError?: boolean;
-}
-export type Block = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
-
-/** Opaque provider wire state, retained with its assistant message and never shown in the UI. */
-export interface Continuation {
-  provider: ProviderId;
-  value: unknown;
-}
-
-export interface Message {
-  role: 'user' | 'assistant';
-  content: Block[];
-  continuation?: Continuation;
-}
-
-export interface ChatRequest {
-  system: string;
-  messages: Message[];
-  tools: ToolDefinition[];
-  model: string;
-  maxTokens: number;
-  /** Host-owned cancellation, including network reads while no tokens are arriving. */
-  signal?: AbortSignal;
-}
-
-export interface Usage {
-  /** Uncached input tokens, including cache writes. */
-  input: number;
-  output: number;
-  cacheRead: number;
-  /** Subset of input billed at a cache-write rate when reported by the provider. */
-  cacheWrite?: number;
-}
-
-export type ChatEvent =
-  | { type: 'text_delta'; text: string }
-  /** Display-only argument snapshot. Never executable until a completed tool_use arrives. */
-  | { type: 'tool_progress'; id: string; name: string; arguments: string }
-  | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'continuation'; continuation: Continuation }
-  | { type: 'usage'; usage: Usage }
-  | { type: 'done'; stopReason: string }
-  | { type: 'error'; message: string };
-
-export interface Provider {
-  id: ProviderId;
-  models: string[];
-  /** Emit at most one usage event with final totals for this request, never cumulative deltas. */
-  chat(req: ChatRequest): AsyncIterable<ChatEvent>;
-}
+// Shared provider protocol: browser and hosted service consume exactly the same events.
+import type { Block, Usage, TextBlock } from '@femlab/ai';
+export type { ProviderId, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, Block, Continuation, Message, ChatRequest, Usage, ChatEvent, Provider } from '@femlab/ai';
 
 export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0 };
 
@@ -87,12 +9,10 @@ export const NO_USAGE: Usage = { input: 0, output: 0, cacheRead: 0 };
  * an unknown id yields `null` and the panel shows tokens and seconds without a price rather than
  * a made-up number.
  */
-// OpenAI Standard rates verified 2026-09-09 against the model pages linked in docs/AI-PRICING.md.
+// OpenAI Standard rates verified 2026-09-06 against the model pages linked in docs/AI-PRICING.md.
 export const PRICES: Record<string, { in: number; out: number; cached?: number; write?: number; longContext?: boolean }> = {
   'gpt-6-astra': { in: 10, cached: 1, write: 12.5, out: 50, longContext: true },
   'gpt-5.6-sol': { in: 4, cached: 0.4, write: 5, out: 20, longContext: true },
-  'gpt-5.6-terra': { in: 2, cached: 0.2, write: 2.5, out: 12, longContext: true },
-  'gpt-5.6-luna': { in: 0.2, cached: 0.02, write: 0.25, out: 1.2, longContext: true },
   'gpt-5.5': { in: 5, cached: 0.5, out: 30, longContext: true },
   'gpt-5.4-mini': { in: 0.75, cached: 0.075, out: 4.5 },
   'claude-opus-5': { in: 5, out: 25 },

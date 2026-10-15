@@ -1,12 +1,71 @@
 // @vitest-environment node
 import { createRequire } from 'node:module';
 import { expect, it } from 'vitest';
+import { batchModule } from '../../../tools/checked-batch.mjs';
 import type { Query, ResultSurface, ResultField, DifferenceField } from '@femlab/registry';
 import { SessionTransport, SessionChannel } from '../src/session-transport';
 import { SessionRuntime } from '../src/session-runtime';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import type { RunLease } from '@femlab/registry';
+import { queryBulk, scientificQuery, rendererSurface, rendererField, type SurfaceTransfer, type FieldTransfer } from '../src/result-transfer';
 const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm.js');
+
+it('transfers explicit member field identities without merging the stresses at a shared joint', async () => {
+  const { Engine } = batchModule(wasm);
+  const engine = new Engine(1);
+  try {
+    for (const command of [
+      { cmd: 'model.new', name: 'member transfer' },
+      { cmd: 'geometry.addLine', name: 'bars', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m'], ['2 m', '0 m', '0 m']], members: [[0, 1], [1, 2]], divisions: 1 },
+      { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
+      { cmd: 'material.assign', material: 'steel', bodies: ['bars'] },
+      { cmd: 'section.add', name: 'rod', shape: { kind: 'circle', radius: '10 mm' } },
+      { cmd: 'section.assign', section: 'rod', bodies: ['bars'] },
+      { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' }, order: 1 },
+      { cmd: 'geometry.nameRegion', name: 'all', where: { kind: 'bbox', min: ['-1 m', '-1 m', '-1 m'], max: ['3 m', '1 m', '1 m'] } },
+      { cmd: 'constraint.fix', name: 'lateral', on: 'all', dofs: ['uy', 'uz'] },
+      { cmd: 'constraint.fix', name: 'root', on: 'bars.p0', dofs: ['ux'] },
+      { cmd: 'load.force', name: 'joint', on: 'bars.p1', total: ['10 kN', '0 N', '0 N'] },
+      { cmd: 'load.force', name: 'tip', on: 'bars.p2', total: ['10 kN', '0 N', '0 N'] },
+      { cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['lateral', 'root'], loads: ['joint', 'tip'], output: ['stressUnaveraged'] },
+      { cmd: 'solve.run', step: 'static', solver: 'cpu-direct' },
+    ]) await engine.dispatch(JSON.stringify(command), () => true);
+    const id = JSON.parse(engine.query(JSON.stringify({ query: 'query.result' }))).resultId as string;
+    const sq = { query: 'query.surface', resultId: id } as const;
+    const fq = { query: 'query.field', resultId: id, field: 'stressUnaveraged' } as const;
+    const surface = engine.query_transfer(JSON.stringify(sq)) as SurfaceTransfer;
+    const field = engine.query_transfer(JSON.stringify(fq)) as FieldTransfer;
+    expect(scientificQuery(sq, surface)).toEqual(JSON.parse(engine.query(JSON.stringify(sq))));
+    expect(scientificQuery(fq, field)).toEqual(JSON.parse(engine.query(JSON.stringify(fq))));
+    expect(surface.edgeElement).toBeInstanceOf(Uint32Array);
+    expect(surface.edgeElementNode).toBeInstanceOf(Uint32Array);
+    expect([...surface.edgeElement]).toEqual([0, 1]);
+    expect([...surface.edgeElementNode]).toEqual([0, 1, 2, 3]);
+    expect(surface.edges[1]).toBe(surface.edges[2]);
+    expect(surface.edgeElementNode[1]).not.toBe(surface.edgeElementNode[2]);
+    const staged = rendererSurface(surface);
+    const scalar = rendererField(field, 0);
+    expect(staged.edgeElementNode).toEqual(surface.edgeElementNode);
+    expect(scalar.per).toBe('elementNode');
+    // Cut equilibrium: the left bar carries both 10 kN loads, the right only the tip load.
+    for (const [end, force] of [20_000, 20_000, 10_000, 10_000].entries()) {
+      expect(scalar.values[staged.edgeElementNode![end]!]).toBeCloseTo(force / (Math.PI * 0.01 ** 2), -1);
+    }
+    const bulk = queryBulk(engine, sq);
+    for (const name of ['edgeElement', 'edgeElementNode'] as const) {
+      const at = bulk.buffers.findIndex(buffer => buffer.name === name);
+      expect(bulk.buffers[at]!.dtype).toBe('u32');
+      expect(new Uint32Array(bulk.raw[at]!)).toEqual(surface[name]);
+    }
+    const transferred = structuredClone(bulk.raw, { transfer: bulk.raw });
+    expect(bulk.raw.every(buffer => buffer.byteLength === 0)).toBe(true);
+    expect(transferred.some(buffer => buffer.byteLength > 0)).toBe(true);
+    surface.edgeElementNode.fill(999);
+    expect([...((engine.query_transfer(JSON.stringify(sq)) as SurfaceTransfer).edgeElementNode)]).toEqual([0, 1, 2, 3]);
+  } finally {
+    engine.free();
+  }
+});
 
 it('transfers independent retained meshes and f64 fields repeatedly without exposing engine storage', async () => {
   const engine = new wasm.SessionEngine(1, 'retained-transfer');

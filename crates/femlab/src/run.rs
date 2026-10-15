@@ -4,11 +4,42 @@ use std::path::Path;
 use std::time::Instant;
 
 use femlab_engine::query::{Query, QueryResult};
-use femlab_engine::replacement::Candidate;
+use femlab_engine::replacement::{Candidate, ModelFileEncoder, PreparedCandidate};
 use femlab_engine::session::{ExecutionContext, ReadRequest, WriteRequest};
 use femlab_engine::session_owner::{DocumentSnapshot, RunLease};
 use femlab_engine::{Command, Host, JournalEntry, ModelFile, Progress, SessionOwner};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Native host policy: actual serde pretty JSON with one LF, measured before publication.
+pub(crate) const MAX_MODEL_FILE_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) struct NativeModelFileEncoder;
+impl ModelFileEncoder for NativeModelFileEncoder {
+    fn encode(&mut self, file: &ModelFile) -> Result<String, femlab_engine::Error> {
+        let mut text =
+            serde_json::to_string_pretty(file).map_err(|e| femlab_engine::Error::schema(e.to_string()).at("file"))?;
+        text.push('\n');
+        Ok(text)
+    }
+}
+
+/// Ordinary native ModelFile exports use the same exact formatter and publication budget.
+/// Return the validated text before the caller opens or truncates any output destination.
+pub(crate) fn bounded_model_file_text(file: &ModelFile) -> Result<String, femlab_engine::Error> {
+    let text = NativeModelFileEncoder.encode(file)?;
+    if text.len() > MAX_MODEL_FILE_BYTES {
+        return Err(femlab_engine::Error::schema(format!(
+            "Model file is {} UTF-8 bytes, exceeding the {MAX_MODEL_FILE_BYTES}-byte host limit",
+            text.len()
+        ))
+        .at("file")
+        .suggest("reduce the Model or Journal before exporting the Model file"));
+    }
+    Ok(text)
+}
+
+fn finish_candidate(candidate: Candidate) -> Result<PreparedCandidate, femlab_engine::Error> {
+    candidate.finish(&mut NativeModelFileEncoder, MAX_MODEL_FILE_BYTES)
+}
 
 /// One CLI invocation owns one producer. No mutable core Engine escapes the owner.
 pub struct BatchEngine {
@@ -43,7 +74,7 @@ impl BatchEngine {
                 candidate.replay(entries, skip, verify && has_hashes).await
             }
         };
-        let prepared = match built.and_then(Candidate::finish) {
+        let prepared = match built.and_then(finish_candidate) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.owner.abandon_replacement(&ticket)?;
@@ -60,23 +91,29 @@ impl BatchEngine {
         self.lease.stamp = reply.stamp;
         Ok(reply.value)
     }
-    pub fn snapshot(&mut self) -> Result<DocumentSnapshot, femlab_engine::Error> {
-        let context = self.context();
-        self.owner.snapshot(&context)
+    /// Converted Commands build a private candidate; no partial import touches the owner.
+    pub async fn replace_commands(
+        &mut self,
+        commands: Vec<Command>,
+    ) -> Result<(DocumentSnapshot, Vec<u8>), femlab_engine::Error> {
+        let (candidate, ticket) = self.candidate()?;
+        let mut progress = |_: Progress| true;
+        let prepared = match candidate.commands(commands, &mut progress).await.and_then(finish_candidate) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.owner.abandon_replacement(&ticket)?;
+                return Err(error);
+            }
+        };
+        let file_bytes = prepared.file_bytes().to_vec();
+        let snapshot = self.owner.commit_replacement(prepared)?;
+        self.lease.stamp = snapshot.stamp.clone();
+        Ok((snapshot, file_bytes))
     }
     async fn dispatch(&mut self, cmd: Command) -> Result<femlab_engine::Ack, femlab_engine::Error> {
         let mut progress = |_: Progress| true;
         if matches!(cmd, Command::ModelNew { .. }) {
-            let (candidate, ticket) = self.candidate()?;
-            let prepared = match candidate.commands(vec![cmd], &mut progress).await.and_then(Candidate::finish) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    self.owner.abandon_replacement(&ticket)?;
-                    return Err(error);
-                }
-            };
-            let snapshot = self.owner.commit_replacement(prepared)?;
-            self.lease.stamp = snapshot.stamp;
+            let (snapshot, _) = self.replace_commands(vec![cmd]).await?;
             return Ok(femlab_engine::Ack {
                 seq: 0,
                 revision: snapshot.model.revision,
@@ -227,17 +264,26 @@ pub fn run(file: &Path, opts: RunOptions) -> i32 {
         return 0;
     }
     if opts.as_script || opts.journal {
-        return match engine.snapshot() {
-            Ok(snapshot) => {
+        return match engine.query(Query::Document {}) {
+            Ok(QueryResult::Document(document)) => {
                 if opts.as_script {
-                    print!("{}", snapshot.script);
+                    print!("{}", document.file.journal.as_script(&document.file.engine_version));
                 } else {
-                    println!("{}", serde_json::to_string_pretty(&snapshot.journal.entries).unwrap_or_default());
+                    println!("{}", serde_json::to_string_pretty(&document.file.journal.entries).unwrap_or_default());
                 }
                 0
             }
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                1
+            }
+            Ok(_) => {
+                let error = femlab_engine::Error::new(
+                    femlab_engine::ErrorCode::Internal,
+                    "query.document did not return a Model document",
+                )
+                .at("query.document");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
                 1
             }
         };

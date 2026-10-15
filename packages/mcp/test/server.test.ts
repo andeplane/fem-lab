@@ -1,9 +1,10 @@
 // The MCP host with a fake engine: the tool list is the registry, every tool call routes to a
 // Command or a Query, `run_script` runs TypeScript, and `export_file` stays inside --project.
-import { RUN_SCRIPT, toolNameFor } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, RUN_SCRIPT, modelFileText, toolNameFor, type ModelFile } from '@femlab/registry';
 import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { missingEngine, wasmCandidates, WASM_ENTRY, loadEngine, type EngineHandle, type EngineProvider } from '../src/engine';
 import { projectFrom, start } from '../src/cli';
@@ -20,6 +21,7 @@ import {
   toolList,
   type ServerDeps,
 } from '../src/server';
+import { ABAQUS_CONVERSION } from '../../registry/test/fakes';
 
 const MODEL = { name: 'beam', revision: 1, hash: 'abc', bodies: [], warnings: [] };
 
@@ -30,6 +32,8 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
     seen,
     acquire: async function () { return this; },
     release: async () => undefined,
+    replaceCommands: async commands => { seen.push(...commands); },
+    captureImport: function () { return { query: query => this.query(query), replaceCommands: commands => this.replaceCommands(commands) }; },
     dispatch: (cmd) => {
       seen.push(cmd);
       if (cmd['cmd'] === 'material.add' && (cmd['nu'] === undefined || Number(cmd['nu']) < 0)) {
@@ -41,6 +45,8 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
       seen.push(q);
       if (q['query'] === 'query.script') return Promise.resolve({ text: 'await fem.model.new({ name: "beam" });\n' });
       if (q['query'] === 'query.journal') return Promise.resolve({ entries: [], revision: 0 });
+      if (q['query'] === 'query.abaqusDependencies') return Promise.resolve({ missingFiles: [] });
+      if (q['query'] === 'query.convertAbaqus') return Promise.resolve(ABAQUS_CONVERSION);
       return Promise.resolve(MODEL);
     },
     modelFile: () => ({ format: 'femlab/1', model: MODEL }),
@@ -57,6 +63,7 @@ describe('the tool list', () => {
     expect(names).toContain(toolNameFor('query.report'));
     expect(names).toContain(toolNameFor('solve.run'));
     expect(names).toContain('export_file');
+    expect(names).toContain(toolNameFor('file.importAbaqus'));
     expect(names).toContain(RUN_SCRIPT);
     // no view, no selection, no panels: this host has no screen to move
     expect(names.filter((n) => n.startsWith('view_') || n.startsWith('selection_'))).toEqual([]);
@@ -76,6 +83,50 @@ describe('the tool list', () => {
     expect(diff.inputSchema.properties).toHaveProperty('base');
     expect(JSON.stringify(diff.inputSchema)).toContain('"cmd"');
   });
+});
+
+it('offers one scoped Abaqus import tool and the same inline script Command; picker and database rejection never reach conversion', async () => {
+  const project = await scratch();
+  const text = '\ufeff*NODE\r\n';
+  await writeFile(path.join(project, 'source.inp'), text);
+  await writeFile(path.join(project, 'results.odb'), Buffer.from([0xff, 0]));
+  const engine = fakeEngine();
+  const registry = createRegistry({ engine, project });
+  const args = { name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 cm' };
+  expect(await callTool(registry, toolNameFor('file.importAbaqus'), { ...args, path: './source.inp' })).toEqual({ report: ABAQUS_CONVERSION.report });
+  expect(engine.seen).toEqual([{ query: 'query.abaqusDependencies', text, sourceName: 'source.inp' }, { query: 'query.convertAbaqus', ...args, text, sourceName: 'source.inp', sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+  engine.seen.length = 0;
+  await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, picker: true })).rejects.toMatchObject({ code: 'unsupported' });
+  await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, path: 'results.odb' })).rejects.toMatchObject({ code: 'unsupported' });
+  expect(engine.seen).toEqual([]);
+  const scripted = await registry.dispatch({ cmd: 'script.run', code: `return await fem.file.importAbaqus(${JSON.stringify({ ...args, text })});` }) as { result: unknown; error?: string };
+  expect(scripted.error).toBeUndefined();
+  expect(scripted.result).toEqual({ report: ABAQUS_CONVERSION.report });
+  expect(engine.seen).toEqual([{ query: 'query.abaqusDependencies', text }, { query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+});
+
+it('acquires included files relative to the submission folder and passes exact contents to the captured converter', async () => {
+  const project = await scratch();
+  await mkdir(path.join(project, 'submission/Parts'), { recursive: true });
+  const text = '*INCLUDE,INPUT=Parts/Mesh.inc\r\n';
+  const mesh = '*NODE\r\n1,0,0,0\r\n';
+  await writeFile(path.join(project, 'submission/Root.inp'), text);
+  await writeFile(path.join(project, 'submission/Parts/Mesh.inc'), mesh);
+  const engine = fakeEngine();
+  const original = engine.query;
+  engine.query = vi.fn(async query => {
+    if (query['query'] === 'query.abaqusDependencies') {
+      engine.seen.push(query);
+      return { missingFiles: query['sourceFiles'] ? [] : ['Parts/Mesh.inc'] };
+    }
+    return original(query);
+  });
+  const registry = createRegistry({ engine, project });
+  await registry.dispatch({ cmd: 'file.importAbaqus', name: 'imported', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', path: 'submission/Root.inp' });
+  const converted = engine.seen.find(item => (item as Record<string, unknown>)['query'] === 'query.convertAbaqus');
+  expect(converted).toMatchObject({ sourceName: 'Root.inp', sourceFiles: { 'Parts/Mesh.inc': mesh }, text, unitTime: '1 s' });
+  expect(JSON.stringify(converted)).not.toContain(project);
+  expect(engine.seen.slice(-ABAQUS_CONVERSION.commands.length)).toEqual(ABAQUS_CONVERSION.commands);
 });
 
 describe('calling a tool', () => {
@@ -145,6 +196,30 @@ describe('run_script on its own', () => {
 });
 
 describe('export_file', () => {
+  it('refuses an oversized model file including its final LF before touching existing files or directories', async () => {
+    const root = await scratch();
+    const engine = fakeEngine();
+    const file: ModelFile = {
+      format: 'femlab/1', engineVersion: '0', model: { name: '', idealisation: { kind: 'solid3d' } },
+      journal: { entries: [{ seq: 0, hashAfter: 'h', cmd: { cmd: 'model.new', name: 'beam' } }] },
+    };
+    const overhead = Buffer.byteLength(modelFileText(file));
+    file.model.name = 'x'.repeat(MAX_MODEL_FILE_BYTES - overhead);
+    expect(Buffer.byteLength(modelFileText(file))).toBe(MAX_MODEL_FILE_BYTES);
+    engine.modelFile = () => file;
+    const registry = createRegistry({ engine, project: root });
+    await writeFile(path.join(root, 'keep.femlab.json'), 'previous model');
+    await expect(callTool(registry, 'export_file', { format: 'journal', path: 'keep.femlab.json' })).rejects.toMatchObject({ code: 'schema', where: 'file' });
+    expect(await readFile(path.join(root, 'keep.femlab.json'), 'utf8')).toBe('previous model');
+    await expect(callTool(registry, 'export_file', { format: 'journal', path: 'new/model.femlab.json' })).rejects.toMatchObject({ code: 'schema' });
+    expect(await readdir(root)).toEqual(['keep.femlab.json']);
+    file.model.name = file.model.name.slice(0, -1);
+    const exact = await exportText(engine, 'journal');
+    expect(Buffer.byteLength(exact)).toBe(MAX_MODEL_FILE_BYTES);
+    expect(exact.endsWith('\n')).toBe(true);
+    expect(JSON.parse(exact)).toEqual(file);
+  });
+
   it('writes each format into the project folder and refuses to leave it', async () => {
     const root = await scratch();
     const engine = fakeEngine();

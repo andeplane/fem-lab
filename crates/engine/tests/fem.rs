@@ -1060,7 +1060,7 @@ fn element_stiffness_is_symmetric_and_annihilates_the_rigid_modes() {
         assert_eq!(el.n_gp(), rule_of(kind).points.len());
         let coords = distorted(kind);
         for id in idealisations(kind) {
-            for form in [Formulation::Full, Formulation::IncompatibleModes] {
+            for form in [Formulation::Full, Formulation::IncompatibleModes, Formulation::MeanDilatation] {
                 let c = ctx(&coords, &mat, id.clone(), form);
                 let mut k = vec![0.0; n * n];
                 let det = el.stiffness(&c, &mut k).expect("a valid element");
@@ -1159,7 +1159,7 @@ fn a_single_hex8_has_six_rigid_modes_and_eighteen_stiff_ones() {
     let mat = steel();
     let coords = distorted(ElementKind::Hex8);
     let el = element_for(ElementKind::Hex8);
-    for form in [Formulation::Full, Formulation::IncompatibleModes] {
+    for form in [Formulation::Full, Formulation::IncompatibleModes, Formulation::MeanDilatation] {
         let c = ctx(&coords, &mat, Idealisation::Solid3d, form);
         let mut k = vec![0.0; 24 * 24];
         el.stiffness(&c, &mut k).expect("ok");
@@ -1181,7 +1181,7 @@ fn one_distorted_element_reproduces_every_constant_strain_state() {
         let n_gp = el.n_gp();
         let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
         for id in idealisations(kind) {
-            for form in [Formulation::Full, Formulation::IncompatibleModes] {
+            for form in [Formulation::Full, Formulation::IncompatibleModes, Formulation::MeanDilatation] {
                 for e in patch_modes(&id) {
                     let c = ctx(&coords, &mat, id.clone(), form);
                     let u = patch_displacement(kind, &id, &coords, &e);
@@ -2355,7 +2355,7 @@ fn section_lines<'a>(text: &'a str, header: &str) -> Vec<&'a str> {
 #[test]
 fn inp_writes_node_and_element_counts_that_parse_back() {
     let m = Structured { kind: ElementKind::Hex20, n: [2, 1, 1] }.box_([1.0, 1.0, 1.0]);
-    let text = write_inp(&m, "demo");
+    let text = write_inp(&m, "demo").unwrap();
     assert!(text.starts_with("*HEADING\ndemo\n"));
     assert_eq!(section_lines(&text, "*NODE").len(), m.n_nodes());
     // C3D20 = 21 fields per element (id + 20 nodes), so 16 + 5 wraps onto two lines
@@ -2366,22 +2366,163 @@ fn inp_writes_node_and_element_counts_that_parse_back() {
 }
 
 #[test]
+fn inp_continues_each_hex20_record_and_preserves_short_connectivity_records() {
+    let mut coords = map_nodes(ElementKind::Hex20, box_map);
+    for p in node_xi(ElementKind::Hex20) {
+        let [x, y, z] = box_map(p);
+        coords.extend([x + 2.0, y, z]);
+    }
+    let mesh = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![
+            ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 3, 4], first_elem: 0 },
+            ElementBlock { kind: ElementKind::Hex8, conn: (0..8).collect(), first_elem: 1 },
+            ElementBlock { kind: ElementKind::Hex20, conn: (0..40).collect(), first_elem: 2 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    mesh.validate().expect("the explicit connectivity fixture is valid");
+    let text = write_inp(&mesh, "records").unwrap();
+    assert_eq!(section_lines(&text, "*ELEMENT, TYPE=C3D4, ELSET=BLOCK1"), ["1, 1, 2, 4, 5"]);
+    assert_eq!(section_lines(&text, "*ELEMENT, TYPE=C3D8, ELSET=BLOCK2"), ["2, 1, 2, 3, 4, 5, 6, 7, 8"]);
+    // Independent exact records: the ID plus 15 nodes fills the first line, whose final comma
+    // continues this element. The last node line ends the record before the next element ID.
+    assert_eq!(
+        section_lines(&text, "*ELEMENT, TYPE=C3D20, ELSET=BLOCK3"),
+        [
+            "3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,",
+            "16, 17, 18, 19, 20",
+            "4, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,",
+            "36, 37, 38, 39, 40",
+        ]
+    );
+}
+
+#[test]
+fn inp_wraps_set_memberships_as_independent_data_records() {
+    let mut mesh = Structured { kind: ElementKind::Hex8, n: [17, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    mesh.node_sets.insert("WRAPPED".into(), (0..33).collect());
+    mesh.elem_sets.insert("WRAPPED".into(), (0..17).collect());
+    mesh.validate().expect("every membership refers to an existing node or element");
+    let text = write_inp(&mesh, "memberships").unwrap();
+    // NSET/ELSET allow repeated independent rows of 16 entries, without continuation commas.
+    assert_eq!(
+        section_lines(&text, "*NSET, NSET=WRAPPED"),
+        [
+            "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16",
+            "17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32",
+            "33",
+        ]
+    );
+    assert_eq!(
+        section_lines(&text, "*ELSET, ELSET=WRAPPED"),
+        ["1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16", "17"]
+    );
+}
+
+#[test]
 fn inp_writes_every_set_and_correct_box_face_labels() {
     let m = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
-    let text = write_inp(&m, "box");
+    let text = write_inp(&m, "box").unwrap();
     for name in ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax"] {
-        assert!(text.contains(&format!("*NSET, NSET={name}\n")), "{name}");
-        assert!(text.contains(&format!("*SURFACE, TYPE=ELEMENT, NAME={name}\n")), "{name}");
+        assert!(text.contains(&format!("*NSET, NSET=\"{name}\"\n")), "{name}");
+        assert!(text.contains(&format!("*SURFACE, TYPE=ELEMENT, NAME=\"{name}\"\n")), "{name}");
     }
-    assert!(text.contains("*ELSET, ELSET=all\n"));
+    assert!(text.contains("*ELSET, ELSET=\"all\"\n"));
     // hex S6/S4, S3/S5, S1/S2 on the low/high side per axis (structured.rs FACE_LOCAL_3D)
     for (name, want) in [("xmin", "S6"), ("xmax", "S4"), ("ymin", "S3"), ("ymax", "S5"), ("zmin", "S1"), ("zmax", "S2")]
     {
-        let header = format!("*SURFACE, TYPE=ELEMENT, NAME={name}");
+        let header = format!("*SURFACE, TYPE=ELEMENT, NAME=\"{name}\"");
         let lines = section_lines(&text, &header);
         assert_eq!(lines.len(), 1, "{name}");
         assert!(lines[0].ends_with(&format!(", {want}")), "{name}: {}", lines[0]);
     }
+}
+
+#[test]
+fn inp_preserves_bare_quoted_and_case_distinct_memberships_in_each_namespace() {
+    let mesh = Mesh {
+        dim: 3,
+        coords: vec![0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.],
+        blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+        node_sets: BTreeMap::from([("BASE_1-X".into(), vec![0, 2]), ("BASE.part".into(), vec![1])]),
+        elem_sets: BTreeMap::from([("ALL".into(), vec![0]), ("All".into(), vec![0])]),
+        face_sets: BTreeMap::from([
+            ("FACE1".into(), vec![Face { elem: 0, local: 0 }]),
+            ("Face 1".into(), vec![Face { elem: 0, local: 2 }]),
+        ]),
+    };
+    // Independent text: each namespace keeps its identity and explicit 1-based membership.
+    let expected = "*HEADING\nlabels\n*NODE\n1, 0, 0, 0\n2, 1, 0, 0\n3, 0, 1, 0\n4, 0, 0, 1\n*ELEMENT, TYPE=C3D4, ELSET=BLOCK1\n1, 1, 2, 3, 4\n*NSET, NSET=\"BASE.part\"\n2\n*NSET, NSET=BASE_1-X\n1, 3\n*ELSET, ELSET=ALL\n1\n*ELSET, ELSET=\"All\"\n1\n*SURFACE, TYPE=ELEMENT, NAME=FACE1\n1, S1\n*SURFACE, TYPE=ELEMENT, NAME=\"Face 1\"\n1, S3\n";
+    assert_eq!(write_inp(&mesh, "labels").unwrap(), expected);
+}
+
+fn inp_tetra() -> Mesh {
+    Mesh {
+        dim: 3,
+        coords: vec![0., 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.],
+        blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn inp_qualified_memberships_have_exact_independent_keyword_spelling() {
+    let mut mesh = inp_tetra();
+    mesh.node_sets.insert("beam.xmin".into(), vec![0, 2, 3]);
+    mesh.elem_sets.insert("beam.all".into(), vec![0]);
+    mesh.face_sets.insert("beam.xmin".into(), vec![Face { elem: 0, local: 3 }]);
+    let expected = "*HEADING\nlabels\n*NODE\n1, 0, 0, 0\n2, 1, 0, 0\n3, 0, 1, 0\n4, 0, 0, 1\n*ELEMENT, TYPE=C3D4, ELSET=BLOCK1\n1, 1, 2, 3, 4\n*NSET, NSET=\"beam.xmin\"\n1, 3, 4\n*ELSET, ELSET=\"beam.all\"\n1\n*SURFACE, TYPE=ELEMENT, NAME=\"beam.xmin\"\n1, S4\n";
+    assert_eq!(write_inp(&mesh, "labels").unwrap(), expected);
+    for keyword in ["*MATERIAL", "*BOUNDARY", "*CLOAD", "*STEP"] {
+        assert!(!expected.contains(keyword));
+    }
+}
+
+#[test]
+fn inp_namespaces_and_case_distinctions_do_not_merge_memberships() {
+    let mut mesh = inp_tetra();
+    mesh.node_sets.insert("BASE".into(), vec![0]);
+    mesh.node_sets.insert("base".into(), vec![1]);
+    mesh.elem_sets.insert("BASE".into(), vec![0]);
+    mesh.face_sets.insert("BASE".into(), vec![Face { elem: 0, local: 0 }]);
+    let text = write_inp(&mesh, "labels").unwrap();
+    assert!(text.contains("*NSET, NSET=BASE\n1\n*NSET, NSET=\"base\"\n2\n"));
+    assert!(text.contains("*ELSET, ELSET=BASE\n1\n"));
+    assert!(text.contains("*SURFACE, TYPE=ELEMENT, NAME=BASE\n1, S1\n"));
+    // Two conforming tetrahedra, with an authored BLOCK1 containing only the second.
+    mesh.coords.extend([0., 0., -1.]);
+    mesh.blocks[0].conn.extend([0, 2, 1, 4]);
+    mesh.elem_sets.insert("BLOCK1".into(), vec![1]);
+    let collision = write_inp(&mesh, "labels").unwrap();
+    assert!(collision.contains("*ELEMENT, TYPE=C3D4\n1, 1, 2, 3, 4\n"));
+    assert!(!collision.contains("TYPE=C3D4, ELSET=BLOCK1"));
+    assert!(collision.contains("*ELSET, ELSET=BLOCK1\n2\n*SURFACE"));
+}
+
+#[test]
+fn inp_each_set_namespace_and_heading_propagates_a_structured_error() {
+    for namespace in 0..3 {
+        let mut mesh = inp_tetra();
+        if namespace == 0 {
+            mesh.node_sets.insert("bad\"name".into(), vec![0]);
+        }
+        if namespace == 1 {
+            mesh.elem_sets.insert("bad\"name".into(), vec![0]);
+        }
+        if namespace == 2 {
+            mesh.face_sets.insert("bad\"name".into(), vec![Face { elem: 0, local: 0 }]);
+        }
+        let error = write_inp(&mesh, "labels").unwrap_err();
+        assert_eq!(error.code, ErrorCode::ExportUnavailable);
+        assert!(error.where_.unwrap().contains("bad\\\"name"));
+    }
+    assert_eq!(write_inp(&inp_tetra(), "*NODE").unwrap_err().where_.as_deref(), Some("model.name"));
 }
 
 /// A line member travels through all three formats: Gmsh's line element (type 1, both
@@ -2405,7 +2546,7 @@ fn a_line_block_round_trips_through_msh_and_names_itself_in_inp_and_vtu() {
     };
     m.validate().expect("a 1D block belongs in a 3D mesh");
     assert_msh_round_trips(&m, "hex8 plus truss2");
-    let inp = write_inp(&m, "frame");
+    let inp = write_inp(&m, "frame").unwrap();
     assert!(inp.contains("*ELEMENT, TYPE=T3D2, ELSET=BLOCK2"), "{inp}");
     // VTK cell type 3 is VTK_LINE; the types array is base64, so check the mesh writes at all
     // and that the truss did not become a face or vanish.
@@ -2426,7 +2567,7 @@ fn inp_maps_every_element_kind_to_its_abaqus_type() {
         (ElementKind::Tri6, "CPS6"),
     ] {
         let m = Structured { kind, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
-        let text = write_inp(&m, "t");
+        let text = write_inp(&m, "t").unwrap();
         assert!(text.contains(&format!("*ELEMENT, TYPE={want}, ELSET=BLOCK1")), "{kind:?} -> {want}");
     }
 }
@@ -6055,6 +6196,13 @@ fn a_free_block_has_six_zero_frequencies() {
     assert_eq!(res.frequencies.len(), 8);
     // Mode 1 is also the Result's displacement field, so a VTU export shows it.
     assert_eq!(res.fields[&Field::Displacement], res.modes[0]);
+    assert!(res.solver.rel_residual.is_finite() && res.solver.rel_residual <= SolveOptions::default().rel_tol);
+    assert_eq!(res.scalars["rel_residual"], res.solver.rel_residual);
+    assert!(res.warnings.iter().any(|w| w.code == "modal.unresolved-frequency"));
+    for warning in res.warnings.iter().filter(|w| w.code == "modal.unresolved-frequency") {
+        assert!(warning.text.contains("relative frequency convergence is not certified"));
+        assert!(warning.where_.as_ref().unwrap().starts_with("mode:"));
+    }
 }
 
 /// A modal Step over a Material without a density has no mass matrix, and says so instead of
@@ -13868,12 +14016,26 @@ fn kinematics_at(kind: ElementKind, coords: &[f64], xi: [f64; 3], w: f64) -> ([f
     (x, w * det, sh, g)
 }
 
-/// `(‖u_h − u‖_L2, |u_h − u|_H1)` of a nodal solution against the manufactured field: the
-/// temperature and its gradient when `heat`, else the displacement and its engineering
-/// strain, integrated with [`error_rule`].
-fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64, f64) {
+/// Independently measured errors of the represented nodal interpolant. The existing
+/// unweighted engineering-Voigt strain metric is retained separately from the full gradient.
+#[derive(Clone, Copy)]
+struct ManufacturedErrors {
+    l2: f64,
+    full_gradient: f64,
+    engineering_strain: Option<f64>,
+}
+
+/// L2, full-gradient H1 seminorm and (elasticity only) the legacy engineering-strain error.
+/// Cartesian gradients include every represented component/direction: 3x3 in solids,
+/// 2x2 in plane models, without a constitutively inferred thickness displacement. In
+/// axisymmetry the no-twist 3D cylindrical lift additionally has the hoop gradient ur/r
+/// and physical volume 2*pi*r*dA. Its r in [1,2] domain needs no axis-limit convention.
+/// Heat retains its existing full scalar gradient over the model domain. The legacy L2
+/// and strain metrics retain their original unweighted model-domain measure in every case.
+/// Incompatible-mode cases measure the nodal interpolant, not recovered/enhanced strains.
+fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> ManufacturedErrors {
     let dpn = u.len() / mesh.n_nodes();
-    let (mut l2, mut h1) = (0.0, 0.0);
+    let (mut l2, mut legacy, mut full_gradient) = (0.0, 0.0, 0.0);
     let mut coords = Vec::new();
     for elem in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(elem);
@@ -13893,7 +14055,7 @@ fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64,
                     }
                 }
             }
-            let (exact_val, exact_grad, grad): (Vec<f64>, Vec<f64>, Vec<f64>) = if heat {
+            let (exact_val, exact_metric, metric): (Vec<f64>, Vec<f64>, Vec<f64>) = if heat {
                 let (phi, gr, _) = harmonic(h, x);
                 (vec![phi], gr.to_vec(), du[0].to_vec())
             } else {
@@ -13906,15 +14068,38 @@ fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64,
                 (ue[..dpn].to_vec(), ee.to_vec(), e.to_vec())
             };
             l2 += wd * val.iter().zip(&exact_val).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
-            h1 += wd * grad.iter().zip(&exact_grad).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
+            let legacy_at_point = metric.iter().zip(&exact_metric).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
+            legacy += wd * legacy_at_point;
+            if heat {
+                full_gradient += wd * legacy_at_point;
+            } else {
+                let (_, exact_u, exact_du) = harmonic(h, x);
+                let mut gradient_error = 0.0;
+                for i in 0..dpn {
+                    for j in 0..dpn {
+                        gradient_error += (du[i][j] - exact_du[i][j]).powi(2);
+                    }
+                }
+                let weight = if h == Harmonic::Axi {
+                    gradient_error += ((val[0] - exact_u[0]) / x[0]).powi(2);
+                    wd * 2.0 * PI * x[0]
+                } else {
+                    wd
+                };
+                full_gradient += weight * gradient_error;
+            }
         }
     }
-    (l2.sqrt(), h1.sqrt())
+    ManufacturedErrors {
+        l2: l2.sqrt(),
+        full_gradient: full_gradient.sqrt(),
+        engineering_strain: if heat { None } else { Some(legacy.sqrt()) },
+    }
 }
 
 /// The manufactured problem on one mesh — the exact field on every boundary DOF, no load —
-/// solved and measured: `(L2 error, H1 error)`.
-fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: bool) -> (f64, f64) {
+/// solved once and measured in L2, full-gradient H1 and the retained strain metric.
+fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: bool) -> ManufacturedErrors {
     let sets = sets_of(mesh);
     let bodies = one_body();
     let h = harmonic_of(id);
@@ -13944,17 +14129,29 @@ fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: b
     manufactured_errors(mesh, &expand(&red, &u_f), h, heat)
 }
 
-/// The observed L2 and H1 rates over the two finest of a series `(h, L2, H1)`, gated at
-/// `p + 1` and `p` within 0.1 for an element of degree `p`.
-fn assert_rates(series: &[(f64, f64, f64)], p: f64, label: &str) {
+/// Rates over the original two finest levels. L2 stays at p+1; full-gradient H1
+/// and the separately retained engineering-strain error stay at p, all within 0.1.
+fn assert_rates(series: &[(f64, ManufacturedErrors)], p: f64, label: &str, heat: bool) {
     let hs: Vec<f64> = series.iter().map(|s| s.0).collect();
-    let l2: Vec<f64> = series.iter().map(|s| s.1).collect();
-    let h1: Vec<f64> = series.iter().map(|s| s.2).collect();
+    let l2: Vec<f64> = series.iter().map(|s| s.1.l2).collect();
+    let h1: Vec<f64> = series.iter().map(|s| s.1.full_gradient).collect();
     let n = series.len();
     let (rl2, rh1) = (observed_rate(&hs[n - 2..], &l2[n - 2..]), observed_rate(&hs[n - 2..], &h1[n - 2..]));
-    eprintln!("D4 {label}: h {hs:?} L2 {l2:?} H1 {h1:?} → rates L2 {rl2:.3} (want {}) H1 {rh1:.3} (want {p})", p + 1.0);
+    eprintln!(
+        "D4 {label}: h {hs:?} L2 {l2:?} full-gradient H1 {h1:?} → rates L2 {rl2:.3} (want {}) H1 {rh1:.3} (want {p})",
+        p + 1.0
+    );
     assert!((rl2 - (p + 1.0)).abs() <= 0.1, "{label}: L2 rate {rl2:.3}, expected {}", p + 1.0);
-    assert!((rh1 - p).abs() <= 0.1, "{label}: H1 rate {rh1:.3}, expected {p}");
+    if heat {
+        assert!(series.iter().all(|s| s.1.engineering_strain.is_none()));
+    } else {
+        let strain: Vec<f64> =
+            series.iter().map(|s| s.1.engineering_strain.expect("elastic strain metric retained")).collect();
+        let rate = observed_rate(&hs[n - 2..], &strain[n - 2..]);
+        eprintln!("D4 {label}: engineering-Voigt strain {strain:?} → rate {rate:.3} (want {p})");
+        assert!((rate - p).abs() <= 0.1, "{label}: engineering-strain rate {rate:.3}, expected {p}");
+    }
+    assert!((rh1 - p).abs() <= 0.1, "{label}: full-gradient H1 rate {rh1:.3}, expected {p}");
 }
 
 fn degree(kind: ElementKind) -> f64 {
@@ -13967,13 +14164,14 @@ fn degree(kind: ElementKind) -> f64 {
 
 /// D4: manufactured-solution refinement rates. For every element kind on the lattice mesher
 /// (Kuhn-split for the simplex kinds) in every idealisation, and for both triangle orders on
-/// the free mesher, the L2 error of the field converges at `p + 1` and the H1 error at `p`
+/// the free mesher, the L2 error of the field converges at `p + 1` and its full-gradient H1 seminorm at `p`
 /// within 0.1 — elasticity with `u = ∇φ` and conduction with `T = φ` for a harmonic `φ`.
 ///
 /// A rate that is right with a wrong constant is caught by the answer benchmarks; a rate that
 /// is wrong means an element is not what it claims to be: a quadrature rule too weak for its
 /// degree, a shape function of the wrong order, a mid-node placed off the edge, a strain
-/// term missing from `B` that a constant-strain patch test cannot see.
+/// term missing from `B` that a constant-strain patch test cannot see. The original
+/// engineering-Voigt strain rate remains an additional gate; it is not called H1 or energy.
 #[test]
 fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
     for kind in ALL_KINDS {
@@ -13987,23 +14185,13 @@ fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
             [2usize, 4, 8].iter().map(|&n| (1.0 / n as f64, lattice_block(kind, n))).collect();
         for id in idealisations(kind) {
             for &form in &forms {
-                let series: Vec<(f64, f64, f64)> = meshes
-                    .iter()
-                    .map(|(h, m)| {
-                        let (l2, h1) = manufactured_solve(m, &id, form, false);
-                        (*h, l2, h1)
-                    })
-                    .collect();
-                assert_rates(&series, p, &format!("{kind:?} {id:?} {form:?}"));
+                let series: Vec<(f64, ManufacturedErrors)> =
+                    meshes.iter().map(|(h, m)| (*h, manufactured_solve(m, &id, form, false))).collect();
+                assert_rates(&series, p, &format!("{kind:?} {id:?} {form:?}"), false);
             }
-            let series: Vec<(f64, f64, f64)> = meshes
-                .iter()
-                .map(|(h, m)| {
-                    let (l2, h1) = manufactured_solve(m, &id, Formulation::Full, true);
-                    (*h, l2, h1)
-                })
-                .collect();
-            assert_rates(&series, p, &format!("{kind:?} {id:?} heat"));
+            let series: Vec<(f64, ManufacturedErrors)> =
+                meshes.iter().map(|(h, m)| (*h, manufactured_solve(m, &id, Formulation::Full, true))).collect();
+            assert_rates(&series, p, &format!("{kind:?} {id:?} heat"), true);
         }
     }
     for quadratic in [false, true] {
@@ -14017,15 +14205,90 @@ fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
             })
             .collect();
         for heat in [false, true] {
-            let series: Vec<(f64, f64, f64)> = meshes
+            let series: Vec<(f64, ManufacturedErrors)> = meshes
                 .iter()
-                .map(|(h, m)| {
-                    let (l2, h1) = manufactured_solve(m, &Idealisation::PlaneStrain, Formulation::Full, heat);
-                    (*h, l2, h1)
-                })
+                .map(|(h, m)| (*h, manufactured_solve(m, &Idealisation::PlaneStrain, Formulation::Full, heat)))
                 .collect();
-            assert_rates(&series, p, &format!("free quadratic={quadratic} heat={heat}"));
+            assert_rates(&series, p, &format!("free quadratic={quadratic} heat={heat}"), heat);
         }
+    }
+}
+
+// Closed-form calibration of the actual integrated D4 metric, independent of the PDE solve.
+const MANUFACTURED_AFFINE_AMPLITUDE: f64 = 0.25;
+
+/// The same nodal analytic field plus -A*x, zero, and +A*x. The cross terms with its
+/// interpolation error cancel in E-^2 + E+^2 - 2 E0^2, leaving 2 integral |A|^2.
+fn manufactured_affine_errors(mesh: &Mesh, h: Harmonic, gradient: [[f64; 3]; 3]) -> [ManufacturedErrors; 3] {
+    let dpn = mesh.dim;
+    [-1.0, 0.0, 1.0].map(|sign| {
+        let mut u = vec![0.0; mesh.n_nodes() * dpn];
+        for n in 0..mesh.n_nodes() as u32 {
+            let x = mesh.node(n);
+            let exact = exact_u(h, x).0;
+            for i in 0..dpn {
+                let affine: f64 = (0..dpn).map(|j| gradient[i][j] * x[j]).sum();
+                u[n as usize * dpn + i] = exact[i] + sign * MANUFACTURED_AFFINE_AMPLITUDE * affine;
+            }
+        }
+        manufactured_errors(mesh, &u, h, false)
+    })
+}
+
+#[test]
+fn manufactured_h1_metric_counts_every_cartesian_component_and_rigid_rotation() {
+    let a2 = MANUFACTURED_AFFINE_AMPLITUDE.powi(2);
+    for kind in ALL_KINDS {
+        let mesh = lattice_block(kind, 1);
+        let dim = mesh.dim;
+        let h = if dim == 3 { Harmonic::Solid } else { Harmonic::Plane };
+        for i in 0..dim {
+            for j in 0..dim {
+                let mut gradient = [[0.0; 3]; 3];
+                gradient[i][j] = 1.0;
+                let e = manufactured_affine_errors(&mesh, h, gradient);
+                let increment =
+                    e[0].full_gradient.powi(2) + e[2].full_gradient.powi(2) - 2.0 * e[1].full_gradient.powi(2);
+                let exact = 2.0 * a2; // Unit model area/volume, one affine derivative of magnitude alpha.
+                assert!((increment - exact).abs() < 2e-10, "{kind:?} d(u{i})/d(x{j}): {increment} versus {exact}");
+            }
+        }
+        for i in 0..dim {
+            for j in i + 1..dim {
+                let mut gradient = [[0.0; 3]; 3];
+                gradient[i][j] = -1.0;
+                gradient[j][i] = 1.0;
+                let e = manufactured_affine_errors(&mesh, h, gradient);
+                let increment =
+                    e[0].full_gradient.powi(2) + e[2].full_gradient.powi(2) - 2.0 * e[1].full_gradient.powi(2);
+                let exact = 4.0 * a2; // Two skew derivatives, each alpha; engineering strain is unchanged.
+                assert!((increment - exact).abs() < 2e-10, "{kind:?} rotation {i},{j}: {increment} versus {exact}");
+                let unchanged = e[1].engineering_strain.expect("elastic baseline strain");
+                for perturbed in [e[0], e[2]] {
+                    let strain = perturbed.engineering_strain.expect("elastic perturbed strain");
+                    assert!(
+                        (strain - unchanged).abs() < 2e-10 * unchanged.max(1.0),
+                        "{kind:?} rotation changes no strain"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn manufactured_h1_metric_counts_axisymmetric_hoop_and_physical_volume() {
+    for kind in ALL_KINDS.into_iter().filter(|kind| kind.dim() == 2) {
+        let mesh = lattice_block(kind, 1);
+        let e = manufactured_affine_errors(&mesh, Harmonic::Axi, [[1.0, 0.0, 0.0], [0.0; 3], [0.0; 3]]);
+        let increment = e[0].full_gradient.powi(2) + e[2].full_gradient.powi(2) - 2.0 * e[1].full_gradient.powi(2);
+        // v=(alpha*r,0) has cylindrical grad diag(alpha,0,alpha). The revolved
+        // strip r in [1,2], z in [0,1] has volume 3*pi: 2*integral |grad v|^2=12*pi*alpha^2.
+        let exact = 12.0 * PI * MANUFACTURED_AFFINE_AMPLITUDE.powi(2);
+        assert!(
+            (increment - exact).abs() < 2e-10,
+            "{kind:?} physical cylindrical gradient: {increment} versus {exact}"
+        );
     }
 }
 
@@ -16913,4 +17176,163 @@ fn a_set_that_moves_past_the_newton_budget_is_cut_back() {
     let res = run_nonlinear(&p, nl_options(2), &mut nop).expect("the gap closes");
     assert_eq!(res.contacts[0].active, 4);
     assert!(res.scalars["contact_changes"] >= 1.0);
+}
+
+/// #633: native callers have the same finite-control contract as JSON hosts.
+#[test]
+fn modal_native_controls_reject_nonfinite_tolerance_and_metadata_matches_the_pencil() {
+    let (mesh, sets) = rod_mesh(20, 1.0);
+    let bodies = one_body();
+    let p = rod_problem(&mesh, &sets, &bodies);
+    for rel_tol in [f64::NAN, f64::INFINITY] {
+        let solver = SolveOptions { rel_tol, ..SolveOptions::default() };
+        let step = Step::Modal { n_modes: 1, shift: None, solver, prestress: None };
+        assert_eq!(run_step(&p, &step).unwrap_err().code, ErrorCode::Schema);
+    }
+    let step = Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None };
+    let res = run_step(&p, &step).unwrap();
+    let pat = pattern(&mesh, p.dofs_per_node());
+    let k = assemble_stiffness(&p, &pat).unwrap().k;
+    let m = assemble_mass(&p, &pat, false).unwrap();
+    let rc = resolve(&p).unwrap();
+    let zeros = vec![0.0; k.n];
+    let kr = reduce(&k, &zeros, &rc, &[]);
+    let mr = reduce(&m, &zeros, &rc, &[]);
+    let phi: Vec<f64> = kr.free.iter().map(|&i| res.modal_dofs[0][i as usize]).collect();
+    let (mut ku, mut mu) = (vec![0.0; phi.len()], vec![0.0; phi.len()]);
+    kr.k_ff.spmv(&phi, &mut ku);
+    mr.k_ff.spmv(&phi, &mut mu);
+    let lambda = (2.0 * PI * res.frequencies[0]).powi(2);
+    let r = ku.iter().zip(&mu).fold(0.0_f64, |r, (a, b)| r.max((a - lambda * b).abs()));
+    let matrix_norm = |matrix: &Csr| {
+        (0..matrix.n)
+            .map(|i| {
+                matrix.vals[matrix.row_ptr[i] as usize..matrix.row_ptr[i + 1] as usize]
+                    .iter()
+                    .map(|v| v.abs())
+                    .sum::<f64>()
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let denominator =
+        (matrix_norm(&kr.k_ff) + lambda * matrix_norm(&mr.k_ff)) * phi.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+    let expected = r / denominator;
+    assert!(res.solver.rel_residual > 0.0 && res.solver.rel_residual <= SolveOptions::default().rel_tol);
+    // This independently evaluates the documented algebraic identity. The tolerance covers
+    // the frequency->lambda round trip and the differently ordered residual arithmetic.
+    assert!(
+        (expected - res.solver.rel_residual).abs() < 16.0 * f64::EPSILON,
+        "{expected} vs {}",
+        res.solver.rel_residual
+    );
+    assert_eq!(res.scalars["rel_residual"], res.solver.rel_residual);
+}
+
+// #673: independent polynomial fields distinguish volume-averaged dilatation from both
+// pointwise full integration and a centroid shortcut, without mirroring the B-bar kernel.
+#[test]
+fn mean_dilatation_hex8_has_the_closed_form_energy_and_volume_average() {
+    let mut mat = steel();
+    mat.props = vec![120.0, 0.25]; // mu = 48, bulk = 80.
+    let kind = ElementKind::Hex8;
+    let el = element_for(kind);
+    let coords: Vec<f64> = node_xi(kind).iter().flatten().copied().collect();
+    let u: Vec<f64> = node_xi(kind).iter().flat_map(|x| [x[0] * x[1], 0.0, 0.0]).collect();
+    for (form, energy) in
+        [(Formulation::Full, 48.0 * 28.0 / 9.0 + 80.0 * 4.0 / 3.0), (Formulation::MeanDilatation, 48.0 * 28.0 / 9.0)]
+    {
+        let c = ctx(&coords, &mat, Idealisation::Solid3d, form);
+        let mut k = vec![0.0; 24 * 24];
+        el.stiffness(&c, &mut k).unwrap();
+        let ku = mat_vec(&k, 24, &u);
+        let actual = u.iter().zip(ku).map(|(a, b)| a * b).sum::<f64>() / 2.0;
+        assert!((actual - energy).abs() < 1e-11, "{form:?}: {actual} vs {energy}");
+    }
+    // F=(xi,eta,zeta*(1+b*xi)+a*xi*eta), det J=1+b*xi, u=(eta*zeta,0,0).
+    // The physical-volume average of div u is -a/3, while its centroid value is zero.
+    let (a, b) = (0.3, 0.2);
+    let warped: Vec<f64> =
+        node_xi(kind).iter().flat_map(|x| [x[0], x[1], x[2] * (1.0 + b * x[0]) + a * x[0] * x[1]]).collect();
+    let u: Vec<f64> = node_xi(kind).iter().flat_map(|x| [x[1] * x[2], 0.0, 0.0]).collect();
+    let c = ctx(&warped, &mat, Idealisation::Solid3d, Formulation::MeanDilatation);
+    let (mut stress, mut strain) = (vec![0.0; 48], vec![0.0; 48]);
+    el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+    for g in 0..8 {
+        let xi = el.gp_xi(g);
+        let divergence = -xi[1] * (b * xi[2] + a * xi[1]) / (1.0 + b * xi[0]);
+        let gamma_xy = xi[2] - xi[1] * a * xi[0] / (1.0 + b * xi[0]);
+        let gamma_xz = xi[1] / (1.0 + b * xi[0]);
+        let correction = (-a / 3.0 - divergence) / 3.0;
+        close(
+            &strain[g * 6..g * 6 + 6],
+            &[divergence + correction, correction, correction, gamma_xy, gamma_xz, 0.0],
+            1e-13,
+        );
+        let expected = isotropic_d(120.0, 0.25);
+        let sig: Vec<f64> =
+            expected.iter().map(|row| row.iter().zip(&strain[g * 6..g * 6 + 6]).map(|(d, e)| d * e).sum()).collect();
+        close(&stress[g * 6..g * 6 + 6], &sig, 1e-12);
+    }
+}
+
+#[test]
+fn mean_dilatation_projection_converges_at_first_order_to_a_smooth_strain_field() {
+    let el = element_for(ElementKind::Hex8);
+    let mat = steel();
+    let mut errors = Vec::new();
+    for n in [2, 4, 8] {
+        let h = 1.0 / f64::from(n);
+        let mut error2 = 0.0;
+        // Translation in x,z does not affect this field's error, so each y-layer represents n² cells.
+        for j in 0..n {
+            let coords: Vec<f64> = node_xi(ElementKind::Hex8)
+                .iter()
+                .flat_map(|x| [(x[0] + 1.0) * h / 2.0, (f64::from(j) + (x[1] + 1.0) / 2.0) * h, (x[2] + 1.0) * h / 2.0])
+                .collect();
+            let u: Vec<f64> = coords.chunks_exact(3).flat_map(|x| [x[0] * x[1], 0.0, 0.0]).collect();
+            let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::MeanDilatation);
+            let (mut stress, mut strain) = (vec![0.0; 48], vec![0.0; 48]);
+            el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+            for g in 0..8 {
+                let xi = el.gp_xi(g);
+                let (x, y) = ((xi[0] + 1.0) * h / 2.0, (f64::from(j) + (xi[1] + 1.0) / 2.0) * h);
+                let exact = [y, 0.0, 0.0, x, 0.0, 0.0];
+                error2 += f64::from(n * n) * h.powi(3) / 8.0
+                    * strain[g * 6..g * 6 + 6].iter().zip(exact).map(|(v, e)| (v - e).powi(2)).sum::<f64>();
+            }
+        }
+        let error = error2.sqrt();
+        assert!((error - h / 6.0).abs() < 1e-13);
+        errors.push(error);
+    }
+    for pair in errors.windows(2) {
+        assert!((pair[0] / pair[1] - 2.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn mean_dilatation_does_not_alias_other_element_kinds_or_finite_strain() {
+    let mat = steel();
+    for kind in ALL_KINDS {
+        if kind == ElementKind::Hex8 {
+            continue;
+        }
+        let coords = distorted(kind);
+        for id in idealisations(kind) {
+            let el = element_for(kind);
+            let nd = el.n_dof();
+            let (mut full, mut mean) = (vec![0.0; nd * nd], vec![0.0; nd * nd]);
+            el.stiffness(&ctx(&coords, &mat, id.clone(), Formulation::Full), &mut full).unwrap();
+            el.stiffness(&ctx(&coords, &mat, id, Formulation::MeanDilatation), &mut mean).unwrap();
+            assert_eq!(full, mean);
+        }
+    }
+    let coords = distorted(ElementKind::Hex8);
+    let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::MeanDilatation);
+    let (mut k, mut f, mut stress, mut strain, mut state) =
+        (vec![0.0; 576], vec![0.0; 24], vec![0.0; 48], vec![0.0; 48], Vec::new());
+    let out = TangentOut { k: &mut k, f: &mut f, stress: &mut stress, strain: &mut strain, state: &mut state };
+    let error = element_for(ElementKind::Hex8).tangent_and_force(&c, &[0.0; 24], &[], out).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.cause.contains("small strain"));
 }

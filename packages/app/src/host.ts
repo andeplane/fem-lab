@@ -1,9 +1,12 @@
+import type { AccountServices } from '@femlab/registry';
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
 
 import { z } from 'zod';
+import type { Command } from '@femlab/registry';
+import { loadTargets } from './loadTargets';
 import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
@@ -11,6 +14,7 @@ import type { HostCaps } from './capabilities';
 import { choiceOf, modeCount } from './fields';
 import type { Projects } from './projects';
 import type { ResultsView } from './results';
+import type { ResultComparison } from './result-comparison';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
@@ -18,6 +22,9 @@ import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
+import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
+import type { AbaqusIo } from '@femlab/registry';
+import { browserAbaqusIo } from './abaqus-files';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -28,6 +35,8 @@ import type { TransientInput } from './transient';
 export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
+  /** A nonempty surface has installed its actual bounds in this session's viewer. */
+  onBounds?: () => void;
   /** A scrub preview; only the final gesture is dispatched as a host Command. */
   previewTransient?: (input: TransientInput) => Promise<void>;
 }
@@ -101,11 +110,12 @@ export interface SessionHostServices {
   projects: Projects;
   active(): Promise<void>;
   replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
+  captureImport(): Omit<ReturnType<HostContext['abaqus']['capture']>, 'io'>;
 }
 
 const missingSession = (): never => { throw new FemError('session.expired', 'this host has no captured project session'); };
 const unboundSession: SessionHostServices = {
-  active: missingSession, replay: missingSession,
+  active: missingSession, replay: missingSession, captureImport: missingSession,
   projects: { prime: missingSession, list: missingSession, current: missingSession, new: missingSession,
     open: missingSession, rename: missingSession, delete: missingSession, save: missingSession,
     setEnabled: missingSession, enabled: missingSession, flush: missingSession },
@@ -124,6 +134,9 @@ export function makeHostContext(
   _refresh: () => Promise<void> = async () => undefined,
   session: SessionHostServices = unboundSession,
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
+  abaqusIo?: AbaqusIo,
+  account?: AccountServices,
+  comparison?: ResultComparison,
 ): HostContext {
   const own = session.projects;
   const v = (): Viewer => {
@@ -131,17 +144,25 @@ export function makeHostContext(
     return viewer.current;
   };
   return {
+    account,
     transport,
+    ...(comparison ? { resultComparison: comparison } : {}),
+    abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {
-      fit: () => v().fit(),
-      setCamera: (c) => v().setCamera(c as CameraState),
-      preset: (p) => v().preset(p),
-      setProjection: (p) => v().setProjection(p),
-      showField: (f) => {
+      fit: () => comparison?.active ? comparison.preset('iso') : v().fit(),
+      setCamera: (c) => {
+        const viewer = v();
+        if (comparison) comparison.setCamera(c as CameraState); else viewer.setCamera(c as CameraState);
+      },
+      preset: (p) => comparison?.active ? comparison.preset(p) : v().preset(p),
+      setProjection: (p) => comparison?.active ? comparison.setProjection(p) : v().setProjection(p),
+      showField: async (f) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         return results?.showField(f as { field: string | null; component?: number | null });
       },
       setLegend: (l) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison legends require an explicit pane and Result', 'view.setLegend', 'view.setComparisonLegend');
         if (!results) {
           if (!l.colormap) return;
           store.set({ colormap: l.colormap as ColormapName });
@@ -151,40 +172,59 @@ export function makeHostContext(
         return results.setLegend(l as { colormap?: string; range?: [number, number] | 'auto' });
       },
       setDeformScale: (s) => {
+        if (comparison?.active) return comparison.setDeformScale(s);
         if (!results) return store.set({ deformScale: typeof s === 'number' ? s : 1 });
         v();
         results.setDeformScale(s);
       },
       setClip: (p) => {
         store.set({ clipOn: p !== null });
+        if (comparison?.active) return comparison.setClip(p ? { normal: p.normal, offset: p.offset } : null);
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
       toggle: (layer, on) => {
         const visible = v().setLayer(layer, on);
+        if (comparison?.active) comparison.viewers.right.current?.setLayer(layer, visible);
         store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
       },
       setVisible: (bodies, on) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison visibility requires an explicit pane and Result', 'view.setVisible', 'view.setComparisonVisible');
         v().setVisible(bodies, on);
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
-      highlight: (s) => viewer.current?.setHighlight(s),
+      highlight: (s) => { if (!comparison?.active) viewer.current?.setHighlight(s); },
+      hover: async (s) => {
+        const commit = store.beginHover();
+        const target = s.load
+          ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store.state.model)
+          : s;
+        commit({ bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
+        if (comparison?.active) comparison.viewers.right.current?.setTheme(t);
       },
-      animate: (a) => {
+      animate: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
         return results.animate(a);
       },
-      playTransient: (a) => {
+      playTransient: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
         return results.playTransient(a);
       },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
+        if (comparison?.active) {
+          const guard = comparison.captureGuard(), png = await composePaneImages(comparison.capture(o));
+          guard();
+          return { png };
+        }
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
@@ -214,10 +254,14 @@ export function makeHostContext(
     selection: {
       set: async (s) => {
         invalidateDefinition(store);
-        store.select(s);
-        const ref = s.refs?.[0];
-        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => `${candidate.kind}:${candidate.name}` === ref) : undefined;
-        if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
+        const { load, ...targets } = s;
+        store.select(targets);
+        const ref = load ? refOf('load', load) : s.refs?.[0];
+        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
+        if (item?.cmd === 'form.edit') {
+          const definition = await editDefinition(store, transport, item.args as DefinitionTarget);
+          if (definition && load) store.select({ ...targets, ...loadTargets(definition, store.state.model) });
+        }
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },
       clear: () => {
@@ -272,13 +316,18 @@ export function makeHostContext(
           tab: 'script',
         }),
     },
-    // The drawer rebinds these the moment it mounts; until then they are no-ops, so a
-    // `chat.send` from a script or the palette never throws at a person. The `import()` keeps
+    // The drawer rebinds the bridge when it mounts; until then it buffers sends and references.
+    // Open it before inserting a reference so a first-use tree click mounts the consumer.
+    // The `import()` keeps
     // the two AI SDKs off the boot path: a static `chatBridge` import would drag `src/ai/**`,
     // and with it @anthropic-ai/sdk and openai, into the landing chunk.
     chat: {
       send: (text) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.send(text); }),
-      insertMention: (ref) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.insertMention(ref); }),
+      insertMention: (ref) => import('./ai').then(async (m) => {
+        await session.active();
+        store.togglePanel('assistant', true);
+        return m.chatBridge.insertMention(ref);
+      }),
       setDraft: (text) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.setDraft(text); }),
       clear: () => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.clear(); }),
     },
@@ -383,7 +432,10 @@ export function makeHostContext(
     } },
     ai: {
       setKey: (key, provider: AiProvider) => {
-        storeKey(provider, key);
+        if (!storeKey(provider, key)) throw new FemError('unsupported', key
+          ? 'browser storage could not complete saving the key'
+          : 'browser storage refused to forget the key completely',
+        'ai.setKey', 'Allow browser storage and retry ai.setKey; to remove inaccessible saved keys, clear this site’s storage in browser settings.');
       },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);
@@ -392,6 +444,26 @@ export function makeHostContext(
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };
+}
+
+/** Browser I/O stays in the host; the comparison controller supplies already-rendered panes. */
+async function composePaneImages(pngs: string[]): Promise<string> {
+  if (pngs.length === 1) return pngs[0]!;
+  const images = await Promise.all(pngs.map(png => new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = document.createElement('img');
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new FemError('internal', 'a captured comparison pane could not be decoded', 'query.screenshot'));
+    image.src = png;
+  })));
+  const canvas = document.createElement('canvas');
+  canvas.width = images.reduce((width, image) => width + image.naturalWidth, 0);
+  canvas.height = Math.max(...images.map(image => image.naturalHeight));
+  const context = canvas.getContext('2d');
+  if (!context) throw new FemError('unsupported', 'a 2D canvas is required to join comparison panes', 'query.screenshot');
+  context.fillStyle = '#0d0f13'; context.fillRect(0, 0, canvas.width, canvas.height);
+  let left = 0;
+  for (const image of images) { context.drawImage(image, left, 0); left += image.naturalWidth; }
+  return canvas.toDataURL('image/png');
 }
 
 /** Metadata and inputs are prepared before the session owner attempts activation. */
@@ -403,6 +475,8 @@ export async function openExample(name: string, session: SessionHostServices) {
 }
 
 type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+type DefinitionCommand = Command;
+
 const definitionRequests = new WeakMap<Store, number>();
 
 function invalidateDefinition(store: Store): number {
@@ -412,14 +486,15 @@ function invalidateDefinition(store: Store): number {
 }
 
 /** Journal selection and form.edit share one request fence and the complete engine definition. */
-async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<void> {
+async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<DefinitionCommand | undefined> {
   const request = invalidateDefinition(store);
   const previousForm = store.state.form;
   const revision = store.state.revision;
-  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: DefinitionCommand };
   if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
   const { cmd, ...args } = command;
-  store.openForm(cmd, args);
+  store.openForm(cmd, args, false, target);
+  return command;
 }
 
 /**
@@ -428,7 +503,7 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
     {
@@ -463,7 +538,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       tool: true,
       run: async (input) => {
         const { mode } = input as { mode: ViewMode };
-        if (results) return results.setMode(mode);
+        if (results) {
+          if (comparison && mode !== 'results') comparison.suspend();
+          await results.setMode(mode);
+          comparison?.resume();
+          return;
+        }
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
       },
@@ -471,7 +551,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.edit',
       execution: 'sessionView',
-      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Returns that Command only when this request opened the form; a superseded request returns no value. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
       run: (input) => editDefinition(store, transport, input as DefinitionTarget),
@@ -503,12 +583,14 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'form.open',
       execution: 'sessionView',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
-      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
       tool: true,
       run: (input) => {
-        const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
-        store.openForm(command, args ?? {}, keepInitial === true);
+        const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
+        store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);
+        if (command === 'file.importAbaqus') store.togglePanel('abaqus', true);
+        if (command === 'geometry.importStep') { store.togglePanel('stepReport', false); store.togglePanel('step', true); }
       },
     },
     {
@@ -525,7 +607,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'file.openExample',
       execution: 'replacement',
-      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, and establish the saved baseline only after a complete open.",
+      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, fit the viewer after the real bounds arrive, and establish the saved baseline only after a complete open. A camera pose adjustment made while loading is preserved.",
       schema: z.object({ name: z.string() }),
       tool: true,
       run: async (input, ctx) => {

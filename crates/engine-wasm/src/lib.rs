@@ -290,6 +290,8 @@ impl SessionEngine {
                     ("triSetOffsets", &mut surface.tri_set_offsets),
                     ("triSets", &mut surface.tri_sets),
                     ("edges", &mut surface.edges),
+                    ("edgeElement", &mut surface.edge_element),
+                    ("edgeElementNode", &mut surface.edge_element_node),
                     ("edgeFace", &mut surface.edge_face),
                     ("edgeBody", &mut surface.edge_body),
                 ] {
@@ -323,6 +325,22 @@ enum CandidateState {
     Building(Box<femlab_engine::replacement::Candidate>),
     Ready(Box<femlab_engine::replacement::PreparedCandidate>),
     Consumed,
+}
+
+/// Host formatting stays in the host: ECMAScript and serde number text need not have the
+/// same length. The core checks the returned actual UTF-8 file bytes, never this transfer JSON.
+struct JsModelFileEncoder(js_sys::Function);
+impl femlab_engine::replacement::ModelFileEncoder for JsModelFileEncoder {
+    fn encode(&mut self, file: &femlab_engine::ModelFile) -> Result<String, femlab_engine::Error> {
+        let input = serde_json::to_string(file).map_err(|e| femlab_engine::Error::schema(e.to_string()).at("file"))?;
+        let encoded = self
+            .0
+            .call1(&JsValue::NULL, &JsValue::from_str(&input))
+            .map_err(|_| femlab_engine::Error::schema("host Model file encoder failed").at("file"))?;
+        encoded.as_string().ok_or_else(|| {
+            femlab_engine::Error::schema("host Model file encoder must return UTF-8 JSON text").at("file")
+        })
+    }
 }
 
 #[wasm_bindgen]
@@ -376,8 +394,24 @@ impl PreparedEngine {
         Ok(())
     }
 
-    pub fn finish(&mut self) -> Result<String, JsValue> {
-        let ready = self.take_building()?.finish().map_err(|e| throw(&e))?;
+    /// Encode the complete prepared ModelFile with the host's actual save formatter and enforce
+    /// its UTF-8 budget before Ready/commit. The callback receives compact transfer JSON and must
+    /// faithfully return the persisted JSON text, including any trailing newline; it performs
+    /// no I/O or replay. Callback/size failures consume this candidate, so abandon its owner ticket.
+    pub fn finish(&mut self, encode_file: js_sys::Function, max_file_bytes: f64) -> Result<String, JsValue> {
+        let candidate = self.take_building()?;
+        if !max_file_bytes.is_finite()
+            || max_file_bytes.fract() != 0.0
+            || max_file_bytes < 0.0
+            || max_file_bytes > f64::from(u32::MAX)
+        {
+            return Err(throw(
+                &femlab_engine::Error::schema("Model file byte limit must be an unsigned 32-bit integer")
+                    .at("maxFileBytes"),
+            ));
+        }
+        let ready =
+            candidate.finish(&mut JsModelFileEncoder(encode_file), max_file_bytes as usize).map_err(|e| throw(&e))?;
         let json = serde_json::to_string(ready.snapshot()).map_err(schema_err)?;
         self.state = CandidateState::Ready(Box::new(ready));
         Ok(json)
