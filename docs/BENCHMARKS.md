@@ -1049,7 +1049,10 @@ both coefficients for p=2^1023, a=2^-1000, b=2^500 (real 2^-977, imaginary −2^
 and p=2^1023, a=2^-1074, b=2 (real 2^-53, imaginary −2^1022), including swapped and
 signed components. These detect prematurely normalizing away the small numerator.
 Zero denominators and nonfinite arithmetic remain nonfinite; there is no epsilon,
-saturation or substituted zero response.
+saturation or substituted zero response. The unchanged checked-display exact-resonance
+case and a finite-authored 1e200–2e200 Hz sweep with nonfinite derived coefficients
+verify rejection before publication, preserving prior modal/finite harmonic Results,
+the catalogue, Model/Journal/revision and the next accepted Result identifier.
 
 The #608 registry and Chromium regressions distinguish retained mode shapes from response
 metadata around these existing dynamic Benchmarks. `query.result.modeCount` is the number

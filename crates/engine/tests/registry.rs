@@ -7623,6 +7623,41 @@ fn harmonic_reciprocals_preserve_extreme_finite_response_phase_and_replay_under_
 }
 
 #[test]
+fn harmonic_nonfinite_reciprocals_do_not_publish_over_the_retained_finite_response() {
+    for threads in [1, 4] {
+        let mut e = Engine::new(None, Box::new(NoClock), threads);
+        harmonic_bar(&mut e, r#", "fStart":"800 Hz", "fStop":"2400 Hz", "points":3, "dampingRatio":0.05"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"step.add","name":"unrepresentable","procedure":"harmonic",
+            "constraints":["root","guide"],"loads":["pull"],"after":"modes",
+            "fStart":"1e200 Hz","fStop":"2e200 Hz","points":3,"dampingRatio":0.05}"#,
+        );
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+        let file = e.export_file();
+        let hash = e.model_hash();
+        let revision = e.revision();
+        let catalogue = e.query(Query::Results {}).unwrap();
+        let modal = summary(&mut e, "modes");
+        let prior = summary(&mut e, "sweep");
+        let field = e.field(Some("sweep"), Field::Displacement).unwrap().data.clone();
+        let error = err(&mut e, r#"{"cmd":"solve.run","step":"unrepresentable","solver":"cpu-direct"}"#);
+        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::UnitDisplay, Some("displayUnits")));
+        assert!(error.suggestion.unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+        assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+        assert_eq!(summary(&mut e, "modes"), modal);
+        assert_eq!(summary(&mut e, "sweep"), prior);
+        assert_eq!(e.field(Some("sweep"), Field::Displacement).unwrap().data, field);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+        assert_eq!(summary(&mut e, "modes").result_id, "result-3");
+    }
+}
+
+#[test]
 fn a_harmonic_step_needs_a_current_modal_result_and_a_usable_sweep() {
     // Its predecessor has not been solved.
     let mut e = engine();
