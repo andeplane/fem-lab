@@ -95,7 +95,7 @@ def fetch(manifest, destination):
                                    "members": [{"file": name, "bytes": len(payload), "sha256": digest(payload)}
                                                for name, payload in files.items()]})
     check_sources(manifest, destination)
-    write_once(destination / "acquisition.json", json_bytes(receipt))
+    write_once(destination / f"acquisition-{receipt['manifestSha256']}.json", json_bytes(receipt))
     return receipt
 
 
@@ -131,6 +131,39 @@ def reference_displacements(text, set_name, time):
     return result
 
 
+def flat_source_inventory(text, element):
+    """Attest these two explicit flat reference meshes; this is not an import converter."""
+    arity = {"C3D10": 10, "C3D20": 20}[element]
+    nodes, tokens = set(), []
+    active = None
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("**"):
+            continue
+        if line.startswith("*"):
+            options = [part.strip().upper() for part in line[1:].split(",")]
+            active = options[0]
+            if active == "ELEMENT" and f"TYPE={element}" not in options:
+                raise ValueError("reference element type differs from manifest")
+            continue
+        values = [part.strip() for part in line.split(",")]
+        while values and not values[-1]:
+            values.pop()
+        if active == "NODE":
+            label = int(values[0])
+            if label in nodes:
+                raise ValueError("duplicate source node label")
+            nodes.add(label)
+        elif active == "ELEMENT":
+            tokens.extend(map(int, values))
+    if not tokens or len(tokens) % (arity + 1):
+        raise ValueError("reference connectivity is incomplete")
+    elements = tokens[::arity + 1]
+    participating = {tokens[i] for i in range(len(tokens)) if i % (arity + 1)}
+    if len(elements) != len(set(elements)) or nodes != participating:
+        raise ValueError("reference labels are duplicate, missing or unused")
+    return nodes, elements
+
+
 def check_sources(manifest, source):
     source = external(source)
     for artifact in manifest["artifacts"]:
@@ -139,14 +172,27 @@ def check_sources(manifest, source):
         for member in artifact.get("members", []):
             checked((source / member["file"]).read_bytes(), member)
     result = []
+    for case in manifest.get("exporterAdmissionCases", []):
+        text = (source / case["deck"]).read_text()
+        nodes, elements = flat_source_inventory(text, case["element"])
+        if (len(nodes) != case["nodes"] or len(elements) != case["elements"]
+                or keywords(text) != case["keywords"] or not all(marker in text for marker in case["metadataMarkers"])):
+            raise ValueError(f"exported source inventory/provenance differs: {case['id']}")
+        result.append({"id": case["id"], "nodes": len(nodes), "elements": len(elements),
+                       "scope": "source identity/inventory only; numerical comparison pending"})
     for case in manifest["comparisons"]:
-        if keywords((source / case["deck"]).read_text()) != case["keywords"]:
+        text = (source / case["deck"]).read_text()
+        if keywords(text) != case["keywords"]:
             raise ValueError(f"keyword inventory changed: {case['id']}")
+        nodes, elements = flat_source_inventory(text, case["element"])
+        if len(nodes) != case["nodes"] or len(elements) != case["elements"]:
+            raise ValueError(f"source mesh counts differ from manifest: {case['id']}")
         rows = reference_displacements((source / case["reference"]).read_text(),
                                        case["referenceSet"], case["referenceTime"])
-        if len(rows) != case["nodes"]:
+        if set(rows) != nodes:
             raise ValueError(f"incomplete independent reference: {case['id']}")
-        result.append({"id": case["id"], "referenceNodes": len(rows), "keywords": case["keywords"]})
+        result.append({"id": case["id"], "referenceNodes": len(rows), "elements": len(elements),
+                       "elementLabelRange": [min(elements), max(elements)], "keywords": case["keywords"]})
     return result
 
 

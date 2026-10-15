@@ -70,6 +70,33 @@ class ReferenceTests(unittest.TestCase):
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_export_inventory_requires_complete_mesh_keywords_and_provenance(self):
+        text = "** Independent unit-test fixture; exporter=example\n*NODE\n"
+        text += "".join(f"{label},0,0\n" for label in range(1, 11))
+        text += "*ELEMENT,TYPE=C3D10\n25,1,2,3,4,5,6,7,8,9,10\n"
+        case = {"id": "example-export", "deck": "example.inp", "element": "C3D10", "nodes": 10,
+                "elements": 1, "keywords": ["NODE", "ELEMENT"], "metadataMarkers": ["exporter=example"]}
+        manifest = {"artifacts": [], "comparisons": [], "exporterAdmissionCases": [case]}
+        with tempfile.TemporaryDirectory(prefix="femlab-656-export-unit-") as directory:
+            deck = Path(directory) / "example.inp"
+            deck.write_text(text)
+            self.assertEqual(corpus.check_sources(manifest, directory)[0]["elements"], 1)
+            for changed in [text.replace("exporter=example", "exporter=other"), text + "*DLOAD\n25,P1,1\n",
+                            text.replace("9,10", "9,999")]:
+                deck.write_text(changed)
+                with self.assertRaises(ValueError):
+                    corpus.check_sources(manifest, directory)
+
+    def test_sparse_element_labels_count_records_not_maximum_label(self):
+        text = "*NODE\n" + "".join(f"{label},0,0\n" for label in range(101, 111))
+        text += "*ELEMENT,TYPE=C3D10\n67,101,102,103,104,105,\n106,107,108,109,110\n"
+        nodes, elements = corpus.flat_source_inventory(text, "C3D10")
+        self.assertEqual(nodes, set(range(101, 111)))
+        self.assertEqual(elements, [67])
+        for changed in [text.replace(",110\n", "\n"), text.replace("109,110", "109,999")]:
+            with self.assertRaises(ValueError):
+                corpus.flat_source_inventory(changed, "C3D10")
+
     def test_corrupt_source_is_rejected_even_when_size_matches(self):
         original = b"independent source"
         expected = {"bytes": len(original), "sha256": corpus.digest(original)}

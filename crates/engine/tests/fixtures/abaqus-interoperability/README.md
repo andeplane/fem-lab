@@ -36,13 +36,13 @@ external. An incomplete run records `completed: false` and exits unsuccessfully.
 [The manifest](../../../../../tools/abaqus-interoperability/corpus.json) pins the original
 [CalculiX 2.23 test archive](https://www.dhondt.de/ccx_2.23.test.tar.bz2), selected input and
 `.dat.ref` bytes by SHA-256. The fetcher reads only four exact regular archive members into
-memory and stores the untouched archive, members, license and source acquisition receipt
+memory and stores the untouched archive, members, license and versioned source acquisition receipt
 outside the checkout. It never extracts archive paths onto the filesystem.
 
 | Untouched official input | Actual contents | Independent comparison |
 | --- | --- | --- |
 | `beam20p.inp` | 261 nodes, 32 full-integration `C3D20`; continued connectivity, two-field `GENERATE`, repeated boundary blocks, density, one static step, `CLOAD`, `NODE PRINT`/`EL PRINT` | Every one of the 261 reference nodal displacement vectors; total reaction `(0,-9,0)` N. |
-| `beam10p.inp` | 90 sparse node labels, 67 `C3D10`; omitted zero z-coordinates, continued connectivity, named sets, one static step, `CLOAD`, print requests | Every one of the 90 reference nodal displacement vectors; total reaction `(0,-9,0)` N. The source comment mentions pressure, but actual loading uses `CLOAD`. |
+| `beam10p.inp` | 90 sparse node labels, 31 `C3D10` with labels 37–67; omitted zero z-coordinates, continued connectivity, named sets, one static step, `CLOAD`, print requests | Every one of the 90 reference nodal displacement vectors; total reaction `(0,-9,0)` N. The source comment mentions pressure, but actual loading uses `CLOAD`. |
 
 The declared source system is mm/N/s: `E=210000` is N/mm², and `beam20p` density `7.8e-9`
 is tonne/mm³. Reference displacements are converted from mm to metres. One fixed tolerance
@@ -58,6 +58,28 @@ license. [Upstream](https://www.dhondt.de/) links its GPLv2 terms; the
 [Debian source copyright record](https://metadata.ftp-master.debian.org/changelogs/main/c/calculix-ccx/calculix-ccx_2.23-1_copyright)
 identifies the upstream copyright/license. The repository commits the acquisition metadata
 and our harness, not vendor input/reference originals. Do not relabel downloaded files as MIT.
+
+## Untouched FreeCAD export, with independently published definition checks
+
+The fetcher also acquires `test/inp_parser/testcube.inp` unchanged from
+[JuliaTopOpt/TopOpt.jl at `ca90253960194b18cfdd10521712bd90ba8d65dd`](https://github.com/JuliaTopOpt/TopOpt.jl/blob/ca90253960194b18cfdd10521712bd90ba8d65dd/test/inp_parser/testcube.inp).
+Its actual footer identifies **FreeCAD 0.17.13514 (Git), 2018-11-07**, and declares mm geometry,
+MPa elasticity and N nodal loads. This is a published export from another application,
+not our hand-authored example and **not** an Abaqus/CAE export. The source project ships
+[independent regression checks](https://github.com/JuliaTopOpt/TopOpt.jl/blob/ca90253960194b18cfdd10521712bd90ba8d65dd/test/inp_parser/test_inpstiffness.jl)
+for this same file's five quadratic tetrahedra, elastic material, nodal force and pressure
+face definitions. Its original MIT copyright/license and those definition checks are fetched
+and attested at the same immutable source revision. The original exported bytes stay external.
+
+The 10 mm cube has 26 nodes and five C3D10 elements. It combines nested named element sets,
+named displacement constraints, a -1 N y-force at source node 2, and 1 MPa pressure on faces
+25/P3 and 29/P2. Those two triangles span the entire 100 mm² top face: pressure supplies
+-100 N in z, so the total reaction must be `(0,1,100)` N. Output/file/print requests remain in
+the untouched input. Current source acquisition/inventory checks are **not** numerical
+acceptance: every displacement still needs comparison against an independently executed,
+attested solver run, and the original input must pass the complete import path unchanged.
+This pending row is kept outside the harness's completed-oracle comparison list until that
+independent numerical reference is available. No source admission or solve pass is inferred.
 
 ## Authored assembly: two materials and two transformed instances
 
