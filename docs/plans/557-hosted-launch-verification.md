@@ -10,59 +10,129 @@ Staging is https://femlab-app-staging.web.app. DNS and normally validated TLS ar
 the final API is https://api.femlab.app. [#600](600-domain-routing.md) records the real
 227.451-second final-proxy stream, immutable receipt, idempotent replay, cancellation
 settlement and disposable-account deletion. Its automatic free grant was historical,
-before the invitation policy; the transport proof remains useful.
+before reviewed free admission; the transport proof remains useful.
 
-Under [#645](645-free-ai-admission.md), creating or reopening an account grants **zero**
-AI credits. The optional preview requires operator approval: one 200,000-credit grant,
-expiring after 30 days, with no automatic renewal or regrant on account recreation.
-Verified paid invoices remain the only public paid-credit authority. This smoke does
-not issue invitations, change spend caps, call a supplier or create a subscription.
+Both frontends, APIs and recovery jobs now run source
+`6c5d4daaf46d59fd68aca725c4b8074b06acf2a8`. Both APIs were healthy at 100% traffic and both
+recovery executions succeeded. Migration 010 and version 1 of the server-only eligibility
+fingerprint key are installed in both environments. Anonymous monthly-claim requests
+returned 401. Runtime evidence is `/tmp/femlab-712-runtime-release.json`; these deployment
+and migration observations are distinct from the authenticated claim acceptance below.
+The combined candidate passed 1,375 app tests (five skipped), coverage for all 93 app
+modules, all 143 registry tests at 100% coverage, 246 real-PostgreSQL service tests,
+service build and 27 Stripe/11 Google guards. It uses its matching release-wasm engine
+baseline; the separate debug-wasm STL issue [#716](https://github.com/andeplane/fem-lab/issues/716)
+is not described as fixed by this release. Both frontend secret scans passed for 74 files.
 
-Public staging is deliberately [AI-disabled](669-staging-spend-defaults.md), including
-for existing test-paid accounts. New completions must return HTTP 503 / `ai-unavailable`
-before input counting or an AI request row is created. Billing QA can run with this
-safety baseline. The default live smoke below now verifies zero signup allowance,
-reopen/refresh stability, denied UI and alias admissions, empty request/credit/receipt
-exports, UI logout preserving the local Model, cross-owner export selectors rejected,
-private export downloads and durable deletion of two disposable identities. Signed
-export URLs are short-lived bearer capabilities: someone given the valid URL can
+Under [#712](712-free-monthly-allowance.md), creating or reopening an account still
+grants **zero** AI credits. Free monthly access requires explicit operator-reviewed
+eligibility and an explicit authenticated claim for each UTC calendar month. Approved
+free accounts can claim 6,666,666 weighted credits, approximately $5 of supplier-accounting
+value. Credits expire at 00:00 UTC on the first of the next month without rollover,
+including a late-month claim. Reviewed-person, approved-alias and immutable claim markers
+prevent an additional claim through account recreation. Revocation and paid/free
+exclusion are enforced by the backend; Google/email verification alone does not establish
+a unique person. The former invited one-time 200,000-credit preview from
+[#645](645-free-ai-admission.md) is historical: existing grants retain their recorded
+expiry, do not renew and cannot stack with monthly access or bypass its revocation.
+Canonical paid invoices remain the paid-credit authority; a browser return cannot grant
+an entitlement. The default staging smoke changes no eligibility, budgets or subscription.
+
+Public staging remains deliberately [AI-disabled](669-staging-spend-defaults.md), with
+all supplier-spend caps zero, including for existing test-paid accounts. New completions
+must return HTTP 503 / `ai-unavailable` before input counting or an AI request row is
+created. The prepared smoke verifies zero signup allowance, rejected unapproved monthly
+claims, reopen/refresh stability, denied UI and alias admissions, empty request/credit/
+receipt exports, UI logout preserving the local Model, cross-owner export selectors
+rejected, private export downloads and durable deletion of two disposable identities.
+Signed export URLs are short-lived bearer capabilities: someone given the valid URL can
 download it. Ownership is enforced when authenticated APIs select and request records;
 the smoke does not mistake an operator-shared signed URL for an ownership failure.
 
-Both Google providers are enabled and redirect-start evidence is recorded in
-[#616](616-google-sign-in.md). A fresh production observation found the Firebase `gapi`
-script blocked by CSP; [#696](https://github.com/andeplane/fem-lab/issues/696) tracks the
-fix and fresh redirect verification. A completed owner chooser/consent return and real
-email inbox delivery remain separate unverified gates. Admin-generated email action
-links exercise the real exchange without sending an email or using an owner identity.
+### Actual production owner acceptance
 
-A separate read-only Google Cloud Console check on 15 October 2026 found both OAuth
-audiences External and In production, with empty sensitive/restricted declared-scope
-tables. The runtime provider uses basic identity scopes; no scope or configuration was
-changed. Audience publication does not prove an owner sign-in return. A generic Gemini
-key banner did not identify a FEM issue: neither project enabled `generativelanguage`,
-and the Firebase public-key API allowlists excluded it. No key or service change followed.
+On 15 October 2026 at 19:22:42 UTC, a fresh real production email link completed through
+the normal public Identity Toolkit REST exchange. The existing owner identity/account
+matched, `isNewUser` was false, and `email_verified` was true. No Admin-token injection
+or replacement identity was used. This is a successful real email-link REST exchange,
+**not** evidence of a successful positive browser email-link return.
+
+The approved owner's public monthly-claim call returned 6,666,666 credits with
+`replay: false`; a repeat returned `replay: true`. A real Mini completion used 40 input
+and 12 output tokens and charged exactly 112 credits. Replaying that completion returned
+the same confirmed receipt. SQL showed exactly one monthly grant, one request, one receipt
+and zero active holds. The remaining allowance was 6,666,554 credits. The legitimate owner
+account was preserved, with no Checkout or live payment. Sanitized evidence is
+`/tmp/femlab-712-owner-acceptance.json`; it records deployed source `6c5d4daa` and separates
+claim/receipt replay from new generation. This bounded production acceptance was performed
+separately from the no-generation staging smoke below.
+
+### Sign-in and delivery boundaries
+
+Both Google providers are enabled; configuration evidence is recorded in
+[#616](616-google-sign-in.md). Frontend source
+`1b008badd2868dc27b242919952fbbe34ae12730` first published the
+[#696](https://github.com/andeplane/fem-lab/issues/696) Auth helper and
+[#704](https://github.com/andeplane/fem-lab/issues/704) root-cache corrections to both
+origins. Native Chrome owner checks completed Google's actual chooser, basic-identity
+consent, Firebase callback and authenticated Account UI in both production and staging,
+then showing free total/available/reserved credits 0/0/0. No AI, Checkout, payment or owner
+deletion occurred in those sign-in checks. Google sign-in is usable; these actual owner
+returns are distinct from provider configuration and cancel/retry checks.
+
+After the current `6c5d4daa` publication, actual published Google start/cancel/return/retry
+checks passed again on both origins without a candidate overlay, preserving the local
+Model. Evidence is `/tmp/femlab-google-stage-published-712.json` and
+`/tmp/femlab-google-prod-published-712.json`. Root documents use no-cache, Auth helper
+responses no-store and hashed assets immutable caching; strict isolation/security headers
+remain. A read-only Google Cloud Console check found both OAuth audiences External and
+In production, with empty sensitive/restricted declared-scope tables. Basic identity scopes
+remain unchanged. The generic Gemini-key banner did not identify a FEM issue: neither
+project enabled `generativelanguage`, and Firebase public-key API allowlists excluded it.
+
+Real production email messages arrived, with the first receipt taking one second and
+passing SPF/DKIM, but Gmail placed both the first message and a fresh 19:22 message in
+**Spam**, not Inbox. The fresh message supplied the successful public REST exchange
+above. Positive browser email-link completion remains unverified under
+[#720](https://github.com/andeplane/fem-lab/issues/720); invalid-code Chromium checks did
+reach Firebase and return `INVALID_OOB_CODE` without an identity or Auth resource CSP
+failure, which proves only the negative path. The earlier browser network failure does
+not prove a product defect. [#710](https://github.com/andeplane/fem-lab/issues/710) tracks
+custom-sender/deliverability work; Cloudflare's explicit terms/login step is still gated,
+and no DNS, sender verification or sender activation is claimed. Mail evidence is
+`/tmp/femlab-email-delivery-557.json`. Disposable Admin-generated links in the staging
+smoke below prove exchange separately and did not send mail.
 
 Managed Payments TEST lifecycle acceptance is recorded by activation
-[#661](https://github.com/andeplane/fem-lab/issues/661); live terms acceptance and billing
-activation remain pending. The TEST lifecycle does not prove a live charge or grant
-authority from a browser redirect. [#695](695-seller-merchant-roles.md) distinguishes
-Hafreager as seller/product provider from the merchant-of-record transaction role.
+[#661](https://github.com/andeplane/fem-lab/issues/661). Live terms acceptance and billing
+activation remain pending, and production billing is disabled. No actual live payment
+has occurred. TEST success does not establish live charge or invoice authority.
+[#695](695-seller-merchant-roles.md) distinguishes Hafreager as seller/product provider
+from the merchant-of-record transaction role.
 
 ## Included usage and supplier accounting
 
-The deployed `dc1bcb47` catalog and read-only production snapshot at 2026-10-15
-17:57:26 UTC use [tariff `2026-10-14.v1`](../../packages/service/src/credits.ts):
+The deployed `6c5d4daa` catalog uses [tariff `2026-10-14.v1`](https://github.com/andeplane/fem-lab/blob/6c5d4daaf46d59fd68aca725c4b8074b06acf2a8/packages/service/src/credits.ts):
 one credit is 30 subcredits and `supplierMicros` rounds `subcredits / 40` upward.
 Thus one million weighted credits have a nominal supplier-accounting value of $0.75.
 These are catalog-derived estimates, not a fresh model-price lookup or supplier invoice.
 
-| Offer | USD list price / paid month | Weighted credits | Supplier equivalent at full use | Price / nominal supplier value |
+| Current offer | USD list price / paid month | Weighted credits | Supplier equivalent at full use | Price / nominal supplier value |
 |---|---:|---:|---:|---:|
-| Invited preview | $0, once | 200,000 | $0.15 | n/a |
-| Plus | $49 | 4,000,000 | $3.00 | 16.33× |
+| Reviewed free monthly | $0, explicit claim | 6,666,666 | approximately $5.00 | n/a |
+| Plus | $49 | 10,000,000 | $7.50 | 6.53× |
 | Pro | $149 | 16,000,000 | $12.00 | 12.42× |
 | Studio | $499 | 50,000,000 | $37.50 | 13.31× |
+
+[#709](709-monthly-ai-allowance.md) changed Plus from 4M to 10M without changing its $49
+price. All six existing Plus provider Products (direct/personal/business in TEST and LIVE)
+now have matching 10M descriptions/metadata, confirmed at 19:15:17 UTC in
+`/tmp/femlab-709-provider-catalog.json`. Runtime and frontend publication use `6c5d4daa`.
+This verifies the deployed offer and catalog sync; it does not claim a newly paid live
+10M grant while billing is disabled. Pro and Studio are unchanged. The earlier deployed
+`dc1bcb47` snapshot at 17:57:26 UTC had Plus 4M/$3.00 nominal supplier value (16.33×
+list-price/value) and an invited one-time 200k/$0.15 preview. Those dated historical
+offers are superseded and are not current signup or monthly benefits.
 
 Mini consumes one credit per uncached input token, 0.1 per cache-read token and six
 per output token including reasoning. Astra uses 13⅓, 1⅓ and 66⅔ respectively, with
@@ -81,14 +151,21 @@ plus ordinary payment processing and separate subscription/Billing fees. Tax col
 from customers is not subscription revenue; FX, payment method and dispute charges may
 also apply. No assumed all-in Stripe fee or future supplier price is presented here.
 
-The same read-only snapshot found production shared supplier limits of $100/day,
-$1,000/month, a $1/day free pool, $10 unresolved exposure and concurrency 16; no active
-holds were present. These are shared admission caps, not additional per-account credits
-or a promise of uninterrupted use. Recorded receipt-derived supplier accounting was
-$0.894551 for the UTC day, $0.894587 for the UTC month, and $0.012010 for that day's
-free pool. Those historical settled-accounting totals differ from offered allowances,
-future full-consumption estimates and a reconciled upstream invoice. The current smoke
-must create no new usage receipt or supplier spend. No production limit changed here.
+The current release retains production shared supplier limits of $100/day, $1,000/month,
+$10 unresolved exposure and concurrency 16. The reviewed-free pool is now $10/day and
+$50/month, with at most ten fully funded principal-months at the current tariff. These
+are shared admission limits, not additional per-account credits or uninterrupted-use
+guarantees; approved claims and requests can pause when limits are reached. Staging's
+supplier caps remain zero. Approval is operator-reviewed, not automatic account signup.
+
+The earlier 17:57:26 UTC snapshot, before this free-policy change, had a $1/day free
+pool and no active holds. Receipt-derived settled accounting then was $0.894551 for
+the UTC day, $0.894587 for the UTC month, and $0.012010 for that day's free pool. Those
+historical totals are distinct from current caps, future full-consumption estimates and
+a reconciled upstream invoice. The later owner acceptance's 112-credit receipt has
+3,360 subcredits, nominal supplier accounting of $0.000084 under this tariff; it does not
+update or replace that earlier snapshot. The default staging smoke creates no new usage
+receipt or supplier spend. This verification slice itself changes no production limit.
 
 ## Historical real-AI and infrastructure proof, 2026-10-15
 
@@ -190,10 +267,11 @@ commit or attach them. Do not blindly rerun consumed links. It never deletes an 
 account. Its sanitized proof attachment records current policy separately from the
 historical real-AI evidence above.
 
-### Current invocation proof
+### Dated staging invocation proof and current smoke preparation
 
-On 15 October 2026 at 18:12 UTC, the command above ran against the deployed staging app
-and API with two fresh private action-link fixtures: **1 passed in 1.2 minutes**. The
+On 15 October 2026 at 18:12 UTC, before the monthly allowance and later Auth/cache changes,
+the command above ran against the deployed staging app and API with two fresh private
+action-link fixtures: **1 passed in 1.2 minutes**. The
 app typecheck and Playwright test discovery passed first. Both real Firebase exchanges
 created zero-credit accounts; reload and refresh retained the same account IDs and zero
 allowance. The UI completion and `/chat/completions` alias both returned HTTP 503 /
@@ -210,15 +288,31 @@ Both input fixtures and the private token-state file were confirmed removed.
 
 Sanitized evidence, containing no identity, token, action link or signed URL, is retained
 outside the repository at `/tmp/femlab-staging-zero-signup-557-evidence.json`, bound to
-the tested source SHA-256. The private execution log is separate. This proves the
-current paused-staging policy, not inbox delivery, owner Google consent-return, new
-real-AI answer quality or live billing.
+the tested source SHA-256 and commit `f75da285`. The private execution log is separate.
+This proves the dated zero-signup, paused-staging and durable cleanup behavior. The
+prepared smoke now additionally expects `review-required` monthly status, a rejected
+unapproved claim and the current account copy/disabled claim control. It has not been
+rerun with fresh disposable fixtures after this update; the 18:12 result does not prove
+those newly added assertions. The separate current production owner acceptance above
+does establish the approved monthly claim and one real Mini debit/replay; neither run
+establishes live billing or engineering-answer quality.
+
+The final prepared source passed `npm run typecheck -w packages/app` and
+`npm exec -w packages/app -- playwright test --config=playwright.live.config.ts --list`
+on 15 October 2026 (one test discovered), plus `git diff --check`. No new fixture,
+mail, supplier generation or deployment was triggered for this evidence update.
+The sanitized combined rollup is `/tmp/femlab-release-557-evidence.json`; it keeps
+the dated staging source, current deployed source and final verification-source
+commit separate, with no identity, credentials, action link or export URL.
 
 ## Remaining release gates
 
-- Publish and verify the #696 Google CSP correction, then complete an owner-authorized
-  chooser/consent return. Enabled providers and redirect-start acceptance alone are
-  insufficient. Verify actual email inbox delivery separately.
+- Resolve production email Spam placement/custom-sender deliverability in #710, then
+  verify actual Inbox delivery. Receipt and SPF/DKIM checks passed; Google's owner
+  chooser/consent return is already verified on both environments.
+- Complete a genuine positive email-link return in the browser under #720. The real
+  public REST exchange and browser invalid-code path are verified separately and do
+  not substitute for that positive browser return.
 - Finish live Managed Payments terms/eligibility and billing activation in #661, with
   current policies, tax coverage, paid controls, canonical live invoice/webhook authority
   and owned cancellation/payment management. TEST success is not live-payment proof.
@@ -226,6 +320,6 @@ real-AI answer quality or live billing.
   bounded procedure in #669; this smoke cannot open that window. Final-domain TLS,
   the 227-second stream, cancellation, SQL restore and traffic rollback already have
   dated evidence; do not list those completed checks as unresolved DNS gates.
-- Coordinate the broader engineering-answer live evaluation with #297's owner; this smoke
-  verifies transport, authority, accounting and a real registry action, not numerical
-  answer quality or a new physics Benchmark.
+- Coordinate the broader engineering-answer live evaluation with #297's owner. The
+  dated real-AI/registry proof and current owner claim/112-credit request verify transport,
+  authority and accounting, not numerical answer quality or a new physics Benchmark.

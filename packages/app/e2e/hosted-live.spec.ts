@@ -56,15 +56,17 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
       const session:Session={token:credential.idToken,firebaseKey:new URL(response.url()).searchParams.get('key')!,email:fixture.email};
       sessions.push(session);await writeFile(statePath,JSON.stringify(sessions),{mode:0o600});
       const profile=await request(session,'/v1/account');expect(profile.status).toBe(200);
-      const created=await profile.json() as AccountInfo;expect(created.usage).toMatchObject(zeroAllowance);
+      const created=await profile.json() as AccountInfo;expect(created).toMatchObject({usage:zeroAllowance,freeAllowance:{status:'review-required',credits:6666666}});
       session.accountId=created.id;await writeFile(statePath,JSON.stringify(sessions),{mode:0o600});
+      const claim=await request(session,'/v1/account/free-allowance',{});
+      expect(claim.status).toBe(403);expect(await claim.json()).toMatchObject({code:'eligibility-required',where:'free-allowance'});
       await current.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});
       await expect.poll(()=>account(current),{timeout:30000}).toMatchObject({status:'active',email:fixture.email,profile:{id:session.accountId,usage:zeroAllowance}});
       await current.reload();
       await current.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});
       await expect.poll(()=>account(current),{timeout:30000}).toMatchObject({status:'active',profile:{id:session.accountId,usage:zeroAllowance}});
       await current.evaluate(()=>window.fem.dispatch({cmd:'account.refresh'}));
-      expect((await account(current)).profile?.usage).toMatchObject(zeroAllowance);
+      expect((await account(current)).profile).toMatchObject({usage:zeroAllowance,freeAllowance:{status:'review-required',credits:6666666}});
     }
     expect(sessions[0]!.accountId===sessions[1]!.accountId).toBe(false);
     await page.evaluate(()=>window.fem.dispatch({cmd:'model.new',name:'Staging zero-allowance smoke'}));
@@ -84,7 +86,9 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
     expect((await account(page)).profile?.usage).toMatchObject(zeroAllowance);
     await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));
     const dialog=page.getByRole('dialog',{name:'Your AI allowance'});
-    await expect(dialog).toContainText('A free AI preview requires an invitation.');
+    await expect(dialog).toContainText('Free monthly AI requires an eligibility review.');
+    await expect(dialog).toContainText('Signing up starts with zero credits.');
+    await expect(dialog.getByRole('button',{name:'Claim this month’s free allowance',exact:true})).toBeDisabled();
     await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('zero-signup-account-390.png')});
     await dialog.getByRole('button',{name:'Sign out',exact:true}).click();
     expect(await account(page)).toMatchObject({status:'anonymous',uid:null,profile:null,disclosureAccepted:false});
@@ -125,7 +129,7 @@ test('email login has zero signup credits, staging rejects AI, exports stay owne
       if(sessions.length)runJob();
       for(const session of sessions)await expect.poll(async()=>(await request(session,'/v1/account')).status,{timeout:30000}).toBe(401);
       if(passed){
-        await testInfo.attach('staging-zero-signup-proof',{contentType:'application/json',body:JSON.stringify({verifiedAt:new Date().toISOString(),disposableAccounts:sessions.length,signupCredits:0,reopenedCredits:0,completionStatus:503,completionCode:'ai-unavailable',requestRows:0,creditRows:0,usageReceipts:0,exportsOwned:true,unsignedExportStatus:403,logoutPreservedLocalModel:true,oldTokenStatus:401,generatedAI:false})});
+        await testInfo.attach('staging-zero-signup-proof',{contentType:'application/json',body:JSON.stringify({verifiedAt:new Date().toISOString(),disposableAccounts:sessions.length,signupCredits:0,reopenedCredits:0,freeAllowanceStatus:'review-required',unapprovedClaimStatus:403,completionStatus:503,completionCode:'ai-unavailable',requestRows:0,creditRows:0,usageReceipts:0,exportsOwned:true,unsignedExportStatus:403,logoutPreservedLocalModel:true,oldTokenStatus:401,generatedAI:false})});
         for(const path of paths)await unlink(path!);
         await unlink(statePath);
       }
