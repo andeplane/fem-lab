@@ -4580,6 +4580,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ## Queries
 
+- [query.abaqusDependencies](#queries-query-abaqusDependencies)
 - [query.capabilities](#queries-query-capabilities)
 - [query.convert](#queries-query-convert)
 - [query.convertAbaqus](#queries-query-convertAbaqus)
@@ -4604,6 +4605,25 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.script](#queries-query-script)
 - [query.set](#queries-query-set)
 - [query.surface](#queries-query-surface)
+
+<a id="queries-query-abaqusDependencies"></a>
+
+### query.abaqusDependencies
+
+Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.
+Uses the same bounded lexer and safe relative-path graph as conversion. This read
+performs no model/physics conversion or file/network I/O; hosts can acquire listed
+files through their captured scoped I/O and repeat until the bundle is complete.
+The actual conversion still rejects missing files and never publishes partial data.
+
+Returns: `AbaqusDependencies`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| text | yes | <code>{"type":"string"}</code> |  |
+| sourceName | no | <code>{"type":["string","null"]}</code> |  |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.abaqusDependencies"}</code> |  |
 
 <a id="queries-query-capabilities"></a>
 
@@ -4640,34 +4660,22 @@ Returns: `Converted`.
 
 ### query.convertAbaqus
 
-Check a bounded Abaqus text deck using an explicit positive length Quantity per
-source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
-portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
-(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
-SURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming
-Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized
-uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
-keyword spellings, 256-character physical lines and comma keyword continuation.
-Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
-keyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.
-Static mode additionally requires a positive force Quantity per source force and
-supports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one
-SOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct
-displacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements
-scale by L, forces by F and modulus by F/L²; no units are inferred. Model-data
-BOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;
-numeric targets get explicit singleton Sets. Conflicting prescribed values and
-overlapping CLOAD updates fail. Static accepts absent/default increment fields
-only (zero also denotes the default in its first three fields), imports final
-linear equilibrium without increment history, and never solves.
-Density/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT
-requests remain unsupported. Bounds: 250000 nodes,
-250000 elements and 1000000 expanded membership declarations before deduplication.
-No paths, includes, file I/O or active Model mutation. Input and serialized response
-are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
-checked conversion, not publication approval:
-hosts must prepare the Commands through Candidate, enforce the exact serialized
-Model-file limit and publish atomically before replacing the active document.
+Convert a bounded Abaqus text deck to checked portable Commands without mutating
+the active Model or solving. Explicit positive unitLength and static-mode unitForce
+define source units; coordinates/displacements scale by L, forces by F and stress
+by F/L². Structural instances, labels, exact Sets and surfaces are normalized by
+the typed deck reader. The report records all translated analysis Steps and notes
+recognized requests whose output/increment execution differs from FEM Lab.
+Mesh mode supports flat and part/assembly/instance solid meshes and supplied INCLUDE
+bundles, retaining source identity and exact Sets. It never discards analysis data.
+Static mode currently accepts one flat homogeneous isotropic linear elastic material,
+one whole solid section, translational BOUNDARY and CLOAD, and one STATIC Step.
+Other analysis definitions are rejected; broader static mapping is tracked separately.
+Optional positive unitTime is validated; DENSITY remains explicitly unsupported.
+Unsupported physics/formulations/parameters fail rather than being discarded.
+Neither mode infers missing physical units.
+Input and serialized response are bounded to 16 MiB; hosts must privately prepare
+all returned Commands through Candidate and publish one validated replacement.
 
 Returns: `AbaqusConversion`.
 
@@ -4679,6 +4687,9 @@ Returns: `AbaqusConversion`.
 | mode | yes | <code>{"$ref":"#/$defs/AbaqusImportMode"}</code> |  |
 | unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> |  |
 | unitForce | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_force"},{"type":"null"}]}</code> | Mandatory in static mode; absent in mesh mode. Positive force per source force. |
+| unitTime | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Positive seconds per source time. Required when a DENSITY is translated: source density scales by F T²/L⁴. No time or mass unit is inferred. |
+| sourceName | no | <code>{"type":["string","null"]}</code> | Logical root filename for resolving an explicitly supplied include bundle. Paths identify bundle entries only; the engine never reads a file system. |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> | Explicit relative source filenames and UTF-8 contents for INCLUDE resolution. Missing/cyclic/escaping references fail; the engine never fetches a file. |
 | sha256 | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.convertAbaqus"}</code> |  |
 

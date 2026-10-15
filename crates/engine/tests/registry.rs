@@ -14833,3 +14833,6 @@ mod modal_thread_determinism;
 mod imported_quadratic;
 #[path = "registry/imported_regions.rs"]
 mod imported_regions;
+
+#[path = "registry/abaqus_assembly.rs"]
+mod abaqus_assembly;

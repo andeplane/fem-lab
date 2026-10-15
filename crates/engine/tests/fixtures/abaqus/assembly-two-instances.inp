@@ -1,0 +1,35 @@
+** Independently authored assembly syntax fixture; not an exported Abaqus file.
+*HEADING
+Two instances with repeated local labels and quoted source names
+*PART, NAME="Part A"
+*NODE
+10,0,0,0
+20,1,0,0
+30,0,1,0
+40,0,0,1
+*ELEMENT, TYPE=C3D4, ELSET="All Cells"
+90,10,20,30,40
+*NSET, NSET="Root, = Face"
+10,20,30
+*SURFACE, NAME="Face.1"
+"All Cells",S1
+*END PART
+*ASSEMBLY, NAME="Assembly A"
+*INSTANCE, NAME="first instance", PART="Part A"
+*END INSTANCE
+*INSTANCE, NAME="second instance", PART="Part A"
+2,0,0
+0,0,0,0,0,1,90
+*NSET, NSET=TIP
+40
+*END INSTANCE
+*NSET, NSET=ROOTS, INSTANCE="first instance", INTERNAL
+10,20,30
+*NSET, NSET=ROOTS, INSTANCE="second instance"
+10,20,30
+*ELSET, ELSET=BOTH
+"first instance"."All Cells","second instance"."All Cells"
+*SURFACE, NAME=BOTTOMS, TYPE=ELEMENT
+"first instance".90,S1
+"second instance"."All Cells",S1
+*END ASSEMBLY

@@ -11,7 +11,7 @@ use super::abaqus::{
 use crate::command::{Command, Dof, Procedure};
 use crate::error::Error;
 use crate::query::{AbaqusConversion, AbaqusImportMode, AbaqusSetKind, AbaqusSetMapping, AbaqusStaticAnalysis};
-use crate::units::{Force, Length, Stress, Q};
+use crate::units::{Force, Length, Stress, Time, Q};
 
 pub const CONVERSION_VERSION: &str = "abaqus-static/1";
 const SUGGESTION: &str = "query.convertAbaqus with mode static, a supported deck, explicit unitLength and unitForce";
@@ -591,6 +591,9 @@ impl Analysis {
         response.report.analysis = Some(AbaqusStaticAnalysis {
             material: material.name,
             section_elset: section.elements,
+            materials: Vec::new(),
+            sections: Vec::new(),
+            source_step: step.clone(),
             step,
             constraints: constraint_names,
             loads: load_names,
@@ -603,15 +606,28 @@ impl Analysis {
 
 /// Convert exactly one homogeneous isotropic static deck using explicit source length and
 /// force scales. Geometry and source locations pass through the shared strict parser.
+#[allow(clippy::too_many_arguments)] // Registry boundary retains explicit unit and source arguments.
 pub fn convert_static(
     text: &str,
     model_name: &str,
     body: &str,
     unit_length: &Q<Length>,
     unit_force: &Q<Force>,
+    unit_time: Option<&Q<Time>>,
+    source_name: Option<&str>,
+    source_files: &BTreeMap<String, String>,
     digest: &str,
 ) -> Result<AbaqusConversion, Error> {
     abaqus::check_model_name(model_name)?;
+    if let Some(time) = unit_time {
+        if time.si().map_err(|e| e.at("unitTime"))? <= 0.0 {
+            return Err(Error::schema("unitTime must be positive").at("unitTime"));
+        }
+    }
+    // The expanded static mapper is a separate change; this bridge never ignores source files.
+    if !source_files.is_empty() {
+        return Err(unsupported(1,"INCLUDE","static analysis","included static analysis requires the assembly-aware static translator; mesh mode supports supplied bundles"));
+    }
     let length = abaqus::check_input(text, body, unit_length, digest)?;
     let force = unit_force.si().map_err(|error| error.at("unitForce").suggest(SUGGESTION))?;
     if force <= 0.0 {
@@ -658,7 +674,13 @@ pub fn convert_static(
     if let Some(previous) = &active {
         previous.finish()?;
     }
-    analysis.finish(mesh.finish(body, digest, length)?, model_name, text.len(), digest)
+    let mut mesh = mesh.finish(body, digest, length)?;
+    if let Some(provenance) = &mut mesh.source.provenance {
+        provenance.source_name = source_name.map(str::to_string);
+    }
+    let mut response = analysis.finish(mesh, model_name, text.len(), digest)?;
+    response.report.unit_time = unit_time.cloned();
+    Ok(response)
 }
 
 #[cfg(test)]

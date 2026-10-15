@@ -51,7 +51,7 @@ it('imports a scoped static deck through the actual converter, solves, exports a
   const before = await registry.query({ query: 'query.journal' }) as JournalDump;
   const result = await registry.query({ query: 'query.result', step: 'AXIAL' });
   for (const { overrides, expected } of [
-    { overrides: { text: '*PART,NAME=P\n' }, expected: { code: 'unsupported' } },
+    { overrides: { text: (await readFile(staticFixture, 'utf8')).replace('*STATIC', '*DYNAMIC') }, expected: { code: 'unsupported' } },
     { overrides: { unitForce: '1 kg' }, expected: { code: 'unit.dimension', where: 'unitForce' } },
     { overrides: { unitForce: '0 N' }, expected: { code: 'schema', where: 'unitForce' } },
     { overrides: { mode: 'mesh' }, expected: { code: 'schema', where: 'unitForce' } },
