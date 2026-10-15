@@ -62,17 +62,31 @@ configuration, SMTP credentials, password-hash configuration, or access tokens. 
 metadata or action URL changes are needed, use a precise `updateMask` on `PATCH` config;
 the browser's Firebase `authDomain` is a separate Google redirect setting.
 
-## Verification and current state
+## Configuration record: 2026-10-15
 
-The wizard's four public records have been captured. Cloudflare sign-in is pending an
-owner action-time confirmation because its Continue button explicitly accepts its terms.
-No DNS records, provider APPLY, SMTP settings, or new test email has been submitted yet.
+The owner completed Cloudflare sign-in and its explicit terms step. The four production
+records above are saved, both DKIM CNAMEs are DNS-only, and all six pre-existing web,
+API, Hosting and certificate records are preserved. Both authoritative Cloudflare
+nameservers return the required TXT and CNAME answers. Staging was not modified.
 
-After configuration, verify all four authoritative DNS answers, Firebase's applied
-`customDomain`/`useCustomDomain`/successful state and unchanged `DEFAULT` transport. Save
-public configuration/DNS evidence and a screenshot. The coordinator then controls one
-fresh owner request and checks actual sender authentication, placement and link completion.
-Custom-domain authentication is not proof of inbox delivery; record that result separately.
+Firebase accepted `VERIFY` at `2026-10-15T19:54:54.529Z`. The scoped readback at 20:13 UTC
+still reports `pendingCustomDomain: femlab.app` and `customDomainState: IN_PROGRESS`.
+The transport remains `DEFAULT`, and the active email callback is still
+`https://femlab-app.firebaseapp.com/__/auth/action`. `APPLY` has not been submitted.
+The console permits up to 48 hours for verification; the documentation describes up to
+24 hours. DNS publication is complete, while provider verification remains outstanding.
+
+Actual production owner sign-in through the normal native Chromium Firebase SDK email-link
+flow passed before this sender change, preserving the existing account and allowance.
+Fresh default-sender messages still landed in Gmail Spam despite SPF and DKIM passing.
+Successful sign-in and Inbox placement are separate results.
+
+After Firebase reports successful verification, apply the custom domain and read back
+its applied `customDomain`/`useCustomDomain` state and unchanged `DEFAULT` transport.
+Save public configuration/DNS evidence and a screenshot. Coordinate one fresh owner
+request, then inspect its actual sender authentication, placement and link completion.
+No post-APPLY email has been requested. Custom-domain authentication is not proof of
+Inbox delivery; record that result separately before closing #710.
 
 Primary references:
 [Firebase managed custom sender domains](https://firebase.google.com/docs/auth/email-custom-domain),
