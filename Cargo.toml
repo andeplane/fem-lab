@@ -36,3 +36,7 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# #17: exact upstream native code plus a shared-memory wasm futex backend.
+[patch.crates-io]
+atomic-wait = { path = "vendor/atomic-wait" }

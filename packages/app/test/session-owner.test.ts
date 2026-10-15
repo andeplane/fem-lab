@@ -33,6 +33,15 @@ const box: Command = { cmd: 'geometry.addBox', name: 'shared', size: ['1 m', '1 
 const remove: Command = { cmd: 'geometry.remove', name: 'shared' };
 
 describe('checked WASM owner', () => {
+  it('reports one actual CPU thread in the portable Node/browser wasm runtime', async () => {
+    const owner = new SessionEngine(8, 'portable-threads');
+    try {
+      const client = new Client(owner);
+      const reply = JSON.parse(owner.query(JSON.stringify({ context: client.context(), query: { query: 'query.capabilities' } })));
+      expect(reply.value.threads).toBe(1);
+    } finally { owner.free(); }
+  });
+
   it('rejects a retained producer after another session creates the same named body', async () => {
     const owner = new SessionEngine(1, 'wasm-test');
     try {

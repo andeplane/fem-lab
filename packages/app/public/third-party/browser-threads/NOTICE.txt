@@ -1,0 +1,8 @@
+Browser thread runtime notices
+
+atomic-wait 1.1.0 (BSD-2-Clause): https://github.com/m-ou-se/atomic-wait
+FEM Lab adds a wasm32 shared-memory wait/notify backend. Native source is unchanged.
+Copyright and terms: atomic-wait-LICENSE.txt
+
+wasm-bindgen-rayon 1.3.0 (Apache-2.0): https://github.com/RReverser/wasm-bindgen-rayon
+Copyright and terms: wasm-bindgen-rayon-LICENSE.txt

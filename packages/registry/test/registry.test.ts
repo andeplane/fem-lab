@@ -210,7 +210,7 @@ describe('Registry', () => {
 
   it('host Queries read the HostContext and query.capabilities merges engine and browser facts', async () => {
     const { registry, host } = make(true);
-    await expect(registry.query({ query: 'query.capabilities' })).resolves.toEqual({ gpu: false, threads: 4, engineVersion: '0', schemaVersion: '1', webgpu: true, crossOriginIsolated: true, userAgent: 'test', engine: 'local' });
+    await expect(registry.query({ query: 'query.capabilities' })).resolves.toEqual({ gpu: false, threads: 1, engineVersion: '0', schemaVersion: '1', webgpu: true, crossOriginIsolated: true, userAgent: 'test', engine: 'local' });
     await expect(registry.query({ query: 'query.selection' })).resolves.toMatchObject({ refs: ['body:beam', 'face:beam.top'] });
     await expect(registry.query({ query: 'query.skills' })).resolves.toEqual([{ name: 'beam-theory-check', description: expect.any(String), when: 'a beam', source: 'builtin' }]);
     await expect(registry.query({ query: 'query.folder' })).resolves.toEqual(FOLDER);
