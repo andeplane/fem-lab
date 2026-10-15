@@ -334,7 +334,7 @@ identities over shared connectivity: their material/section overrides live on th
 otherwise inherit the source owner assignment. The source owner retains aggregate identity
 and the qualified source Set namespace. Disconnected components retain distinct labels.
 Optional provenance maps global labels to original instance/part-local labels and records
-supplied-file hashes. See ADR 0026, ADR 0032 and issues #501/#652.
+supplied-file hashes. See ADR 0026, ADR 0035 and issues #501/#652.
 
 **STEP geometry conversion** — A host-only, on-demand conversion of declared-unit STEP
 surfaces to one tessellated geometry Body at explicit physical deflections. The checked
