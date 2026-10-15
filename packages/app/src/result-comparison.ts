@@ -45,6 +45,9 @@ export class ResultComparison implements ResultComparisonHost {
   private payloads: Partial<Record<ComparisonPaneName, Payload>> = {};
   private conversions = new Map<string, { scale: number; offset: number }>();
   private requestedScale: number | 'auto' | 'true' = 'true';
+  /** First entry waits for the actual pane layout; an explicit camera action wins. */
+  private initialFit: number | null = null;
+  private cameraRevision = 0;
   private clip: Parameters<Viewer['setClip']>[0] = null;
 
   constructor(private readonly store: Store, private readonly transport: EngineTransport,
@@ -67,7 +70,9 @@ export class ResultComparison implements ResultComparisonHost {
   async configure(configuration: ComparisonConfiguration): Promise<void> {
     if (this.disposed) throw new FemError('session.expired', 'comparison belongs to a closed project');
     const ticket = ++this.epoch;
+    this.initialFit = null;
     const wasActive = this.active;
+    const cameraRevision = this.cameraRevision;
     this.lifecycle.pauseSingle();
     this.publish({ loading: true, error: null });
     try {
@@ -91,11 +96,11 @@ export class ResultComparison implements ResultComparisonHost {
       }
       if (difference) difference.payload.summary = { ...difference.payload.summary, stale: left.summary.stale || right.summary.stale };
       this.payloads = { left, right, ...(difference ? { difference: difference.payload } : {}) };
+      if (!wasActive && cameraRevision === this.cameraRevision) this.initialFit = ticket;
       this.store.set({ viewMode: 'results', playing: false });
       this.publish({ configuration, catalogue, left: this.pane(left), right: this.pane(right), difference: difference ? this.pane(difference.payload) : null,
         coverage: difference?.response.coverage ?? null, interpolated: difference?.response.interpolated ?? false, warnings: difference?.response.warnings ?? [], loading: false });
       this.draw();
-      if (!wasActive) this.preset('iso');
     } catch (error) {
       if (!this.current(ticket)) return;
       this.publish({ loading: false, error: engineError(error) });
@@ -123,15 +128,22 @@ export class ResultComparison implements ResultComparisonHost {
     this.draw();
   }
 
-  invalidate(): void { this.epoch++; }
+  invalidate(): void { this.epoch++; this.initialFit = null; }
   dispose(): void { this.disposed = true; this.invalidate(); this.payloads = {}; this.conversions.clear(); }
   /** Current geometry/mesh modes borrow the primary renderer without replacing pinned ids. */
   suspend(): void { this.invalidate(); this.publish({ loading: false }); this.resetPresentation(); }
-  resume(): void { this.draw(); }
+  resume(): void { this.draw(); this.fitInitial(); }
   resize(): void {
     if (!this.active) return;
     const height = this.frameHeight();
     this.viewers.left.current?.setComparisonFrameHeight(height); this.viewers.right.current?.setComparisonFrameHeight(height);
+    this.fitInitial();
+  }
+  private fitInitial(): void {
+    if (this.initialFit === null || !this.current(this.initialFit) || !this.active || !this.viewers.left.current) return;
+    if (this.store.state.resultComparison.configuration.mode === 'sideBySide' && !this.viewers.right.current) return;
+    this.initialFit = null;
+    this.applyPreset('iso');
   }
   private resetPresentation(): void {
     if (!Object.keys(this.payloads).length) return;
@@ -265,6 +277,13 @@ export class ResultComparison implements ResultComparisonHost {
 
   /** Camera synchronization never changes a Result’s own surface bounds. */
   cameraChanged(side: 'left' | 'right'): void {
+    if (this.disposed || this.syncingCamera) return;
+    this.cameraRevision++;
+    this.initialFit = null;
+    if (!this.active) return;
+    this.syncCamera(side);
+  }
+  private syncCamera(side: 'left' | 'right'): void {
     if (!this.active || this.syncingCamera) return;
     const source = this.viewers[side].current, other = this.viewers[side === 'left' ? 'right' : 'left'].current;
     if (!source || !other) return;
@@ -272,22 +291,31 @@ export class ResultComparison implements ResultComparisonHost {
     try { other.setCamera(source.getCamera()); other.setCameraZoom(source.getCameraZoom()); } finally { this.syncingCamera = false; }
   }
   setCamera(camera: CameraState): void {
+    this.cameraRevision++;
+    this.initialFit = null;
     this.syncingCamera = true;
     try { this.viewers.left.current?.setCamera(camera); this.viewers.right.current?.setCamera(camera); } finally { this.syncingCamera = false; }
   }
   preset(view: ViewPreset): void {
+    this.cameraRevision++;
+    this.initialFit = null;
+    this.applyPreset(view);
+  }
+  private applyPreset(view: ViewPreset): void {
     const positions = this.displayedPayloads().map(p => p.surface.positions);
     const bounds = unionBounds(positions);
-    this.viewers.left.current?.preset(view, bounds);
+    this.viewers.left.current?.preset(view, bounds, this.frameAspect());
     this.viewers.right.current?.setCameraZoom(1);
     const camera = this.viewers.left.current?.getCamera();
     if (camera) this.setCamera(camera);
   }
   setProjection(projection: 'perspective' | 'orthographic'): void {
+    this.cameraRevision++;
+    this.initialFit = null;
     this.syncingCamera = true;
     try { this.viewers.left.current?.setProjection(projection); this.viewers.right.current?.setProjection(projection); }
     finally { this.syncingCamera = false; }
-    this.cameraChanged('left');
+    this.syncCamera('left');
   }
   setClip(clip: Parameters<Viewer['setClip']>[0]): void { this.clip = clip; this.viewers.left.current?.setClip(clip); this.viewers.right.current?.setClip(clip); }
   setDeformScale(scale: number | 'auto' | 'true'): void {
@@ -322,9 +350,11 @@ export class ResultComparison implements ResultComparisonHost {
   private frameHeight(): number {
     const bounds = unionBounds(this.displayedPayloads().map(p => p.surface.positions));
     const radius = Math.hypot(...bounds.max.map((v, i) => v - bounds.min[i]!)) * 0.7;
+    return Math.max(radius / this.frameAspect(), 1e-6);
+  }
+  private frameAspect(): number {
     const viewers = this.store.state.resultComparison.configuration.mode === 'sideBySide' ? [this.viewers.left.current, this.viewers.right.current] : [this.viewers.left.current];
-    const aspect = Math.min(1, ...viewers.flatMap(viewer => viewer ? [viewer.viewportAspect()] : []));
-    return Math.max(radius / aspect, 1e-6);
+    return Math.min(1, ...viewers.flatMap(viewer => viewer ? [viewer.viewportAspect()] : []));
   }
   private draw(): void {
     if (!this.active || this.disposed) return;
@@ -359,7 +389,7 @@ export class ResultComparison implements ResultComparisonHost {
       viewer.setDeformed(payload.displacement, deformScale);
       viewer.setSelection({ bodies: metadata.pick?.body ? [metadata.pick.body] : [], faces: metadata.pick?.face ? [metadata.pick.face] : [], sets: [] });
     } } finally { this.syncingCamera = false; }
-    this.cameraChanged('left');
+    this.syncCamera('left');
   }
   private displayedPayloads(): Payload[] {
     const configuration = this.store.state.resultComparison.configuration;

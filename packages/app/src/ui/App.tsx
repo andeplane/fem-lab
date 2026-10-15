@@ -547,10 +547,11 @@ function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: {
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
-        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
-        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        // The layout box catches splitters; the canvas CSS size also changes when comparison
+        // reserves a legend column without changing that box. The fixed CSS dimensions keep
+        // backing-buffer writes from feeding the observer. Resize then reads the actual pane.
         observer.observe(el.parentElement ?? el);
+        observer.observe(el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);

@@ -75,6 +75,22 @@ it('uses a shared orthographic world span and serializable zoom without replacin
   viewer.fit(); expect(viewer.getCamera().target).toEqual([0.5, 0.5, 0]); expect(viewer.getCamera().zoom).toBeUndefined();
 });
 
+it('fits a perspective comparison to a portrait pane without changing ordinary single-Result framing', () => {
+  const { viewer } = setup();
+  const bounds = { min: [0, 0, 0] as [number, number, number], max: [1, 0.1, 0.1] as [number, number, number] };
+  const camera = (viewer as unknown as { perspective: import('three').PerspectiveCamera }).perspective;
+  camera.aspect = 0.375; camera.updateProjectionMatrix();
+  viewer.preset('iso', bounds, 0.375);
+  for (const x of [0, 1]) for (const y of [0, 0.1]) for (const z of [0, 0.1]) {
+    const point = camera.position.clone().set(x, y, z).project(camera);
+    expect(Math.abs(point.x)).toBeLessThan(0.9); expect(Math.abs(point.y)).toBeLessThan(0.9);
+  }
+  const radius = Math.hypot(1, 0.1, 0.1) * 0.5;
+  expect(camera.position.distanceTo(camera.position.clone().set(0.5, 0.05, 0.05))).toBeCloseTo(radius * 3.2 / 0.375);
+  viewer.preset('iso', bounds);
+  expect(camera.position.distanceTo(camera.position.clone().set(0.5, 0.05, 0.05))).toBeCloseTo(radius * 3.2);
+});
+
 it('retains hidden Sheet edges across surface and mode rebuilds and disposes each owned geometry once', () => {
   const { viewer, objects } = setup();
   const oldMesh = objects.mesh.geometry, oldEdges = objects.edges.geometry, oldOutline = objects.outlines.geometry;

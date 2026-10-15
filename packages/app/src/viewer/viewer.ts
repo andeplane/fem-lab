@@ -714,12 +714,15 @@ export class Viewer {
     this.preset('iso');
   }
 
-  preset(view: ViewPreset, bounds?: { min: [number, number, number]; max: [number, number, number] }): void {
+  preset(view: ViewPreset, bounds?: { min: [number, number, number]; max: [number, number, number] }, fitAspect?: number): void {
     const box = bounds ? new Box3(new Vector3(...bounds.min), new Vector3(...bounds.max)) : this.box;
     const size = box.getSize(new Vector3());
     const centre = box.getCenter(new Vector3());
     const radius = Math.max(size.length() * 0.5, 1e-6);
-    const eye = centre.clone().add(new Vector3(...DIRECTIONS[view]).normalize().multiplyScalar(radius * 3.2));
+    // Comparison panes can be much narrower than the original single canvas. Fit the shared
+    // perspective eye to the narrowest pane; ordinary single-Result presets retain their span.
+    const aspect = this.camera === this.perspective ? Math.min(1, fitAspect ?? 1) : 1;
+    const eye = centre.clone().add(new Vector3(...DIRECTIONS[view]).normalize().multiplyScalar(radius * 3.2 / aspect));
     this.camera.zoom = 1;
     this.camera.updateProjectionMatrix();
     this.setCamera({ position: [eye.x, eye.y, eye.z], target: [centre.x, centre.y, centre.z] });

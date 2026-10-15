@@ -38,6 +38,11 @@ and field. Camera position, target, up and projection are shared in world coordi
 and zoom in either pane update the other. Fit/preset use the union of displayed retained bounds,
 not whichever current mesh happens to be active. The renderer's original per-pane bounds remain
 owned by its surface. A final camera gesture is callable as the existing `view.setCamera` Command.
+The first automatic preset waits for actual pane mounting/CSS layout. Perspective distance
+uses the narrowest pane aspect, while orthographic drawing uses the shared world span. A
+camera action after configure admission, while payloads load or panes mount, cancels that
+pending fit; later edits, solves and resizes keep
+the person's camera. Canvas CSS sizing and the layout box are observed directly, without timers.
 
 Difference is left minus right, using only `query.difference`. The caller explicitly chooses
 `onto: left | right`; the target id also supplies the retained surface. The display labels the
@@ -107,9 +112,9 @@ as scripts/AI. These are host capabilities, never Journal entries or a new engin
 | --- | --- |
 | Distinct retained ids, visible per-pane node/element counts, unequal meshes, independent fields/units/clamps, scoped picking/hiding and shared orbit | `packages/app/e2e/result-comparison.spec.ts`, independent retained panes case. Headers use the exact catalogue id's retained Mesh counts, checked against retained surface node counts on both sides; unavailable ids retain their error without invented counts. Its axial oracles are `PL/EA = 0.01 mm` and `P/A = 0.01 MPa`, with 1/2 GPa materials and 100/50 mm meshes. |
 | Explicit right target, partial coverage, null probes, edit/re-solve identity, mode transitions, eviction and project replacement | The engine differences Chromium case. Outside nodes remain neutral and absent from extrema. |
-| Portrait fit with docked legends, synchronized wheel zoom, both-pane PNG export, explicit left target and structured incompatible-field rejection preserving the prior configuration | The portrait panes Chromium case. Rendered bounds are checked against each actual canvas; resize/export preserve the public camera. |
+| Default first-entry perspective fit after dynamic pane mounting, portrait fit with docked legends, synchronized wheel zoom, both-pane PNG export, explicit left target and structured incompatible-field rejection preserving the prior configuration | The default-first-entry and portrait panes Chromium cases. Rendered bounds are checked against each actual canvas without a manual fit on first entry; resize/export preserve the public camera. |
 | Scalar thermal component zero, independent absolute Celsius legends, signed Celsius differences and absence of deformation for heat-only payloads | The thermal Chromium case uses the E1 linear steady conduction oracle. Temperature differences remove the unit origin offset. |
-| Concurrent per-pane legend updates, hide/pick ordering, interrupted first load, late Model edits/eviction, session disposal and screenshot replacement fences | Deferred typed transport regressions in `packages/app/test/result-comparison.test.ts`. |
+| Concurrent per-pane legend updates, hide/pick ordering, interrupted first load, camera actions during preparation/mounting, late Model edits/eviction, session disposal and screenshot replacement fences | Deferred typed transport regressions in `packages/app/test/result-comparison.test.ts`. |
 | Retained nulls on triangles and line elements, scientific missing picks, shared camera span/zoom and disposal | `packages/app/test/sheet-viewer-lifecycle.test.ts` exercises real three.js geometry/controls with only the GPU boundary replaced. |
 | UI/AI/script parity, physical quantities, exact pane/id targets, unsupported headless host and existing camera compatibility | `packages/registry/test/result-comparison.test.ts` plus the exhaustive host registry samples and coverage gate. |
 | Existing single-Result fields, playback, selection, session replacement and accepted account UI | The complete app suite includes `results.test.tsx`, `transient-results.test.ts`, `main-session.test.ts` and `account-ui.test.tsx`; leaving comparison restores the existing workflow. |

@@ -150,7 +150,10 @@ export function makeHostContext(
     abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {
       fit: () => comparison?.active ? comparison.preset('iso') : v().fit(),
-      setCamera: (c) => comparison?.active ? comparison.setCamera(c as CameraState) : v().setCamera(c as CameraState),
+      setCamera: (c) => {
+        const viewer = v();
+        if (comparison) comparison.setCamera(c as CameraState); else viewer.setCamera(c as CameraState);
+      },
       preset: (p) => comparison?.active ? comparison.preset(p) : v().preset(p),
       setProjection: (p) => comparison?.active ? comparison.setProjection(p) : v().setProjection(p),
       showField: async (f) => {

@@ -15,7 +15,7 @@ function viewer() {
     setDim: vi.fn(), setColormap: vi.fn(), setFieldValidity: vi.fn(), setSelection: vi.fn(), preset: vi.fn(), setProjection: vi.fn(), getProjection: () => 'perspective' as const,
     setLayer: vi.fn(() => true), setClip: vi.fn(), setTheme: vi.fn(), setHover: vi.fn(), setHighlight: vi.fn(),
     viewportAspect: vi.fn(() => 4 / 3), screenshot: vi.fn(() => 'data:image/png;base64,pane'),
-    setCamera: vi.fn((next: CameraState) => { camera = next; }), getCamera: () => camera,
+    setCamera: vi.fn((next: CameraState) => { camera = next; if (next.zoom !== undefined) zoom = next.zoom; }), getCamera: () => camera,
     setComparisonFrameHeight: vi.fn(), getCameraZoom: () => zoom, setCameraZoom: vi.fn((next: number) => { zoom = next; }),
   } satisfies ComparisonViewer;
   return fake;
@@ -98,7 +98,56 @@ it('shares camera, orthographic span and zoom across unequal meshes without chan
   comparison.cameraChanged('right');
   expect(left.getCamera()).toEqual(right.getCamera()); expect(left.getCameraZoom()).toBe(2.5);
   comparison.preset('top');
-  expect(left.preset).toHaveBeenCalledWith('top', { min: [0, 0, 0], max: [2, 1, 0] });
+  expect(left.preset).toHaveBeenCalledWith('top', { min: [0, 0, 0], max: [2, 1, 0] }, 1);
+});
+
+it('fits first entry only after the real panes mount, using their narrowest aspect exactly once', async () => {
+  const { comparison, left, right } = setup(); comparison.viewers.right.current = null;
+  await comparison.configure(pair);
+  expect(left.preset).not.toHaveBeenCalled(); comparison.resize(); expect(left.preset).not.toHaveBeenCalled();
+  left.viewportAspect.mockReturnValue(0.4); right.viewportAspect.mockReturnValue(0.5);
+  comparison.viewers.right.current = right; comparison.resume();
+  expect(left.preset).toHaveBeenCalledExactlyOnceWith('iso', { min: [0, 0, 0], max: [2, 1, 0] }, 0.4);
+  comparison.resize(); comparison.resume(); await comparison.refresh();
+  expect(left.preset).toHaveBeenCalledTimes(1);
+});
+
+it('lets a camera gesture or command during pane mounting win over the pending first fit', async () => {
+  for (const action of ['gesture', 'command'] as const) {
+    const { comparison, left, right } = setup(); comparison.viewers.right.current = null;
+    await comparison.configure(pair);
+    const chosen: CameraState = { position: [8, 7, 6], target: [1, 0, 0], zoom: 2 };
+    if (action === 'gesture') { left.setCamera(chosen); comparison.cameraChanged('left'); } else comparison.setCamera(chosen);
+    comparison.viewers.right.current = right; comparison.resume(); comparison.resize();
+    expect(left.preset).not.toHaveBeenCalled(); expect(left.getCamera()).toEqual(chosen); expect(right.getCamera()).toEqual(chosen);
+  }
+});
+
+it('preserves a camera gesture or command while the first comparison payloads are still loading', async () => {
+  for (const action of ['gesture', 'command'] as const) {
+    const { comparison, left, transport } = setup();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    transport.surface = vi.fn(async selector => { await gate; return surface(selector!.resultId!); });
+    const loading = comparison.configure(pair);
+    await vi.waitFor(() => expect(transport.surface).toHaveBeenCalledTimes(2));
+    const chosen: CameraState = { position: [8, 7, 6], target: [1, 0, 0], zoom: 2 };
+    if (action === 'gesture') { left.setCamera(chosen); comparison.cameraChanged('left'); } else comparison.setCamera(chosen);
+    release(); await loading; comparison.resume(); comparison.resize();
+    expect(left.preset).not.toHaveBeenCalled(); expect(left.getCamera()).toEqual(chosen);
+  }
+});
+
+it('drops the pending layout fit after mode suspension, leaving comparison or disposal', async () => {
+  for (const action of ['suspend', 'single', 'dispose'] as const) {
+    const { comparison, left, right } = setup(); comparison.viewers.right.current = null;
+    await comparison.configure(pair);
+    if (action === 'suspend') comparison.suspend();
+    else if (action === 'single') await comparison.configure({ mode: 'single' });
+    else comparison.dispose();
+    comparison.viewers.right.current = right; comparison.resume(); comparison.resize();
+    expect(left.preset).not.toHaveBeenCalled();
+  }
 });
 
 it('fits portrait panes with one shared world span, preserves camera on resize, and captures each pane with its own identity/legend', async () => {
@@ -146,7 +195,7 @@ it('uses the engine difference on the explicit target surface with nullable cove
   expect(comparison.state().difference?.legend?.min).toEqual(q(-3, 'mm'));
   expect(left.setFieldValidity).toHaveBeenLastCalledWith(Uint8Array.of(1, 0, 1));
   expect((await comparison.pick({ pane: 'difference', resultId: 'new', at: [q(2.001234567891), q(0), q(0)] }))?.value).toBeNull();
-  comparison.preset('front'); expect(left.preset).toHaveBeenCalledWith('front', { min: [0, 0, 0], max: [2, 1, 0] });
+  comparison.preset('front'); expect(left.preset).toHaveBeenCalledWith('front', { min: [0, 0, 0], max: [2, 1, 0] }, 1);
   const before = comparison.state().catalogue;
   catalogue({ ...before, records: before.records.filter(record => record.id !== 'old') }); await comparison.refresh();
   expect(comparison.state().difference?.error).toMatchObject({ code: 'not-found', cause: expect.stringContaining('old') });

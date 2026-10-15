@@ -50,6 +50,26 @@ async function cleanView(page: Page) {
   });
 }
 
+test('@cpu default first comparison entry fits both retained bars in perspective without a manual fit', async ({ page }, info) => {
+  test.setTimeout(180_000); await boot(page); const ids = await axialPair(page);
+  await page.evaluate(async ids => {
+    await window.fem.dispatch({ cmd: 'view.compareResults', mode: 'sideBySide', left: { resultId: ids.left, field: 'displacement', component: 0 }, right: { resultId: ids.right, field: 'displacement', component: 0 } });
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'grid', on: false });
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'axes', on: false });
+  }, ids);
+  await expect(page.locator('[data-comparison-pane]')).toHaveCount(2);
+  for (const name of ['left', 'right']) await expect.poll(async () => (await raster(page, name)).count).toBeGreaterThan(200);
+  const left = await raster(page, 'left'), right = await raster(page, 'right');
+  const bounds = ({ png: _png, ...bounds }: Awaited<ReturnType<typeof raster>>) => bounds;
+  console.info('default first-entry framing', { left: bounds(left), right: bounds(right), camera: await page.evaluate(() => window.fem.registry.query({ query: 'query.view' })) });
+  await page.screenshot({ path: info.outputPath('default-perspective-first-entry.png') });
+  await info.attach('default-perspective-first-entry', { path: info.outputPath('default-perspective-first-entry.png'), contentType: 'image/png' });
+  for (const picture of [left, right]) {
+    expect(picture.minX).toBeGreaterThan(2); expect(picture.maxX).toBeLessThan(picture.width - 2);
+    expect(picture.minY).toBeGreaterThan(2); expect(picture.maxY).toBeLessThan(picture.height - 2);
+  }
+});
+
 test('@cpu independent retained panes preserve physics, surfaces, legends, scoped picking, hidden bodies and synchronized cameras', async ({ page }, info) => {
   test.setTimeout(180_000); await boot(page); const ids = await axialPair(page);
   const before = await page.evaluate(() => window.fem.query.journal());
