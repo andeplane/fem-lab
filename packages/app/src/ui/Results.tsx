@@ -574,7 +574,7 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
       {list.length === 0 ? (
         <div class="surface pass">
           <span>✓</span>
-          <span>Nothing blocks a solve: every Body has a Material, the Model is held, loaded and has a Step.</span>
+          <span>No current pre-solve blockers are reported.</span>
         </div>
       ) : null}
       {list.map((b) => (
