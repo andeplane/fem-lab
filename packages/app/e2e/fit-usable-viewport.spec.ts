@@ -53,6 +53,12 @@ test('@cpu explicit Fit keeps result pixels and picks clear of viewer chrome wit
       await page.setViewportSize({ width, height: 1000 });
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(beforeResize);
+      await page.evaluate(async width => {
+        // Public CameraState accepts zero up; at1180 use a valid prior eye whose up is
+        // nearly parallel to Fit's new iso direction. Fit must serialize its repaired up.
+        const up = width === 1600 ? [0, 0, 0] : [1 + 1e-10, -1.35, 0.9];
+        await window.fem.dispatch({ cmd: 'view.setCamera', position: [0, 0, 2], target: [0, 0, 0], up });
+      }, width);
       await page.evaluate(() => window.fem.dispatch({ cmd: 'view.fit' }));
       const actual = await picture(page);
       await info.attach(`${projection}-${width}-pixels`, { body: JSON.stringify(actual, null, 2), contentType: 'application/json' });

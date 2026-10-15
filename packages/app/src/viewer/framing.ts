@@ -11,7 +11,11 @@ export interface FitViewport {
 export function fitCamera(box: Box3, direction: Vector3, camera: PerspectiveCamera | OrthographicCamera, viewport: FitViewport): CameraState {
   const centre = box.getCenter(new Vector3());
   const back = direction.clone().normalize();
-  const right = camera.up.clone().cross(back).normalize();
+  const viewUp = camera.up.clone().normalize();
+  // A legal previous pose can put up along the new iso eye. Choose a stable z-up basis and
+  // serialize it too, so Three's lookAt and a later setCamera use the same fitted projection.
+  if (viewUp.lengthSq() === 0 || Math.abs(viewUp.dot(back)) > 1 - 1e-8) viewUp.set(0, 0, 1);
+  const right = viewUp.clone().cross(back).normalize();
   const up = back.clone().cross(right);
   const left = 2 * viewport.left / viewport.width - 1;
   const rightEdge = 2 * viewport.right / viewport.width - 1;
@@ -45,5 +49,5 @@ export function fitCamera(box: Box3, direction: Vector3, camera: PerspectiveCame
   }
   const target = centre.clone().addScaledVector(right, -cx * spanX).addScaledVector(up, -cy * spanY);
   const eye = target.clone().addScaledVector(back, distance);
-  return { position: eye.toArray(), target: target.toArray(), zoom };
+  return { position: eye.toArray(), target: target.toArray(), up: viewUp.toArray(), zoom };
 }
