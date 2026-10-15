@@ -84,6 +84,23 @@ pub(crate) fn retained_indices(points: usize, output_every: usize) -> Vec<usize>
     out
 }
 
+/// `participation / (a + i b)`, without squaring large denominator components or
+/// losing a small numerator component before the final power-of-two rescaling.
+/// The normalized denominator lies in [1, 2] for a nonzero finite complex value.
+/// Its negligible smaller term may round to zero; each numerator component keeps
+/// its own exponent. A zero denominator or nonfinite inputs remain nonfinite, so
+/// the existing Result validation still refuses an unrepresentable response.
+fn modal_coefficient(participation: f64, a: f64, b: f64) -> (f64, f64) {
+    let scale = a.abs().max(b.abs());
+    let (ar, br) = (a / scale, b / scale);
+    let (pm, pe) = libm::frexp(participation);
+    let (am, ae) = libm::frexp(a);
+    let (bm, be) = libm::frexp(b);
+    let (sm, se) = libm::frexp(scale);
+    let denominator = sm * sm * (ar * ar + br * br);
+    (libm::scalbn(pm * am / denominator, pe + ae - 2 * se), libm::scalbn(-pm * bm / denominator, pe + be - 2 * se))
+}
+
 /// The modal Step this one continues has no Result, or the Step it names was not modal.
 fn needs_modes(step_has_after: bool) -> Error {
     Error::new(
@@ -167,12 +184,11 @@ pub fn run(
         let w = 2.0 * std::f64::consts::PI * grid[i];
         let (mut re, mut im) = (vec![0.0; p.n_dofs()], vec![0.0; p.n_dofs()]);
         for (k, phi) in shapes.iter().enumerate() {
-            // 1 / ((ω_k² − ω²) + i 2 ζ_k ω_k ω), by the conjugate. Undamped and exactly on a
+            // 1 / ((ω_k² − ω²) + i 2 ζ_k ω_k ω). Undamped and exactly on a
             // natural frequency this is a divide by zero, and an infinite response is the
             // honest answer to driving an undamped resonance.
             let (a, b) = (omega[k] * omega[k] - w * w, 2.0 * zeta[k] * omega[k] * w);
-            let d = a * a + b * b;
-            let (cr, ci) = (participation[k] * a / d, -participation[k] * b / d);
+            let (cr, ci) = modal_coefficient(participation[k], a, b);
             for (j, &v) in phi.iter().enumerate() {
                 re[j] += v * cr;
                 im[j] += v * ci;
@@ -226,9 +242,66 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{retained_indices, sweep_grid};
+    use super::{modal_coefficient, retained_indices, sweep_grid};
     use crate::command::SweepSpacing;
     use crate::ErrorCode;
+
+    #[test]
+    fn modal_reciprocals_match_independent_rational_complex_quotients() {
+        for (p, a, b, real, imaginary) in [
+            (10.0, 2.0, 0.0, 5.0, 0.0),
+            (10.0, -2.0, 0.0, -5.0, 0.0),
+            (10.0, 0.0, 2.0, 0.0, -5.0),
+            (10.0, 0.0, -2.0, 0.0, 5.0),
+            (10.0, 3.0, 4.0, 1.2, -1.6),
+            (-10.0, 3.0, 4.0, -1.2, 1.6),
+        ] {
+            let actual = modal_coefficient(p, a, b);
+            assert!((actual.0 - real).abs() < 1e-15);
+            assert!((actual.1 - imaginary).abs() < 1e-15);
+        }
+        // p/(p+i p) is exactly (1-i)/2 at every nonzero scale, even when the
+        // unscaled squared denominator overflows or underflows.
+        for scale in [f64::from_bits(1), 1e-300, 1.0, 1e300, f64::MAX] {
+            assert_eq!(modal_coefficient(scale, scale, scale), (0.5, -0.5));
+        }
+    }
+
+    #[test]
+    fn modal_reciprocals_preserve_independently_scaled_small_components() {
+        let p = f64::from_bits((2046u64) << 52); // 2^1023
+        let tiny = f64::from_bits((23u64) << 52); // 2^-1000
+        let large = f64::from_bits((1523u64) << 52); // 2^500
+        let real = f64::from_bits((46u64) << 52); // 2^-977
+        let imaginary = f64::from_bits((1546u64) << 52); // 2^523
+                                                         // The exact denominator is 2^1000 (1+2^-3000); its correction cannot
+                                                         // change either rounded answer. A normalized tiny/large numerator is zero.
+        for sign in [-1.0, 1.0] {
+            assert_eq!(modal_coefficient(p, sign * tiny, large), (sign * real, -imaginary));
+            assert_eq!(modal_coefficient(p, large, sign * tiny), (imaginary, -sign * real));
+        }
+        // Even the smallest subnormal component must survive when multiplied by
+        // a large finite participation: 2^1023 * 2^-1074 / 2^2 = 2^-53.
+        let small_real = f64::from_bits((970u64) << 52); // 2^-53
+        let large_imaginary = f64::from_bits((2045u64) << 52); // 2^1022
+        assert_eq!(modal_coefficient(p, f64::from_bits(1), 2.0), (small_real, -large_imaginary));
+        assert_eq!(modal_coefficient(p, 2.0, f64::from_bits(1)), (large_imaginary, -small_real));
+    }
+
+    #[test]
+    fn singular_and_nonfinite_modal_coefficients_still_are_not_finite_responses() {
+        for (p, a, b) in [
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0),
+            (1.0, f64::INFINITY, 0.0),
+            (1.0, 0.0, f64::INFINITY),
+            (1.0, f64::NAN, 1.0),
+            (f64::INFINITY, 1.0, 1.0),
+        ] {
+            let (real, imaginary) = modal_coefficient(p, a, b);
+            assert!(!libm::hypot(real, imaginary).is_finite());
+        }
+    }
 
     #[test]
     fn a_linear_grid_hits_both_endpoints_and_steps_evenly() {
