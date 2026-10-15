@@ -12,9 +12,17 @@ the final API is https://api.femlab.app. [#600](600-domain-routing.md) records t
 settlement and disposable-account deletion. Its automatic free grant was historical,
 before reviewed free admission; the transport proof remains useful.
 
-Both frontends, APIs and recovery jobs now run source
-`6c5d4daaf46d59fd68aca725c4b8074b06acf2a8`. Both APIs were healthy at 100% traffic and both
-recovery executions succeeded. Migration 010 and version 1 of the server-only eligibility
+The latest published API source is `fe94e445` and frontend source is `b18c37a5` in
+both environments, adding the public credit unit described below. At 20:18:28 UTC,
+both published pages/assets/sign-in hosts returned 200 with the intended cache policy,
+and headless Chromium Google start/cancel/return/retry preserved the local Model on
+both origins. The existing-owner native check at the new unit display has not been
+repeated because the Mac is locked; it is not claimed as a new screenshot or sign-in.
+
+The reviewed-monthly release used source
+`6c5d4daaf46d59fd68aca725c4b8074b06acf2a8` for both frontends, APIs and recovery jobs.
+At that release both APIs were healthy at 100% traffic and both recovery executions
+succeeded. Migration 010 and version 1 of the server-only eligibility
 fingerprint key are installed in both environments. Anonymous monthly-claim requests
 returned 401. Runtime evidence is `/tmp/femlab-712-runtime-release.json`; these deployment
 and migration observations are distinct from the authenticated claim acceptance below.
@@ -27,8 +35,12 @@ is not described as fixed by this release. Both frontend secret scans passed for
 Under [#712](712-free-monthly-allowance.md), creating or reopening an account still
 grants **zero** AI credits. Free monthly access requires explicit operator-reviewed
 eligibility and an explicit authenticated claim for each UTC calendar month. Approved
-free accounts can claim 6,666,666 weighted credits, approximately $5 of supplier-accounting
-value. Credits expire at 00:00 UTC on the first of the next month without rollover,
+free accounts can claim an advertised 5,000 public AI credits, approximately $5 of
+supplier-accounting value. The existing exact allocation remains 199,999,980 internal
+subcredits (formerly 6,666,666 weighted credits); public-unit responses preserve
+4,999.9995 credits and the UI displays 5,000. The later unit release below changes no
+allowance purchasing power or ledger row. Credits expire at 00:00 UTC on the first of
+the next month without rollover,
 including a late-month claim. Reviewed-person, approved-alias and immutable claim markers
 prevent an additional claim through account recreation. Revocation and paid/free
 exclusion are enforced by the backend; Google/email verification alone does not establish
@@ -57,7 +69,8 @@ matched, `isNewUser` was false, and `email_verified` was true. No Admin-token in
 or replacement identity was used. This records the public REST exchange separately
 from the later native browser completion below.
 
-The approved owner's public monthly-claim call returned 6,666,666 credits with
+Amounts in this 19:22 snapshot use legacy weighted-credit units. The approved owner's
+public monthly-claim call returned 6,666,666 credits with
 `replay: false`; a repeat returned `replay: true`. A real Mini completion used 40 input
 and 12 output tokens and charged exactly 112 credits. Replaying that completion returned
 the same confirmed receipt. SQL showed exactly one monthly grant, one request, one receipt
@@ -80,18 +93,18 @@ then showing free total/available/reserved credits 0/0/0. No AI, Checkout, payme
 deletion occurred in those sign-in checks. Google sign-in is usable; these actual owner
 returns are distinct from provider configuration and cancel/retry checks.
 
-A further native Chrome check at current source `6c5d4daa` used a fresh tab in the
+A further native Chrome check at the then-published source `6c5d4daa` used a fresh tab in the
 existing profile and a normal Google redirect with existing authorization. The owner
 Account UI visibly showed 6,666,554 available of 6,666,666, zero reserved, the monthly
 allowance already claimed, and disabled claim/purchase controls. No identity was
 injected, browser data cleared, claim repeated or AI request made. The original blank
-tab was preserved; this observation establishes the current rendered owner balance,
+tab was preserved; this observation establishes that release's rendered owner balance,
 not a universal cause or source fix for that tab's visual problem. Evidence is
 `/tmp/femlab-native-owner-account-721.json` and `.png`, recorded separately under
 [#721](https://github.com/andeplane/fem-lab/issues/721). This observation records
 Google sign-in; native email-link completion is recorded separately below.
 
-After the current `6c5d4daa` publication, actual published Google start/cancel/return/retry
+After the `6c5d4daa` publication, actual published Google start/cancel/return/retry
 checks passed again on both origins without a candidate overlay, preserving the local
 Model. Evidence is `/tmp/femlab-google-stage-published-712.json` and
 `/tmp/femlab-google-prod-published-712.json`. Root documents use no-cache, Auth helper
@@ -122,49 +135,108 @@ Earlier invalid-code Chromium checks reached Firebase and returned `INVALID_OOB_
 without an identity or Auth resource CSP failure; they remain negative-path evidence.
 The earlier browser network failure did not establish a product defect.
 [#710](https://github.com/andeplane/fem-lab/issues/710) tracks
-custom-sender/deliverability work; Cloudflare's explicit terms/login step is still gated,
-and no DNS, sender verification or sender activation is claimed. Mail evidence is
+custom-sender/deliverability work. Four sender records were subsequently added in
+Cloudflare and verified on both authoritative nameservers, preserving the original
+six records and hosting/API DNS. At 20:13:33 UTC Firebase still reported the custom
+domain `IN_PROGRESS` and sender method `DEFAULT`; Apply had not run and no post-change
+message was sent. `/tmp/femlab-sender-domain-710.json` records that intermediate state.
+DNS publication is complete; provider activation and Inbox delivery remain unverified.
+Mail evidence is
 `/tmp/femlab-email-delivery-557.json`. Disposable Admin-generated links in the staging
 smoke below prove exchange separately and did not send mail.
 
-Managed Payments TEST lifecycle acceptance is recorded by activation
-[#661](https://github.com/andeplane/fem-lab/issues/661). Live terms acceptance and billing
-activation remain pending, and production billing is disabled. No actual live payment
-has occurred. TEST success does not establish live charge or invoice authority.
+### Live subscription activation and unpaid Checkout
+
+Under [#661](https://github.com/andeplane/fem-lab/issues/661), owner-approved live
+Managed Payments terms/eligibility and subscription activation completed. The 19:47 UTC
+production release exited successfully with image source `6c5d4daa`, activation config
+`da7291a2` and API revision `femlab-api-rec9d6678-57d285f5`. Billing became available in
+managed mode. TEST lifecycle acceptance remains separately recorded by #661.
+
+A genuine existing-owner public-API Checkout check at 19:49:34 UTC created one LIVE
+Plus personal Session and its public retry reused that Session. Stripe readback showed
+Managed Payments enabled, automatic tax complete, and liability/provider `stripe`.
+The hosted page showed USD 49 plus USD 12.25 Norway VAT, USD 61.25 total. No card details
+were entered, the terms checkbox was not checked and Subscribe was not submitted.
+The Session was deliberately expired and verified at 19:56:35 UTC as expired/unpaid,
+with null subscription and PaymentIntent, zero owner subscriptions, zero paid grants
+and zero active holds. The existing monthly allowance/account stayed unchanged.
+Evidence is `/tmp/femlab-661-live-checkout-evidence.json`; the hosted screenshot is
+`/tmp/femlab-live-unpaid-checkout-661.png`. This is real live Checkout/tax/idempotency
+proof, with no actual live payment or paid-invoice grant claimed. Canonical paid invoice
+and webhook authority remain the only route to a paid entitlement.
 [#695](695-seller-merchant-roles.md) distinguishes Hafreager as seller/product provider
 from the merchant-of-record transaction role.
 
 ## Included usage and supplier accounting
 
-The deployed `6c5d4daa` catalog uses [tariff `2026-10-14.v1`](https://github.com/andeplane/fem-lab/blob/6c5d4daaf46d59fd68aca725c4b8074b06acf2a8/packages/service/src/credits.ts):
-one credit is 30 subcredits and `supplierMicros` rounds `subcredits / 40` upward.
-Thus one million weighted credits have a nominal supplier-accounting value of $0.75.
-These are catalog-derived estimates, not a fresh model-price lookup or supplier invoice.
+[#728](728-credit-scale.md) introduces public unit `usd-milli-v1`: one AI credit is
+USD 0.001 of supplier/model usage. The unit-aware API source
+`fe94e445b00424cdf3f2ea58d02b3779a2f0c512` released successfully to production and staging;
+release manifests are `/tmp/femlab-app-release-563.json` and
+`/tmp/femlab-app-staging-release-563.json`. Unit-aware clients send
+`X-Femlab-Credit-Unit: usd-milli-v1`; old clients retain their legacy numeric contract.
+Responses carry the unit marker. Balances/receipts read exact immutable subcredits,
+not an already truncated legacy display. One public credit is 40,000 internal subcredits;
+there is no per-request rounding, new grant or history/budget change. UI formatting
+uses at most two decimal places.
 
-| Current offer | USD list price / paid month | Weighted credits | Supplier equivalent at full use | Price / nominal supplier value |
+Independent Cloud Run readback at 20:19:56 UTC confirmed both new API revisions ready
+with 100% traffic. Production retained billing enabled/live/managed/automatic-tax;
+staging retained billing enabled/test/managed/automatic-tax, while staging supplier
+caps remained zero. `/tmp/femlab-728-runtime-readback.json` records those runtime facts.
+The hosting helper's older hardcoded disabled-billing summary was misleading text,
+tracked separately in #737; it did not disable the actual service.
+
+| Current offer | USD list price / paid month | Advertised public AI credits | Supplier equivalent at full use | Price / nominal supplier value |
 |---|---:|---:|---:|---:|
-| Reviewed free monthly | $0, explicit claim | 6,666,666 | approximately $5.00 | n/a |
-| Plus | $49 | 10,000,000 | $7.50 | 6.53× |
-| Pro | $149 | 16,000,000 | $12.00 | 12.42× |
-| Studio | $499 | 50,000,000 | $37.50 | 13.31× |
+| Reviewed free monthly | $0, explicit claim | 5,000 | approximately $5.00 | n/a |
+| Plus | $49 | 7,500 | $7.50 | 6.53× |
+| Pro | $149 | 12,000 | $12.00 | 12.42× |
+| Studio | $499 | 37,500 | $37.50 | 13.31× |
 
-[#709](709-monthly-ai-allowance.md) changed Plus from 4M to 10M without changing its $49
-price. All six existing Plus provider Products (direct/personal/business in TEST and LIVE)
-now have matching 10M descriptions/metadata, confirmed at 19:15:17 UTC in
-`/tmp/femlab-709-provider-catalog.json`. Runtime and frontend publication use `6c5d4daa`.
-This verifies the deployed offer and catalog sync; it does not claim a newly paid live
-10M grant while billing is disabled. Pro and Studio are unchanged. The earlier deployed
-`dc1bcb47` snapshot at 17:57:26 UTC had Plus 4M/$3.00 nominal supplier value (16.33×
-list-price/value) and an invited one-time 200k/$0.15 preview. Those dated historical
-offers are superseded and are not current signup or monthly benefits.
+All 18 existing provider Products (three plans × direct/personal/business × TEST/LIVE)
+were synced at 20:13:00 UTC to the new descriptions, allowance quantities and explicit
+`usd-milli-v1` metadata. Product/Price identities, price amounts and tax classifications
+were preserved; no payments were created. Evidence is `/tmp/femlab-728-provider-catalog.json`.
+Frontend source `b18c37a5d0b62cfe7f6954b8e69780fe516d0476` was then published to both
+sites. At 20:18:28 UTC production served `index-DdPWQvkF.js` and staging
+`index-DkhnJjf3.js`; root, asset and sign-in requests returned 200 with root no-cache,
+assets immutable and sign-in no-store. Actual published Chromium Google start/cancel/
+return/retry and Model preservation passed on both origins; owner authentication was
+not rerun for that check. Evidence is `/tmp/femlab-728-published-release.json`.
 
-Mini consumes one credit per uncached input token, 0.1 per cache-read token and six
-per output token including reasoning. Astra uses 13⅓, 1⅓ and 66⅔ respectively, with
-16⅔ per cache-write input token. These are weighted allowances, not fixed raw-token
-bundles. Current context ceilings are 64,000 for free and 128,000 for paid plans;
-output ceilings are 4,096 for free, 8,192 for Plus and 16,000 for Pro/Studio. There is
-no automatic overage or rollover. History, tools and other provider-metered context
-consume allowance too.
+Read-only production SQL at 20:18:05 UTC confirmed the same 199,999,980 total and
+199,996,620 available subcredits, one eligibility/monthly grant, zero paid grants and
+zero holds. Those exact values convert to 4,999.9995 total and 4,999.9155 available
+public credits, displayed as 5,000 and 4,999.92. No ledger adjustment or new funding
+was applied. Eligibility tables remain SELECT-only for both runtime roles, and budgets
+retain their recorded values. `/tmp/femlab-728-production-balance.json` contains that
+SQL proof; numeric conversion follows the committed public-unit contract. Native
+owner UI verification of the new display remains unavailable while the Mac is locked;
+the earlier Google/email owner screenshots/accessibility checks retain their original
+legacy-unit context. This update includes no new owner-unit screenshot, claim, supplier
+request or paid transaction.
+
+The previous `6c5d4daa` offer used 6,666,666/10M/16M/50M legacy weighted credits for
+reviewed-free/Plus/Pro/Studio. Those amounts have the same purchasing power as the current
+public unit. [#709](709-monthly-ai-allowance.md) had already increased Plus from 4M to 10M
+without changing its USD 49 price; its six-Product sync at 19:15:17 UTC remains dated in
+`/tmp/femlab-709-provider-catalog.json`. The earlier `dc1bcb47` snapshot at 17:57:26 UTC
+had Plus 4M/USD 3.00 nominal supplier value (16.33× list-price/value) and a one-time invited
+200k/USD 0.15 preview. Historical grants retain their original exact amount and expiry;
+the unit release does not regrant, increase or renew them.
+
+The immutable [tariff `2026-10-14.v1`](https://github.com/andeplane/fem-lab/blob/fe94e445b00424cdf3f2ea58d02b3779a2f0c512/packages/service/src/credits.ts)
+uses 30 internal subcredits per legacy weighted credit and rounds `subcredits/40` upward
+for supplier USD microdollar accounting. Mini's raw rates remain 30 per uncached input,
+3 per cache-read input and 180 per output token including reasoning. Astra uses 400/40/
+2,000 respectively and 500 per cache-write input. Public unit conversion changes none
+of those tariffs. Allowances account for model cost rather than a fixed raw-token count;
+history, tools and provider-metered context consume usage too. Context ceilings remain
+64,000 free/128,000 paid, with output ceilings 4,096 free/8,192 Plus/16,000 Pro and Studio.
+There is no automatic overage or rollover. Catalog equivalents are not a fresh model
+price lookup or supplier invoice.
 
 The supplier equivalents exclude per-receipt upward rounding (less than one USD
 microdollar each), company-funded overrun/uncertainty losses, infrastructure, support,
@@ -186,8 +258,9 @@ The earlier 17:57:26 UTC snapshot, before this free-policy change, had a $1/day 
 pool and no active holds. Receipt-derived settled accounting then was $0.894551 for
 the UTC day, $0.894587 for the UTC month, and $0.012010 for that day's free pool. Those
 historical totals are distinct from current caps, future full-consumption estimates and
-a reconciled upstream invoice. The later owner acceptance's 112-credit receipt has
-3,360 subcredits, nominal supplier accounting of $0.000084 under this tariff; it does not
+a reconciled upstream invoice. The later owner acceptance's 112-legacy-credit receipt
+has 3,360 subcredits, equal to 0.084 public credits and nominal supplier accounting of
+$0.000084 under this tariff; it does not
 update or replace that earlier snapshot. The default staging smoke creates no new usage
 receipt or supplier spend. This verification slice itself changes no production limit.
 
@@ -333,12 +406,18 @@ confirmed absent after success. No eligibility, credits, email, supplier work, p
 spend-cap change or owner-account action was created by this run; staging stayed paused.
 
 Sanitized evidence is `/tmp/femlab-staging-monthly-zero-signup-557-evidence.json`, bound
-to the exact tested source and test SHA-256. This proves the current disposable staging
-browser flow and monthly denial, separately from the production owner REST exchange
+to the exact tested source and test SHA-256. This proves the dated disposable staging
+browser flow and monthly denial at the legacy-unit release, separately from the
+production owner REST exchange
 and real Mini debit/replay above. It does not prove positive genuine owner email delivery
 through the browser, live billing or engineering-answer quality.
 
-The tested source passed `npm run typecheck -w packages/app` and
+The prepared smoke now explicitly requests `usd-milli-v1` for direct API calls and
+expects the exact preserved monthly allocation 4,999.9995 plus the unit marker, matching
+the new browser profile. The revised contract has not been rerun with fresh fixtures;
+the 19:32 test remains bound to its actual legacy-unit source.
+
+The updated verification source passed `npm run typecheck -w packages/app` and
 `npm exec -w packages/app -- playwright test --config=playwright.live.config.ts --list`
 on 15 October 2026 (one test discovered), plus `git diff --check`. No new fixture,
 supplier generation or deployment was triggered by the final documentation update;
@@ -352,9 +431,6 @@ commit separate, with no identity, credentials, action link or export URL.
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
   verify actual Inbox delivery. Receipt and SPF/DKIM checks passed; Google's owner
   chooser/consent return is already verified on both environments.
-- Finish live Managed Payments terms/eligibility and billing activation in #661, with
-  current policies, tax coverage, paid controls, canonical live invoice/webhook authority
-  and owned cancellation/payment management. TEST success is not live-payment proof.
 - Complete required exact-head CI and review for the final three-file verification
   source. Recorded deployed acceptance is separate from that source gate.
 
