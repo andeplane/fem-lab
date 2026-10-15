@@ -5,23 +5,52 @@
   "apiVersion": "2026-09-30.endive",
   "billingEnabled": false,
   "taxClassificationConfirmed": false,
-  "taxMode": "not_collecting",
-  "taxCollectionDecisionConfirmed": true,
-  "policyUrlsConfirmed": false,
-  "stagingCheckoutVerified": false,
-  "webhookVerified": false,
+  "taxMode": "automatic",
+  "taxCollectionDecisionConfirmed": false,
+  "policyUrlsConfirmed": true,
+  "stagingCheckoutVerified": true,
+  "webhookVerified": true,
   "activeTaxRegistrationVerified": false,
   "plans": {
-    "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmWyAAtmJJ65hf91LvyAFE", "amountUsdCents": 4900, "credits": 4000000},
-    "pro": {"product": "femlab_pro_2026_10", "price": "price_1UQmWzAAtmJJ65hfnlgp7daG", "amountUsdCents": 14900, "credits": 16000000},
-    "studio": {"product": "femlab_studio_2026_10", "price": "price_1UQmX1AAtmJJ65hfZVJOQV7T", "amountUsdCents": 49900, "credits": 50000000}
+    "plus": {
+      "product": "femlab_plus_2026_10",
+      "price": "price_1UQmWyAAtmJJ65hf91LvyAFE",
+      "amountUsdCents": 4900,
+      "credits": 4000000
+    },
+    "pro": {
+      "product": "femlab_pro_2026_10",
+      "price": "price_1UQmWzAAtmJJ65hfnlgp7daG",
+      "amountUsdCents": 14900,
+      "credits": 16000000
+    },
+    "studio": {
+      "product": "femlab_studio_2026_10",
+      "price": "price_1UQmX1AAtmJJ65hfZVJOQV7T",
+      "amountUsdCents": 49900,
+      "credits": 50000000
+    }
   },
   "portalConfiguration": "bpc_1UQmX1AAtmJJ65hfnQBmiZSJ",
   "webhook": {
     "id": "we_1UQmX3AAtmJJ65hf1CRblIOT",
-    "enabled": false,
+    "enabled": true,
     "url": "https://api.femlab.app/v1/billing/webhook",
-    "events": ["invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "charge.refunded", "charge.dispute.created"],
+    "events": [
+      "invoice.paid",
+      "invoice.payment_succeeded",
+      "invoice.payment_failed",
+      "customer.subscription.created",
+      "customer.subscription.updated",
+      "customer.subscription.deleted",
+      "charge.refunded",
+      "charge.dispute.created"
+    ],
     "secretName": "stripe-webhook-secret"
-  }
+  },
+  "merchantMode": "managed",
+  "managedPaymentsAccountEnabled": false,
+  "managedPaymentsEligibilityConfirmed": false,
+  "managedPaymentsTermsAccepted": false,
+  "managedPaymentsCheckoutVerified": false
 }
