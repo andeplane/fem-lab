@@ -64,17 +64,19 @@ There are no FEM engine patches. The standalone converter patches are:
 2. Produce a modular ES-module entry for the dedicated Worker/Node proof. This changes
    packaging, not the geometric algorithm, and is recorded as a separate build patch.
 
-`tools/build-step-converter` obtains the two pinned source archives, verifies their hashes,
+`tools/build-step-converter.sh` obtains the pinned wrapper, OCCT, Emscripten and SDK source
+archives, verifies their hashes,
 applies the recorded patches and builds with Emscripten **3.1.69**, CMake Release and the
 upstream `-Oz`/exception/memory-growth settings. The exact compiler/platform/build details
 and `jobs=2` invocation are recorded with the produced artifact; no claim of identical bytes
 to the publisher's Windows build is made. The resulting standalone JS/WASM are vendored as
 distributable assets, with their notices and manifest.
 
-`tools/prepare-step-assets` prepares `public/third-party/step-converter/`: the converter,
+`tools/prepare-step-assets.mjs` prepares `public/third-party/step-converter/`: the converter,
 LGPL texts, pinned OCCT exception, human-readable notices, manifest and a complete
 `corresponding-source.tar.gz`. That source kit includes the full wrapper and OCCT source
-trees, local patches, build instructions and replacement instructions. It is assembled from
+trees, full Emscripten runtime and SDK source, local patches, build instructions and
+replacement instructions. It is assembled from
 the verified source archives/cache during the ordinary app build and included in the web
 distribution at the same origin as the converter. Missing/mismatched source or notices fail
 the build; upstream links alone are not substituted for the distributed source kit.
@@ -90,6 +92,14 @@ can omit unusable roots, and emits empty face ranges. This is why output array c
 engine watertightness alone are insufficient, and why the patched-build/source-kit route is
 a prerequisite rather than an optional follow-up. The receipt describes recognized transfer
 roots/faces and supported tessellated geometry, not universal STEP entity support.
+
+The actual patched-module negative proof also reproduced a seventh unsupported child face
+being omitted with only an OCCT transfer warning, leaving an otherwise valid solid. The
+final guard rejects all reported transfer warnings as unsupported, even potentially harmless
+ones; it does not call every such source invalid. This conservative policy remains until
+complete conversion can be established for a warning-producing transfer. The before/after
+fixture and exact diagnostics are preserved, and the same final module must rerun all
+positive unit/refinement cases. Post-transfer face counts alone do not prove source completeness.
 
 ## Units and conversion contract
 
@@ -170,3 +180,21 @@ Journal, but cannot pretend to parse an original STEP file.
 
 Any new material restriction found by real conversion or distribution proof is recorded
 here and on #351 before changing scope. The completed feature is one issue and one PR.
+
+## Verification status
+
+The pinned patched converter and complete source kit are built and hash-verified. Real
+negative fixtures reject malformed/incomplete/free/external source content without partial
+arrays, including the reproduced warning-only omitted face. Six independent analytic cases
+(boxes declared in m/mm/inch and three cylinder refinements) pass the converter/engine
+measurement gates and converter-free native 1/4-thread plus Node WASM replay. Model and
+Journal hashes remain exact. At the JSON-persisted query comparison only, native derived
+`-0` normals compare as `0`; every other scalar, field and array order remains exact.
+
+App/controller/checked-session tests, full app coverage, registry 100%, workspace types,
+codegen, production build and size gates pass. Actual Chromium CPU and service-worker
+flows pass lazy loading, import/re-import, named face/mesh, cancellation and stale project
+checks. Screenshot review found the existing fixed perspective near-plane clipping tiny
+Bodies: [#620](https://github.com/andeplane/fem-lab/issues/620) is an independent viewer
+correction and a prerequisite for the final visible millimeter-Body acceptance. A blank
+viewport is not treated as visual acceptance merely because physical queries pass.

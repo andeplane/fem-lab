@@ -46,9 +46,17 @@ describe('portable STEP source boundary', () => {
     expect(command).not.toHaveProperty('featureAngle');
     value.root.meshes = []; value.root.children = [{ meshes: [0], children: [] }];
     expect(stepGeometry(value)).toEqual(converted);
+    const second = structuredClone(value.meshes[0]!);
+    for (let i = 0; i < second.attributes.position.array.length; i += 3) second.attributes.position.array[i]! += 2;
+    value.meshes.push(second); value.root.children.push({ meshes: [1], children: [] });
+    value.femlab = { ...value.femlab, roots: 2, transferredRoots: 2, sourceRoots: 2, faces: 2, meshes: 2, triangles: 2 };
+    const combined = stepGeometry(value);
+    expect(combined.counts).toMatchObject({ roots: 2, sourceRoots: 2, meshes: 2, faces: 2, triangles: 2 });
+    expect(combined.data.split('facet normal')).toHaveLength(3);
+    expect(combined.data).toContain('vertex 2 0 0');
   });
   it('refuses incompatible/unpatched, failed, empty and malformed converter responses', () => {
-    expect(() => stepGeometry({ success: false, error: { code: 'FACE_MISSING', cause: 'missing face', where: 'root 2' } })).toThrow(/FACE_MISSING: missing face/);
+    expect(() => stepGeometry({ success: false, error: { code: 'FACE_MISSING', cause: 'missing\n face', where: 'root 2' } })).toThrow(/FACE_MISSING: missing face/);
     for (const value of [null, false, {}, { success: false }, { ...triangle(), femlab: undefined }, { ...triangle(), success: false }, { ...triangle(), meshes: [] }]) expect(() => stepGeometry(value)).toThrow(/incomplete/);
     const invalid = (edit: (v: ReturnType<typeof triangle>) => void, pattern: RegExp) => { const value = triangle(); edit(value); expect(() => stepGeometry(value)).toThrow(pattern); };
     invalid(v => { v.femlab.transferredRoots = 2; }, /counts disagree/);

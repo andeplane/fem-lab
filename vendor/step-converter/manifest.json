@@ -1,0 +1,240 @@
+{
+  "version": "occt-import-js-0.0.23+femlab.1",
+  "upstream": {
+    "wrapper": {
+      "commit": "c2148e54b456b571238d35cac037d304053d64b2",
+      "bytes": 4399573,
+      "url": "https://codeload.github.com/kovacsv/occt-import-js/tar.gz/c2148e54b456b571238d35cac037d304053d64b2",
+      "sha256": "2bd3799b2ac56cbf3f0df6300a51c8890e137bd001462702b356f621e33ff192"
+    },
+    "occt": {
+      "version": "7.6.1",
+      "commit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
+      "bytes": 48218968,
+      "url": "https://codeload.github.com/Open-Cascade-SAS/OCCT/tar.gz/d2abb6d844231cb8f29be6894440874a4700e4a5",
+      "sha256": "2715d89a1bc44dfd34dab88f729c445ea93f6b57d6539b0c89614a80ae144a6c"
+    }
+  },
+  "runtimeSource": {
+    "commit": "c55ff404dbe1eb9f263c48b584d5ba627224763a",
+    "bytes": 29652200,
+    "url": "https://codeload.github.com/emscripten-core/emscripten/tar.gz/c55ff404dbe1eb9f263c48b584d5ba627224763a",
+    "sha256": "2b456a63bef514fbad27c44ab53a742b456048d54fdcfbc209985e1fc7f7fb6b"
+  },
+  "patches": [
+    {
+      "path": "patches/0001-reject-incomplete-step.patch",
+      "sha256": "40c0be390fcbbc4e7c76e83a6a9b797e1c6fd00267aeaf21847db8c96a9a01ff"
+    },
+    {
+      "path": "patches/0002-es-module.patch",
+      "sha256": "884457ff42e2ffe1ab22ae8f5ae750e2934cb9f5d265761a19a9315cd5cb6223"
+    }
+  ],
+  "toolchain": {
+    "emscripten": "3.1.69",
+    "emsdk": {
+      "version": "3.1.69",
+      "bytes": 112049,
+      "url": "https://codeload.github.com/emscripten-core/emsdk/tar.gz/refs/tags/3.1.69",
+      "sha256": "7fbf610accce016f8b05196c254cc92162c07571979fbd0b6e5a4c50fded157c"
+    },
+    "emcc": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 3.1.69 (c55ff404dbe1eb9f263c48b584d5ba627224763a)\nCopyright (C) 2014 the Emscripten authors (see AUTHORS.txt)\nThis is free and open source software under the MIT license.\nThere is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+    "components": [
+      {
+        "path": "upstream/emscripten/emcc.py",
+        "sha256": "af2820cfff72ecf890540f547bdd1d2a59da3f3e36c8aaad03c2977a4ffb83d6",
+        "bytes": 62390
+      },
+      {
+        "path": "upstream/bin/clang",
+        "sha256": "b225ef1f3c4dd58d6de2969ba8c0f4b87ac9ecba214706c0997ce18d8e87c39b",
+        "bytes": 112157760
+      },
+      {
+        "path": "upstream/bin/wasm-ld",
+        "sha256": "664010b6da98be284642ec31639290b0703d86c5a8dcdca26ed01a2bf08bc54a",
+        "bytes": 60118928
+      },
+      {
+        "path": "upstream/bin/wasm-opt",
+        "sha256": "1aa03dd21738a2f138fc16fff01559ab165061ae129d78e3ff994db5e35c9765",
+        "bytes": 15897360
+      },
+      {
+        "path": "node/18.20.3_64bit/bin/node",
+        "sha256": "65055aa6b3fcff1098056fa60d5a4ce0ef65f9cb27063079d7cb4dd7d7ebb0eb",
+        "bytes": 87121776
+      },
+      {
+        "path": "python/3.9.2_64bit/bin/python3",
+        "sha256": "d77060ad3f9b8f88e7893254c425d20195aed468f51e4fd8039fdc87448fc9d5",
+        "bytes": 3613575
+      }
+    ],
+    "cmake": "cmake version 3.31.6",
+    "python": "3.14.7",
+    "emccPython": "Python 3.9.2",
+    "clang": "clang version 20.0.0git (https:/github.com/llvm/llvm-project 50866e84d1da8462aeb96607bf6d9e5bbd5869c5)\nTarget: x86_64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /private/tmp/fem-lab-351-converter-build/source/emsdk-3.1.69/upstream/bin",
+    "wasmOpt": "wasm-opt version 119 (version_119-69-g34906bfbc)",
+    "make": "GNU Make 3.81\nCopyright (C) 2006  Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.\nThere is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A\nPARTICULAR PURPOSE.\n\nThis program built for i386-apple-darwin11.3.0",
+    "node": "v18.20.3",
+    "nodeVersionEvidence": "pinned SDK manifest and installed node/18.20.3_64bit/bin/node; actual binary SHA-256 above",
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O"
+  },
+  "build": {
+    "script": "tools/build-step-converter.sh",
+    "jobs": 2,
+    "invocation": [
+      "/private/tmp/fem-lab-351-converter-build/source/emsdk-3.1.69/upstream/emscripten/emcmake",
+      "cmake",
+      "-S",
+      "/private/tmp/fem-lab-351-converter-build/source/occt-import-js-c2148e54b456b571238d35cac037d304053d64b2",
+      "-B",
+      "/private/tmp/fem-lab-351-converter-build/build",
+      "-G",
+      "Unix Makefiles",
+      "-DEMSCRIPTEN=1",
+      "-DCMAKE_BUILD_TYPE=Release"
+    ],
+    "compileInvocation": [
+      "cmake",
+      "--build",
+      "/private/tmp/fem-lab-351-converter-build/build",
+      "--parallel",
+      "2"
+    ],
+    "environment": {
+      "EMCC_CORES": "2",
+      "BINARYEN_CORES": "2"
+    },
+    "sourceInput": "verified-upstream-archives",
+    "execution": "Recorded equivalent configure/build commands; the recipe assembles those commands. One clean OCCT build followed by two wrapper-only incremental rebuilds.",
+    "logs": [
+      "/private/tmp/fem-lab-351-converter-build/logs/configure.log",
+      "/private/tmp/fem-lab-351-converter-build/logs/build.log",
+      "/private/tmp/fem-lab-351-converter-build/logs/build-final.log",
+      "/private/tmp/fem-lab-351-converter-build/logs/build-warning-fix.log"
+    ],
+    "patchedInputs": [
+      {
+        "path": "CMakeLists.txt",
+        "sha256": "6aae8144a7bb0da9833cc488fc73a8e9a0556f9c4f586bc4d3c1aeaba16f6acb",
+        "bytes": 10152
+      },
+      {
+        "path": "occt-import-js/src/importer.hpp",
+        "sha256": "0e81862170756c50b748c18e4224bb354606cc18c5d04c2725fc23e6385bd2d9",
+        "bytes": 2792
+      },
+      {
+        "path": "occt-import-js/src/importer-step.cpp",
+        "sha256": "a5533f0e2e074660505900ae0d6befa256f125848b5539e51a0a27f29ac73e44",
+        "bytes": 3082
+      },
+      {
+        "path": "occt-import-js/src/importer-utils.cpp",
+        "sha256": "88d2cc16ec5f071aeed9cbb8b1e28a8695099b9e8c8040999e0d644d33d3f295",
+        "bytes": 4904
+      },
+      {
+        "path": "occt-import-js/src/importer-xcaf.cpp",
+        "sha256": "31a3950c3feaca4c6498f26316ae49a454c070ceb200e4b25b48b78a8217ad4e",
+        "bytes": 14274
+      },
+      {
+        "path": "occt-import-js/src/js-interface.cpp",
+        "sha256": "99ba19c7c91555c0f9238122d0472bf256a693d8d8948b90839ea1a09f787253",
+        "bytes": 13023
+      }
+    ]
+  },
+  "limits": {
+    "inputBytes": 16777216,
+    "triangles": 500000
+  },
+  "notices": [
+    {
+      "path": "NOTICE.txt",
+      "sha256": "14f17b180ee1a39135f9a437686b5eab07700fe48131372d919d54909f21a743",
+      "bytes": 2218
+    },
+    {
+      "path": "licenses/Emscripten-LICENSE.txt",
+      "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86",
+      "bytes": 5093
+    },
+    {
+      "path": "licenses/FEM-Lab-MIT.txt",
+      "sha256": "28200210e7b7c16553417e66c47a5fec4925429380b322018030fd5b47c71164",
+      "bytes": 1073
+    },
+    {
+      "path": "licenses/OCCT-LGPL-2.1.txt",
+      "sha256": "e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c",
+      "bytes": 26434
+    },
+    {
+      "path": "licenses/OCCT_LGPL_EXCEPTION.txt",
+      "sha256": "04580a884ea6cea294402649ff7b5cbb167d47462d1340a4ed33e550db10a81b",
+      "bytes": 663
+    },
+    {
+      "path": "licenses/compiler-rt-LICENSE.txt",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "bytes": 16708
+    },
+    {
+      "path": "licenses/libcxx-LICENSE.txt",
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+      "bytes": 16703
+    },
+    {
+      "path": "licenses/libcxxabi-LICENSE.txt",
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+      "bytes": 16706
+    },
+    {
+      "path": "licenses/libunwind-LICENSE.txt",
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+      "bytes": 16706
+    },
+    {
+      "path": "licenses/musl-COPYRIGHT.txt",
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "bytes": 6204
+    },
+    {
+      "path": "licenses/wrapper-LGPL-2.1.txt",
+      "sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331",
+      "bytes": 26526
+    }
+  ],
+  "recipes": [
+    {
+      "path": "tools/build-step-converter.py",
+      "sha256": "1ed02b22ed1b57574b456726c837b11b520718f60eaf1a69e90281bc3d72691f"
+    },
+    {
+      "path": "tools/build-step-converter.sh",
+      "sha256": "a861069dc046ac6243e21e5647f72f459dcb68fbe24f2afba611bdd1c1370c4b"
+    }
+  ],
+  "artifacts": {
+    "javascript": {
+      "path": "dist/occt-import-js.js",
+      "sha256": "18e7b9c646cf36165df3fcab7bffe690b5432339e936d58fa1dc1233f3e30452",
+      "bytes": 96572
+    },
+    "wasm": {
+      "path": "dist/occt-import-js.wasm",
+      "sha256": "cd06ab6adc4dccdd8a7eb83f75474298fcbaf8e046f2181496d8622705831d7b",
+      "bytes": 7601325
+    },
+    "sourceKit": {
+      "path": "corresponding-source.tar.gz",
+      "sha256": "1e1822f5339c088d52ef7fbb0abf7922a8166fe67682aaab0faaa74c9bee8eb5",
+      "bytes": 81740429
+    }
+  }
+}

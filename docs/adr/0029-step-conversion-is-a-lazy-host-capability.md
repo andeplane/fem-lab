@@ -28,6 +28,13 @@ binary can return partial geometry and is not shipped as if those checks existed
 independent packaging patch enables an ES-module entry. Both patches and actual artifact
 hashes are recorded in `vendor/step-converter/manifest.json`.
 
+Real negative input demonstrated that OCCT can omit an unsupported child face and return
+an otherwise valid solid with only a transfer warning. The converter therefore rejects
+**all reported transfer warnings as well as failures**, including warnings that might be
+harmless. This conservative admission policy preserves completeness over repair convenience;
+warning-producing transfer is unsupported until completeness can be established. A successful
+shape and post-transfer face counts alone are insufficient evidence of completeness.
+
 An import adds/reimports a named Body. It captures original session identity and stateVersion
 before any input/conversion await, then uses the ordinary WriteRequest expectedVersion
 check. It does not read a new stamp just before queued publication. This preserves the
@@ -57,12 +64,13 @@ is not treated as a general exemption for the combined executable. The standalon
 converter stays separate from the MIT FEM engine/application, with its own preserved
 license notices and rebuild/replacement materials.
 
-`tools/build-step-converter` verifies pinned source archives, applies the recorded patches
-and builds with Emscripten3.1.69 and the pinned CMake configuration. It records the actual
-platform/compiler/invocation and resulting hashes. `tools/prepare-step-assets` assembles
+`tools/build-step-converter.sh` verifies pinned source archives, applies the recorded patches
+and builds with Emscripten 3.1.69 and the pinned CMake configuration. It records the actual
+platform/compiler/invocation and resulting hashes. `tools/prepare-step-assets.mjs` assembles
 `public/third-party/step-converter/` with converter assets, the LGPL texts, pinned OCCT
 exception, notices, manifest and a complete `corresponding-source.tar.gz` containing wrapper
-and OCCT trees, local patches and build/replacement scripts. The ordinary app build includes
+and OCCT trees, Emscripten runtime and SDK source, local patches and build/replacement
+scripts. The ordinary app build includes
 these materials at the same origin and fails if any required source/notice asset is absent
 or mismatched. Notices and source-kit links are visible in the import UI; these assets are
 not part of boot traffic.

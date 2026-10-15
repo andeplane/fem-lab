@@ -77,7 +77,7 @@ export type StepConversionCounts = Pick<StepReport, 'roots' | 'transferredRoots'
 export function stepGeometry(value: unknown): { data: string; counts: StepConversionCounts } {
   if (value && typeof value === 'object' && 'success' in value && value.success === false) {
     const error = z.object({ error: z.object({ code: z.string(), cause: z.string(), where: z.string() }) }).safeParse(value);
-    if (error.success) throw new FemError('unsupported', `${error.data.error.code}: ${error.data.error.cause}`, error.data.error.where, 'export supported complete solid geometry or repair the source STEP file');
+    if (error.success) throw new FemError('unsupported', `${error.data.error.code}: ${error.data.error.cause}`.replace(/\s+/g, ' ').trim(), error.data.error.where, 'export supported complete solid geometry or repair the source STEP file');
   }
   const parsed = converted.safeParse(value);
   if (!parsed.success) invalid('STEP converter returned incomplete, incompatible or malformed geometry', 'step.converter');
@@ -89,7 +89,7 @@ export function stepGeometry(value: unknown): { data: string; counts: StepConver
   // The hierarchy is metadata, but account for every mesh occurrence instead of dropping it.
   while (pending.length) {
     const current = pending.pop();
-    if (hierarchy.has(current) || hierarchy.size >= 10_000) invalid('STEP source hierarchy repeats a node or exceeds 10000 nodes', 'step.converter.root');
+    if (hierarchy.has(current)) invalid('STEP source hierarchy repeats a node', 'step.converter.root');
     hierarchy.add(current);
     const branch = node.safeParse(current);
     if (!branch.success) invalid('STEP converter returned an invalid source hierarchy', 'step.converter.root');
@@ -97,6 +97,7 @@ export function stepGeometry(value: unknown): { data: string; counts: StepConver
       if (index >= meshes.length || seen.has(index)) invalid('STEP source hierarchy repeats or references a missing mesh', 'step.converter.root');
       seen.add(index);
     }
+    if (hierarchy.size + pending.length + branch.data.children.length > 10_000) invalid('STEP source hierarchy exceeds 10000 nodes', 'step.converter.root');
     pending.push(...branch.data.children);
   }
   if (seen.size !== meshes.length) invalid('STEP source hierarchy omits an output mesh', 'step.converter.root');
