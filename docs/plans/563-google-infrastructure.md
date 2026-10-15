@@ -131,3 +131,60 @@ image returned 404 on public health and must not be used as a rollback target. D
 financial database down-migrations; validate image/schema compatibility and paired browser
 behavior before each future release. Billing remains deliberately disabled in this baseline
 release script; live Stripe deployment configuration is a separate activation step.
+
+
+## Post-cutover tagged revision audit
+
+Tracks [#663](https://github.com/andeplane/fem-lab/issues/663), following the
+[invitation-only admission cutover](645-free-ai-admission.md). A revision with 0% of
+normal service traffic can still receive requests through its tag URL. Promoting the
+new backend therefore does not retire every public route to old authentication,
+free-grant or billing behavior. Google's [revision-tag documentation](https://docs.cloud.google.com/run/docs/rollouts-rollbacks-traffic-migration)
+explicitly supports calling a tagged revision before assigning it normal traffic.
+
+After each such cutover, inventory **every** tagged traffic entry in both environments,
+including entries whose percentage is absent or zero. Keep revision names, tag URLs and
+traffic percentages in the release evidence; do not filter the inventory to the latest
+revision or positive traffic alone:
+
+```sh
+gcloud run services describe femlab-api --region=europe-west3 \
+  --project=femlab-app-staging --account=andershaf@gmail.com \
+  --format='json(status.url,status.latestReadyRevisionName,status.traffic)'
+gcloud run services describe femlab-api --region=europe-west3 \
+  --project=femlab-app --account=andershaf@gmail.com \
+  --format='json(status.url,status.latestReadyRevisionName,status.traffic)'
+```
+
+For each retained URL, identify its owner/purpose and deployed revision. Check readiness
+and rerun the cutover's authentication/admission acceptance against that URL, including
+a fresh verified account without an invitation or paid entitlement: it must receive no
+free grant and must be rejected before provider counting/generation. Readiness alone proves availability,
+not the new admission policy. Test fixtures must use the normal durable cleanup path.
+Audit additional API services/regions too if a later release introduces them.
+
+Remove only a specifically identified, owned obsolete tag after recording the intended
+traffic and rollback target. Unknown tags can belong to another active task; resolve
+ownership before changing them. Do not clear all tags or automatically remove every
+zero-traffic entry. The owned `domain-600` diagnostic tag was removed with:
+
+```sh
+gcloud run services update-traffic femlab-api --remove-tags=domain-600 \
+  --region=europe-west3 --project=femlab-app --account=andershaf@gmail.com --quiet
+```
+
+After removal, verify the old tagged URL no longer serves, the canonical API remains
+ready, and intended traffic/tag mappings are unchanged. Record evidence without
+credentials, prompts or customer data.
+
+On 2026-10-15, that named cleanup succeeded. Independent read-only verification found:
+
+- `https://domain-600---femlab-api-3p4c7epl7a-ey.a.run.app/ready` returned HTTP 404.
+- `https://api.femlab.app/ready` returned HTTP 200 with `status=ready`.
+- Production's only remaining tag was `release-candidate`, mapped to
+  `femlab-api-r17d568be-bfc38d40` with 100% of normal traffic; its tagged `/ready` returned
+  HTTP 200. Staging's only tag was also `release-candidate`, mapped to
+  `femlab-api-r1723d1eb-e4876371` with 100% traffic and HTTP 200 tagged readiness.
+
+This snapshot verifies removal and routing. Admission-policy acceptance for the current
+release remains tracked with #645/#556; it is not inferred from readiness responses.
