@@ -1,4 +1,5 @@
-//! Strict, bounded Abaqus mesh-deck conversion. No paths, includes, model mutation or solve.
+//! Bounded Abaqus mesh conversion with typed scope normalization and supplied-only includes.
+//! No filesystem, network, model mutation or numerical solve occurs in this reader.
 //! Syntax follows the vendor's 2025 Input Syntax / NODE / ELEMENT / NSET / ELSET / SURFACE
 //! documentation; the deliberately narrower subset is recorded in docs/plans/500-abaqus-import.md.
 
@@ -29,6 +30,7 @@ pub struct MeshDeck {
     pub source_labels: SourceLabels,
     pub bbox: [Q<Length>; 6],
     pub unit_length: Q<Length>,
+    pub notes: Vec<crate::query::AbaqusImportNote>,
 }
 
 pub(crate) fn malformed(line: usize, keyword: &str, field: &str, cause: impl Into<String>) -> Error {
@@ -100,9 +102,18 @@ impl<'a> Records<'a> {
             }
             joined.push_str(continuation.text.trim());
         }
-        // Blanks on keyword records are ignored by Abaqus. Full spellings remain mandatory.
-        let compact: String = joined.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-        let mut fields = compact[1..].split(',');
+        // Spaces and case inside quoted labels (and filename case) are meaningful.
+        let mut quoted = false;
+        let compact: String = joined
+            .chars()
+            .filter(|c| {
+                if *c == '"' {
+                    quoted = !quoted;
+                }
+                quoted || !c.is_ascii_whitespace()
+            })
+            .collect();
+        let mut fields = split_fields(&compact[1..], first.line, "INPUT")?.into_iter();
         let name = fields.next().unwrap_or_default().to_ascii_uppercase();
         if name.is_empty() || name.contains('=') {
             return Err(malformed(first.line, "INPUT", "keyword", "a keyword needs its full name after '*'"));
@@ -111,7 +122,7 @@ impl<'a> Records<'a> {
         for field in fields {
             let (key, value) = match field.split_once('=') {
                 Some((key, value)) => {
-                    if value.is_empty() || value.contains('=') {
+                    if value.is_empty() || has_unquoted_equals(value) {
                         return Err(malformed(
                             first.line,
                             &name,
@@ -119,7 +130,19 @@ impl<'a> Records<'a> {
                             "a parameter needs exactly one nonempty value",
                         ));
                     }
-                    (key, Some(value.to_ascii_uppercase()))
+                    (
+                        key,
+                        Some(
+                            if value.contains('"')
+                                || key.eq_ignore_ascii_case("INPUT")
+                                || key.eq_ignore_ascii_case("FILE")
+                            {
+                                value.to_string()
+                            } else {
+                                value.to_ascii_uppercase()
+                            },
+                        ),
+                    )
                 }
                 None => (field, None),
             };
@@ -134,13 +157,14 @@ impl<'a> Records<'a> {
             }
             parameters.insert(key, value);
         }
-        Ok(Keyword { line: first.line, name, parameters })
+        Ok(Keyword { line: first.line, source: None, name, parameters })
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Keyword {
     pub(crate) line: usize,
+    pub(crate) source: Option<String>,
     pub(crate) name: String,
     pub(crate) parameters: BTreeMap<String, Option<String>>,
 }
@@ -182,20 +206,67 @@ impl Keyword {
 }
 
 pub(crate) fn name(text: &str, line: usize, keyword: &str, field: &str) -> Result<String, Error> {
-    let mut chars = text.bytes();
-    let first = chars.next();
-    if text.len() > 80
-        || !first.is_some_and(|c| c.is_ascii_alphabetic())
-        || !chars.all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    let quoted = text.starts_with('"');
+    let value = if quoted {
+        text.strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .filter(|v| !v.contains('"'))
+            .ok_or_else(|| malformed(line, keyword, field, "a quoted label needs one matching pair of quotes"))?
+            .to_string()
+    } else {
+        text.chars().filter(|c| !c.is_ascii_whitespace()).collect::<String>().to_ascii_uppercase()
+    };
+    if value.is_empty()
+        || value.len() > 80
+        || !value.is_ascii()
+        || value.bytes().any(|c| c.is_ascii_control())
+        || (value.starts_with("__") && value.ends_with("__"))
+        || (!quoted
+            && (!(value.as_bytes()[0].is_ascii_alphabetic() || value.as_bytes()[0] == b'_')
+                || value.bytes().any(|c| matches!(c, b'.' | b',' | b'=' | b'"'))))
     {
         return Err(unsupported(
             line,
             keyword,
             field,
-            "names require unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters",
+            "invalid Abaqus label (1..80 characters; quote spaces or punctuation)",
         ));
     }
-    Ok(text.to_ascii_uppercase())
+    Ok(value)
+}
+
+fn has_unquoted_equals(text: &str) -> bool {
+    let mut quoted = false;
+    for ch in text.chars() {
+        if ch == '"' {
+            quoted = !quoted;
+        }
+        if ch == '=' && !quoted {
+            return true;
+        }
+    }
+    false
+}
+
+/// Split only outside quotes. Returned slices retain quotes, so label case is not lost.
+pub(crate) fn split_fields<'a>(text: &'a str, line: usize, keyword: &str) -> Result<Vec<&'a str>, Error> {
+    let mut quoted = false;
+    let mut start = 0;
+    let mut values = Vec::new();
+    for (index, ch) in text.char_indices() {
+        if ch == '"' {
+            quoted = !quoted;
+        }
+        if ch == ',' && !quoted {
+            values.push(text[start..index].trim());
+            start = index + 1;
+        }
+    }
+    if quoted {
+        return Err(malformed(line, keyword, "quotes", "unterminated quoted field"));
+    }
+    values.push(text[start..].trim());
+    Ok(values)
 }
 
 pub(crate) fn label(text: &str, line: usize, keyword: &str, field: &str) -> Result<u32, Error> {
@@ -221,7 +292,7 @@ pub(crate) fn scalar(text: &str, line: usize, keyword: &str, field: &str, scale:
 }
 
 pub(crate) fn fields<'a>(record: Record<'a>, keyword: &str, min: usize, max: usize) -> Result<Vec<&'a str>, Error> {
-    let fields: Vec<_> = record.text.split(',').map(str::trim).collect();
+    let fields = split_fields(record.text, record.line, keyword)?;
     if fields.len() < min || fields.len() > max {
         return Err(malformed(
             record.line,
@@ -233,8 +304,8 @@ pub(crate) fn fields<'a>(record: Record<'a>, keyword: &str, min: usize, max: usi
     Ok(fields)
 }
 
-struct NamedSet {
-    members: BTreeMap<u32, usize>,
+pub(super) struct NamedSet {
+    pub(super) members: BTreeMap<u32, usize>,
 }
 
 enum Section {
@@ -251,10 +322,19 @@ pub(crate) struct Active {
     keyword: Keyword,
     section: Section,
     records: usize,
+    pending: Vec<String>,
 }
 
 impl Active {
     pub(crate) fn finish(&self) -> Result<(), Error> {
+        if !self.pending.is_empty() {
+            return Err(malformed(
+                self.keyword.line,
+                "ELEMENT",
+                "connectivity",
+                "incomplete continued element connectivity",
+            ));
+        }
         let requires_data = match self.section {
             Section::Heading | Section::Preprint | Section::SetFromElements => false,
             Section::Nodes { .. } | Section::Elements { .. } | Section::Set { .. } | Section::Surface { .. } => true,
@@ -273,14 +353,14 @@ impl Active {
 
 #[derive(Default)]
 pub(crate) struct Builder {
-    nodes: BTreeMap<u32, (ImportedNodeSpec, usize)>,
-    elements: BTreeMap<u32, (ImportedElement, usize)>,
-    node_sets: BTreeMap<String, NamedSet>,
-    element_sets: BTreeMap<String, NamedSet>,
-    surfaces: BTreeMap<String, (usize, BTreeMap<ImportedFace, usize>)>,
-    headings: Vec<String>,
-    preprint: Vec<BTreeMap<String, bool>>,
-    memberships: usize,
+    pub(super) nodes: BTreeMap<u32, (ImportedNodeSpec, usize)>,
+    pub(super) elements: BTreeMap<u32, (ImportedElement, usize)>,
+    pub(super) node_sets: BTreeMap<String, NamedSet>,
+    pub(super) element_sets: BTreeMap<String, NamedSet>,
+    pub(super) surfaces: BTreeMap<String, (usize, BTreeMap<ImportedFace, usize>)>,
+    pub(super) headings: Vec<String>,
+    pub(super) preprint: Vec<BTreeMap<String, bool>>,
+    pub(super) memberships: usize,
 }
 
 impl Builder {
@@ -296,7 +376,7 @@ impl Builder {
         Ok(())
     }
 
-    fn reserve_members(&mut self, count: usize, line: usize, keyword: &str) -> Result<(), Error> {
+    pub(super) fn reserve_members(&mut self, count: usize, line: usize, keyword: &str) -> Result<(), Error> {
         self.room_for(count, line, keyword)?;
         self.memberships += count;
         Ok(())
@@ -352,12 +432,14 @@ impl Builder {
                 let kind = match keyword.required("TYPE")? {
                     "C3D4" => ImportedElementKind::Tet4,
                     "C3D8" => ImportedElementKind::Hex8,
+                    "C3D10" => ImportedElementKind::Tet10,
+                    "C3D20" => ImportedElementKind::Hex20,
                     other => {
                         return Err(unsupported(
                             keyword.line,
                             "ELEMENT",
                             "TYPE",
-                            format!("element type {other} is unsupported; choose standard C3D4 or C3D8"),
+                            format!("element type {other} is unsupported; supported solids are C3D4, C3D8, C3D10 and C3D20 with their exact formulations"),
                         ))
                     }
                 };
@@ -366,8 +448,8 @@ impl Builder {
             }
             "NSET" | "ELSET" => self.start_set(&keyword)?,
             "SURFACE" => {
-                keyword.only(&["NAME", "TYPE"])?;
-                if keyword.required("TYPE")? != "ELEMENT" {
+                keyword.only(&["NAME", "TYPE", "INTERNAL"])?;
+                if keyword.value("TYPE")?.is_some_and(|v| v != "ELEMENT") {
                     return Err(unsupported(
                         keyword.line,
                         "SURFACE",
@@ -396,15 +478,15 @@ impl Builder {
                 ))
             }
         };
-        Ok(Active { keyword, section, records: 0 })
+        Ok(Active { keyword, section, records: 0, pending: Vec::new() })
     }
 
     fn start_set(&mut self, keyword: &Keyword) -> Result<Section, Error> {
         let nodes = keyword.name == "NSET";
         if nodes {
-            keyword.only(&["NSET", "ELSET", "GENERATE"])?;
+            keyword.only(&["NSET", "ELSET", "GENERATE", "INTERNAL", "UNSORTED"])?;
         } else {
-            keyword.only(&["ELSET", "GENERATE"])?;
+            keyword.only(&["ELSET", "GENERATE", "INTERNAL", "UNSORTED"])?;
         }
         let set = name(keyword.required(&keyword.name)?, keyword.line, &keyword.name, &keyword.name)?;
         let generate = keyword.flag("GENERATE")?;
@@ -487,8 +569,29 @@ impl Builder {
             }
             Section::Elements { kind, set } => {
                 let arity = kind.geometry().n_nodes();
-                let values = fields(record, "ELEMENT", arity + 1, arity + 1)?;
-                let id = label(values[0], record.line, "ELEMENT", "label")?;
+                let mut values: Vec<String> =
+                    split_fields(record.text, record.line, "ELEMENT")?.into_iter().map(str::to_string).collect();
+                let continues = values.last().is_some_and(String::is_empty);
+                if continues {
+                    values.pop();
+                }
+                if !active.pending.is_empty() {
+                    active.pending.append(&mut values);
+                    values = std::mem::take(&mut active.pending);
+                }
+                if values.len() < arity + 1 && continues {
+                    active.pending = values;
+                    return Ok(());
+                }
+                if values.len() != arity + 1 {
+                    return Err(malformed(
+                        record.line,
+                        "ELEMENT",
+                        "connectivity",
+                        format!("expected {} fields, got {}", arity + 1, values.len()),
+                    ));
+                }
+                let id = label(&values[0], record.line, "ELEMENT", "label")?;
                 if self.elements.contains_key(&id) {
                     return Err(malformed(
                         record.line,
@@ -540,7 +643,13 @@ impl Builder {
                     self.reserve_members(count, record.line, keyword)?;
                     (0..count).map(|index| first + index as u32 * increment).collect()
                 } else {
-                    let values = fields(record, keyword, 1, 16)?;
+                    let mut values = fields(record, keyword, 1, 17)?;
+                    if values.last() == Some(&"") {
+                        values.pop();
+                    }
+                    if values.len() > 16 || values.is_empty() {
+                        return Err(malformed(record.line, keyword, "members", "set records need 1..16 members"));
+                    }
                     let sets = if *nodes { &self.node_sets } else { &self.element_sets };
                     let mut members = Vec::new();
                     for value in values {
@@ -650,6 +759,17 @@ fn source_location(
 
 impl Builder {
     pub(crate) fn finish(self, body: &str, digest: &str, scale: f64) -> Result<MeshDeck, Error> {
+        self.finish_source(body, digest, scale, BTreeMap::new(), None)
+    }
+
+    pub(crate) fn finish_source(
+        self,
+        body: &str,
+        digest: &str,
+        scale: f64,
+        regions: BTreeMap<String, Vec<u32>>,
+        provenance: Option<Box<ImportedProvenance>>,
+    ) -> Result<MeshDeck, Error> {
         if self.nodes.is_empty() || self.elements.is_empty() {
             return Err(malformed(1, "INPUT", "mesh", "a mesh deck requires nodes and elements"));
         }
@@ -706,7 +826,6 @@ impl Builder {
         let element_lines: BTreeMap<_, _> = self.elements.iter().map(|(&id, (_, line))| (id, *line)).collect();
         let first_element = element_lines.values().copied().min().expect("nonempty elements checked above");
         let source = ImportedMeshSpec {
-            regions: BTreeMap::new(),
             body: body.to_string(),
             nodes: self.nodes.into_values().map(|(node, _)| node).collect(),
             elements: self.elements.into_values().map(|(element, _)| element).collect(),
@@ -722,14 +841,17 @@ impl Builder {
                 .collect(),
             surfaces: self.surfaces.into_iter().map(|(name, (_, faces))| (name, faces.into_keys().collect())).collect(),
             node_targets: Vec::new(),
-            provenance: Some(Box::new(ImportedProvenance {
-                source_files: BTreeMap::new(),
-                source_name: None,
-                node_identities: BTreeMap::new(),
-                element_identities: BTreeMap::new(),
-                sha256: digest.to_string(),
-                conversion_version: CONVERSION_VERSION.to_string(),
-            })),
+            regions,
+            provenance: provenance.or_else(|| {
+                Some(Box::new(ImportedProvenance {
+                    sha256: digest.to_string(),
+                    conversion_version: CONVERSION_VERSION.to_string(),
+                    node_identities: BTreeMap::new(),
+                    element_identities: BTreeMap::new(),
+                    source_files: BTreeMap::new(),
+                    source_name: None,
+                }))
+            }),
         };
         let checked = crate::imported::source(&source)
             .map_err(|error| source_location(error, &node_lines, &element_lines, first_element))?;
@@ -757,6 +879,7 @@ impl Builder {
             source_labels: labels,
             bbox,
             unit_length: Q::new(scale, "m"),
+            notes: Vec::new(),
         })
     }
 }
@@ -792,30 +915,11 @@ pub(crate) fn check_input(text: &str, body: &str, unit_length: &Q<Length>, diges
     Ok(scale)
 }
 
-/// Parse a strict mesh deck; analysis-bearing converters use the same checked streaming records
-/// and Builder directly, preserving original lines and the full input digest.
+/// Parse a mesh-only flat or assembly source, preserving typed identity and provenance.
+/// Analysis-bearing records require the separate analysis conversion mode.
 pub fn read_mesh(text: &str, body: &str, unit_length: &Q<Length>, digest: &str) -> Result<MeshDeck, Error> {
-    let scale = check_input(text, body, unit_length, digest)?;
-    let mut records = Records::new(text);
-    let mut builder = Builder::default();
-    let mut active: Option<Active> = None;
-    while let Some(record) = records.next()? {
-        if record.text.trim_start().starts_with('*') {
-            if let Some(previous) = &active {
-                previous.finish()?;
-            }
-            active = Some(builder.start(records.keyword(record)?)?);
-        } else {
-            let section = active
-                .as_mut()
-                .ok_or_else(|| malformed(record.line, "INPUT", "data", "data must follow an accepted keyword"))?;
-            builder.record(section, record, scale)?;
-        }
-    }
-    if let Some(previous) = &active {
-        previous.finish()?;
-    }
-    builder.finish(body, digest, scale)
+    let normalized = super::abaqus_deck::normalize(text, body, unit_length, digest)?;
+    Ok(normalized.mesh)
 }
 
 /// Count the bytes that serde would return without allocating another copy of the response.
@@ -871,9 +975,23 @@ pub fn convert_mesh(
     unit_length: &Q<Length>,
     digest: &str,
 ) -> Result<AbaqusConversion, Error> {
+    convert_mesh_sources(text, model_name, body, unit_length, None, &BTreeMap::new(), digest)
+}
+
+pub fn convert_mesh_sources(
+    text: &str,
+    model_name: &str,
+    body: &str,
+    unit_length: &Q<Length>,
+    source_name: Option<&str>,
+    source_files: &BTreeMap<String, String>,
+    digest: &str,
+) -> Result<AbaqusConversion, Error> {
     check_model_name(model_name)?;
-    let parsed = read_mesh(text, body, unit_length, digest)?;
-    let response = conversion_from_mesh(parsed, model_name, text.len(), digest);
+    let parsed =
+        super::abaqus_deck::normalize_mesh_sources(text, body, unit_length, digest, source_name, source_files)?;
+    let input_bytes = text.len() + source_files.values().map(String::len).sum::<usize>();
+    let response = conversion_from_mesh(parsed.mesh, model_name, input_bytes, digest);
     check_response(&response)?;
     Ok(response)
 }
@@ -887,6 +1005,7 @@ pub(crate) fn conversion_from_mesh(
     digest: &str,
 ) -> AbaqusConversion {
     let body = &parsed.source.body;
+    let order = Some(1);
     let mut sets = Vec::new();
     for (kind, prefix, maps) in [
         (AbaqusSetKind::Node, "nset", &parsed.source.node_sets),
@@ -917,12 +1036,21 @@ pub(crate) fn conversion_from_mesh(
         body: body.to_string(),
         unit_length: parsed.unit_length,
         unit_force: None,
+        unit_time: None,
         source_nodes: parsed.source.nodes.len() as u32,
         active_nodes: parsed.source_labels.nodes.len() as u32,
         source_elements: parsed.source.elements.len() as u32,
         element_kind: parsed.source.elements.first().expect("read_mesh requires nonempty elements").kind,
+        element_kinds: parsed.source.elements.iter().fold(Vec::new(), |mut kinds, e| {
+            if !kinds.contains(&e.kind) {
+                kinds.push(e.kind);
+            }
+            kinds
+        }),
         analysis_configured: false,
         analysis: None,
+        analyses: Vec::new(),
+        notes: parsed.notes,
         bbox: parsed.bbox,
         source_labels: parsed.source_labels,
         sets,
@@ -936,7 +1064,7 @@ pub(crate) fn conversion_from_mesh(
             Command::ModelSetIdealisation { idealisation: IdealisationSpec::Solid3d },
             Command::MeshSet {
                 mesher: MesherSpec::Imported(parsed.source),
-                order: Some(1),
+                order,
                 formulation: Some(Formulation::Full),
                 simplices: None,
                 refinement: None,
@@ -1003,6 +1131,9 @@ mod tests {
     fn keyword_continuation_and_parameters_are_case_insensitive_but_exact() {
         let k = keyword("  *ElEmeNt , TYPE = c3d8 ,\n** comment\n ELSET = box \n").unwrap();
         assert_eq!(k.name, "ELEMENT");
+        let named = keyword("*NSET,NSET=\"My Set\",ELSET=instance.\"Set=1\"\n").unwrap();
+        assert_eq!(named.required("NSET").unwrap(), "\"My Set\"");
+        assert_eq!(named.required("ELSET").unwrap(), "instance.\"Set=1\"");
         assert_eq!(k.line, 1);
         assert_eq!(k.required("TYPE").unwrap(), "C3D8");
         assert_eq!(k.value("ELSET").unwrap(), Some("BOX"));
@@ -1036,7 +1167,7 @@ mod tests {
     fn names_and_labels_have_explicit_bounds_without_guessing() {
         assert_eq!(name("aBc_9-x", 4, "NSET", "NSET").unwrap(), "ABC_9-X");
         assert_eq!(name(&"a".repeat(80), 4, "NSET", "NSET").unwrap().len(), 80);
-        for text in ["", "1A", "_A", "a.b", "a b", "\"a\"", "a'", "å", &"a".repeat(81)] {
+        for text in ["", "1A", "a.b", "å", &"a".repeat(81)] {
             let error = name(text, 4, "NSET", "NSET").unwrap_err();
             assert_eq!(error.code, ErrorCode::Unsupported);
             assert_eq!(error.where_.as_deref(), Some("line 4 *NSET NSET"));

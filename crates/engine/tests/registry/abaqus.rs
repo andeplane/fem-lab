@@ -202,10 +202,6 @@ fn abaqus_conversion_is_a_read_even_on_an_existing_solved_model() {
 fn abaqus_rejects_unsupported_intent_instead_of_silently_dropping_it() {
     let mut e = engine();
     for keyword in [
-        "INCLUDE,INPUT=other.inp",
-        "PART,NAME=P",
-        "ASSEMBLY,NAME=A",
-        "INSTANCE,NAME=I,PART=P",
         "SYSTEM",
         "TRANSFORM,NSET=N",
         "STEP",
@@ -225,6 +221,11 @@ fn abaqus_rejects_unsupported_intent_instead_of_silently_dropping_it() {
         assert_eq!(rejected.code, ErrorCode::Unsupported, "{keyword}: {rejected:?}");
         assert!(rejected.where_.as_deref().unwrap().starts_with("line 1 *"));
         assert!(rejected.suggestion.is_some());
+    }
+    // Structural keywords are supported; incomplete definitions and missing bundles are malformed.
+    for keyword in ["INCLUDE,INPUT=other.inp", "PART,NAME=P", "ASSEMBLY,NAME=A", "INSTANCE,NAME=I,PART=P"] {
+        let text = format!("*{keyword}\n");
+        assert_eq!(e.query(request(&text, "1 m")).unwrap_err().code, ErrorCode::Schema);
     }
     for keyword in [
         "NODE,SYSTEM=C",
@@ -308,7 +309,6 @@ fn abaqus_malformed_labels_memberships_connectivity_and_source_geometry_locate_o
         TET.replace("40, 0\n", "1000000000, 0\n"),
         TET.replace("10, 1D0,", "10, 1D999,"),
         TET.replace("10, 1D0,", "10,,"),
-        TET.replace("NSET=SAME", "NSET=\"SAME\""),
         TET.replace("NSET=SAME", "NSET=part.SAME"),
         TET.replace("SAME\n*NSET", "UNDEFINED\n*NSET"),
         TET.replace("900, S4", "900, S5"),
@@ -492,9 +492,11 @@ fn abaqus_uppercase_raw_mesh_writer_roundtrip_is_supplementary_to_independent_fi
         assert_eq!(&e.mesh().unwrap().mesh.elem_sets[&format!("part.elset_{name}")], expected);
     }
     assert_eq!(e.mesh().unwrap().mesh.face_sets["part.surface_FACE1"], original.face_sets["FACE1"]);
-    // Ordinary FEM Lab exports contain qualified quoted labels. That boundary remains explicit.
+    // Quoted labels round-trip as exact source identities, including embedded periods.
     let qualified = text.replace("NSET=BASE", "NSET=\"part.nset_BASE\"");
-    assert!(e.query(request(&qualified, "1 m")).is_err());
+    let quoted = converted(&mut e, &qualified, "1 m");
+    let command = serde_json::to_value(&quoted.commands[2]).unwrap();
+    assert_eq!(command["mesher"]["nodeSets"]["part.nset_BASE"], json!([1, 2, 3, 4]));
 }
 
 proptest! {
