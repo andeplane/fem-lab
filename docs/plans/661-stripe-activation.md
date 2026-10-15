@@ -20,19 +20,26 @@ These are actual Stripe test-mode transactions through the deployed API and host
 - Advancing the Stripe test clock produced a real USD 149 renewal invoice. Both invoice events completed, including recovery of a queued duplicate. Exactly one future 16,000,000-credit grant starts at the original Plus period end, without overlap; current wall-clock credits remained 4,000,000.
 - Fully refunding the original USD 49 charge delivered a real `charge.refunded` event. The account entered pending billing review, eligible credits became zero, and plan changes returned `409/billing-review`. Both historical paid grants remained immutable.
 - The first disposable account was durably deleted; its old Firebase token returned 401, renewal stopped, and private QA credential files were removed.
-- An independent dispute-card hosted purchase paid successfully and Stripe created a canonical `product_not_received` dispute. Its webhook exposed an adapter routing bug: a real `du_` dispute ID was incorrectly sent to the Charges API because the adapter guessed event type from an ID prefix. Issue #675 tracks routing by verified event kind and replay of the preserved real event. `webhookVerified` remains false until the fix and freeze are proven, followed by durable cleanup.
+- An independent dispute-card hosted purchase paid successfully and Stripe created a canonical `product_not_received` dispute. Its webhook exposed an adapter ID-prefix bug, fixed in #675 / PR #677 by routing through the verified event kind. The preserved real `du_` dispute then completed from the durable inbox: exactly one review, zero eligible credits, plan-change rejection, and the original 4,000,000-credit grant retained. Signed replay did not duplicate the review. The second fixture was durably deleted and its old token returned 401; renewal stopped and all private fixture files and owned database processes were removed.
 
 ## Deployed safeguards
 
-- Both API environments and recovery jobs run backend source `bf8505fa1a101879c33cd32b25912818b7b88dfc`, including the narrow safe Checkout-expiry retry. Production readiness is healthy with billing disabled; staging billing is enabled in test mode.
+- Both API environments and recovery jobs run backend source `46d7aefaa554ee0b3fdc5bda3a177aac04fe0803`, including the safe Checkout-expiry retry and actual dispute routing fix. Production readiness is healthy with billing disabled; staging billing is enabled in test mode.
 - Both restricted runtime keys and webhook signing secrets are pinned to version 1 in each environment. API and recovery job identities have the required Secret Manager access. The test and live webhook endpoints are enabled; enabling the live receiver does not enable Checkout or create a charge.
 - All staging AI spending is disabled (`ai_limits.enabled=false`, supplier caps zero), including for paid test accounts. Test cards cannot purchase real supplier spend. Issue #669 makes this the staging migration default; any bounded AI QA must be explicitly temporary.
 - The obsolete production `domain-600` traffic tag was removed and its diagnostic URL returns 404. The canonical API remains healthy.
 
 ## Remaining acceptance
 
-1. Fix #675, replay the actual queued dispute, verify the independent freeze, and clean the preserved disposable fixture.
+1. Complete #676 / PR #679 (explicit merchant responsibility) and #680 (personal/business catalog aliases and durable purchase-use intents), then run full hosted Managed Payments purchase and lifecycle acceptance. Direct-mode lifecycle acceptance above is complete; it is not evidence of a managed subscription purchase.
 2. The owner selected preparation of [Stripe Managed Payments](https://docs.stripe.com/payments/managed-payments), subject to account eligibility review and owner acceptance of its terms. It supports Norway and eligible cloud AI products, and handles indirect tax in supported jurisdictions. The additional fee is [3.5% of the payment total, including tax](https://stripe.com/managed-payments), plus standard Payments and Billing fees. Account eligibility, terms acceptance, and the personal/business product tax classifications remain unconfirmed. No tax registrations have been invented or added.
 3. After the selected route is configured and tested, activate production and verify ready state and owned Checkout creation without charging a real customer. Production checkout stays disabled until then.
 
-Independent implementation PRs: #648 (billing), #667 (direct Checkout parameters), #670 (safe expiry retry), #672 (staging AI pause defaults). Published policies and Google sign-in are already deployed.
+Independent implementation PRs: #648 (billing), #667 (direct Checkout parameters), #670 (safe expiry retry), #672 (staging AI pause defaults), #677 (real dispute IDs), #678 (conditional merchant policies), #679 (explicit merchant mode). Published policies and Google sign-in are already deployed.
+
+## Managed Payments preparation evidence
+
+- Six test-only candidate Products/Prices cover cloud AI personal (`txcd_10105001`) and business (`txcd_10105002`) use for all three tiers. These are test fixtures, not owner confirmation of live legal classification. The owner was asked to confirm the concrete proposed live categories; no live catalog was changed.
+- Both a minimal request and the exact prepared SDK request shape created real Managed Payments test Checkout Sessions. The direct-only automatic-tax, tax-ID and customer-update parameters were omitted. Stripe returned `automatic_tax.enabled=true`, `liability.type=stripe` and `provider=stripe`.
+- Filling the fake Norway personal-use location in hosted Checkout produced canonical `automatic_tax.status=complete`, USD 49.00 subtotal, USD 12.25 tax and USD 61.25 total. The UI showed the managed seller's Link terms/support route. Neither contract-only Session was submitted or paid. Both Sessions were explicitly expired and their disposable customer deleted.
+- The native Dashboard sign-in requires the owner's Touch ID/security key. That request is pending. Managed Payments live terms have not been accepted, and live account eligibility has not been asserted.
