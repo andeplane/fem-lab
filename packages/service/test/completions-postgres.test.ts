@@ -1,3 +1,4 @@
+import { grantFreeFixture } from './free-fixture';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {once} from 'node:events';
@@ -34,7 +35,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       yield {type:'usage',usage};yield {type:'continuation',continuation:{provider:'openai',value:[]}};yield {type:'done',stopReason:'tool_use'};
     },
   };
-  const account=async(header:string|undefined)=>{if(!header?.startsWith('Bearer '))throw new ServiceFailure(401,'login-required','Sign in to use hosted AI.','identity');return accounts.provision({uid:header.slice(7),email:`${header.slice(7)}@example.com`});};
+  const account=async(header:string|undefined)=>{if(!header?.startsWith('Bearer '))throw new ServiceFailure(401,'login-required','Sign in to use hosted AI.','identity');const owner=await accounts.provision({uid:header.slice(7),email:`${header.slice(7)}@example.com`});if(mode!=='unapproved')await grantFreeFixture(ledger,owner.id,now());return owner;};
   const completions=completionService({account,ledger,reservations:holds,provider});
   const server=serviceServer({now,newId:randomUUID,ready:async()=>true,account,completions});
   const body={protocol:1,turnId:'turn-one',round:0,model:'gpt-5.4-mini',maxTokens:1000,system:'project context',messages:[{role:'user',content:[{type:'text',text:'inspect'}]}],tools:[]};
@@ -47,6 +48,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
   beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');counted=undefined;generated=0;mode='complete';});
   afterAll(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await db.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
   const send=(key='key-one',input:unknown=body,authorization='Bearer owner')=>fetch(`${url}/v1/ai/completions`,{method:'POST',headers:{authorization,'content-type':'application/json','idempotency-key':key},body:JSON.stringify(input)});
+  it('denies disposable verified identities before any provider call unless explicitly approved',async()=>{
+    mode='unapproved';
+    for(let i=0;i<8;i++){const response=await send('signup',body,`Bearer disposable-${i}`);expect(response.status).toBe(402);}
+    expect(counted).toBeUndefined();expect(generated).toBe(0);
+    expect((await db.query('SELECT * FROM credit_grants')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM ai_requests')).rows).toHaveLength(0);
+  });
   it('streams normalized calls/continuation, with the authoritative receipt before executable tools',async()=>{
     const response=await send();expect(response.status).toBe(200);expect(response.headers.get('content-type')).toBe('text/event-stream');
     const stream=await response.text();expect(stream).toContain('query_nodes');expect(stream).toContain('continuation');

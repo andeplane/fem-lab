@@ -16,10 +16,6 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
     const row = (await sql.query('SELECT account_id, plan, starts_at, expires_at FROM credit_grants WHERE source=$1', [input.source])).rows[0];
     if (!row || row.account_id !== input.accountId || row.plan !== input.plan || (row.starts_at as Date).getTime() !== input.startsAt.getTime() || (row.expires_at as Date).getTime() !== input.expiresAt.getTime()) throw new Error('Conflicting immutable grant source.');
   }
-  async function ensureFree(accountId: string): Promise<void> {
-    const period = calendarPeriod(now());
-    await grant({ accountId, source: `free:${accountId}:${period.key}`, plan: 'free', startsAt: period.start, expiresAt: period.end });
-  }
   async function balance(accountId: string) {
     const clock = now();
     const rows = (await sql.query(`SELECT g.id, g.plan, g.amount, g.expires_at, g.starts_at,
@@ -40,6 +36,8 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string) {
     return { plan, totalCredits: Number(total / CREDIT_SCALE), availableCredits: Number(remaining / CREDIT_SCALE), reservedCredits: Number(BigInt(String(reserved.amount)) / CREDIT_SCALE),
       periodEndsAt: (activePaid?.expires_at as Date | undefined ?? period.end).toISOString(), models: [...PLANS[plan].models], maxOutput: PLANS[plan].maxOutput, contextLimit:plan==='free'?64000:128000, tariffVersion: TARIFF_VERSION };
   }
-  return { grant, ensureFree, balance };
+  // Free grants require an explicit operator approval, just as paid grants require an invoice.
+  // Reading an account, calling completions or crossing a month boundary cannot mint money.
+  return { grant, balance };
 }
 export type CreditLedger = ReturnType<typeof creditLedger>;
