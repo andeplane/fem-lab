@@ -15,7 +15,7 @@ export class AccountController {
   readonly services:AccountServices;
   constructor(private env:AccountEnvironment|null) {
     this.value={...EMPTY_ACCOUNT,configured:env!==null,status:env?'loading':'anonymous',googleEnabled:env?.googleEnabled??false};
-    this.services={state:()=>this.state,signIn:(m,e)=>this.signIn(m,e),signOut:()=>this.signOut(),refresh:()=>this.refresh(),checkout:(p,purchaseUse)=>this.redirect('/v1/billing/checkout',{plan:p,...(purchaseUse===undefined?{}:{purchaseUse})}),portal:()=>this.redirect('/v1/billing/portal',{}),changePlan:p=>this.changePlan(p),exportData:()=>this.exportData(),deleteAccount:c=>this.deleteAccount(c),acceptDisclosure:()=>this.set({disclosureAccepted:true})};
+    this.services={state:()=>this.state,signIn:(m,e)=>this.signIn(m,e),signOut:()=>this.signOut(),refresh:()=>this.refresh(),claimFreeAllowance:()=>this.claimFreeAllowance(),checkout:(p,purchaseUse)=>this.redirect('/v1/billing/checkout',{plan:p,...(purchaseUse===undefined?{}:{purchaseUse})}),portal:()=>this.redirect('/v1/billing/portal',{}),changePlan:p=>this.changePlan(p),exportData:()=>this.exportData(),deleteAccount:c=>this.deleteAccount(c),acceptDisclosure:()=>this.set({disclosureAccepted:true})};
   }
   get version():number{return this.epoch}
   get state():AccountState{return this.value}
@@ -44,6 +44,7 @@ export class AccountController {
   private async signOut():Promise<void>{await this.action(async()=>{await this.env?.auth.signOut();this.identityChanged(null)})}
   private async redirect(path:string,body:unknown):Promise<void>{await this.action(async()=>{const uid=this.state.uid;const {url}=await this.request<{url:string}>(path,body);await this.env!.beforeLeave();if(this.state.uid!==uid)throw new Error('The account changed.');this.env!.navigate(url)})}
   private async changePlan(plan:Exclude<AccountPlan,'free'>):Promise<void>{await this.action(async()=>{await this.request('/v1/billing/plan',{plan});await this.refresh();this.set({message:'Plan change saved for the next paid period.'})})}
+  private async claimFreeAllowance():Promise<void>{await this.action(async()=>{const epoch=this.epoch;await this.request('/v1/account/free-allowance',{});if(epoch!==this.epoch)return;await this.refresh();if(epoch===this.epoch)this.set({message:'Free allowance claim complete.'})})}
   private async exportData():Promise<void>{await this.action(async()=>{const result=await this.request<{url?:string;status:string}>('/v1/account/export',{});if(result.url){const uid=this.state.uid;await this.env!.beforeLeave();if(this.state.uid!==uid)throw new Error('The account changed.');this.env!.navigate(result.url)}else this.set({message:'Your private export is being prepared. Select Export again shortly.'})})}
   private async deleteAccount(confirm:'DELETE'):Promise<void>{await this.action(async()=>{await this.request('/v1/account/delete',{confirm});await this.env?.auth.signOut();this.identityChanged(null);this.set({message:'Account deletion requested. Local models remain in this browser.'})})}
 }

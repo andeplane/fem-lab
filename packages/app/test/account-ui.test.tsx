@@ -114,3 +114,40 @@ it.each([
   if(!available)expect(container.textContent).toContain('New purchases and plan changes are currently unavailable.');
   act(()=>render(null,container));container.remove();
 });
+it.each([
+  {status:'review-required',enabled:false,text:'requires an eligibility review'},
+  {status:'eligible',enabled:true,text:'Eligibility approved'},
+  {status:'claimed',enabled:false,text:'has already been claimed'},
+  {status:'revoked',enabled:false,text:'eligibility has been revoked'},
+  {status:'paid',enabled:false,text:'not added to paid credits'},
+  {status:'unavailable',enabled:false,text:'temporarily unavailable'},
+  {status:undefined,enabled:false,text:'temporarily unavailable'},
+  {status:'future-status',enabled:false,text:'temporarily unavailable'},
+] as const)('requires authoritative free status $status before a claim',({status,enabled,text})=>{
+  const s=signedIn(),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  Object.assign(s.account.profile.usage,{totalCredits:0,availableCredits:0});
+  if(status)Object.assign(s.account.profile,{freeAllowance:{status,credits:6666666,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}});
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  const panel=container.querySelector('section[aria-label="Free monthly AI allowance"]')!;
+  expect(panel.textContent).toContain(text);expect(container.textContent).toContain('Signing up starts with zero credits.');
+  if(status)expect(panel.textContent).toContain('6,666,666 weighted AI credits');
+  expect(dispatch).not.toHaveBeenCalled();
+  const button=panel.querySelector<HTMLButtonElement>('[data-cmd="account.claimFreeAllowance"]')!;
+  expect(button.disabled).toBe(!enabled);act(()=>button.click());
+  if(enabled)expect(dispatch).toHaveBeenCalledExactlyOnceWith({cmd:'account.claimFreeAllowance'});else expect(dispatch).not.toHaveBeenCalled();
+  expect(s.journal).toBeNull();act(()=>render(null,container));container.remove();
+});
+it('denies a stale eligible free claim while paid credits, account loading or billing review are active',()=>{
+  for(const blocker of ['loading','paid','review']){
+    const paid=blocker==='paid';
+    const s=signedIn(paid?'plus':'free'),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+    Object.assign(s.account.profile,{freeAllowance:{status:'eligible',credits:6666666,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}});
+    if(blocker==='loading')Object.assign(s.account,{status:'loading'});
+    if(blocker==='review')s.account.profile.billing.reviewRequired=true;
+    act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+    const button=container.querySelector<HTMLButtonElement>('[data-cmd="account.claimFreeAllowance"]')!;
+    expect(button.disabled).toBe(true);act(()=>button.click());expect(dispatch).not.toHaveBeenCalled();
+    if(paid)expect(container.textContent).toContain('Free monthly credits are not added to paid credits.');
+    act(()=>render(null,container));container.remove();
+  }
+});
