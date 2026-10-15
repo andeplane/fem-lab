@@ -250,7 +250,9 @@ pub struct Surface {
 /// Clustering is by a `tol`-sized grid cell and its 26 neighbours, and a node only ever joins a
 /// cluster whose survivor has a lower id, so the survivors and the renumbering are a pure
 /// function of the coordinates. Element and face sets are untouched (elements keep their ids);
-/// node sets are remapped and re-sorted.
+/// node sets are remapped and re-sorted. Absolute grid keys saturate at the i64 bounds;
+/// neighbour offsets clamp there too. Repeated border buckets only repeat distance checks,
+/// so finite translated coordinates retain the same coincidence and lowest-id decisions.
 pub fn merge_coincident(mesh: &mut Mesh, tol: f64) {
     let cell = |x: f64| (x / tol).floor() as i64;
     let mut buckets: BTreeMap<[i64; 3], Vec<u32>> = BTreeMap::new();
@@ -262,7 +264,8 @@ pub fn merge_coincident(mesh: &mut Mesh, tol: f64) {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
-                    let near = buckets.get(&[k[0] + dx, k[1] + dy, k[2] + dz]);
+                    let near =
+                        buckets.get(&[k[0].saturating_add(dx), k[1].saturating_add(dy), k[2].saturating_add(dz)]);
                     for &other in near.map_or(&[][..], Vec::as_slice) {
                         let q = mesh.node(other);
                         let d2: f64 = (0..3).map(|i| (p[i] - q[i]) * (p[i] - q[i])).sum();

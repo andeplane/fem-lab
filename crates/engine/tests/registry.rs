@@ -4896,7 +4896,10 @@ fn a_chained_static_step_is_budgeted_before_its_history_is_allocated() {
     let frame_bytes = heat.retained_bytes / heat.retained_frames;
     let heat_fixed = heat.bytes.saturating_sub(heat.retained_bytes);
     let static_fixed = structural.bytes + nodes * 5 * 8;
-    assert!(static_fixed > heat_fixed, "the chained static budget must cost more fixed bytes than the heat Step's own for this test to isolate it: {static_fixed} vs {heat_fixed}");
+    assert!(
+        static_fixed > heat_fixed,
+        "the chained static budget must cost more fixed bytes than the heat Step's own for this test to isolate it: {static_fixed} vs {heat_fixed}"
+    );
     // Once "warm" is solved, its own retained History becomes a *resident* Result the chained
     // static budget must also carry (`with_records`), on top of the static Step's own new
     // History of the same frame count — so the chained check pays for two Histories' worth of
@@ -7807,6 +7810,79 @@ fn line_bodies_that_meet_at_a_joint_are_welded_into_one_node() {
     ok(&mut e, r#"{"cmd":"geometry.addLine","name":"c","points":[["0 m","1 m","0 m"],["1 m","1 m","0 m"]]}"#);
     let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
     assert_eq!((m.elements, m.nodes), (3, 5));
+}
+
+#[test]
+fn finite_extreme_line_translations_weld_and_replay_without_a_grid_neighbour_panic() {
+    for translation in [f64::MAX, -f64::MAX] {
+        let mut thread_results = Vec::new();
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            ok(&mut e, r#"{"cmd":"model.new","name":"translated-lines"}"#);
+            ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+            let at = |y, z| serde_json::json!([{"value":translation,"unit":"m"}, y, z]);
+            ok(
+                &mut e,
+                &serde_json::json!({"cmd":"geometry.addLine","name":"a","kind":"truss",
+                    "points":[at("0 m", "0 m"), at("1 m", "0 m"), at("2 m", "0 m")]})
+                .to_string(),
+            );
+            ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+            let original = mesh_summary(&mut e);
+            assert_eq!((original.nodes, original.elements), (3, 2));
+            assert_eq!(original.min_edge.value, 1.0);
+            assert_eq!(original.max_edge.value, 1.0);
+            // A second Body shares the middle joint; another is three metres away.
+            for (name, points) in
+                [("b", vec![at("1 m", "0 m"), at("3 m", "0 m")]), ("c", vec![at("0 m", "3 m"), at("1 m", "3 m")])]
+            {
+                ok(
+                    &mut e,
+                    &serde_json::json!({"cmd":"geometry.addLine","name":name,
+                    "kind":"truss","points":points})
+                    .to_string(),
+                );
+            }
+            let file = e.export_file();
+            let hash = e.model_hash();
+            let summary = mesh_summary(&mut e);
+            assert_eq!((summary.nodes, summary.elements), (6, 4));
+            assert_eq!(summary.bbox.clone().map(|v| v.value), [translation, 0., 0., translation, 3., 3.]);
+            assert_eq!(summary.min_edge.value, 1.0);
+            assert_eq!(summary.max_edge.value, 2.0);
+            let built = e.mesh().unwrap().clone();
+            assert_eq!(built.mesh.node(1), [translation, 1., 0.]);
+            assert_eq!(built.sets["a.p1"].nodes, [1]);
+            assert_eq!(built.sets["b.p0"].nodes, [1]);
+            assert_eq!(built.sets["b.p1"].nodes, [3]);
+            assert_eq!(built.sets["c.p0"].nodes, [4]);
+            assert_eq!(built.mesh.blocks[1].conn, [1, 3]);
+            assert_eq!(built.mesh.blocks[2].conn, [4, 5]);
+            assert_eq!(e.export_file(), file, "mesh reads do not change the Model or Journal");
+            assert_eq!(e.model_hash(), hash);
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&file.journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), hash);
+            assert_eq!(replayed.mesh().unwrap(), &built);
+            assert_eq!(mesh_summary(&mut replayed), summary);
+
+            let collapsed = serde_json::json!({"cmd":"geometry.addLine","name":"bad",
+                "points":[at("0 m", "0 m"), at("0 m", "0 m")]})
+            .to_string();
+            assert!(err(&mut e, &collapsed).cause.contains("zero length"));
+            assert_eq!(
+                err(
+                    &mut e,
+                    r#"{"cmd":"geometry.addLine","name":"bad","points":[["1e309 m","0 m","0 m"],["0 m","1 m","0 m"]]}"#
+                )
+                .code,
+                ErrorCode::Schema
+            );
+            assert_eq!(e.export_file(), file, "invalid geometry is still rejected before mutation");
+            thread_results.push((built, summary, hash));
+        }
+        assert_eq!(thread_results[0], thread_results[1]);
+    }
 }
 
 #[test]
