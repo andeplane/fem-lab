@@ -233,6 +233,7 @@ jobs:
       - run: python3 -m unittest discover -s infra/google -p 'test_*.py'
       - run: npm run codegen:check
       - run: node --test tools/test-step-assets.mjs
+      - run: node --test tools/test-size-runtime.mjs
       - run: npm run typecheck
       - run: npm run test -w packages/registry
       - run: npm run test -w packages/ai
