@@ -107,8 +107,8 @@ export class Registry<C = HostContext> {
       for (const d of hostCommands) this.commands.set(d.name, { ...hostDef(d, () => ({ ...host, transport: policyTransport(host.transport, d.execution, d.name) })), journaled: false });
       for (const d of hostQueries) this.queries.set(d.name, hostDef(d, () => ({ ...host, transport: policyTransport(host.transport, d.execution, d.name) })));
     } else {
-      for (const d of options.hostCommands) this.commands.set(d.name, { ...hostDef(d, () => options.context), journaled: false });
-      for (const d of options.hostQueries) this.queries.set(d.name, hostDef(d, () => options.context));
+      for (const d of options.hostCommands) this.commands.set(d.name, { ...hostDef(d, () => { options.guard(); return options.context; }), journaled: false });
+      for (const d of options.hostQueries) this.queries.set(d.name, hostDef(d, () => { options.guard(); return options.context; }));
     }
   }
 

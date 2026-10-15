@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ComponentProps, VNode } from 'preact';
-import type { App } from '../src/ui/App';
+import type { ActiveAppProps, App } from '../src/ui/App';
 import type { Progress } from '@femlab/registry';
 import type { Viewer, CameraState } from '../src/viewer/viewer';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
@@ -10,8 +10,9 @@ import { FileDelivery, FileArtifactMetadata } from '@femlab/registry';
 import { fakeDir } from './project-fake';
 import { IDBFactory } from 'fake-indexeddb';
 
-const mounted = vi.hoisted(() => ({ props: null as ComponentProps<typeof App> | null, makeViewer: null as ((props: ComponentProps<typeof App>) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
+const mounted = vi.hoisted(() => ({ props: null as ActiveAppProps | null, makeViewer: null as ((props: ActiveAppProps) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
 vi.mock('preact', async original => ({ ...await original<typeof import('preact')>(), render: (node: VNode<ComponentProps<typeof App>>) => {
+  if ('startup' in node.props) return;
   mounted.props = node.props;
   const viewer = mounted.makeViewer?.(node.props);
   if (viewer) {

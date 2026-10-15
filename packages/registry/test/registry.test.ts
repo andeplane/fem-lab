@@ -636,7 +636,7 @@ it('forwards explicit subscription use while preserving legacy direct checkout a
 
 
 it('binds a transport-free host phase through the same schemas, metadata and router', async () => {
-  const context = { count: 0 };
+  const context = { count: 0, reads: 0 };
   let retired = false;
   const unavailable = () => new FemError('session.transitioning', 'the actual engine is still starting', 'workspace', 'query.workspaceStatus');
   const registry = Registry.hostOnly({
@@ -649,7 +649,7 @@ it('binds a transport-free host phase through the same schemas, metadata and rou
       run: (input: { attempt: number }, host) => { host.count += input.attempt; return host.count; } }],
     hostQueries: [{ name: 'query.workspaceStatus', execution: 'workspace', tool: true,
       description: 'Read the actual host startup status without an engine or model.',
-      schema: z.object({}), run: (_input, host) => ({ attempts: host.count }) }],
+      schema: z.object({}), run: (_input, host) => { host.reads++; return { attempts: host.count }; } }],
   });
   expect(registry.describe('workspace.retryStartup')).toMatchObject({ provider: 'host', execution: 'workspace', journaled: false, schema: { required: ['attempt'] } });
   expect(registry.list().commands).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'geometry.addBox', provider: 'engine' })]));
@@ -661,7 +661,14 @@ it('binds a transport-free host phase through the same schemas, metadata and rou
   await expect(registry.query({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.transitioning', where: 'workspace' });
   await expect(registry.dispatch({ cmd: 'not-a-command' })).rejects.toMatchObject({ code: 'not-found', where: 'cmd' });
   await expect(registry.query({ query: 'not-a-query' })).rejects.toMatchObject({ code: 'not-found', where: 'query' });
+  const describedCommand = registry.describe('workspace.retryStartup').run!;
+  const describedQuery = registry.describe('query.workspaceStatus').run!;
+  const listedCommand = registry.list().commands.find(command => command.name === 'workspace.retryStartup')!.run!;
+  const listedQuery = registry.list().queries.find(query => query.name === 'query.workspaceStatus')!.run!;
   retired = true;
+  const retained = [describedCommand({ attempt: 9 }), listedCommand({ attempt: 9 }), describedQuery({}), listedQuery({})];
+  await Promise.all(retained.map(result => expect(result).rejects.toMatchObject({ code: 'session.expired' })));
+  expect(context.reads).toBe(1);
   await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: 1 })).rejects.toMatchObject({ code: 'session.expired' });
   await expect(registry.query({ query: 'query.workspaceStatus' })).rejects.toMatchObject({ code: 'session.expired' });
   expect(context.count).toBe(2);
