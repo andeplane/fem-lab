@@ -115,6 +115,14 @@ export function reservations(db: Database, now: () => Date, newId: () => string)
       if (row.state !== 'reserved' || (row.deadline as Date) <= now()) throw new ServiceFailure(409, 'request-state', 'This request cannot be dispatched.', 'admission');
       const account = (await sql.query('SELECT status FROM accounts WHERE id=$1', [accountId])).rows[0];
       if (account?.status !== 'active') throw new ServiceFailure(403, 'account-inactive', 'This account cannot use hosted AI.', 'account');
+      if (row.plan !== 'free') {
+        // Refunds, disputes and period expiry can invalidate a hold before provider generation starts.
+        const grants = await eligibleGrants(sql, accountId, now());
+        const allocations = (await sql.query('SELECT grant_id FROM credit_holds WHERE request_id=$1', [id])).rows;
+        if (!allocations.length || allocations.some(hold => !grants.some(grant => grant.id === hold.grant_id))) {
+          throw new ServiceFailure(403, 'paid-allowance-inactive', 'This paid allowance is no longer available. Refresh your account before retrying.', 'admission', 'account.refresh');
+        }
+      }
       await sql.query("UPDATE ai_requests SET state='dispatched',updated_at=$2 WHERE id=$1", [id,now()]);
     });
   }
