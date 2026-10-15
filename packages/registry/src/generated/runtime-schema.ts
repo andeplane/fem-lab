@@ -825,7 +825,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -833,7 +833,7 @@ const commands = {
           "$ref": "#/$defs/MesherSpec"
         },
         "order": {
-          "description": "Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require\n1.",
+          "description": "Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.\nImported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.",
           "type": [
             "integer",
             "null"
@@ -3803,7 +3803,7 @@ const commands = {
           ]
         },
         {
-          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10, Hex8 and Hex20 use standard\nfull integration. Requires solid3d,\nunchanged authored interpolation (order 1), formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
           "type": "object",
           "properties": {
             "body": {
@@ -4318,7 +4318,7 @@ const commands = {
           "$ref": "#/$defs/ImportedElementKind"
         },
         "nodes": {
-          "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+          "description": "Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.",
           "type": "array",
           "items": {
             "type": "integer",
@@ -4335,11 +4335,13 @@ const commands = {
       ]
     },
     "ImportedElementKind": {
-      "description": "Only the explicitly supported standard, first-order 3D solids.",
+      "description": "Standard full-integration 3D solids; interpolation and source connectivity are retained.",
       "type": "string",
       "enum": [
         "tet4",
-        "hex8"
+        "hex8",
+        "tet10",
+        "hex20"
       ]
     },
     "ImportedFace": {
@@ -4352,7 +4354,7 @@ const commands = {
           "minimum": 0
         },
         "face": {
-          "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+          "description": "Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.",
           "type": "integer",
           "format": "uint8",
           "minimum": 0,
@@ -5714,7 +5716,38 @@ const queries = {
       "x-returns": "Converted"
     },
     {
-      "description": "Check a bounded Abaqus text deck using an explicit positive length Quantity per\nsource coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary\nportable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT\n(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit\nSURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming\nBody. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized\nuppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive\nkeyword spellings, 256-character physical lines and comma keyword continuation.\nRejects abbreviations, quoted labels, repeated SURFACE names and every unsupported\nkeyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.\nStatic mode additionally requires a positive force Quantity per source force and\nsupports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one\nSOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct\ndisplacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements\nscale by L, forces by F and modulus by F/L²; no units are inferred. Model-data\nBOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;\nnumeric targets get explicit singleton Sets. Conflicting prescribed values and\noverlapping CLOAD updates fail. Static accepts absent/default increment fields\nonly (zero also denotes the default in its first three fields), imports final\nlinear equilibrium without increment history, and never solves.\nDensity/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT\nrequests remain unsupported. Bounds: 250000 nodes,\n250000 elements and 1000000 expanded membership declarations before deduplication.\nNo paths, includes, file I/O or active Model mutation. Input and serialized response\nare each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is\nchecked conversion, not publication approval:\nhosts must prepare the Commands through Candidate, enforce the exact serialized\nModel-file limit and publish atomically before replacing the active document.",
+      "description": "Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.\nUses the same bounded lexer and safe relative-path graph as conversion. This read\nperforms no model/physics conversion or file/network I/O; hosts can acquire listed\nfiles through their captured scoped I/O and repeat until the bundle is complete.\nThe actual conversion still rejects missing files and never publishes partial data.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "sourceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceFiles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "query": {
+          "type": "string",
+          "const": "query.abaqusDependencies"
+        }
+      },
+      "required": [
+        "query",
+        "text"
+      ],
+      "x-execution": "modelRead",
+      "x-returns": "AbaqusDependencies"
+    },
+    {
+      "description": "Convert a bounded Abaqus text deck to checked portable Commands without mutating\nthe active Model or solving. Explicit positive unitLength and static-mode unitForce\ndefine source units; coordinates/displacements scale by L, forces by F and stress\nby F/L². Structural instances, labels, exact Sets and surfaces are normalized by\nthe typed deck reader. The report records all translated analysis Steps and notes\nrecognized requests whose output/increment execution differs from FEM Lab.\nMesh mode supports flat and part/assembly/instance solid meshes and supplied INCLUDE\nbundles, retaining source identity and exact Sets. It never discards analysis data.\nStatic mode currently accepts one flat homogeneous isotropic linear elastic material,\none whole solid section, translational BOUNDARY and CLOAD, and one STATIC Step.\nOther analysis definitions are rejected; broader static mapping is tracked separately.\nOptional positive unitTime is validated; DENSITY remains explicitly unsupported.\nUnsupported physics/formulations/parameters fail rather than being discarded.\nNeither mode infers missing physical units.\nInput and serialized response are bounded to 16 MiB; hosts must privately prepare\nall returned Commands through Candidate and publish one validated replacement.",
       "type": "object",
       "properties": {
         "text": {
@@ -5742,6 +5775,31 @@ const queries = {
               "type": "null"
             }
           ]
+        },
+        "unitTime": {
+          "description": "Positive seconds per source time. Required when a DENSITY is translated:\nsource density scales by F T²/L⁴. No time or mass unit is inferred.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceName": {
+          "description": "Logical root filename for resolving an explicitly supplied include bundle.\nPaths identify bundle entries only; the engine never reads a file system.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceFiles": {
+          "description": "Explicit relative source filenames and UTF-8 contents for INCLUDE resolution.\nMissing/cyclic/escaping references fail; the engine never fetches a file.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "sha256": {
           "type": "string"

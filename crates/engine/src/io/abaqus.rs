@@ -4,6 +4,7 @@
 //! documentation; the deliberately narrower subset is recorded in docs/plans/500-abaqus-import.md.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::command::{
     Command, Formulation, IdealisationSpec, ImportedElement, ImportedElementKind, ImportedFace, ImportedMeshSpec,
@@ -45,6 +46,7 @@ pub(crate) fn unsupported(line: usize, keyword: &str, field: &str, cause: impl I
 pub(crate) struct Record<'a> {
     pub(crate) line: usize,
     pub(crate) text: &'a str,
+    pub(crate) source: Option<&'a Arc<str>>,
 }
 
 /// Reads incrementally: an unsupported first keyword never allocates the remaining records.
@@ -81,7 +83,7 @@ impl<'a> Records<'a> {
                     "keyword/data records require printable ASCII or tabs",
                 ));
             }
-            return Ok(Some(Record { line, text }));
+            return Ok(Some(Record { line, text, source: None }));
         }
         Ok(None)
     }
@@ -164,7 +166,7 @@ impl<'a> Records<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct Keyword {
     pub(crate) line: usize,
-    pub(crate) source: Option<String>,
+    pub(crate) source: Option<Arc<str>>,
     pub(crate) name: String,
     pub(crate) parameters: BTreeMap<String, Option<String>>,
 }
@@ -304,6 +306,14 @@ pub(crate) fn fields<'a>(record: Record<'a>, keyword: &str, min: usize, max: usi
     Ok(fields)
 }
 
+pub(super) fn element_kind(keyword: &Keyword) -> Result<ImportedElementKind, Error> {
+    match keyword.required("TYPE")? {
+        "C3D4"=>Ok(ImportedElementKind::Tet4),"C3D8"=>Ok(ImportedElementKind::Hex8),
+        "C3D10"=>Ok(ImportedElementKind::Tet10),"C3D20"=>Ok(ImportedElementKind::Hex20),
+        other=>Err(unsupported(keyword.line,"ELEMENT","TYPE",format!("element type {other} is unsupported; supported solids are C3D4, C3D8, C3D10 and C3D20 with their exact formulations"))),
+    }
+}
+
 pub(super) struct NamedSet {
     pub(super) members: BTreeMap<u32, usize>,
 }
@@ -323,6 +333,8 @@ pub(crate) struct Active {
     section: Section,
     records: usize,
     pending: Vec<String>,
+    pending_line: Option<usize>,
+    pending_source: Option<Arc<str>>,
 }
 
 impl Active {
@@ -361,6 +373,10 @@ pub(crate) struct Builder {
     pub(super) headings: Vec<String>,
     pub(super) preprint: Vec<BTreeMap<String, bool>>,
     pub(super) memberships: usize,
+    pub(super) node_sources: BTreeMap<u32, Arc<str>>,
+    pub(super) element_sources: BTreeMap<u32, Arc<str>>,
+    pub(super) set_sources: BTreeMap<(bool, String), BTreeMap<u32, Arc<str>>>,
+    pub(super) surface_sources: BTreeMap<String, BTreeMap<ImportedFace, Arc<str>>>,
 }
 
 impl Builder {
@@ -383,10 +399,17 @@ impl Builder {
     }
 
     /// Insert members after their declaration count was checked and reserved.
-    fn append_members(&mut self, nodes: bool, set: &str, members: Vec<u32>, line: usize) {
+    fn append_members(&mut self, nodes: bool, set: &str, members: Vec<u32>, line: usize, source: Option<&Arc<str>>) {
         let sets = if nodes { &mut self.node_sets } else { &mut self.element_sets };
         let entry = sets.entry(set.to_string()).or_insert_with(|| NamedSet { members: BTreeMap::new() });
         for member in members {
+            if let Some(source) = source {
+                self.set_sources
+                    .entry((nodes, set.to_string()))
+                    .or_default()
+                    .entry(member)
+                    .or_insert_with(|| source.clone());
+            }
             entry.members.entry(member).or_insert(line);
         }
     }
@@ -429,20 +452,7 @@ impl Builder {
             }
             "ELEMENT" => {
                 keyword.only(&["TYPE", "ELSET"])?;
-                let kind = match keyword.required("TYPE")? {
-                    "C3D4" => ImportedElementKind::Tet4,
-                    "C3D8" => ImportedElementKind::Hex8,
-                    "C3D10" => ImportedElementKind::Tet10,
-                    "C3D20" => ImportedElementKind::Hex20,
-                    other => {
-                        return Err(unsupported(
-                            keyword.line,
-                            "ELEMENT",
-                            "TYPE",
-                            format!("element type {other} is unsupported; supported solids are C3D4, C3D8, C3D10 and C3D20 with their exact formulations"),
-                        ))
-                    }
-                };
+                let kind = element_kind(&keyword)?;
                 let set = keyword.value("ELSET")?.map(|s| name(s, keyword.line, "ELEMENT", "ELSET")).transpose()?;
                 Section::Elements { kind, set }
             }
@@ -478,7 +488,7 @@ impl Builder {
                 ))
             }
         };
-        Ok(Active { keyword, section, records: 0, pending: Vec::new() })
+        Ok(Active { keyword, section, records: 0, pending: Vec::new(), pending_line: None, pending_source: None })
     }
 
     fn start_set(&mut self, keyword: &Keyword) -> Result<Section, Error> {
@@ -524,7 +534,7 @@ impl Builder {
                 let (element, _) = self.elements.get(&id).expect("element references validated above");
                 members.extend_from_slice(&element.nodes);
             }
-            self.append_members(true, &set, members, keyword.line);
+            self.append_members(true, &set, members, keyword.line, keyword.source.as_ref());
             return Ok(Section::SetFromElements);
         }
         Ok(Section::Set { nodes, name: set, generate })
@@ -562,9 +572,12 @@ impl Builder {
                     );
                 }
                 self.nodes.insert(id, (ImportedNodeSpec { label: id, at }, record.line));
+                if let Some(source) = record.source {
+                    self.node_sources.insert(id, source.clone());
+                }
                 if let Some(set) = set {
                     self.reserve_members(1, record.line, "NODE")?;
-                    self.append_members(true, set, vec![id], record.line);
+                    self.append_members(true, set, vec![id], record.line, record.source);
                 }
             }
             Section::Elements { kind, set } => {
@@ -581,6 +594,10 @@ impl Builder {
                 }
                 if values.len() < arity + 1 && continues {
                     active.pending = values;
+                    active.pending_line.get_or_insert(record.line);
+                    if active.pending_source.is_none() {
+                        active.pending_source = record.source.cloned();
+                    }
                     return Ok(());
                 }
                 if values.len() != arity + 1 {
@@ -591,6 +608,12 @@ impl Builder {
                         format!("expected {} fields, got {}", arity + 1, values.len()),
                     ));
                 }
+                let source = active.pending_source.take().or_else(|| record.source.cloned());
+                let record = Record {
+                    line: active.pending_line.take().unwrap_or(record.line),
+                    text: record.text,
+                    source: source.as_ref(),
+                };
                 let id = label(&values[0], record.line, "ELEMENT", "label")?;
                 if self.elements.contains_key(&id) {
                     return Err(malformed(
@@ -617,9 +640,12 @@ impl Builder {
                     nodes.push(node);
                 }
                 self.elements.insert(id, (ImportedElement { label: id, kind: *kind, nodes }, record.line));
+                if let Some(source) = record.source {
+                    self.element_sources.insert(id, source.clone());
+                }
                 if let Some(set) = set {
                     self.reserve_members(1, record.line, "ELEMENT")?;
-                    self.append_members(false, set, vec![id], record.line);
+                    self.append_members(false, set, vec![id], record.line, record.source);
                 }
             }
             Section::Set { nodes, name: set, generate } => {
@@ -676,7 +702,7 @@ impl Builder {
                     self.memberships += members.len();
                     members
                 };
-                self.append_members(*nodes, set, members, record.line);
+                self.append_members(*nodes, set, members, record.line, record.source);
             }
             Section::Surface { name: set } => {
                 let values = fields(record, "SURFACE", 2, 2)?;
@@ -718,13 +744,50 @@ impl Builder {
                 };
                 let (_, surface) = self.surfaces.get_mut(set).expect("surface created by its keyword");
                 for element in elements {
-                    surface.entry(ImportedFace { element, face }).or_insert(record.line);
+                    let face = ImportedFace { element, face };
+                    if let Some(source) = record.source {
+                        self.surface_sources
+                            .entry(set.clone())
+                            .or_default()
+                            .entry(face)
+                            .or_insert_with(|| source.clone());
+                    }
+                    surface.entry(face).or_insert(record.line);
                 }
             }
         }
         active.records += 1;
         Ok(())
     }
+}
+
+pub(super) fn with_source(error: Error, source: Option<&str>) -> Error {
+    if let Some(source) = source {
+        if error.where_.as_deref().is_some_and(|at| at.starts_with(&format!("{source}: "))) {
+            return error;
+        }
+        let at = error.where_.as_deref().unwrap_or("input").to_string();
+        error.at(format!("{source}: {at}"))
+    } else {
+        error
+    }
+}
+fn error_source<'a>(
+    error: &Error,
+    nodes: &'a BTreeMap<u32, Arc<str>>,
+    elements: &'a BTreeMap<u32, Arc<str>>,
+) -> Option<&'a str> {
+    let path = error.where_.as_deref()?;
+    for (prefix, sources) in [("mesher.nodes[", nodes), ("mesher.elements[", elements)] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            if let Some((label, _)) = rest.split_once(']') {
+                if let Ok(label) = label.parse::<u32>() {
+                    return sources.get(&label).map(Arc::as_ref);
+                }
+            }
+        }
+    }
+    elements.values().next().map(Arc::as_ref)
 }
 
 fn source_location(
@@ -776,11 +839,14 @@ impl Builder {
         for (element, line) in self.elements.values() {
             for (index, node) in element.nodes.iter().enumerate() {
                 if !self.nodes.contains_key(node) {
-                    return Err(malformed(
-                        *line,
-                        "ELEMENT",
-                        &format!("element {} node {}", element.label, index + 1),
-                        format!("source node {node} is not defined"),
+                    return Err(with_source(
+                        malformed(
+                            *line,
+                            "ELEMENT",
+                            &format!("element {} node {}", element.label, index + 1),
+                            format!("source node {node} is not defined"),
+                        ),
+                        self.element_sources.get(&element.label).map(Arc::as_ref),
                     ));
                 }
             }
@@ -791,11 +857,14 @@ impl Builder {
                     let exists =
                         if nodes { self.nodes.contains_key(&member) } else { self.elements.contains_key(&member) };
                     if !exists {
-                        return Err(malformed(
-                            line,
-                            keyword,
-                            &format!("Set {set} member"),
-                            format!("source label {member} is not defined"),
+                        return Err(with_source(
+                            malformed(
+                                line,
+                                keyword,
+                                &format!("Set {set} member"),
+                                format!("source label {member} is not defined"),
+                            ),
+                            self.set_sources.get(&(nodes, set.clone())).and_then(|m| m.get(&member)).map(Arc::as_ref),
                         ));
                     }
                 }
@@ -813,11 +882,14 @@ impl Builder {
                 })?;
                 let maximum = element.kind.geometry().n_faces() as u8;
                 if member.face > maximum {
-                    return Err(malformed(
-                        *line,
-                        "SURFACE",
-                        &format!("element {} face", member.element),
-                        format!("S{} is invalid on this element type", member.face),
+                    return Err(with_source(
+                        malformed(
+                            *line,
+                            "SURFACE",
+                            &format!("element {} face", member.element),
+                            format!("S{} is invalid on this element type", member.face),
+                        ),
+                        self.surface_sources.get(set).and_then(|m| m.get(member)).map(Arc::as_ref),
                     ));
                 }
             }
@@ -853,8 +925,10 @@ impl Builder {
                 }))
             }),
         };
-        let checked = crate::imported::source(&source)
-            .map_err(|error| source_location(error, &node_lines, &element_lines, first_element))?;
+        let checked = crate::imported::source(&source).map_err(|error| {
+            let source = error_source(&error, &self.node_sources, &self.element_sources);
+            with_source(source_location(error, &node_lines, &element_lines, first_element), source)
+        })?;
         let participating: BTreeSet<_> = checked.participating_labels();
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
@@ -1194,10 +1268,10 @@ mod tests {
             assert_eq!(scalar(text, 5, "NODE", "x", 0.001).unwrap().to_bits(), 0.0f64.to_bits());
         }
         assert_eq!(scalar("1E308", 5, "NODE", "x", 10.0).unwrap_err().code, ErrorCode::Schema);
-        assert_eq!(fields(Record { line: 2, text: "1,0,," }, "NODE", 2, 4).unwrap(), ["1", "0", "", ""]);
+        assert_eq!(fields(Record { line: 2, text: "1,0,,", source: None }, "NODE", 2, 4).unwrap(), ["1", "0", "", ""]);
         for text in ["1", "1,0,0,0,0"] {
             assert_eq!(
-                fields(Record { line: 2, text }, "NODE", 2, 4).unwrap_err().where_.as_deref(),
+                fields(Record { line: 2, text, source: None }, "NODE", 2, 4).unwrap_err().where_.as_deref(),
                 Some("line 2 *NODE record")
             );
         }

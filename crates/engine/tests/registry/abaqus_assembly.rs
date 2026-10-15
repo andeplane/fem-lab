@@ -98,3 +98,29 @@ fn abaqus_dependency_query_and_mode_unit_guards_do_not_change_active_model() {
     }
     assert_eq!(e.export_file(), before);
 }
+
+#[test]
+fn abaqus_included_connectivity_faces_sets_and_geometry_keep_the_authored_file_and_line() {
+    let root = "*INCLUDE,INPUT=Parts/beam.inc\n";
+    let original = include_str!("../fixtures/abaqus/sparse-label-tet.inp");
+    for text in [
+        original.replace("900, 40, 10, 70, 20", "900, 40, 10, 70, 999"),
+        original.replace("900, S4", "900, S5"),
+        format!("{original}*NSET,NSET=MISSING\n999\n"),
+        original.replace("900, 40, 10, 70, 20", "900, 40, 70, 10, 20"),
+    ] {
+        let files = BTreeMap::from([("Parts/beam.inc".into(), text)]);
+        let error = abaqus::convert_mesh_sources(
+            root,
+            "included",
+            "beam",
+            &Q::text("1 m"),
+            Some("Main.inp"),
+            &files,
+            &sha256_hex(root.as_bytes()),
+        )
+        .unwrap_err();
+        assert!(error.where_.as_deref().unwrap().starts_with("Parts/beam.inc: line "), "{error:?}");
+        assert_eq!(error.where_.as_deref().unwrap().matches("Parts/beam.inc:").count(), 1);
+    }
+}

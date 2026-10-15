@@ -9,8 +9,10 @@ identity are [#652](https://github.com/andeplane/fem-lab/issues/652), analysis m
 
 The normalizer is a headless, deterministic transformation of supplied source snapshots.
 It does not read paths, weld coincident nodes, solve, or publish a model. It keeps original
-keyword/data locations and passes typed analysis blocks to the analysis mapper. There is
-no intermediate generated input file.
+keyword/data locations. There is no intermediate generated input file. This change enables
+assembly conversion in mesh mode; the paired analysis mapper in #654 consumes the same typed
+records for static assembly conversion. Until that change lands, the existing static bridge
+retains its flat, single-material, single-step scope and rejects supplied include bundles.
 
 ## Semantics
 
@@ -26,17 +28,22 @@ no intermediate generated input file.
 - Instance translation precedes the right-handed rotation about the supplied axis. The
   transformation changes geometry; it does not reinterpret global nodal force components
   or invent a local nodal `TRANSFORM`.
-- Part sections are instantiated as typed scoped analysis records before step history.
-  The analysis mapper resolves each region and preserves its material assignment.
+- The paired #654 mapper instantiates part sections as typed scoped analysis records before
+  step history, resolves each region and preserves its material assignment.
 - `C3D10` and `C3D20` connectivity continuation retains the exact Abaqus local node order.
   Reduced-integration element names are never silently substituted with full integration.
 - Includes resolve only against supplied submission-directory-relative names, with exact
   filename case. Include paths do not become relative to the including file's directory.
   Missing files are discoverable through a pure query; actual conversion requires them.
+  Typed collection admits at most 250000 authored nodes/elements and keyword records,
+  and 1000000 data records before allocating their owned records. Duplicate node/element
+  labels fail during collection. A cached count per part reserves expanded entities and
+  declared memberships before copying that part into another instance. Instance Builders
+  are flattened one at a time, rather than retained in a vector.
   Cycles, traversal, excessive depth, more than 128 provided files, aggregate input above
   16 MiB and expanded input above 16 MiB are errors. File hashes and the root name persist.
-- Analysis and output records are passed through explicitly. Unknown physical intent is
-  rejected by the mapper; mesh-only mode cannot silently drop an analysis.
+- The paired #654 mapper handles analysis and output records explicitly. Unknown physical
+  intent is rejected; mesh-only mode cannot silently drop an analysis.
 
 ## Verification
 
@@ -48,7 +55,10 @@ have direct assertions. It is a syntax fixture, not evidence of an actual CAE ex
 
 Pure graph tests cover nested includes, case-sensitive names, missing-file discovery,
 original locations, cycles, traversal, malformed syntax and resource limits. An invalid
-included scope must identify the original include filename and line. Unsupported physical
+included scope, connectivity, Set member, face or element geometry must identify the original
+include filename and line. Small injected-budget fixtures verify that an over-limit second
+instance is rejected before its later invalid Set is parsed, and that duplicate/over-limit
+record prefixes are rejected before an invalid tail is read. Unsupported physical
 records adjacent to valid structural data must fail rather than disappear.
 
 Reference semantics: [Input Syntax Rules](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEMODRefMap/simamod-c-inputsyntax.htm),

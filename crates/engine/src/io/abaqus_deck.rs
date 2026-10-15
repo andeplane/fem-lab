@@ -5,7 +5,8 @@ use super::abaqus::{self, malformed, unsupported, Builder, Keyword, MeshDeck, Na
 use crate::command::{ImportedEntityIdentity, ImportedFace};
 use crate::error::Error;
 use crate::units::{Length, Q};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum DeckScope {
@@ -19,7 +20,7 @@ pub(crate) struct DeckRecord {
     pub line: usize,
     pub fields: Vec<String>,
     pub raw: String,
-    pub source: Option<String>,
+    pub source: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,30 +85,124 @@ fn scoped_name(scope: &DeckScope, name: &str) -> String {
     }
 }
 
-fn blocks(text: &str, source: Option<&str>) -> Result<Vec<DeckBlock>, Error> {
+/// Admission is checked before allocating an owned typed record. Source entity totals
+/// bound authored definitions as well as the later expanded, participating assembly.
+struct CollectionBudget {
+    keywords: usize,
+    records: usize,
+    nodes: usize,
+    elements: usize,
+    record_limit: usize,
+    entity_limit: usize,
+}
+impl Default for CollectionBudget {
+    fn default() -> Self {
+        Self { keywords: 0, records: 0, nodes: 0, elements: 0, record_limit: 1_000_000, entity_limit: 250_000 }
+    }
+}
+impl CollectionBudget {
+    fn keyword(&mut self, line: usize) -> Result<(), Error> {
+        if self.keywords == self.entity_limit {
+            return Err(malformed(
+                line,
+                "INPUT",
+                "keywords",
+                format!("source exceeds {} keyword records", self.entity_limit),
+            ));
+        }
+        self.keywords += 1;
+        Ok(())
+    }
+    fn record(&mut self, line: usize) -> Result<(), Error> {
+        if self.records == self.record_limit {
+            return Err(malformed(
+                line,
+                "INPUT",
+                "records",
+                format!("source exceeds {} data records", self.record_limit),
+            ));
+        }
+        self.records += 1;
+        Ok(())
+    }
+    fn entity(&mut self, nodes: bool, label: u32, labels: &mut BTreeSet<u32>, line: usize) -> Result<(), Error> {
+        let key = if nodes { "NODE" } else { "ELEMENT" };
+        if labels.contains(&label) {
+            return Err(malformed(
+                line,
+                key,
+                "label",
+                format!("source label {label} is already defined in this block"),
+            ));
+        }
+        let count = if nodes { &mut self.nodes } else { &mut self.elements };
+        if *count == self.entity_limit {
+            return Err(malformed(
+                line,
+                key,
+                "count",
+                format!("source exceeds {} {}", self.entity_limit, if nodes { "nodes" } else { "elements" }),
+            ));
+        }
+        *count += 1;
+        labels.insert(label);
+        Ok(())
+    }
+}
+
+fn blocks(
+    text: &str,
+    source: Option<&str>,
+    budget: &mut CollectionBudget,
+    collect_data: bool,
+) -> Result<Vec<DeckBlock>, Error> {
+    let source = source.map(Arc::<str>::from);
     let mut reader = Records::new(text);
     let mut blocks: Vec<DeckBlock> = Vec::new();
+    let mut labels = BTreeSet::new();
+    let mut pending_element_fields = 0;
     while let Some(record) = reader.next()? {
         if record.text.trim_start().starts_with('*') {
+            budget.keyword(record.line)?;
+            labels.clear();
+            pending_element_fields = 0;
             let mut keyword = reader.keyword(record)?;
-            keyword.source = source.map(str::to_string);
+            keyword.source = source.clone();
             blocks.push(DeckBlock { keyword, records: Vec::new(), scope: DeckScope::Model });
         } else {
             let block = blocks
                 .last_mut()
                 .ok_or_else(|| malformed(record.line, "INPUT", "data", "data must follow a keyword"))?;
+            budget.record(record.line)?;
+            if !collect_data && block.keyword.name != "INCLUDE" {
+                continue;
+            }
+            let fields: Vec<String> = if block.keyword.name == "HEADING" {
+                vec![record.text.to_string()]
+            } else {
+                abaqus::split_fields(record.text, record.line, &block.keyword.name)?
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect()
+            };
+            if collect_data
+                && (block.keyword.name == "NODE" || (block.keyword.name == "ELEMENT" && pending_element_fields == 0))
+            {
+                let id = abaqus::label(&fields[0], record.line, &block.keyword.name, "label")?;
+                budget.entity(block.keyword.name == "NODE", id, &mut labels, record.line)?;
+            }
+            if collect_data && block.keyword.name == "ELEMENT" {
+                let arity = abaqus::element_kind(&block.keyword)?.geometry().n_nodes() + 1;
+                pending_element_fields += fields.len() - usize::from(fields.last().is_some_and(String::is_empty));
+                if pending_element_fields >= arity {
+                    pending_element_fields = 0;
+                }
+            }
             block.records.push(DeckRecord {
                 line: record.line,
-                fields: if block.keyword.name == "HEADING" {
-                    vec![record.text.to_string()]
-                } else {
-                    abaqus::split_fields(record.text, record.line, &block.keyword.name)?
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect()
-                },
+                fields,
                 raw: record.text.to_string(),
-                source: source.map(str::to_string),
+                source: source.clone(),
             });
         }
     }
@@ -123,12 +218,43 @@ fn local_mesh(blocks: &[DeckBlock], scale: f64) -> Result<Builder, Error> {
     for block in blocks.iter().filter(|b| mesh_keyword(&b.keyword.name)) {
         let mut active = mesh.start(block.keyword.clone()).map_err(|e| located(e, block.keyword.source.as_deref()))?;
         for record in &block.records {
-            mesh.record(&mut active, Record { line: record.line, text: &record.raw }, scale)
-                .map_err(|e| located(e, record.source.as_deref()))?;
+            mesh.record(
+                &mut active,
+                Record { line: record.line, text: &record.raw, source: record.source.as_ref() },
+                scale,
+            )
+            .map_err(|e| located(e, record.source.as_deref()))?;
         }
         active.finish().map_err(|e| located(e, block.keyword.source.as_deref()))?;
     }
     Ok(mesh)
+}
+
+#[derive(Clone, Copy, Default)]
+struct ExpansionCount {
+    nodes: usize,
+    elements: usize,
+    memberships: usize,
+}
+impl ExpansionCount {
+    const LIMIT: Self = Self { nodes: 250_000, elements: 250_000, memberships: 1_000_000 };
+}
+fn check_expansion(
+    current: ExpansionCount,
+    additional: ExpansionCount,
+    limit: ExpansionCount,
+    line: usize,
+) -> Result<(), Error> {
+    for (field, used, added, max) in [
+        ("nodes", current.nodes, additional.nodes, limit.nodes),
+        ("elements", current.elements, additional.elements, limit.elements),
+        ("memberships", current.memberships, additional.memberships, limit.memberships),
+    ] {
+        if added > max.saturating_sub(used) {
+            return Err(malformed(line, "INSTANCE", field, format!("expanded assembly exceeds {max} {field}")));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -214,7 +340,7 @@ pub(crate) fn normalize_mesh_sources(
     source_name: Option<&str>,
     source_files: &BTreeMap<String, String>,
 ) -> Result<NormalizedDeck, Error> {
-    normalize_deck(text, body, unit_length, digest, source_name, source_files)
+    normalize_deck(text, body, unit_length, digest, source_name, source_files, ExpansionCount::LIMIT)
 }
 
 fn normalize_deck(
@@ -224,6 +350,7 @@ fn normalize_deck(
     digest: &str,
     source_name: Option<&str>,
     source_files: &BTreeMap<String, String>,
+    expansion_limit: ExpansionCount,
 ) -> Result<NormalizedDeck, Error> {
     let scale = abaqus::check_input(text, body, unit_length, digest)?;
     let expanded = expand_sources(text, source_name, source_files)?;
@@ -375,10 +502,25 @@ fn normalize_deck(
     let mut node_identities = BTreeMap::new();
     let mut element_identities = BTreeMap::new();
     let mut regions = BTreeMap::new();
-    let mut instance_regions = BTreeMap::new();
-    let mut local_meshes = Vec::new();
+    let mut part_counts = BTreeMap::new();
+    for (name, blocks) in &parts {
+        let local = local_mesh(blocks, scale)?;
+        part_counts.insert(
+            name.clone(),
+            ExpansionCount { nodes: local.nodes.len(), elements: local.elements.len(), memberships: local.memberships },
+        );
+    }
+    let mut local_plans = Vec::new();
     if assembly.is_none() {
-        local_meshes.push((DeckScope::Model, None, local_mesh(&model_blocks, scale)?, Vec::new(), 1));
+        local_plans.push((
+            DeckScope::Model,
+            None,
+            model_blocks.as_slice(),
+            &[][..],
+            &[][..],
+            1,
+            ExpansionCount::default(),
+        ));
     } else {
         let presentation: Vec<_> = model_blocks
             .iter()
@@ -388,7 +530,7 @@ fn normalize_deck(
         let presentation = local_mesh(&presentation, scale)?;
         global.headings = presentation.headings;
         global.preprint = presentation.preprint;
-        for (index, (instance_name, instance)) in instances.iter().enumerate() {
+        for (instance_name, instance) in &instances {
             transform([0.0; 3], &instance.position, instance.line)?;
             let inherited = &parts[&instance.part];
             let part_has_mesh = inherited.iter().any(|b| matches!(b.keyword.name.as_str(), "NODE" | "ELEMENT"));
@@ -428,34 +570,45 @@ fn normalize_deck(
                     }
                 }
             }
-            let mut combined = inherited.clone();
-            combined.extend(instance.blocks.clone());
-            let region = format!("{body}_instance_{}", index + 1);
-            instance_regions.insert(instance_name.clone(), region.clone());
-            regions.insert(region, Vec::new());
-            local_meshes.push((
+            local_plans.push((
                 DeckScope::Instance(instance_name.clone()),
                 Some(instance.part.clone()),
-                local_mesh(&combined, scale)?,
-                instance.position.clone(),
+                inherited.as_slice(),
+                instance.blocks.as_slice(),
+                instance.position.as_slice(),
                 instance.line,
+                part_counts[&instance.part],
             ));
         }
     }
 
-    for (scope, source_part, local, position, line) in local_meshes {
+    for (ordinal, (scope, source_part, inherited, additions, position, line, minimum)) in
+        local_plans.into_iter().enumerate()
+    {
+        let current = ExpansionCount {
+            nodes: global.nodes.len(),
+            elements: global.elements.len(),
+            memberships: global.memberships,
+        };
+        check_expansion(current, minimum, expansion_limit, line)?;
+        // Only the current instance is parsed; previous instances have already been flattened.
+        let mut combined = inherited.to_vec();
+        combined.extend_from_slice(additions);
+        let local = local_mesh(&combined, scale)?;
+        check_expansion(
+            current,
+            ExpansionCount { nodes: local.nodes.len(), elements: local.elements.len(), memberships: local.memberships },
+            expansion_limit,
+            line,
+        )?;
         global.reserve_members(local.memberships, line, "INSTANCE")?;
+        let mut region_members = Vec::new();
         let instanced = matches!(scope, DeckScope::Instance(_));
         for (id, (mut node, source_line)) in local.nodes {
-            let mapped = if instanced {
-                u32::try_from(global.nodes.len() + 1)
-                    .map_err(|_| malformed(line, "NODE", "count", "node labels overflow"))?
-            } else {
-                id
-            };
+            let mapped = if instanced { global.nodes.len() as u32 + 1 } else { id };
             if instanced {
                 let point = node.at.clone().map(|v| v.si()).into_iter().collect::<Result<Vec<_>, _>>()?;
-                let point = transform([point[0] / scale, point[1] / scale, point[2] / scale], &position, line)?;
+                let point = transform([point[0] / scale, point[1] / scale, point[2] / scale], position, line)?;
                 node.at = point.map(|v| Q::new(v * scale, "m"));
                 let instance = match &scope {
                     DeckScope::Instance(name) => Some(name.clone()),
@@ -464,27 +617,25 @@ fn normalize_deck(
                 node_identities
                     .insert(mapped, ImportedEntityIdentity { source_label: id, instance, part: source_part.clone() });
             }
+            if let Some(source) = local.node_sources.get(&id) {
+                global.node_sources.insert(mapped, source.clone());
+            }
             node.label = mapped;
             node_ids.insert((scope.clone(), id), mapped);
-            if global.nodes.len() == 250_000 {
-                return Err(malformed(source_line, "NODE", "count", "expanded assembly exceeds 250000 nodes"));
-            }
             global.nodes.insert(mapped, (node, source_line));
         }
         for (id, (mut element, source_line)) in local.elements {
-            let mapped = if instanced {
-                u32::try_from(global.elements.len() + 1)
-                    .map_err(|_| malformed(line, "ELEMENT", "count", "element labels overflow"))?
-            } else {
-                id
-            };
+            let mapped = if instanced { global.elements.len() as u32 + 1 } else { id };
             for node in &mut element.nodes {
                 *node = *node_ids.get(&(scope.clone(), *node)).ok_or_else(|| {
-                    malformed(
-                        source_line,
-                        "ELEMENT",
-                        "connectivity",
-                        format!("source node {node} is not defined in this instance"),
+                    located(
+                        malformed(
+                            source_line,
+                            "ELEMENT",
+                            "connectivity",
+                            format!("source node {node} is not defined in this instance"),
+                        ),
+                        local.element_sources.get(&id).map(Arc::as_ref),
                     )
                 })?;
             }
@@ -497,13 +648,13 @@ fn normalize_deck(
                         part: source_part.clone(),
                     },
                 );
-                regions.get_mut(&instance_regions[instance]).expect("instance region exists").push(mapped);
+                region_members.push(mapped);
+            }
+            if let Some(source) = local.element_sources.get(&id) {
+                global.element_sources.insert(mapped, source.clone());
             }
             element.label = mapped;
             element_ids.insert((scope.clone(), id), mapped);
-            if global.elements.len() == 250_000 {
-                return Err(malformed(source_line, "ELEMENT", "count", "expanded assembly exceeds 250000 elements"));
-            }
             global.elements.insert(mapped, (element, source_line));
         }
         for (nodes, maps) in [(true, local.node_sets), (false, local.element_sets)] {
@@ -514,14 +665,31 @@ fn normalize_deck(
                     .members
                     .into_iter()
                     .map(|(id, source_line)| {
-                        ids.get(&(scope.clone(), id)).copied().map(|id| (id, source_line)).ok_or_else(|| {
-                            malformed(
-                                source_line,
-                                if nodes { "NSET" } else { "ELSET" },
-                                "member",
-                                "source label is not defined in this instance",
-                            )
-                        })
+                        let origin = local.set_sources.get(&(nodes, name.clone())).and_then(|m| m.get(&id));
+                        ids.get(&(scope.clone(), id))
+                            .copied()
+                            .map(|id| {
+                                if let Some(source) = origin {
+                                    global
+                                        .set_sources
+                                        .entry((nodes, mapped_name.clone()))
+                                        .or_default()
+                                        .entry(id)
+                                        .or_insert_with(|| source.clone());
+                                }
+                                (id, source_line)
+                            })
+                            .ok_or_else(|| {
+                                located(
+                                    malformed(
+                                        source_line,
+                                        if nodes { "NSET" } else { "ELSET" },
+                                        "member",
+                                        "source label is not defined in this instance",
+                                    ),
+                                    origin.map(Arc::as_ref),
+                                )
+                            })
                     })
                     .collect::<Result<BTreeMap<_, _>, _>>()?;
                 let (lookup, sets) = if nodes {
@@ -541,14 +709,35 @@ fn normalize_deck(
                     element_ids
                         .get(&(scope.clone(), face.element))
                         .copied()
-                        .map(|element| (ImportedFace { element, face: face.face }, line))
+                        .map(|element| {
+                            let mapped = ImportedFace { element, face: face.face };
+                            if let Some(source) = local.surface_sources.get(&name).and_then(|m| m.get(&face)) {
+                                global
+                                    .surface_sources
+                                    .entry(mapped_name.clone())
+                                    .or_default()
+                                    .insert(mapped, source.clone());
+                            }
+                            (mapped, line)
+                        })
                         .ok_or_else(|| {
-                            malformed(line, "SURFACE", "element", "surface element is not defined in this instance")
+                            located(
+                                malformed(
+                                    line,
+                                    "SURFACE",
+                                    "element",
+                                    "surface element is not defined in this instance",
+                                ),
+                                local.surface_sources.get(&name).and_then(|m| m.get(&face)).map(Arc::as_ref),
+                            )
                         })
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
             surfaces.insert((scope.clone(), name), mapped_name.clone());
             global.surfaces.insert(mapped_name, (source_line, faces));
+        }
+        if matches!(scope, DeckScope::Instance(_)) {
+            regions.insert(format!("{body}_instance_{}", ordinal + 1), region_members);
         }
         global.headings.extend(local.headings);
         global.preprint.extend(local.preprint);
@@ -624,211 +813,235 @@ fn add_assembly(
     for block in blocks.iter().filter(|b| mesh_keyword(&b.keyword.name)) {
         let key = &block.keyword.name;
         let line = block.keyword.line;
-        match key.as_str() {
-            "NODE" => {
-                let local = local_mesh(std::slice::from_ref(block), scale)?;
-                global.reserve_members(local.memberships, line, "NODE")?;
-                for (id, (mut node, source_line)) in local.nodes {
-                    if node_ids.contains_key(&(DeckScope::Assembly, id)) {
-                        return Err(malformed(source_line, "NODE", "label", "assembly node label is already defined"));
-                    }
-                    let mapped = global.nodes.last_key_value().map(|(id, _)| id + 1).unwrap_or(1);
-                    node.label = mapped;
-                    node_ids.insert((DeckScope::Assembly, id), mapped);
-                    if global.nodes.len() == 250_000 {
-                        return Err(malformed(source_line, "NODE", "count", "expanded assembly exceeds 250000 nodes"));
-                    }
-                    global.nodes.insert(mapped, (node, source_line));
-                }
-                for (name, set) in local.node_sets {
-                    let members: BTreeMap<u32, usize> = set
-                        .members
-                        .into_iter()
-                        .map(|(id, line)| (node_ids[&(DeckScope::Assembly, id)], line))
-                        .collect();
-                    node_sets.insert((DeckScope::Assembly, name.clone()), name.clone());
-                    global
-                        .node_sets
-                        .entry(name)
-                        .or_insert_with(|| NamedSet { members: BTreeMap::new() })
-                        .members
-                        .extend(members);
-                }
-            }
-            "NSET" | "ELSET" => {
-                let nodes = key == "NSET";
-                block.keyword.only(if nodes {
-                    &["NSET", "ELSET", "GENERATE", "INSTANCE", "INTERNAL", "UNSORTED"]
-                } else {
-                    &["ELSET", "GENERATE", "INSTANCE", "INTERNAL", "UNSORTED"]
-                })?;
-                let name = abaqus::name(block.keyword.required(key)?, line, key, key)?;
-                let instance =
-                    block.keyword.value("INSTANCE")?.map(|s| abaqus::name(s, line, key, "INSTANCE")).transpose()?;
-                let generate = block.keyword.flag("GENERATE")?;
-                let mut members = BTreeMap::new();
-                if let Some(from) = if nodes { block.keyword.value("ELSET")? } else { None } {
-                    if generate || !block.records.is_empty() {
-                        return Err(malformed(line, key, "ELSET", "NSET from ELSET accepts no data or GENERATE"));
-                    }
-                    let reference = assembly_reference(assembly, from, instance.as_deref(), line, key)?;
-                    let source = element_sets
-                        .get(&reference)
-                        .ok_or_else(|| malformed(line, key, "ELSET", "element set must already exist"))?;
-                    let declared =
-                        global.element_sets[source].members.keys().map(|id| global.elements[id].0.nodes.len()).sum();
-                    global.reserve_members(declared, line, key)?;
-                    for id in global.element_sets[source].members.keys() {
-                        for node in &global.elements[id].0.nodes {
-                            members.insert(*node, line);
+        let handled = (|| {
+            match key.as_str() {
+                "NODE" => {
+                    let local = local_mesh(std::slice::from_ref(block), scale)?;
+                    global.reserve_members(local.memberships, line, "NODE")?;
+                    for (id, (mut node, source_line)) in local.nodes {
+                        if node_ids.contains_key(&(DeckScope::Assembly, id)) {
+                            return Err(malformed(
+                                source_line,
+                                "NODE",
+                                "label",
+                                "assembly node label is already defined",
+                            ));
                         }
-                    }
-                } else {
-                    if block.records.is_empty() {
-                        return Err(malformed(line, key, "data", "set requires member records"));
-                    }
-                    for record in &block.records {
-                        let mut values = record.fields.clone();
-                        if values.last().is_some_and(String::is_empty) {
-                            values.pop();
+                        let mapped = global.nodes.last_key_value().map(|(id, _)| id + 1).unwrap_or(1);
+                        node.label = mapped;
+                        if let Some(source) = local.node_sources.get(&id) {
+                            global.node_sources.insert(mapped, source.clone());
                         }
-                        let refs = if generate {
-                            if !(2..=3).contains(&values.len()) {
-                                return Err(malformed(
-                                    record.line,
-                                    key,
-                                    "GENERATE",
-                                    "range needs first, last, and optional increment",
-                                ));
-                            }
-                            let first = abaqus::label(&values[0], record.line, key, "first")?;
-                            let last = abaqus::label(&values[1], record.line, key, "last")?;
-                            let increment = match values.get(2) {
-                                Some(v) if !v.is_empty() => abaqus::label(v, record.line, key, "increment")?,
-                                _ => 1,
-                            };
-                            if last < first || (last - first) % increment != 0 {
-                                return Err(malformed(
-                                    record.line,
-                                    key,
-                                    "GENERATE",
-                                    "range must increase by a positive integer increment",
-                                ));
-                            }
-                            let count = ((last - first) / increment + 1) as usize;
-                            if count > 1_000_000 {
-                                return Err(malformed(
-                                    record.line,
-                                    key,
-                                    "memberships",
-                                    "expanded set exceeds 1000000 memberships",
-                                ));
-                            }
-                            (0..count).map(|i| (first + i as u32 * increment).to_string()).collect::<Vec<_>>()
-                        } else {
-                            values
-                        };
-                        for value in refs {
-                            let reference =
-                                assembly_reference(assembly, &value, instance.as_deref(), record.line, key)?;
-                            let ids = if nodes { &*node_ids } else { &*element_ids };
-                            if numeric_reference(&value) {
-                                let id = abaqus::label(&reference.1, record.line, key, "member")?;
-                                let mapped = ids.get(&(reference.0, id)).ok_or_else(|| {
-                                    malformed(record.line, key, "member", format!("source {value} does not exist"))
-                                })?;
-                                global.reserve_members(1, record.line, key)?;
-                                members.insert(*mapped, record.line);
-                            } else {
-                                let (lookup, sets) = if nodes {
-                                    (&*node_sets, &global.node_sets)
-                                } else {
-                                    (&*element_sets, &global.element_sets)
-                                };
-                                let source = lookup.get(&reference).ok_or_else(|| {
-                                    malformed(
-                                        record.line,
-                                        key,
-                                        "referenced set",
-                                        format!("set {value} must already exist"),
-                                    )
-                                })?;
-                                let captured = sets[source].members.keys().copied().collect::<Vec<_>>();
-                                global.reserve_members(captured.len(), record.line, key)?;
-                                members.extend(captured.into_iter().map(|id| (id, record.line)));
-                            }
-                            if members.len() > 1_000_000 {
-                                return Err(malformed(
-                                    record.line,
-                                    key,
-                                    "memberships",
-                                    "expanded set exceeds 1000000 memberships",
-                                ));
-                            }
+                        node_ids.insert((DeckScope::Assembly, id), mapped);
+                        if global.nodes.len() == 250_000 {
+                            return Err(malformed(
+                                source_line,
+                                "NODE",
+                                "count",
+                                "expanded assembly exceeds 250000 nodes",
+                            ));
                         }
+                        global.nodes.insert(mapped, (node, source_line));
+                    }
+                    for (name, set) in local.node_sets {
+                        let members: BTreeMap<u32, usize> = set
+                            .members
+                            .into_iter()
+                            .map(|(id, line)| (node_ids[&(DeckScope::Assembly, id)], line))
+                            .collect();
+                        node_sets.insert((DeckScope::Assembly, name.clone()), name.clone());
+                        global
+                            .node_sets
+                            .entry(name)
+                            .or_insert_with(|| NamedSet { members: BTreeMap::new() })
+                            .members
+                            .extend(members);
                     }
                 }
-                let (lookup, sets) = if nodes {
-                    (&mut *node_sets, &mut global.node_sets)
-                } else {
-                    (&mut *element_sets, &mut global.element_sets)
-                };
-                lookup.insert((DeckScope::Assembly, name.clone()), name.clone());
-                sets.entry(name).or_insert_with(|| NamedSet { members: BTreeMap::new() }).members.extend(members);
-            }
-            "SURFACE" => {
-                block.keyword.only(&["NAME", "TYPE", "INTERNAL"])?;
-                if block.keyword.value("TYPE")?.is_some_and(|s| s != "ELEMENT") {
-                    return Err(unsupported(line, key, "TYPE", "only element surfaces are supported"));
-                }
-                let name = abaqus::name(block.keyword.required("NAME")?, line, key, "NAME")?;
-                if global.surfaces.contains_key(&name) {
-                    return Err(malformed(line, key, "NAME", "surface is already defined in this scope"));
-                }
-                let mut members = BTreeMap::new();
-                for record in &block.records {
-                    if record.fields.len() != 2 {
-                        return Err(malformed(
-                            record.line,
-                            key,
-                            "data",
-                            "element surface requires element target and S1..S6 face",
-                        ));
-                    }
-                    let face = record.fields[1]
-                        .strip_prefix('S')
-                        .or_else(|| record.fields[1].strip_prefix('s'))
-                        .and_then(|s| s.parse::<u8>().ok())
-                        .filter(|v| (1..=6).contains(v))
-                        .ok_or_else(|| malformed(record.line, key, "face", "face must be S1..S6"))?;
-                    let reference = assembly_reference(assembly, &record.fields[0], None, record.line, key)?;
-                    let elements = if numeric_reference(&record.fields[0]) {
-                        let id = abaqus::label(&reference.1, record.line, key, "element")?;
-                        vec![*element_ids
-                            .get(&(reference.0, id))
-                            .ok_or_else(|| malformed(record.line, key, "element", "element does not exist"))?]
+                "NSET" | "ELSET" => {
+                    let nodes = key == "NSET";
+                    block.keyword.only(if nodes {
+                        &["NSET", "ELSET", "GENERATE", "INSTANCE", "INTERNAL", "UNSORTED"]
                     } else {
+                        &["ELSET", "GENERATE", "INSTANCE", "INTERNAL", "UNSORTED"]
+                    })?;
+                    let name = abaqus::name(block.keyword.required(key)?, line, key, key)?;
+                    let instance =
+                        block.keyword.value("INSTANCE")?.map(|s| abaqus::name(s, line, key, "INSTANCE")).transpose()?;
+                    let generate = block.keyword.flag("GENERATE")?;
+                    let mut members = BTreeMap::new();
+                    if let Some(from) = if nodes { block.keyword.value("ELSET")? } else { None } {
+                        if generate || !block.records.is_empty() {
+                            return Err(malformed(line, key, "ELSET", "NSET from ELSET accepts no data or GENERATE"));
+                        }
+                        let reference = assembly_reference(assembly, from, instance.as_deref(), line, key)?;
                         let source = element_sets
                             .get(&reference)
-                            .ok_or_else(|| malformed(record.line, key, "ELSET", "element set does not exist"))?;
-                        global.element_sets[source].members.keys().copied().collect()
-                    };
-                    global.reserve_members(elements.len(), record.line, key)?;
-                    for element in elements {
-                        members.insert(ImportedFace { element, face }, record.line);
+                            .ok_or_else(|| malformed(line, key, "ELSET", "element set must already exist"))?;
+                        let declared = global.element_sets[source]
+                            .members
+                            .keys()
+                            .map(|id| global.elements[id].0.nodes.len())
+                            .sum();
+                        global.reserve_members(declared, line, key)?;
+                        for id in global.element_sets[source].members.keys() {
+                            for node in &global.elements[id].0.nodes {
+                                members.insert(*node, line);
+                            }
+                        }
+                    } else {
+                        if block.records.is_empty() {
+                            return Err(malformed(line, key, "data", "set requires member records"));
+                        }
+                        for record in &block.records {
+                            let mut values = record.fields.clone();
+                            if values.last().is_some_and(String::is_empty) {
+                                values.pop();
+                            }
+                            let refs = if generate {
+                                if !(2..=3).contains(&values.len()) {
+                                    return Err(malformed(
+                                        record.line,
+                                        key,
+                                        "GENERATE",
+                                        "range needs first, last, and optional increment",
+                                    ));
+                                }
+                                let first = abaqus::label(&values[0], record.line, key, "first")?;
+                                let last = abaqus::label(&values[1], record.line, key, "last")?;
+                                let increment = match values.get(2) {
+                                    Some(v) if !v.is_empty() => abaqus::label(v, record.line, key, "increment")?,
+                                    _ => 1,
+                                };
+                                if last < first || (last - first) % increment != 0 {
+                                    return Err(malformed(
+                                        record.line,
+                                        key,
+                                        "GENERATE",
+                                        "range must increase by a positive integer increment",
+                                    ));
+                                }
+                                let count = ((last - first) / increment + 1) as usize;
+                                if count > 1_000_000 {
+                                    return Err(malformed(
+                                        record.line,
+                                        key,
+                                        "memberships",
+                                        "expanded set exceeds 1000000 memberships",
+                                    ));
+                                }
+                                (0..count).map(|i| (first + i as u32 * increment).to_string()).collect::<Vec<_>>()
+                            } else {
+                                values
+                            };
+                            for value in refs {
+                                let reference =
+                                    assembly_reference(assembly, &value, instance.as_deref(), record.line, key)?;
+                                let ids = if nodes { &*node_ids } else { &*element_ids };
+                                if numeric_reference(&value) {
+                                    let id = abaqus::label(&reference.1, record.line, key, "member")?;
+                                    let mapped = ids.get(&(reference.0, id)).ok_or_else(|| {
+                                        malformed(record.line, key, "member", format!("source {value} does not exist"))
+                                    })?;
+                                    global.reserve_members(1, record.line, key)?;
+                                    members.insert(*mapped, record.line);
+                                } else {
+                                    let (lookup, sets) = if nodes {
+                                        (&*node_sets, &global.node_sets)
+                                    } else {
+                                        (&*element_sets, &global.element_sets)
+                                    };
+                                    let source = lookup.get(&reference).ok_or_else(|| {
+                                        malformed(
+                                            record.line,
+                                            key,
+                                            "referenced set",
+                                            format!("set {value} must already exist"),
+                                        )
+                                    })?;
+                                    let captured = sets[source].members.keys().copied().collect::<Vec<_>>();
+                                    global.reserve_members(captured.len(), record.line, key)?;
+                                    members.extend(captured.into_iter().map(|id| (id, record.line)));
+                                }
+                                if members.len() > 1_000_000 {
+                                    return Err(malformed(
+                                        record.line,
+                                        key,
+                                        "memberships",
+                                        "expanded set exceeds 1000000 memberships",
+                                    ));
+                                }
+                            }
+                        }
                     }
+                    let (lookup, sets) = if nodes {
+                        (&mut *node_sets, &mut global.node_sets)
+                    } else {
+                        (&mut *element_sets, &mut global.element_sets)
+                    };
+                    lookup.insert((DeckScope::Assembly, name.clone()), name.clone());
+                    sets.entry(name).or_insert_with(|| NamedSet { members: BTreeMap::new() }).members.extend(members);
                 }
-                if members.is_empty() {
-                    return Err(malformed(line, key, "data", "surface requires at least one face"));
+                "SURFACE" => {
+                    block.keyword.only(&["NAME", "TYPE", "INTERNAL"])?;
+                    if block.keyword.value("TYPE")?.is_some_and(|s| s != "ELEMENT") {
+                        return Err(unsupported(line, key, "TYPE", "only element surfaces are supported"));
+                    }
+                    let name = abaqus::name(block.keyword.required("NAME")?, line, key, "NAME")?;
+                    if global.surfaces.contains_key(&name) {
+                        return Err(malformed(line, key, "NAME", "surface is already defined in this scope"));
+                    }
+                    let mut members = BTreeMap::new();
+                    for record in &block.records {
+                        if record.fields.len() != 2 {
+                            return Err(malformed(
+                                record.line,
+                                key,
+                                "data",
+                                "element surface requires element target and S1..S6 face",
+                            ));
+                        }
+                        let face = record.fields[1]
+                            .strip_prefix('S')
+                            .or_else(|| record.fields[1].strip_prefix('s'))
+                            .and_then(|s| s.parse::<u8>().ok())
+                            .filter(|v| (1..=6).contains(v))
+                            .ok_or_else(|| malformed(record.line, key, "face", "face must be S1..S6"))?;
+                        let reference = assembly_reference(assembly, &record.fields[0], None, record.line, key)?;
+                        let elements = if numeric_reference(&record.fields[0]) {
+                            let id = abaqus::label(&reference.1, record.line, key, "element")?;
+                            vec![*element_ids
+                                .get(&(reference.0, id))
+                                .ok_or_else(|| malformed(record.line, key, "element", "element does not exist"))?]
+                        } else {
+                            let source = element_sets
+                                .get(&reference)
+                                .ok_or_else(|| malformed(record.line, key, "ELSET", "element set does not exist"))?;
+                            global.element_sets[source].members.keys().copied().collect()
+                        };
+                        global.reserve_members(elements.len(), record.line, key)?;
+                        for element in elements {
+                            let face = ImportedFace { element, face };
+                            if let Some(source) = record.source.as_ref() {
+                                global.surface_sources.entry(name.clone()).or_default().insert(face, source.clone());
+                            }
+                            members.insert(face, record.line);
+                        }
+                    }
+                    if members.is_empty() {
+                        return Err(malformed(line, key, "data", "surface requires at least one face"));
+                    }
+                    surfaces.insert((DeckScope::Assembly, name.clone()), name.clone());
+                    global.surfaces.insert(name, (line, members));
                 }
-                surfaces.insert((DeckScope::Assembly, name.clone()), name.clone());
-                global.surfaces.insert(name, (line, members));
+                _ => return Err(unsupported(line, key, "scope", "this mesh keyword is not valid at assembly level")),
             }
-            _ => return Err(unsupported(line, key, "scope", "this mesh keyword is not valid at assembly level")),
-        }
-        if global.nodes.len() > 250_000 || global.elements.len() > 250_000 {
-            return Err(malformed(line, key, "count", "expanded assembly exceeds 250000 nodes/elements"));
-        }
+            if global.nodes.len() > 250_000 || global.elements.len() > 250_000 {
+                return Err(malformed(line, key, "count", "expanded assembly exceeds 250000 nodes/elements"));
+            }
+            Ok(())
+        })();
+        handled.map_err(|e| located(e, block.keyword.source.as_deref()))?;
     }
     Ok(())
 }
@@ -850,12 +1063,7 @@ fn source_path(path: &str) -> Result<(), Error> {
 }
 
 fn located(error: Error, source: Option<&str>) -> Error {
-    if let Some(source) = source {
-        let at = error.where_.as_deref().unwrap_or("input").to_string();
-        error.at(format!("{source}: {at}"))
-    } else {
-        error
-    }
+    abaqus::with_source(error, source)
 }
 
 fn expand_sources(
@@ -866,7 +1074,8 @@ fn expand_sources(
     validate_sources(text, source_name, sources)?;
     let mut stack = vec![source_name.unwrap_or("").to_string()];
     let mut expanded_bytes = 0;
-    expand_one(text, source_name, sources, &mut stack, &mut expanded_bytes)
+    let mut budget = CollectionBudget::default();
+    expand_one(text, source_name, sources, &mut stack, &mut expanded_bytes, &mut budget)
 }
 
 fn expand_one(
@@ -875,13 +1084,14 @@ fn expand_one(
     sources: &BTreeMap<String, String>,
     stack: &mut Vec<String>,
     expanded_bytes: &mut usize,
+    budget: &mut CollectionBudget,
 ) -> Result<Vec<DeckBlock>, Error> {
     *expanded_bytes = expanded_bytes.saturating_add(text.len());
     if *expanded_bytes > abaqus::MAX_INPUT_BYTES {
         return Err(located(Error::schema("expanded includes exceed the 16 MiB input bound").at("INCLUDE"), source));
     }
     let mut expanded = Vec::new();
-    for block in blocks(text, source).map_err(|e| located(e, source))? {
+    for block in blocks(text, source, budget, true).map_err(|e| located(e, source))? {
         if block.keyword.name != "INCLUDE" {
             expanded.push(block);
             continue;
@@ -906,7 +1116,7 @@ fn expand_one(
             )
         })?;
         stack.push(path.to_string());
-        let records = expand_one(included, Some(&path), sources, stack, expanded_bytes)?;
+        let records = expand_one(included, Some(&path), sources, stack, expanded_bytes, budget)?;
         stack.pop();
         expanded.extend(records);
     }
@@ -924,7 +1134,8 @@ pub(crate) fn source_dependencies(
     let mut missing = std::collections::BTreeSet::new();
     let mut stack = vec![source_name.unwrap_or("").to_string()];
     let mut bytes = 0;
-    dependencies_one(text, source_name, sources, &mut stack, &mut bytes, &mut missing)?;
+    let mut budget = CollectionBudget::default();
+    dependencies_one(text, source_name, sources, &mut stack, &mut bytes, &mut missing, &mut budget)?;
     Ok(missing.into_iter().collect())
 }
 
@@ -935,12 +1146,13 @@ fn dependencies_one(
     stack: &mut Vec<String>,
     bytes: &mut usize,
     missing: &mut std::collections::BTreeSet<String>,
+    budget: &mut CollectionBudget,
 ) -> Result<(), Error> {
     *bytes = bytes.saturating_add(text.len());
     if *bytes > abaqus::MAX_INPUT_BYTES {
         return Err(located(Error::schema("expanded includes exceed the 16 MiB input bound").at("INCLUDE"), source));
     }
-    for block in blocks(text, source).map_err(|e| located(e, source))? {
+    for block in blocks(text, source, budget, false).map_err(|e| located(e, source))? {
         if block.keyword.name != "INCLUDE" {
             continue;
         }
@@ -959,7 +1171,7 @@ fn dependencies_one(
         }
         if let Some(included) = sources.get(&path) {
             stack.push(path.clone());
-            dependencies_one(included, Some(&path), sources, stack, bytes, missing)?;
+            dependencies_one(included, Some(&path), sources, stack, bytes, missing, budget)?;
             stack.pop();
         } else {
             missing.insert(path);
@@ -1128,5 +1340,53 @@ mod tests {
         let sources = BTreeMap::from([("a.inp".into(), payload)]);
         let root = "*INCLUDE, INPUT=a.inp\n".repeat(20);
         assert!(source_dependencies(&root, None, &sources).unwrap_err().cause.contains("expanded"));
+    }
+    #[test]
+    fn expansion_is_reserved_before_a_later_instance_is_parsed_or_copied() {
+        let text = include_str!("../../tests/fixtures/abaqus/assembly-two-instances.inp");
+        let poisoned = text.replace("*NSET, NSET=TIP\n40\n", "*NSET,NSET=TIP\nUNDEFINED\n");
+        let digest = crate::hash::sha256_hex(poisoned.as_bytes());
+        let error = normalize_deck(
+            &poisoned,
+            "mesh",
+            &Q::text("1 m"),
+            &digest,
+            None,
+            &BTreeMap::new(),
+            ExpansionCount { nodes: 7, elements: 2, memberships: 100 },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.cause, "expanded assembly exceeds 7 nodes");
+        let current = ExpansionCount { nodes: 4, elements: 1, memberships: 4 };
+        for additional in [
+            ExpansionCount { nodes: 4, elements: 0, memberships: 0 },
+            ExpansionCount { nodes: 0, elements: 2, memberships: 0 },
+            ExpansionCount { nodes: 0, elements: 0, memberships: 5 },
+        ] {
+            assert!(check_expansion(current, additional, ExpansionCount { nodes: 7, elements: 2, memberships: 8 }, 1)
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn typed_record_admission_stops_before_copying_oversized_or_duplicate_tails() {
+        let mut budget = CollectionBudget { record_limit: 2, entity_limit: 2, ..CollectionBudget::default() };
+        let error = blocks("*NODE\n1,0\n1,0\n∞\n", None, &mut budget, true).unwrap_err();
+        assert!(error.cause.contains("already defined"));
+        assert_eq!(budget.records, 2);
+        assert_eq!(budget.nodes, 1);
+        let mut budget = CollectionBudget { record_limit: 2, entity_limit: 2, ..CollectionBudget::default() };
+        assert!(blocks("*NODE\n1,0\n2,0\n3,0\n", None, &mut budget, true).unwrap_err().cause.contains("data records"));
+        assert_eq!(budget.records, 2);
+        let mut budget = CollectionBudget { record_limit: 10, entity_limit: 2, ..CollectionBudget::default() };
+        assert!(blocks("*NODE\n1,0\n2,0\n3,0\n", None, &mut budget, true).unwrap_err().cause.contains("2 nodes"));
+        let mut budget = CollectionBudget { record_limit: 10, entity_limit: 2, ..CollectionBudget::default() };
+        assert!(blocks("*HEADING\n*PREPRINT\n*NODE\n", None, &mut budget, true)
+            .unwrap_err()
+            .cause
+            .contains("keyword records"));
+        let query = "*ELEMENT,TYPE=UNSUPPORTED\nnot connectivity\n*INCLUDE,INPUT=nodes.inc\n";
+        assert_eq!(source_dependencies(query, None, &BTreeMap::new()).unwrap(), ["nodes.inc"]);
     }
 }
