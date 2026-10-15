@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { FileDelivery } from '@femlab/registry';
 import { expect, test } from './fixtures';
 
 test.use({ trace: 'on' });
+test.describe.configure({ retries: 0, timeout: 30_000 });
 
 test('@cpu Assistant file cards use actual deliveries and exclude a cancelled recording', async ({ page }, testInfo) => {
   const expectedWasm = createHash('sha256').update(await readFile(new URL('../src/generated/wasm/femlab_engine_wasm_bg.wasm', import.meta.url))).digest('hex');
@@ -62,6 +64,11 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
   expect(JSON.parse(firstBytes.toString()).journal.entries).toEqual(before.journal.entries);
   await expect(drawer.locator('.thinking')).toHaveCount(0);
   await expect.soft(drawer.locator('.files-row .path')).toHaveText(['assistant-files.femlab.json']);
+  const delivery = FileDelivery.parse(JSON.parse((await drawer.getByLabel('Tool result', { exact: true }).first().textContent())!));
+  expect(delivery.bytes).toBe(firstBytes.length);
+  expect(delivery.mime).toBe('application/json');
+  expect(delivery.id).toBeTruthy();
+  await expect(drawer.locator('.files-row .file-size').first()).toHaveText(`${firstBytes.length} B`);
   await drawer.locator('.files-row [data-cmd="clipboard.copy"]').first().click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('assistant-files.femlab.json');
   await testInfo.attach('default-save-receipt.png', { body: await page.screenshot(), contentType: 'image/png' });
@@ -101,6 +108,35 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
     { name: 'assistant-files.femlab.json', destination: 'download', command: 'clipboard.copy' },
     { name: 'script-output.femlab.json', destination: 'download', command: 'clipboard.copy' },
   ]);
-  await testInfo.attach('file-delivery-receipts.json', { body: JSON.stringify({ expectedWasm, runtime, shownFiles, defaultFilename: first.suggestedFilename(), scriptFilename: script.suggestedFilename(), bytes: firstBytes.length, sha256: createHash('sha256').update(firstBytes).digest('hex'), cancelledDownloads: downloads, before }, null, 2), contentType: 'application/json' });
   await testInfo.attach('completed-and-cancelled-files.png', { body: await page.screenshot(), contentType: 'image/png' });
+
+  // A repeat is the earlier immutable payload, even after its source Model changes.
+  const available = await page.evaluate(id => window.fem.registry.query({ query: 'query.fileDelivery', id }), delivery.id);
+  expect(available).toEqual({ file: { id: delivery.id, name: delivery.name, bytes: firstBytes.length, mime: 'application/json' } });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'model.setName', name: 'Model edited after the original download' }));
+  const edited = await page.evaluate(() => window.fem.query.journal());
+  const repeating = page.waitForEvent('download');
+  const again = drawer.locator('.files-row [data-cmd="file.download"]').first();
+  await expect(again).toBeEnabled();
+  await again.click();
+  const repeated = await repeating;
+  expect(repeated.suggestedFilename()).toBe(first.suggestedFilename());
+  const repeatedBytes = await readFile((await repeated.path())!);
+  expect(repeatedBytes).toEqual(firstBytes);
+  expect(await page.evaluate(() => window.fem.query.journal())).toEqual(edited);
+  expect((await page.evaluate(() => window.fem.query.model())).name).toBe('Model edited after the original download');
+  await testInfo.attach('original-after-model-edit.femlab.json', { body: repeatedBytes, contentType: 'application/json' });
+  await testInfo.attach('original-bytes-download-again.png', { body: await page.screenshot(), contentType: 'image/png' });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'Different document' }));
+  expect(await page.evaluate(id => window.fem.registry.query({ query: 'query.fileDelivery', id }), delivery.id)).toEqual({ file: null });
+  await expect(drawer.locator('.files-row')).toHaveCount(2);
+  for (const button of await drawer.locator('.files-row [data-cmd="file.download"]').all()) await expect(button).toBeDisabled();
+  await expect(drawer.locator('.file-unavailable').first()).toContainText('expired or is not retained');
+  const refused = await page.evaluate(async id => {
+    try { await window.fem.dispatch({ cmd: 'file.download', id }); return 'incorrectly delivered'; }
+    catch (error) { return String((error as { code?: string }).code); }
+  }, delivery.id);
+  expect(refused).toBe('file.not-found');
+  await testInfo.attach('expired-file-download.png', { body: await page.screenshot(), contentType: 'image/png' });
+  await testInfo.attach('file-delivery-receipts.json', { body: JSON.stringify({ expectedWasm, runtime, shownFiles, delivery, available, defaultFilename: first.suggestedFilename(), scriptFilename: script.suggestedFilename(), bytes: firstBytes.length, sha256: createHash('sha256').update(firstBytes).digest('hex'), repeatSha256: createHash('sha256').update(repeatedBytes).digest('hex'), refused, cancelledDownloads: downloads, before, edited }, null, 2), contentType: 'application/json' });
 });

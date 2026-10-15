@@ -6,6 +6,9 @@ import type { Progress } from '@femlab/registry';
 import type { Viewer, CameraState } from '../src/viewer/viewer';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import { SessionRuntime } from '../src/session-runtime';
+import { FileDelivery, FileArtifactMetadata } from '@femlab/registry';
+import { fakeDir } from './project-fake';
+import { IDBFactory } from 'fake-indexeddb';
 
 const mounted = vi.hoisted(() => ({ props: null as ComponentProps<typeof App> | null, makeViewer: null as ((props: ComponentProps<typeof App>) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
 vi.mock('preact', async original => ({ ...await original<typeof import('preact')>(), render: (node: VNode<ComponentProps<typeof App>>) => {
@@ -127,4 +130,43 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await window.fem.dispatch({ cmd: 'model.setName', name: 'deleted stays deleted' });
   expect(await window.fem.dispatch({ cmd: 'project.save' })).toBeNull();
   expect(mounted.props!.store.state.projects).toEqual([]);
+  // Actual host ownership follows this document through Worker recovery, but expires when
+  // the person changes document/folder/conversation. The download boundary is injected here;
+  // actual browser delivery is a separate scheduled acceptance case.
+  const payloads: Blob[] = [];
+  vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { if (blob instanceof Blob) payloads.push(blob); return 'blob:unit-completed-file'; });
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+  await window.fem.dispatch({ cmd: 'project.new', name: 'file-history' });
+  const file = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save', to: 'download' }));
+  expect(file.id).toBeTruthy();
+  const originalBytes = await payloads.at(-1)!.text();
+  expect(file.bytes).toBe(new TextEncoder().encode(originalBytes).byteLength);
+  await window.fem.dispatch({ cmd: 'model.setName', name: 'changed after delivery' });
+  await window.fem.dispatch({ cmd: 'solve.cancel' });
+  const meta = await window.fem.registry.query({ query: 'query.fileDelivery', id: file.id });
+  expect(meta).toEqual({ file: FileArtifactMetadata.parse(file) });
+  const repeated = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.download', id: file.id }));
+  expect(repeated.id).toBe(file.id);
+  expect(await payloads.at(-1)!.text()).toBe(originalBytes);
+  expect((await window.fem.query.model()).name).toBe('changed after delivery');
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  await window.fem.dispatch({ cmd: 'folder.open', handle: fakeDir({}, 'other') });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: file.id })).toEqual({ file: null });
+  const beforeFileVersion = mounted.props!.store.state.completedFilesVersion;
+  const inFolder = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save' }));
+  expect(mounted.props!.store.state.completedFilesVersion).toBeGreaterThan(beforeFileVersion);
+  expect(inFolder.to).toBe('folder');
+  await window.fem.dispatch({ cmd: 'folder.close' });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: inFolder.id })).toEqual({ file: null });
+  const beforeClear = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save' }));
+  await window.fem.dispatch({ cmd: 'chat.clear' });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: beforeClear.id })).toEqual({ file: null });
+  const beforeNew = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save' }));
+  await window.fem.dispatch({ cmd: 'project.new', name: 'other-document' });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: beforeNew.id })).toEqual({ file: null });
+  await expect(window.fem.dispatch({ cmd: 'geometry.remove', name: 'missing' })).rejects.toMatchObject({ code: 'not-found' });
+  const engineeringError = mounted.props!.store.state.lastError;
+  await expect(window.fem.dispatch({ cmd: 'file.download', id: beforeNew.id })).rejects.toMatchObject({ code: 'file.not-found' });
+  expect(mounted.props!.store.state.lastError).toBe(engineeringError);
 }, 30000);
