@@ -62,12 +62,23 @@ metadata before later failure and isolate later runs. Real checked-owner host te
 Model edits, Worker recovery, folder/conversation/document replacement and engineering-error
 preservation; UI tests fence obsolete metadata replies and late eviction.
 
-The first coherent host step passes registry **200/200 at 100% coverage**, the full app
-suite **1,456 tests with five existing skips** with all 97 authored modules included and
-coverage above every threshold, workspace types and codegen freshness. The complete MCP
-coverage suite and actual browser acceptance remain pending at this source checkpoint.
+The coherent host implementation passes registry **200/200 at 100% coverage**, MCP
+**86/86 at 100% coverage**, and the full app suite **1,456 tests with five existing skips**.
+All 97 authored app modules are included and coverage passes every threshold. Workspace types,
+codegen freshness, the development-AI production build, secret scan and size budgets pass.
 
-One bounded production Chromium journey will compare original and repeated actual downloads
-after a real Model edit, inspect size/action/expiry states, and retain payload, clipboard,
-Journal and served-WASM receipts. It uses one authenticated whole binding pair and a
-controlled provider; no numerical or privacy completeness claim comes from source tests alone.
+The upgraded existing production Chromium journey passes **1/1 in 4,205 ms, zero retries**.
+Actual default save, script output completed before a later script failure, and repeat download
+after a real Model edit are identical **4,044-byte** payloads. Repeat delivery leaves the edited
+Model and Journal unchanged. Explicit project replacement disables the retained action and
+returns `file.not-found`; cancelled WebM produces no file. The test retains real downloaded
+files, clipboard, Journal, trace and screenshots; the size, repeat and expiry states were
+visually inspected. A controlled provider makes no paid API requests.
+
+This local proof is scoped to host source `79665812` before its final main integration, using
+the accepted complete browser/Node binding pair (`b6d29d12…2488`, schema `c79967c2…61bf0e`).
+All three actual trace WASM resources match that binary; all 1,084 tracked source-file hashes
+and all eight binding hashes are unchanged across build and browser execution. Automatic CI
+must validate the final composed source before delivery. The broader #90 visual and keyboard
+acceptance remains outstanding. These checks do not claim a total-heap bound, general privacy
+certification or completion of the user's eventual operating-system browser-download write.
