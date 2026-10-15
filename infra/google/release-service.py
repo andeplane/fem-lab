@@ -42,7 +42,8 @@ origins=f'https://{project}.web.app,https://{project}.firebaseapp.com'
 if a.environment=='production':origins+=',https://femlab.app,https://www.femlab.app'
 api_env='^|^'+common+f'|PGUSER=femlab_api|APP_ORIGINS={origins}'
 print(project+': releasing API '+manifest['revision'],flush=True)
-free_secret=f'FREE_ELIGIBILITY_HMAC_KEY=free-eligibility-hmac-key:{version("free-eligibility-hmac-key")}'
+# Identity fingerprints must not change when another secret version is added.
+free_secret='FREE_ELIGIBILITY_HMAC_KEY=free-eligibility-hmac-key:1'
 api_secrets=f'PGPASSWORD=database-api-password:{version("database-api-password")},OPENAI_API_KEY=openai-api-key:{version("openai-api-key")},{free_secret}{stripe_secrets}'
 # A billing activation or secret rotation can release the same image again under a new immutable revision.
 config_hash=hashlib.sha256((api_env+'|'+api_secrets).encode()).hexdigest()[:8]
