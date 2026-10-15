@@ -2450,3 +2450,151 @@ rejects without replacing the previous static Result or its catalogue.
 Buckling skips this static-only recovery in the shared postprocessor and retains
 its existing preload/force/buckling-factor contract. Legacy formatting behavior
 outside the new ledger is tracked separately by #580.
+
+
+### Checked display conversion (#580, inseparable unit grouping #582)
+
+The public Model/report regression authors a finite `1e308 Pa` modulus, then selects `mPa`.
+The mathematically required display magnitude is `1e311`, beyond f64: both reads reject
+with `unit.display` instead of relabelling the SI value, preserving Model, Journal, hash and
+revision. Returning to Pa reports the original `1e308 Pa` value. Unit-level force/moment
+and area/volume checks cover the same finite-SI/output-overflow boundary.
+
+The actual `units::format` output at seventeen significant digits is parsed back through
+Quantity conversion in the property test; it is not checked against a second formatter.
+Ordinary conversion tolerance is `1e-12 * abs(SI value)` for a representable generated
+domain: source magnitudes from `1e-6` to `1e6` with both signs and twenty-four unit symbols.
+Zero has an explicit exact round-trip check; an absolute floor cannot certify a lost tiny value. Offset temperature conversion retains the independent 20 °C = 293.15 K
+oracle. Finite numeric conversion overflow is rejected; the separate nonzero-underflow
+policy remains tracked by #583.
+
+A public unit cube with valid composite Length `m*s/s` must report volume `1 (m*s/s)*(m*s/s)*(m*s/s)`
+and face area `1 (m*s/s)*(m*s/s)`; both labels independently parse to the correct physical
+dimension. Grouping whole operands is required before repeated multiplication or torque
+multiplication, so checked conversion does not newly reject a valid selected unit.
+
+
+For torque operands, independently valid composite force `N*Gm^30/m^30` has factor
+`1e270`; composite length `Gm^5/nm^5*nm^35/m^34` has factor `1e-225`. Their product
+factor is `1e45`, so `1 N m` must display approximately `1e-45` in the grouped unit.
+Unparenthesized concatenation overflows an intermediate multiplication before cancellation.
+The relative tolerance `1e-8` admits the factor's unavoidable subnormal decimal rounding
+from `nm^35`; parsing back must recover `1 N m` to `1e-14`.
+
+Public coordinate cases independently place each lower/upper bound and each point-vector
+component on a known metre coordinate. A selected length factor `1e-315` cannot display
+that metre as a finite f64; every component must reject, preserving the actual native
+file, Journal, hash, revision and Result catalogue. The same checked array loop handles
+vectors and bounds, with no unchecked component or partial array publication.
+
+Six orthotropic moduli, density, yield and point mass are tested independently with finite
+authored SI values and mathematically overflowing configured display magnitudes. Positive
+point masses, elastic material definitions and a real mapped axisymmetric shaft satisfy
+their normal Command admission rules. Authored load, prescribed constraint, connection
+tolerance and thickness cases exercise their real public display dimensions.
+
+A square line loop has perimeter 4 m with each coordinate at most 1 m. A finite length factor
+`1e-308` leaves each coordinate readable near `1e308` while the perimeter requires `4e308`
+and must reject. A unit cube independently checks derived volume and density-times-volume
+mass conversions. Two individually readable `1e308 N` forces have an unrepresentable
+`2e308 N` report sum. A genuine line mesh with an outside named Set has no boundary face,
+so its ordinary `set.empty` diagnostic remains available. Two unused imported labels at
+the same `1e308 m` coordinate retain that exact centroid and a literal zero node measure;
+the separate three-MAX centroid arithmetic defect is tracked by #593.
+
+A fully prescribed rigid translation of a real truss has finite components `ux = uy =
+f64::MAX`, zero strain and zero reactions. Component probes return the exact prescribed
+values; the mathematical norm `sqrt(2) * MAX` exceeds the largest f64, so public norm
+probes, paths and convergence metrics reject with `unit.display` while the actual native
+file, hash, Journal and readable selected Result remain unchanged. This does not depend
+on an intermediate-overflow example whose correct mathematical norm would be finite.
+
+Unit changes conservatively stale Results (ADR 0017). Current probe/path/frame reads retain
+that fence; explicit Result IDs retain their solved units and scientific values. Stale-readable
+frame lists and summaries still check their requested time unit: a retained one-second frame
+cannot fit in a unit with factor `1e-315`. A prescribed cooling case retains initial ranges
+`[0,10] K` and `[10,10] K` and a final zero-temperature field, testing both historical
+extrema separately. Its storage power follows `rho cp V DeltaT / DeltaT_time`, with
+`rho cp V = 36110 J/K` and a one-second interval.
+
+Steady heat checks independently use Fourier power `k A DeltaT / L = 0.45 W` and a uniform
+source delivering `q V = 0.02 W`, shared equally by two held ends (`0.01 W` each). Selected
+power factors independently make a whole reaction or the applied sum unrepresentable while
+earlier nodal values stay finite. A translated axial bar from `1 m` to `2 m` has a readable
+one-metre wrench reference but an unrepresentable two-metre extremum coordinate; tension
+and compression select the maximum and minimum coordinate checks respectively.
+
+Convection, flux, source and contact conductance Commands admit finite `1e308` values in
+their actual typed SI dimensions. These four authored dimensions have no configurable
+UnitSet field, so their Model rows retain the existing literal `SI` label and exact admitted
+values. This invariant does not bypass checks for temperatures, computed quantities,
+frequencies or contact forces.
+
+Additional checked display fixtures use publicly admitted imported unit tetrahedra: volume
+`det(I)/6 = 1/6 m³`, right-triangle face area `1/2 m²`, and active Set values in those same
+physical dimensions. Tiny valid composite length units leave ordinary coordinates readable
+while derived volume or area units cannot represent the value. A mapped plane-stress unit
+square with thickness `1e100 m` has geometric edge length `1 m` and loaded pressure area
+`1e100 m²`; length factor `1e-108` leaves bbox, thickness and Body area readable while the
+loaded area overflows. Its ordinary quadrature oracle uses relative tolerance `1e-14`.
+Two directly admitted tetrahedra have bounded coordinates `|x| <= 1`: one has shortest edge
+`sqrt(2) m` and longest edge `2 m`, the regular one has every edge `sqrt(8) m`. Length factor
+`8.333e-309` leaves every bbox coordinate finite but respectively rejects the longest edge
+or the shortest edge. Each failed public Query preserves the full native file, model hash,
+revision and Result catalogue.
+
+The automatic origin-Box hand calculation reuses checked bbox dimensions, material E and
+exact authored LoadRow text from the Model summary. Its formula keeps the authored SI force;
+F/P denotes the magnitude of that vector's sole nonzero component. Computed cross-sectional
+area and analytical deflection retain checked conversions. Reusing assembled nodal force as
+the independent reference would admit quadrature rounding into the oracle and is avoided.
+
+The contact-specific display fixture is a supported axisymmetric interference fit with
+nu=0, E=40Pa, height h=1m and annular radii [a,r]=[1,2]m and [s,b]=[1.99,3]m.
+The shared anchor fixes both inner and outer radial boundaries. Lamé displacement
+`u=Ar+B/r` with zero endpoint displacement gives the force-conservative compatibility
+
+`F = 2π h E (r-s) / [(r²-a²)/(r²+a²) + (b²-s²)/(b²+s²)] = 2.5415407008 N`.
+
+The master/slave reference radii differ, so their equal/opposite transmitted force uses
+pressures `F/(2πrh)` and `F/(2πsh)` respectively. Equal pressure at both radii would be a
+wrong reference. With 2/4/8 radial cells the public contact force converges quadratically
+(relative gates 0.006/0.002/0.0005, observed rate in [1.8,2.2]). At four cells, every
+reaction component and the combined anchor reaction remains below1.4N while contact
+force exceeds2.5N. A valid force unit with factor8.333e-309 has finite limit≈1.498N,
+so the current Result rejects specifically at checked contact output. The Model remains
+readable, failed reads preserve the full native state, and retained-ID contact output
+keeps its original N units. The formatter test and independent convergence test are separate.
+
+The public undamped-resonance rejection fixture asks the modal registry for a finite positive
+natural frequency, then solves the same physical bar with that exact disclosed frequency as
+a harmonic sweep endpoint, damping0 and finite nonzero modal force projection. Independent
+oscillator response `Q/[(ωk²-ω²)+i2ζωkω]` has no finite value at `ω=ωk`, `ζ=0`, `Q!=0`.
+Its other retained frequencies lie off every disclosed mode and give a finite global peak;
+that does not make the resonant sample readable. The checked sweep output rejects before
+publishing, preserving the full native file/hash/revision/catalogue and the original modal
+summary/field. The next valid modal solve is result-2, so rejection consumes no Result ID.
+This case credits the actual amplitude/publication path, not unproved frequency failures.
+
+Additional isolated public reads cover an ordinary unit Box bbox, an imported unit-Tet Mesh
+bbox, a built line-node Set bbox, unused authored source-node bounds, and imported STL
+unit-cube patch areas. Each has an independently known SI extent or planar area; failed
+conversions preserve the complete native file/hash/revision/Result catalogue. They query
+their own capability directly, so an unrelated Model summary does not preempt the check.
+
+The hand-reference boundary uses an authored1N axial force on a1×0.1×0.1m Box,
+E=1e-207Pa and nu=0.49999999. The mathematical bar reference FL/(EA)=1e209m
+exceeds the finite limit of the chosen length unit (factor1e-101). The constrained one-Hex
+near-incompressible calculation has a finite, much smaller locking displacement, and
+Model/Mesh/Result queries remain readable. Verification rejects the independently
+unrepresentable reference without mutating the retained Result. This is a display and
+state-preservation fixture, not a physical large-strain or convergence claim.
+
+The interior-ply boundary uses a symmetric five-ply1m-wide flat cantilever, five1mm plies
+with E=[1,1e6,1,1e6,1]Pa, nu=0, and a1e-5Nm end moment. Symmetry gives B=0;
+D=∫E(z)z²dz, curvature=M/D, and sigma_x(z)=E(z)zM/D. At2/4/8 longitudinal cells,
+the stiff interior-ply outer face agrees with this independent constant-curvature reference
+(≈6.92305056Pa) within1e-7 relative error. Ordinary midplane and outer-surface stress
+remain below0.1Pa. A selected stress-unit factor≈1e-308 admits those fields and rejects
+the interior ply. Failed current reads and new solves preserve the prior original-unit
+Result and consume no Result ID; restoring SI lets the next solve publish result-2.

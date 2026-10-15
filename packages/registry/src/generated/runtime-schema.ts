@@ -33,7 +33,7 @@ const commands = {
       "x-execution": "replacement"
     },
     {
-      "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+      "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
       "type": "object",
       "properties": {
         "units": {

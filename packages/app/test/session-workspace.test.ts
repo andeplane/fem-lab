@@ -43,6 +43,48 @@ function setup() {
   return { workspace, workers, publications };
 }
 
+// #580/#592: preserve the error from the real checked Worker through Runtime and Transport.
+it('preserves display code, cause, location and recovery without changing session or scientific state', async () => {
+  const { workspace } = setup();
+  const initial = await workspace.start();
+  const transport = await workspace.replace(initial.transport, { kind: 'commands', commands: [{ cmd: 'model.new', name: 'checked display error' }] });
+  try {
+    const commands: Command[] = [
+      { cmd: 'geometry.addLine', name: 'shaft', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m']], divisions: 1, kind: 'beam' },
+      { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
+      { cmd: 'material.assign', material: 'steel', bodies: ['shaft'] },
+      { cmd: 'section.add', name: 'round', shape: { kind: 'circle', radius: '50 mm' } },
+      { cmd: 'section.assign', section: 'round', bodies: ['shaft'] },
+      { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' } },
+      { cmd: 'constraint.fix', name: 'root', on: 'shaft.p0' },
+      { cmd: 'load.force', name: 'tip', on: 'shaft.p1', total: ['1000 N', '0 N', '0 N'] },
+      { cmd: 'step.add', name: 'axial', procedure: 'static', constraints: ['root'], loads: ['tip'] },
+      { cmd: 'solve.run', step: 'axial', solver: 'cpu-direct' },
+      { cmd: 'load.moment', name: 'plus', on: 'shaft.p0', total: ['1e307 N m', '0 N m', '0 N m'] },
+      { cmd: 'load.moment', name: 'minus', on: 'shaft.p1', total: ['-1e307 N m', '0 N m', '0 N m'] },
+      { cmd: 'model.setUnits', units: { length: 'mm', force: 'mN', stress: 'Pa' } },
+    ];
+    for (const command of commands) await transport.dispatch(command);
+    const state = async () => ({
+      stamp: transport.stamp,
+      journal: await transport.query({ query: 'query.journal' }),
+      plus: await transport.query({ query: 'query.definition', kind: 'load', name: 'plus' }),
+      minus: await transport.query({ query: 'query.definition', kind: 'load', name: 'minus' }),
+      catalogue: await transport.query({ query: 'query.results' }),
+      result: await transport.query({ query: 'query.result', step: 'axial' }),
+    });
+    const before = await state();
+    await expect(transport.query({ query: 'query.model' })).rejects.toMatchObject({
+      code: 'unit.display',
+      cause: "cannot represent energy in display unit 'mN mm': quantity must be finite before and after unit conversion",
+      where: 'displayUnits',
+      suggestion: "model.setUnits with SI display units, for example length 'm', force 'N' and stress 'Pa'",
+    });
+    expect(await state()).toEqual(before);
+    expect(workspace.active.transport.channel).toBe(transport.channel);
+  } finally { transport.channel.close(); }
+});
+
 describe('session workspace using the checked WASM runtime', () => {
   it.each(['initiating', 'independent'] as const)('checks original replacement admission after the %s producer edits and a read refreshes the lease', async writerKind => {
     const { workspace, workers, publications } = setup();

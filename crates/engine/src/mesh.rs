@@ -718,12 +718,24 @@ fn set_empty(model: &Model, mesh: &Mesh, name: &str, probe: Option<[f64; 3]>) ->
     let (lo, hi) = mesh.bbox();
     let centre = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])];
     let point = probe.unwrap_or(centre);
-    let near = nearest_boundary_face(mesh, point).map_or("the mesh has no boundary face".to_string(), |(f, _)| {
-        let (c, _) = face_centroid_normal(mesh, f);
-        let v: Vec<String> =
-            c.iter().map(|&x| crate::units::fmt_sig(display(model, x, Length::DIM).value, 4)).collect();
-        format!("the nearest boundary face is centred at [{}] {}", v.join(", "), display(model, 0.0, Length::DIM).unit)
-    });
+    let near = match nearest_boundary_face(mesh, point) {
+        None => "the mesh has no boundary face".to_string(),
+        Some((face, _)) => {
+            let (centroid, _) = face_centroid_normal(mesh, face);
+            let shown =
+                centroid.into_iter().map(|value| display(model, value, Length::DIM)).collect::<Result<Vec<_>, Error>>();
+            let shown = match shown {
+                Ok(shown) => shown,
+                Err(error) => return error,
+            };
+            let values: Vec<_> = shown.iter().map(|value| crate::units::fmt_sig(value.value, 4)).collect();
+            format!(
+                "the nearest boundary face is centred at [{}] {}",
+                values.join(", "),
+                model.units.resolve().unit(Length::DIM)
+            )
+        }
+    };
     Error::new(ErrorCode::SetEmpty, format!("set '{name}' matched no face, node or element on the mesh; {near}"))
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace with a plane through that point, or a larger tol")

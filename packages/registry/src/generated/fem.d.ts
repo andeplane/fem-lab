@@ -13,7 +13,9 @@ export interface Fem {
     /**
      * Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
      * stays SI and every input may still use any unit of the right dimension; this only
-     * changes how values are reported back.
+     * changes how values are reported back. A scalar that cannot fit in the selected unit
+     * produces `unit.display` when queried or reported, without altering its stored SI data.
+     * Choose larger or SI display units to read it; formatting never silently changes units.
      */
     setUnits(args: Omit<Extract<Command, { cmd: 'model.setUnits' }>, 'cmd'>): Promise<Ack>;
     /**

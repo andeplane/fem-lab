@@ -2655,7 +2655,33 @@ fn si3_force(q: &[Q<crate::units::Force>; 3]) -> Result<[f64; 3], Error> {
 }
 
 /// Display helper: SI value into the Model's units for a dimension.
-pub fn display(model: &Model, value_si: f64, dim: Dimension) -> crate::query::Valued {
-    let (v, u) = model.units.resolve().fmt(value_si, dim);
-    crate::query::Valued { value: v, unit: u }
+pub fn display(model: &Model, value_si: f64, dim: Dimension) -> Result<crate::query::Valued, Error> {
+    let (v, u) = model.units.resolve().fmt(value_si, dim).map_err(|error| {
+        Error::new(
+            ErrorCode::UnitDisplay,
+            format!(
+                "cannot represent {} in display unit '{}': {}",
+                dim.name(),
+                model.units.resolve().unit(dim),
+                error.cause
+            ),
+        )
+        .at("displayUnits")
+        .suggest("model.setUnits with SI display units, for example length 'm', force 'N' and stress 'Pa'")
+    })?;
+    Ok(crate::query::Valued { value: v, unit: u })
+}
+
+/// Fixed-size vectors and bounds share one checked conversion loop. Every component is
+/// converted before an array can escape; an error leaves the caller's Model untouched.
+pub(crate) fn display_values<const N: usize>(
+    model: &Model,
+    values: [f64; N],
+    dim: Dimension,
+) -> Result<[crate::query::Valued; N], Error> {
+    let mut shown = values.map(|value| crate::query::Valued { value, unit: String::new() });
+    for value in &mut shown {
+        *value = display(model, value.value, dim)?;
+    }
+    Ok(shown)
 }

@@ -33,7 +33,7 @@
         "x-execution": "replacement"
       },
       {
-        "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+        "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
         "type": "object",
         "properties": {
           "units": {
@@ -6013,7 +6013,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {
@@ -12862,7 +12862,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {
@@ -20821,47 +20821,56 @@
     "$defs": {
       "ErrorCode": {
         "description": "Error codes, serialised as dotted strings so TypeScript sees a closed union.",
-        "type": "string",
-        "enum": [
-          "session.expired",
-          "session.conflict",
-          "session.transitioning",
-          "operation.reused",
-          "operation.unknown",
-          "schema",
-          "unit.dimension",
-          "unit.unknown",
-          "name.taken",
-          "not-found",
-          "in-use",
-          "set.empty",
-          "unsupported",
-          "cancelled",
-          "internal",
-          "file.scope",
-          "file.not-found",
-          "export.unavailable",
-          "material.props",
-          "mesh.inverted",
-          "mesh.failed",
-          "model.no-material",
-          "model.no-section",
-          "model.ill-posed",
-          "result.stale",
-          "constraint.conflict",
-          "constraint.rigid-modes",
-          "constraint.dependent",
-          "contact.unpaired",
-          "contact.chatter",
-          "contact.open",
-          "solve.not-positive-definite",
-          "solve.stalled",
-          "solve.diverged",
-          "solve.too-large",
-          "gpu.shader",
-          "gpu.too-large",
-          "explicit.unstable",
-          "newton.diverged"
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "session.expired",
+              "session.conflict",
+              "session.transitioning",
+              "operation.reused",
+              "operation.unknown",
+              "schema",
+              "unit.dimension",
+              "unit.unknown",
+              "name.taken",
+              "not-found",
+              "in-use",
+              "set.empty",
+              "unsupported",
+              "cancelled",
+              "internal",
+              "file.scope",
+              "file.not-found",
+              "export.unavailable",
+              "material.props",
+              "mesh.inverted",
+              "mesh.failed",
+              "model.no-material",
+              "model.no-section",
+              "model.ill-posed",
+              "result.stale",
+              "constraint.conflict",
+              "constraint.rigid-modes",
+              "constraint.dependent",
+              "contact.unpaired",
+              "contact.chatter",
+              "contact.open",
+              "solve.not-positive-definite",
+              "solve.stalled",
+              "solve.diverged",
+              "solve.too-large",
+              "gpu.shader",
+              "gpu.too-large",
+              "explicit.unstable",
+              "newton.diverged"
+            ]
+          },
+          {
+            "description": "A reported SI quantity cannot be represented in the selected display unit.",
+            "type": "string",
+            "const": "unit.display"
+          }
         ]
       }
     }
@@ -24461,7 +24470,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {
@@ -29150,7 +29159,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {
@@ -35192,7 +35201,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {
@@ -43214,7 +43223,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {
@@ -54767,7 +54776,7 @@
             "x-execution": "replacement"
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
             "type": "object",
             "properties": {
               "units": {

@@ -420,8 +420,7 @@ impl Engine {
         let (field, which) = record.named_field(name)?;
         let unit = crate::units::UnitSet::default()
             .resolve()
-            .fmt(0.0, crate::solve_run::field_dimension(which, record.result.reaction_quantity))
-            .1;
+            .unit(crate::solve_run::field_dimension(which, record.result.reaction_quantity));
         Ok(crate::query::ResultField {
             result_id: record.id.clone(),
             step: record.step.clone(),
@@ -534,7 +533,7 @@ impl Engine {
                 comparison_result_id: target.record.id.clone(),
                 components,
                 node_count: total_nodes,
-                unit: crate::units::UnitSet::default().resolve().fmt(0.0, dimension).1,
+                unit: crate::units::UnitSet::default().resolve().unit(dimension),
                 values,
                 interpolated: !direct,
                 coverage: crate::query::DifferenceCoverage { inside_nodes, total_nodes, outside_nodes },

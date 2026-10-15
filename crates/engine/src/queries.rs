@@ -3,14 +3,12 @@
 use femlab_geometry::{Face, Mesh};
 
 use crate::command::{CoupleKind, Field, ObjectKind};
-use crate::engine::{display, Engine};
+use crate::engine::{display, display_values, Engine};
 use crate::error::{Error, ErrorCode};
 use crate::model::{Axial, ConstraintKind, Idealisation, LoadKind, SetSource};
 use crate::post::FieldData;
 use crate::query::*;
-use crate::units::{
-    self, Acceleration, Density, Dim, Dimension, Force, HeatTransfer, Length, Mass, Stress, Temperature, Q,
-};
+use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature, Q};
 
 /// Three lengths in SI, with the field path an error names.
 pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
@@ -21,16 +19,12 @@ pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
     Ok(out)
 }
 
-fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> [Valued; 6] {
-    let d = Length::DIM;
-    [
-        display(model, lo[0], d),
-        display(model, lo[1], d),
-        display(model, lo[2], d),
-        display(model, hi[0], d),
-        display(model, hi[1], d),
-        display(model, hi[2], d),
-    ]
+fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> Result<[Valued; 6], Error> {
+    display_values(model, [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]], Length::DIM)
+}
+
+fn displayed3(model: &crate::model::Model, values: [f64; 3], dim: Dimension) -> Result<[Valued; 3], Error> {
+    display_values(model, values, dim)
 }
 
 fn axial_row(value: Axial, unit: &str) -> AxialRow {
@@ -149,9 +143,14 @@ impl Engine {
     ///
     /// It has no Solid — the mapped mesher's blocks *are* its geometry — so its extent, its
     /// area and its faces come from the Mesh, and it has no row at all until that Mesh builds.
-    fn implicit_body_row(&mut self) -> Option<BodyRow> {
-        let name = self.model.implicit_body()?.to_string();
-        self.mesh().ok()?;
+    fn implicit_body_row(&mut self) -> Result<Option<BodyRow>, Error> {
+        let Some(name) = self.model.implicit_body().map(str::to_string) else { return Ok(None) };
+        if let Err(error) = self.mesh() {
+            if error.code == ErrorCode::UnitDisplay {
+                return Err(error);
+            }
+            return Ok(None);
+        }
         let built = self.mesh.as_ref().expect("built above");
         let imported =
             matches!(self.model.mesh.as_ref().map(|m| &m.mesher), Some(crate::model::MesherSettings::Imported(_)));
@@ -181,24 +180,24 @@ impl Engine {
             .map(|(k, _)| k.clone())
             .collect();
         let m = &self.model;
-        Some(BodyRow {
+        Ok(Some(BodyRow {
             name,
             material: m.mesher_material.clone(),
-            bbox: bbox6(m, lo, hi),
-            measure: display(m, measure, Dimension([dim, 0, 0, 0])),
+            bbox: bbox6(m, lo, hi)?,
+            measure: display(m, measure, Dimension([dim, 0, 0, 0]))?,
             mass: None,
             faces,
             patches: Vec::new(),
-        })
+        }))
     }
 
     /// A line Body as a row of [`query_model`](Engine::query_model): its bounding box and the
     /// total length of its members, which is the measure a 1D Body has. `None` for a Body that
     /// is not made of line members, which is what sends it down the Solid path instead.
-    fn line_body_row(m: &crate::model::Model, b: &crate::model::Body) -> Option<BodyRow> {
+    fn line_body_row(m: &crate::model::Model, b: &crate::model::Body) -> Result<Option<BodyRow>, Error> {
         let (points, members) = match &b.shape {
             femlab_geometry::Shape::Polyline { points, members, .. } => (points, members),
-            _ => return None,
+            _ => return Ok(None),
         };
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
@@ -215,25 +214,25 @@ impl Engine {
                 libm::sqrt((0..3).map(|k| (a[k] - c[k]) * (a[k] - c[k])).sum::<f64>())
             })
             .sum();
-        Some(BodyRow {
+        Ok(Some(BodyRow {
             name: b.name.clone(),
             material: b.material.clone(),
-            bbox: bbox6(m, lo, hi),
-            measure: display(m, length, Length::DIM),
+            bbox: bbox6(m, lo, hi)?,
+            measure: display(m, length, Length::DIM)?,
             mass: None,
             faces: Vec::new(),
             patches: Vec::new(),
-        })
+        }))
     }
 
     pub(crate) fn query_model(&mut self) -> Result<ModelSummary, Error> {
         let names: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
-        let implicit = self.implicit_body_row();
+        let implicit = self.implicit_body_row()?;
         let mut bodies = Vec::with_capacity(names.len() + usize::from(implicit.is_some()));
         for n in &names {
             // A line Body has no Solid: its extent and its measure come from its own joints,
             // and it has no faces to list.
-            let line = Self::line_body_row(&self.model, self.model.body(n).expect("listed above"));
+            let line = Self::line_body_row(&self.model, self.model.body(n).expect("listed above"))?;
             if let Some(row) = line {
                 bodies.push(row);
                 continue;
@@ -253,29 +252,33 @@ impl Engine {
                 .and_then(|mn| m.material(mn))
                 .and_then(|mat| mat.rho)
                 .filter(|_| solid.dim() == 3)
-                .map(|rho| display(m, rho * solid.volume(), Mass::DIM));
+                .map(|rho| display(m, rho * solid.volume(), Mass::DIM))
+                .transpose()?;
             let patches = if b.shape.is_imported() {
                 solid
                     .triangles()
                     .face_patches()
                     .into_iter()
-                    .map(|p| ImportedPatchRow {
-                        tag: p.tag,
-                        triangle_count: p.triangle_count,
-                        area: display(m, p.area, Dimension([2, 0, 0, 0])),
-                        centroid: p.centroid.map(|x| display(m, x, Length::DIM)),
-                        mean_normal: p.mean_normal,
-                        suggested_predicate: crate::definition::face(&p.suggested_predicate),
+                    .map(|p| {
+                        let area = display(m, p.area, Dimension([2, 0, 0, 0]))?;
+                        displayed3(m, p.centroid, Length::DIM).map(|centroid| ImportedPatchRow {
+                            tag: p.tag,
+                            triangle_count: p.triangle_count,
+                            area,
+                            centroid,
+                            mean_normal: p.mean_normal,
+                            suggested_predicate: crate::definition::face(&p.suggested_predicate),
+                        })
                     })
-                    .collect()
+                    .collect::<Result<_, Error>>()?
             } else {
                 Vec::new()
             };
             bodies.push(BodyRow {
                 name: b.name.clone(),
                 material: b.material.clone(),
-                bbox: bbox6(m, lo, hi),
-                measure: display(m, measure, mdim),
+                bbox: bbox6(m, lo, hi)?,
+                measure: display(m, measure, mdim)?,
                 mass,
                 faces: solid.tags(),
                 patches,
@@ -286,45 +289,52 @@ impl Engine {
         let materials = m
             .materials
             .iter()
-            .map(|mat| MaterialRow {
-                name: mat.name.clone(),
-                e: mat.e.map(|e| display(m, e, Stress::DIM)),
-                nu: mat.nu,
-                orthotropic: mat.orthotropic.map(|o| crate::query::OrthotropicRow {
-                    e1: display(m, o.e1, Stress::DIM),
-                    e2: display(m, o.e2, Stress::DIM),
-                    e3: display(m, o.e3, Stress::DIM),
-                    g12: display(m, o.g12, Stress::DIM),
-                    g13: display(m, o.g13, Stress::DIM),
-                    g23: display(m, o.g23, Stress::DIM),
-                    nu12: o.nu12,
-                    nu13: o.nu13,
-                    nu23: o.nu23,
-                }),
-                orientation: mat.orientation.map(|o| crate::query::OrientationRow {
-                    axis: o.axis,
-                    degrees: o.angle * 180.0 / std::f64::consts::PI,
-                }),
-                rho: mat.rho.map(|r| display(m, r, Density::DIM)),
-                alpha: mat.alpha.map(|value| axial_row(value, "1/K")),
-                k: mat.k.map(|value| axial_row(value, "W/(m K)")),
-                cp: mat.cp.map(|value| Valued { value, unit: "J/(kg K)".into() }),
-                yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
-                plasticity: mat.plasticity.is_some(),
-                source: mat.source.clone(),
-                assigned_to: m
-                    .bodies
-                    .iter()
-                    .filter(|b| b.material.as_deref() == Some(&mat.name))
-                    .map(|b| b.name.clone())
-                    .chain(
-                        m.implicit_body()
-                            .filter(|_| m.mesher_material.as_deref() == Some(&mat.name))
-                            .map(str::to_string),
-                    )
-                    .collect(),
+            .map(|mat| {
+                Ok(MaterialRow {
+                    name: mat.name.clone(),
+                    e: mat.e.map(|e| display(m, e, Stress::DIM)).transpose()?,
+                    nu: mat.nu,
+                    orthotropic: mat
+                        .orthotropic
+                        .map(|o| {
+                            Ok::<_, Error>(crate::query::OrthotropicRow {
+                                e1: display(m, o.e1, Stress::DIM)?,
+                                e2: display(m, o.e2, Stress::DIM)?,
+                                e3: display(m, o.e3, Stress::DIM)?,
+                                g12: display(m, o.g12, Stress::DIM)?,
+                                g13: display(m, o.g13, Stress::DIM)?,
+                                g23: display(m, o.g23, Stress::DIM)?,
+                                nu12: o.nu12,
+                                nu13: o.nu13,
+                                nu23: o.nu23,
+                            })
+                        })
+                        .transpose()?,
+                    orientation: mat.orientation.map(|o| crate::query::OrientationRow {
+                        axis: o.axis,
+                        degrees: o.angle * 180.0 / std::f64::consts::PI,
+                    }),
+                    rho: mat.rho.map(|r| display(m, r, Density::DIM)).transpose()?,
+                    alpha: mat.alpha.map(|value| axial_row(value, "1/K")),
+                    k: mat.k.map(|value| axial_row(value, "W/(m K)")),
+                    cp: mat.cp.map(|value| Valued { value, unit: "J/(kg K)".into() }),
+                    yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)).transpose()?,
+                    plasticity: mat.plasticity.is_some(),
+                    source: mat.source.clone(),
+                    assigned_to: m
+                        .bodies
+                        .iter()
+                        .filter(|b| b.material.as_deref() == Some(&mat.name))
+                        .map(|b| b.name.clone())
+                        .chain(
+                            m.implicit_body()
+                                .filter(|_| m.mesher_material.as_deref() == Some(&mat.name))
+                                .map(str::to_string),
+                        )
+                        .collect(),
+                })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let mut sets: Vec<SetRow> = m
             .sets
             .iter()
@@ -358,92 +368,103 @@ impl Engine {
         let connections = m
             .constraints
             .iter()
-            .filter_map(|c| match &c.kind {
-                ConstraintKind::Bonded { master, tol } | ConstraintKind::Frictionless { master, tol } => {
-                    let kind = if matches!(c.kind, ConstraintKind::Bonded { .. }) { "bonded" } else { "frictionless" };
-                    Some(ConnectionRow {
+            .map(|c| {
+                Ok(match &c.kind {
+                    ConstraintKind::Bonded { master, tol } | ConstraintKind::Frictionless { master, tol } => {
+                        let kind =
+                            if matches!(c.kind, ConstraintKind::Bonded { .. }) { "bonded" } else { "frictionless" };
+                        Some(ConnectionRow {
+                            name: c.name.clone(),
+                            kind: kind.into(),
+                            master: master.clone(),
+                            slave: c.on.clone(),
+                            summary: match tol {
+                                None => format!("{kind}, pairing tolerance from the mesh size"),
+                                Some(t) => {
+                                    let v = display(m, *t, Length::DIM)?;
+                                    format!("{kind}, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
+                                }
+                            },
+                        })
+                    }
+                    ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
                         name: c.name.clone(),
-                        kind: kind.into(),
-                        master: master.clone(),
+                        kind: "cyclic".into(),
+                        master: from.clone(),
                         slave: c.on.clone(),
-                        summary: match tol {
-                            None => format!("{kind}, pairing tolerance from the mesh size"),
-                            Some(t) => {
-                                let v = display(m, *t, Length::DIM);
-                                format!("{kind}, pairing within {} {}", units::fmt_sig(v.value, 4), v.unit)
-                            }
+                        summary: format!("cyclic, {angle_deg} deg"),
+                    }),
+                    ConstraintKind::Couple { point, coupling } => Some(match coupling {
+                        CoupleKind::Distributed => ConnectionRow {
+                            name: c.name.clone(),
+                            kind: "distributed".into(),
+                            master: c.on.clone(),
+                            slave: point.clone(),
+                            summary: format!("point '{point}' follows the weighted mean of '{}'", c.on),
                         },
-                    })
-                }
-                ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
-                    name: c.name.clone(),
-                    kind: "cyclic".into(),
-                    master: from.clone(),
-                    slave: c.on.clone(),
-                    summary: format!("cyclic, {angle_deg} deg"),
-                }),
-                ConstraintKind::Couple { point, coupling } => Some(match coupling {
-                    CoupleKind::Distributed => ConnectionRow {
-                        name: c.name.clone(),
-                        kind: "distributed".into(),
-                        master: c.on.clone(),
-                        slave: point.clone(),
-                        summary: format!("point '{point}' follows the weighted mean of '{}'", c.on),
-                    },
-                    CoupleKind::Rigid => ConnectionRow {
-                        name: c.name.clone(),
-                        kind: "rigid".into(),
-                        master: point.clone(),
-                        slave: c.on.clone(),
-                        summary: format!("every node of '{}' follows point '{point}'", c.on),
-                    },
-                }),
-                _ => None,
+                        CoupleKind::Rigid => ConnectionRow {
+                            name: c.name.clone(),
+                            kind: "rigid".into(),
+                            master: point.clone(),
+                            slave: c.on.clone(),
+                            summary: format!("every node of '{}' follows point '{point}'", c.on),
+                        },
+                    }),
+                    _ => None,
+                })
             })
+            .collect::<Result<Vec<_>, Error>>()?
+            .into_iter()
+            .flatten()
             .collect();
         let points = m
             .points
             .iter()
-            .map(|pt| PointRow {
-                name: pt.name.clone(),
-                at: pt.at.map(|x| display(m, x, Length::DIM)),
-                mass: display(m, pt.mass, Mass::DIM),
-                coupled_by: m
-                    .constraints
-                    .iter()
-                    .filter(|c| matches!(&c.kind, ConstraintKind::Couple { point, .. } if *point == pt.name))
-                    .map(|c| c.name.clone())
-                    .collect(),
+            .map(|pt| {
+                Ok(PointRow {
+                    name: pt.name.clone(),
+                    at: displayed3(m, pt.at, Length::DIM)?,
+                    mass: display(m, pt.mass, Mass::DIM)?,
+                    coupled_by: m
+                        .constraints
+                        .iter()
+                        .filter(|c| matches!(&c.kind, ConstraintKind::Couple { point, .. } if *point == pt.name))
+                        .map(|c| c.name.clone())
+                        .collect(),
+                })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let constraints = m
             .constraints
             .iter()
-            .filter_map(|c| {
+            .map(|c| {
                 let summary = match &c.kind {
                     // A tie, a cyclic tie or a coupling prescribes nothing and names two Sets: they are the
                     // Connections above.
                     ConstraintKind::Bonded { .. }
                     | ConstraintKind::Frictionless { .. }
                     | ConstraintKind::Cyclic { .. }
-                    | ConstraintKind::Couple { .. } => return None,
+                    | ConstraintKind::Couple { .. } => return Ok(None),
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
                     ),
                     ConstraintKind::Pin => "pin".to_string(),
                     ConstraintKind::Prescribe { dof, value } => {
-                        let v = display(m, *value, Length::DIM);
+                        let v = display(m, *value, Length::DIM)?;
                         format!("{} = {} {}", format!("{dof:?}").to_lowercase(), units::fmt_sig(v.value, 4), v.unit)
                     }
                     ConstraintKind::Symmetry { normal } => format!("symmetry, normal {normal:?}").to_lowercase(),
                     ConstraintKind::Temperature { value } => {
-                        let v = display(m, *value, Temperature::DIM);
+                        let v = display(m, *value, Temperature::DIM)?;
                         format!("temperature = {} {}", units::fmt_sig(v.value, 4), v.unit)
                     }
                 };
-                Some(ConstraintRow { name: c.name.clone(), on: c.on.clone(), summary })
+                Ok(Some(ConstraintRow { name: c.name.clone(), on: c.on.clone(), summary }))
             })
+            .collect::<Result<Vec<_>, Error>>()?
+            .into_iter()
+            .flatten()
             .collect();
         let loads = m
             .loads
@@ -451,18 +472,20 @@ impl Engine {
             .map(|l| {
                 let (kind, summary) = match &l.kind {
                     LoadKind::Pressure { value, .. } => {
-                        let v = display(m, *value, Stress::DIM);
+                        let v = display(m, *value, Stress::DIM)?;
                         ("pressure", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
-                    LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM))),
-                    LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM))),
+                    LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM)?)),
+                    LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM)?)),
                     LoadKind::Moment { total, .. } => {
-                        ("moment", format!("total {}", vec3(m, *total, crate::units::Torque::DIM)))
+                        ("moment", format!("total {}", vec3(m, *total, crate::units::Torque::DIM)?))
                     }
-                    LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM))),
+                    LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM)?)),
                     LoadKind::Convection { h, t_inf, .. } => {
-                        let hv = display(m, *h, HeatTransfer::DIM);
-                        let t = display(m, *t_inf, Temperature::DIM);
+                        // Typed Command admission stores finite h/q. These thermal
+                        // dimensions have no configurable unit; their label is always SI.
+                        let hv = Valued { value: *h, unit: "SI".into() };
+                        let t = display(m, *t_inf, Temperature::DIM)?;
                         (
                             "convection",
                             format!(
@@ -475,7 +498,7 @@ impl Engine {
                         )
                     }
                     LoadKind::Radiation { emissivity, t_inf, .. } => {
-                        let t = display(m, *t_inf, Temperature::DIM);
+                        let t = display(m, *t_inf, Temperature::DIM)?;
                         (
                             "radiation",
                             format!(
@@ -487,20 +510,20 @@ impl Engine {
                         )
                     }
                     LoadKind::HeatFlux { q, .. } => {
-                        let v = display(m, *q, crate::units::HeatFlux::DIM);
+                        let v = Valued { value: *q, unit: "SI".into() };
                         ("heatFlux", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
                     LoadKind::HeatSource { bodies, q } => {
-                        let v = display(m, *q, crate::units::HeatSource::DIM);
+                        let v = Valued { value: *q, unit: "SI".into() };
                         ("heatSource", format!("{} {} on {}", units::fmt_sig(v.value, 4), v.unit, bodies.join(", ")))
                     }
                     LoadKind::Torque { total, .. } => {
-                        let v = display(m, *total, crate::units::Torque::DIM);
+                        let v = display(m, *total, crate::units::Torque::DIM)?;
                         ("torque", format!("total {} {}", units::fmt_sig(v.value, 4), v.unit))
                     }
                     LoadKind::Temperature { bodies, value, reference } => {
-                        let v = display(m, *value, Temperature::DIM);
-                        let r = display(m, *reference, Temperature::DIM);
+                        let v = display(m, *value, Temperature::DIM)?;
+                        let r = display(m, *reference, Temperature::DIM)?;
                         (
                             "temperature",
                             format!(
@@ -514,13 +537,13 @@ impl Engine {
                         )
                     }
                     LoadKind::ThermalContact { of, h } => {
-                        let v = display(m, *h, HeatTransfer::DIM);
+                        let v = Valued { value: *h, unit: "SI".into() };
                         ("thermalContact", format!("h = {} {} across '{of}'", units::fmt_sig(v.value, 4), v.unit))
                     }
                 };
-                LoadRow { name: l.name.clone(), kind: kind.into(), on: l.kind.set().map(str::to_string), summary }
+                Ok(LoadRow { name: l.name.clone(), kind: kind.into(), on: l.kind.set().map(str::to_string), summary })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let steps = m
             .steps
             .iter()
@@ -541,7 +564,7 @@ impl Engine {
             idealisation: match &m.idealisation {
                 Idealisation::Solid3d => "solid3d".into(),
                 Idealisation::PlaneStress { thickness } => {
-                    let t = display(m, *thickness, Length::DIM);
+                    let t = display(m, *thickness, Length::DIM)?;
                     format!("planeStress (thickness {} {})", units::fmt_sig(t.value, 4), t.unit)
                 }
                 Idealisation::PlaneStrain => "planeStrain".into(),
@@ -585,9 +608,9 @@ impl Engine {
             elements: mesh.n_elems() as u32,
             element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
             dofs: (mesh.n_nodes() * crate::fem::problem::mesh_dofs_per_node(mesh, &m.idealisation)) as u32,
-            bbox: bbox6(m, lo, hi),
-            min_edge: display(m, min_edge, Length::DIM),
-            max_edge: display(m, max_edge, Length::DIM),
+            bbox: bbox6(m, lo, hi)?,
+            min_edge: display(m, min_edge, Length::DIM)?,
+            max_edge: display(m, max_edge, Length::DIM)?,
             sets: built
                 .sets
                 .iter()
@@ -637,16 +660,17 @@ impl Engine {
                 }
                 let participating = source.participating_labels();
                 let unused = labels.iter().filter(|label| !participating.contains(label)).copied().collect();
-                return Ok(SetInfo {
+                let bbox = bbox6(&self.model, lo, hi)?;
+                return displayed3(&self.model, centroid, Length::DIM).map(|centroid| SetInfo {
                     count: labels.len() as u32,
                     source_node_labels: Some(labels),
                     unused_source_node_labels: unused,
                     name: name.into(),
                     kind: "node".into(),
-                    bbox: bbox6(&self.model, lo, hi),
-                    measure: display(&self.model, 0.0, Dimension([0, 0, 0, 0])),
+                    bbox,
+                    measure: Valued { value: 0.0, unit: "SI".into() },
                     pressure_area: None,
-                    centroid: centroid.map(|value| display(&self.model, value, Length::DIM)),
+                    centroid,
                 });
             }
         }
@@ -680,29 +704,28 @@ impl Engine {
             crate::mesh::SetKind::Element => (set.elems.iter().map(|&e| elem_measure(mesh, e)).sum(), mesh.dim as i8),
             crate::mesh::SetKind::Node => (0.0, 0),
         };
-        Ok(SetInfo {
+        let bbox = bbox6(m, lo, hi)?;
+        let measure = display(m, measure, Dimension([exponent, 0, 0, 0]))?;
+        let pressure_area = if set.kind == crate::mesh::SetKind::Face {
+            let area = set
+                .faces
+                .iter()
+                .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
+                .sum();
+            Some(display(m, area, Dimension([2, 0, 0, 0]))?)
+        } else {
+            None
+        };
+        displayed3(m, centroid, Length::DIM).map(|centroid| SetInfo {
             source_node_labels: None,
             unused_source_node_labels: Vec::new(),
             name: name.to_string(),
             kind: set.kind.as_str().into(),
             count: set.count() as u32,
-            bbox: bbox6(m, lo, hi),
-            measure: display(m, measure, Dimension([exponent, 0, 0, 0])),
-            pressure_area: if set.kind == crate::mesh::SetKind::Face {
-                let area = set
-                    .faces
-                    .iter()
-                    .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
-                    .sum();
-                Some(display(m, area, Dimension([2, 0, 0, 0])))
-            } else {
-                None
-            },
-            centroid: [
-                display(m, centroid[0], Length::DIM),
-                display(m, centroid[1], Length::DIM),
-                display(m, centroid[2], Length::DIM),
-            ],
+            bbox,
+            measure,
+            pressure_area,
+            centroid,
         })
     }
 
@@ -728,7 +751,8 @@ impl Engine {
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let model = if id.is_some() { &record.model } else { &self.model };
-        let unit = display(model, 0.0, crate::solve_run::field_dimension(field, record.result.reaction_quantity)).unit;
+        let unit =
+            model.units.resolve().unit(crate::solve_run::field_dimension(field, record.result.reaction_quantity));
         Ok((f, unit, resolved, record))
     }
 
@@ -761,7 +785,7 @@ impl Engine {
             model,
             Engine::pick(&v, component),
             crate::solve_run::field_dimension(field, record.result.reaction_quantity),
-        );
+        )?;
         Ok(ProbeResult {
             sample,
             value: Valued { value: value.value, unit },
@@ -792,8 +816,12 @@ impl Engine {
             s: samples.iter().map(|(s, _)| *s).collect(),
             values: samples
                 .iter()
-                .map(|(_, v)| v.as_ref().map(|v| display(model, Engine::pick(v, component), dim).value))
-                .collect(),
+                .map(|(_, v)| {
+                    v.as_ref()
+                        .map(|v| display(model, Engine::pick(v, component), dim).map(|value| value.value))
+                        .transpose()
+                })
+                .collect::<Result<_, Error>>()?,
             unit,
         })
     }
@@ -1059,15 +1087,15 @@ fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
     measure
 }
 
-fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> String {
-    let d: Vec<Valued> = v.iter().map(|x| display(m, *x, dim)).collect();
-    format!(
+fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> Result<String, Error> {
+    let d = displayed3(m, v, dim)?;
+    Ok(format!(
         "[{}, {}, {}] {}",
         units::fmt_sig(d[0].value, 4),
         units::fmt_sig(d[1].value, 4),
         units::fmt_sig(d[2].value, 4),
         d[0].unit
-    )
+    ))
 }
 
 #[cfg(test)]

@@ -40,6 +40,9 @@ pub enum ErrorCode {
     UnitDimension,
     #[serde(rename = "unit.unknown")]
     UnitUnknown,
+    /// A reported SI quantity cannot be represented in the selected display unit.
+    #[serde(rename = "unit.display")]
+    UnitDisplay,
     #[serde(rename = "name.taken")]
     NameTaken,
     #[serde(rename = "not-found")]
@@ -180,6 +183,7 @@ mod tests {
             ErrorCode::Schema,
             ErrorCode::UnitDimension,
             ErrorCode::UnitUnknown,
+            ErrorCode::UnitDisplay,
             ErrorCode::NameTaken,
             ErrorCode::NotFound,
             ErrorCode::InUse,
