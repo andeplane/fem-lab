@@ -25,7 +25,7 @@ The API certificate is still `PROVISIONING`; this is not HTTPS acceptance eviden
 Firebase Hosting has registered the root domain and a `www` redirect to the root; both
 are waiting for ownership/DNS validation.
 
-## Cloudflare records to apply after verifying zone ownership
+## Cloudflare records to apply
 
 | Type | Name | Value | Proxy |
 |---|---|---|---|
@@ -40,9 +40,11 @@ already publish separate `_acme-challenge` values. If Firebase still requires it
 challenge after the A/CNAME records propagate, add the current value alongside those
 records. Do not copy an old temporary certificate challenge from a document.
 
-The domain is registered through Cloudflare, but ownership/access has not been verified
-in this task. The Mac is locked and the authenticated console is unavailable. No domain
-purchase or Cloudflare write has been performed by this implementation.
+The owner confirmed purchase of `femlab.app` on 2026-10-15. The Mac is still locked and
+the authenticated Cloudflare console is unavailable. A fresh public DNS check found no
+root A/AAAA/TXT records and no `www` or `api` records. No Cloudflare write has been
+performed by this implementation. The Google provisioner has been rerun; the API
+certificate remains `PROVISIONING`, and Hosting ownership remains `OWNERSHIP_MISSING`.
 
 ## Activate and verify
 
@@ -52,6 +54,29 @@ lasting over 60 seconds through `https://api.femlab.app`, then exercise client c
 and confirm one authoritative receipt or conservative recovery. Update the production
 browser's API origin and Auth helper domain only after those checks. Retain the working
 Google-hosted app until the new origin passes login and local-project return checks.
+
+The browser release command is:
+
+```sh
+python3 infra/google/deploy-hosting.py --environment production --account <account> --source <checkout> --custom-domain
+```
+
+It checks normally validated HTTPS on the custom domain, the Firebase project/app IDs,
+and API readiness before building. It sets `authDomain=femlab.app` so the Auth helper
+uses the same origin, and includes `https://api.femlab.app` in the browser's network
+policy. Use `--build-only` to inspect the deployable artifact without publishing it.
+Google sign-in and paid billing stay disabled. The unchanged default command retains
+the working Google URLs. Building from the deployment script's own checkout also
+preserves its `dist` directory rather than deleting it before copying.
+
+Five release smoke checks pass: building in the same checkout, copying from a separate
+checkout, custom-domain Auth/API configuration, wrong-project refusal, and unready-API
+refusal. A real production `--build-only` run from source `a02d6f7b` compiled successfully
+and passed the built-artifact secret check. No Firebase release was published by that run.
+
+Before enabling Stripe, configure the backend's canonical return origin to the new app
+domain and verify checkout/portal return handling for locally saved projects. The current
+baseline still uses the Google app URL, and paid billing remains disabled.
 
 The current working app is https://femlab-app.web.app; staging is
 https://femlab-app-staging.web.app. Long real streams have passed directly through Cloud
