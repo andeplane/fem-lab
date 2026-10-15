@@ -1,0 +1,100 @@
+{
+  "format": "femlab-abaqus-interoperability/1",
+  "issue": 656,
+  "plan": "https://github.com/andeplane/fem-lab/issues/650",
+  "exporterGeneratedAcceptance": "missing: no untouched Abaqus/CAE export with verified exporter/version provenance has been acquired",
+  "artifacts": [
+    {
+      "id": "calculix-2.23-tests",
+      "url": "https://www.dhondt.de/ccx_2.23.test.tar.bz2",
+      "bytes": 13468187,
+      "sha256": "be2259fd9a7b990d0453b30708e1b05f2cd4b6df4a90fa96f0e4abd1ae7beaa0",
+      "license": "GPL-2.0-only; external reference corpus, not relicensed as FEM Lab MIT",
+      "provenance": "Official CalculiX 2.23 solver test distribution, linked by https://www.dhondt.de/; not an Abaqus/CAE export",
+      "licenseEvidence": "https://metadata.ftp-master.debian.org/changelogs/main/c/calculix-ccx/calculix-ccx_2.23-1_copyright",
+      "members": [
+        {"name": "./CalculiX/ccx_2.23/test/beam20p.inp", "file": "beam20p.inp", "bytes": 19224, "sha256": "e5e0b182de4d3a718fcda583c70e49ffa328fe714ee47ae9983889600d8e10df"},
+        {"name": "./CalculiX/ccx_2.23/test/beam20p.dat.ref", "file": "beam20p.dat.ref", "bytes": 99618, "sha256": "4e98bb5df3c721b5710c34928a2e433694ffb058597dc26d97e5ded907352cf3"},
+        {"name": "./CalculiX/ccx_2.23/test/beam10p.inp", "file": "beam10p.inp", "bytes": 8238, "sha256": "a5d21bd2aa8970c0bfc042355e7c49e8d0ee91cb0187685a6a2c6762151673b4"},
+        {"name": "./CalculiX/ccx_2.23/test/beam10p.dat.ref", "file": "beam10p.dat.ref", "bytes": 22123, "sha256": "56baf8023edc48a09ef27fcadfa05495b32e10f4d485983905c2aebfca3c49bf"}
+      ]
+    },
+    {
+      "id": "calculix-gpl2",
+      "url": "https://www.dhondt.de/gpl-2.0.txt",
+      "bytes": 18092,
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "file": "COPYING.calculix-GPL-2",
+      "license": "GPL-2.0-only",
+      "provenance": "License linked by the official CalculiX distribution page"
+    }
+  ],
+  "comparisons": [
+    {
+      "id": "calculix-beam20p",
+      "deck": "beam20p.inp", "reference": "beam20p.dat.ref",
+      "element": "C3D20", "nodes": 261, "elements": 32,
+      "unitLength": "1 mm", "unitForce": "1 N", "unitTime": "1 s",
+      "step": "STATIC", "referenceSet": "NALL", "referenceTime": 1.0,
+      "referenceDisplacementScaleToMetres": 0.001,
+      "displacementRelativeTolerance": 0.000002, "displacementAbsoluteToleranceMetres": 1e-13,
+      "totalAppliedForceNewtons": [0, 9, 0],
+      "keywords": ["HEADING", "NODE", "ELEMENT", "NSET", "BOUNDARY", "ELSET", "MATERIAL", "ELASTIC", "DENSITY", "SOLID SECTION", "STEP", "STATIC", "CLOAD", "NODE PRINT", "EL PRINT", "END STEP"],
+      "oracle": "Every nodal displacement in the original distribution .dat.ref, plus total reaction equilibrium; integration-point stresses are retained externally but not compared by this harness"
+    },
+    {
+      "id": "calculix-beam10p",
+      "deck": "beam10p.inp", "reference": "beam10p.dat.ref",
+      "element": "C3D10", "nodes": 90, "elements": 67,
+      "unitLength": "1 mm", "unitForce": "1 N",
+      "step": "STATIC", "referenceSet": "NALL", "referenceTime": 1.0,
+      "referenceDisplacementScaleToMetres": 0.001,
+      "displacementRelativeTolerance": 0.000002, "displacementAbsoluteToleranceMetres": 1e-13,
+      "totalAppliedForceNewtons": [0, 9, 0],
+      "keywords": ["NODE", "ELEMENT", "NSET", "BOUNDARY", "MATERIAL", "ELASTIC", "SOLID SECTION", "STEP", "STATIC", "CLOAD", "NODE PRINT", "EL PRINT", "END STEP"],
+      "oracle": "Every nodal displacement in the original distribution .dat.ref, plus total reaction equilibrium; despite the source comment, actual loading is CLOAD, not DLOAD pressure"
+    }
+  ],
+  "externalCandidates": [
+    {
+      "id": "abaqus-c3d20-pressure", "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMAINPRefResources/ec3ksfs2.inp",
+      "bytes": 2085, "sha256": "6583c4616bea2582737a0aab1d777ed4be0e85441d1af763092e0c9ff6a47568",
+      "reference": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-3delem.htm",
+      "features": "C3D20 full integration, continued connectivity, P1-P6 face pressure, CLOAD, output controls, two static steps including hydrostatic HP pressure",
+      "status": "candidate only; full two-step/hydrostatic semantics required, no silent removal",
+      "license": "Redistribution grant not established; do not commit vendor original"
+    },
+    {
+      "id": "abaqus-c3d10-pressure", "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMAINPRefResources/ec3asfs2.inp",
+      "bytes": 2725, "sha256": "aff176b24393ecbf3219c447b647c554b8bf4fad4c4a741cafcc0745b01923b9",
+      "reference": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-3delem.htm",
+      "features": "C3D10, face numbering, surface, pressure, CLOAD, output controls, hydrostatic second step",
+      "status": "candidate only; full two-step/hydrostatic semantics required, no silent removal",
+      "license": "Redistribution grant not established; do not commit vendor original"
+    },
+    {
+      "id": "abaqus-cps8-pressure", "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMAINPRefResources/ecs8sfs1.inp",
+      "bytes": 959, "sha256": "a0799bf6b7a18152ab8da44eade5b1a437e95d73839a6a320cec2ab31250f84d",
+      "reference": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-2dmembraneloading.htm",
+      "features": "CPS8 plane stress, section thickness, edge pressure, nodal forces, output controls, two static steps",
+      "status": "candidate only; full two-step load modification semantics required",
+      "license": "Redistribution grant not established; do not commit vendor original"
+    },
+    {
+      "id": "abaqus-dc2d4-patch", "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMAINPRefResources/ec24dfp4.inp",
+      "bytes": 950, "sha256": "2df10a15a5abd379bbce80fa1cee00ac8ad53b24cba5898e99a2ccbdd34db6d1",
+      "reference": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-heattranspatch.htm",
+      "features": "DC2D4, NGEN, conductivity/density/specific heat, steady heat transfer, temperature DOF 11, ENDSTEP alias, output controls",
+      "status": "candidate only; thermal mapping is separate from completed static comparison paths",
+      "license": "Redistribution grant not established; do not commit vendor original"
+    },
+    {
+      "id": "abaqus-assembly-coupling", "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMAINPRefResources/xcouplingd_std_wgt_uniform.inp",
+      "bytes": 1676, "sha256": "530c89b22e83eaa8b73eea2d73fdfa83b36f359728dc3b0b2924e4c50d4eb2da",
+      "reference": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-coupling.htm",
+      "features": "PART/ASSEMBLY, three transformed instances, part-local sets, qualified references, CPE4R and distributing couplings",
+      "status": "diagnostic candidate; unsupported coupling physics must not be stripped to obtain a green solve",
+      "license": "Redistribution grant not established; do not commit vendor original"
+    }
+  ]
+}
