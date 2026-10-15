@@ -11688,6 +11688,9 @@ mod equilibrium;
 
 #[path = "registry/abaqus_static.rs"]
 mod abaqus_static;
+
+#[path = "registry/vm142.rs"]
+mod vm142;
 /// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
 ///
 /// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at

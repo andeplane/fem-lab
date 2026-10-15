@@ -686,6 +686,7 @@ not ramp it.
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
 | C1 | Kirsch plate with a hole, plane stress | K_t = 3.00 (infinite plate); 3.018 for the Ansys VM142 finite geometry | 2 % at p=2 after Richardson | stress concentration, local refinement, symmetry (quarter model equals full) | green |
+| C1b | Finite-width VM142 square plate with a hole, plane stress | σxx(0, 0.5 in) = 3018 psi, Kt = 3.018; original 12 in square, 1 in hole | 2% on each of the three finest meshes | independent finite-geometry stress reference, five-level refinement, force balance and freshness (#626) | engine test + CLI case |
 | C2 | Lamé thick cylinder, plane strain, axisymmetric and 3D | σθθ(a) = 100 MPa, σrr(a) = −60 MPa; u_r(a) = 5.72e-5 m with ε_z = 0 and 5.90e-5 m with free ends (SimScale/SSLV04's number) | 1 % disp, 2 % stress at p=2 | axisymmetric and 3D agree | green |
 | C3 | Near-incompressible cylinder, ν = 0.49, 0.499, 0.4999 | regenerated from Lamé | < 2 % on u_r for a locking-free element; the hoop stress recorded | volumetric locking exposed and cured | green |
 | C4 | Cook's membrane, plane stress **and** plane strain | 23.97 (plane stress, Cook 1974's 23.9) and 21.53 (plane strain, arXiv 1806.07500's 21.520) — resolved | 1 % against the extrapolated value | bending-dominated distorted mesh | green |
@@ -703,6 +704,44 @@ the plan estimated, so it cannot meet a 2 % gate against 3.00. The Benchmark use
 3.022, extrapolating to 3.024. `the_kirsch_full_plate_equals_the_quarter_model_at_the_hole` builds
 the same plate as eight blocks turned into the four quadrants, holds it only against rigid motion
 on its two centre lines, and gets the quarter model's σ_xx(0, a) back to 1e-10.
+
+**C1b uses the finite VM142 problem and its own fixed reference.** The
+[Ansys VM142 description](https://ansyshelp.ansys.com/public/views/secured/corp/v251/en/ans_vm/Hlp_V_VM142.html)
+and [primary input](https://ansyshelp.ansys.com/public/views/secured/corp/v251/en/ans_vm/Hlp_V_VM142TXT.html)
+reference Roark (4th ed., p. 384): a 12 in square with a 1 in diameter hole,
+plane-stress thickness 1 in, E = 30 × 10⁶ psi and ν = 0.3. The quarter domain
+has outer extent 6 in, radius 0.5 in, symmetry ux = 0 on x = 0 and uy = 0 on
+y = 0, and uniform tensile pressure 1000 psi on x = 6 in. The top and hole are
+free. Its independent reference is σxx(0, 0.5 in) = 3018 psi (Kt = 3.018), with
+the original **2% tolerance unchanged**. Scope is the whole-plate static solve;
+APDL cut-boundary submodel interpolation is outside this case.
+
+`vm142::finite_vm142_plate_refines_against_its_independent_published_stress`
+replays the same public Journal as `vm142-finite-quarter-quad8.json`, changing
+only the mesh divisions and corresponding grading. Two mapped Quad8 blocks use
+n = 8, 16, 32, 64, 128 and radial ratio r = 4^(1/n), so the corner parameter map
+u(t) = (4^t − 1)/3 stays fixed as h is halved; circumferential spacing is uniform.
+Every mesh gates fresh Results and the independent resultant/reaction
+1000 psi × 6 in × 1 in = 6000 lbf, with zero net transverse force (1e-8 relative).
+All three finest meshes must meet the fixed 3018 psi reference within 2%.
+
+| n per block direction | σxx at the hole (psi) | Signed difference from 3018 psi |
+|---|---:|---:|
+| 8 | 2745.696049 | −9.02266% |
+| 16 | 2934.508127 | −2.76646% |
+| 32 | 3016.684813 | −0.04358% |
+| 64 | 3046.779769 | +0.95360% |
+| 128 | 3056.035585 | +1.26029% |
+
+The coarse two meshes fail the reference gate; the three finest pass. Discrete
+increments are positive and shrink from 188.812 to 82.177, 30.095 and 9.256 psi.
+Three-level observed rates are 1.200, 1.449 and 1.701, with fitted Richardson
+limits 3080.013, 3064.170 and 3060.147 psi. These fits are discretization
+diagnostics, **not independent oracles or proofs that true error decreases**.
+The sequence crosses the published target, and the cause of the offset remains
+unsettled. No universal recovered-point-stress rate is asserted from the
+quadratic element order. Tracking #7 retains the separate FV52 reference and D4
+norm questions; this case addresses only the finite VM142 criterion (#626).
 
 **C2's displacement depends on the idealisation, its stresses do not.** BENCHMARKS.md's single
 5.90e-5 m is the free-ended (σ_z = 0) value; every row here holds ε_z = 0 and so lands on
