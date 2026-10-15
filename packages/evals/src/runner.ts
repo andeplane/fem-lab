@@ -1,3 +1,4 @@
+import type { AttemptReceipt } from './transport-recovery';
 import { EVAL_CASES } from './cases';
 import { laneResult, scoreCase } from './score';
 import type { EvaluationBudget } from './budget';
@@ -63,6 +64,7 @@ export interface FrozenManifest {
     stable: boolean;
   };
   provenance: {
+    runtimeLocks?: { file: string; sha256: string }[];
     source: 'built-from-clean-HEAD' | 'built-from-clean-HEAD-with-verified-wasm' | 'not-run';
     wasmProvenance?: Record<string, unknown>;
     buildCommands: string[];
@@ -84,7 +86,7 @@ export interface EvaluationArtifact {
   format: 'femlab-assistant-eval/1';
   manifest: FrozenManifest;
   lanes: LaneResult[];
-  controls?: { budget: ReturnType<EvaluationBudget['snapshot']>; resumedFromSha256: string | null; caseInFlight: boolean };
+  controls?: { budget: ReturnType<EvaluationBudget['snapshot']>; resumedFromSha256: string | null; caseInFlight: boolean; providerAttempts?: AttemptReceipt[] };
 }
 
 /** Serialize only after proving no authorized credential value leaked into the artifact. */

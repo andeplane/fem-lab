@@ -168,3 +168,32 @@ cases; modal support/load invariants fail independently; and an explicit history
 displacement or the wrong `g t²/2` value fails; secrets are absent from serialized artifacts; and unavailable credentials produce the
 explicit not-run state. Adapter tests exercise all twenty IDs through both host interfaces. The live
 browser run must use actual Chromium, and the MCP run must use the packed stdio server.
+
+### Bounded transport recovery and cumulative spend (#731)
+
+The benchmark wrapper buffers an entire provider attempt, including text, tools and
+opaque continuation, until iteration and billing validation complete. One explicit
+retry is allowed only for an observed allowlisted network cause. SDK retries remain
+zero; authentication, schema/protocol errors, request cancellation, SDK timeouts and
+input-count failures are terminal. Every attempt checks resources, recounts input and
+reserves a new worst-case charge. An unknown first-attempt charge remains consumed
+at its full reservation; a second failure stops generation. Attempt receipts retain
+sanitized cause chains and discarded-event counts. A checkpoint containing retained
+unknown charges cannot be silently resumed as a settled ledger.
+
+Set `FEMLAB_EVAL_PRIOR_ARTIFACTS` to a JSON array of `{ "file": "/absolute/result.json",
+"sha256": "pinned artifact SHA-256" }` for all prior attempts, including any controlled
+probe. `FEMLAB_EVAL_MAX_USD` and `FEMLAB_EVAL_MAX_REQUESTS` now describe the original
+whole-evaluation allowance. The runner verifies every parent artifact, leaves its
+stopped ledger untouched, deducts its full charged-or-reserved cost and request count,
+and seals that lineage in the new configuration. Consumption rounds up and remaining
+allowance down to microdollars. The two original failed Sol 6.1 attempts remain
+incomplete evidence; their combined 71 requests and $2.309102 held/charged leave
+$47.690898 and 329 requests from the approved $50/400 envelope. A probe consumes this
+same remaining allowance, never a fresh one.
+
+Both isolated npm locks are copied byte-for-byte to an output-adjacent runtime
+receipt directory, with raw SHA-256 hashes and verified readback, before temporary
+installation cleanup. These raw provenance receipts are separate from the semantic
+runtime fingerprints used for resume comparison. Offline SDK/fake-host tests prove
+recovery and ledger behavior; they are not a live Assistant quality score.
