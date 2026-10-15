@@ -69,5 +69,6 @@ describe('headless service host', () => {
     const response=await fetch(`${url}/v1/billing/webhook`,{method:'POST',headers:{'stripe-signature':'signed-header'},body:'{ "original": 1 }\n'});
     expect(response.status).toBe(200);expect(raw).toBe('{ "original": 1 }\n');expect(signature).toBe('signed-header');
     const missing=await fetch(`${await host(async()=>true)}/v1/billing/webhook`,{method:'POST',body:'{}'});expect(missing.status).toBe(503);expect(await missing.json()).toMatchObject({code:'billing-unavailable'});
+    const portal=await fetch(`${await host(async()=>true)}/v1/billing/portal`,{method:'POST',headers:{authorization:'Bearer owner','content-type':'application/json'},body:'{}'});expect(portal.status).toBe(503);expect(await portal.json()).toMatchObject({code:'billing-unavailable'});
   });
 });
