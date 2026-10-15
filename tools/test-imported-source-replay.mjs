@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +64,82 @@ function checkOracle(outputs) {
 }
 
 try {
+  // #593: independent constant/signed/tick oracles share authored input with native tests.
+  const centroidFixture = JSON.parse(readFileSync(path.join(root, 'crates/engine/tests/fixtures/imported/centroid-extremes.json'), 'utf8'));
+  const numberBits = value => {
+    const bytes = new DataView(new ArrayBuffer(8));
+    bytes.setFloat64(0, value);
+    return bytes.getBigUint64(0).toString(16).padStart(16, '0');
+  };
+  const checkCentroids = sets => sets.forEach((set, i) => {
+    const oracle = centroidFixture.cases[i];
+    assert.deepEqual(set.sourceNodeLabels, oracle.labels);
+    assert.deepEqual(set.unusedSourceNodeLabels, oracle.labels);
+    assert.equal(set.count, oracle.labels.length);
+    assert.deepEqual(set.centroid.map(value => numberBits(value.value)), oracle.centroidBits);
+    assert.ok(set.centroid.every(value => Number.isFinite(value.value) && value.unit === 'm'));
+  });
+  const centroids = new Engine(1);
+  try {
+    for (const command of centroidFixture.commands) await centroids.dispatch(JSON.stringify(command));
+    const before = centroids.export_file();
+    const hash = centroids.model_hash();
+    const retained = centroids.query(JSON.stringify({ query: 'query.result', step: 'static' }));
+    const reaction = centroids.query(JSON.stringify({ query: 'query.field', step: 'static', field: 'reaction' }));
+    const queries = centroidFixture.cases.map(({ name }) => ({ query: 'query.set', name }));
+    const expected = queries.map(query => {
+      const set = JSON.parse(centroids.query(JSON.stringify(query)));
+      assert.equal(centroids.export_file(), before);
+      assert.equal(centroids.model_hash(), hash);
+      assert.equal(centroids.query(JSON.stringify({ query: 'query.result', step: 'static' })), retained);
+      assert.equal(centroids.query(JSON.stringify({ query: 'query.field', step: 'static', field: 'reaction' })), reaction);
+      return set;
+    });
+    checkCentroids(expected);
+    const mesh = JSON.parse(centroids.query(JSON.stringify({ query: 'query.mesh' })));
+    assert.equal(mesh.nodes, 4);
+    assert.deepEqual(mesh.sourceLabels.nodes, [10, 77, 88, 301]);
+    assert.deepEqual(mesh.sourceLabels.unusedNodes, centroidFixture.unusedLabels);
+    assert.deepEqual(mesh.bbox.map(value => value.value), [0, 0, 0, 1, 1, 1]);
+    const file = path.join(scratch, 'centroid-extremes.json');
+    writeFileSync(file, before);
+    for (const threads of [1, 4]) {
+      const actual = JSON.parse(execFileSync(native, ['run', file, '--cpu', '--threads', String(threads), '--verify', ...queries.flatMap(query => ['--query', JSON.stringify(query)])], { encoding: 'utf8' }));
+      checkCentroids(actual);
+      assert.deepEqual(actual, expected);
+    }
+    await centroids.import_file(before);
+    assert.deepEqual(queries.map(query => JSON.parse(centroids.query(JSON.stringify(query)))), expected);
+    await centroids.replay_hashes(JSON.stringify(JSON.parse(before).journal.entries), false, true);
+    assert.deepEqual(queries.map(query => JSON.parse(centroids.query(JSON.stringify(query)))), expected);
+    await centroids.dispatch(JSON.stringify({ cmd: 'model.setUnits', units: { length: 'mm' } }));
+    const errorState = centroids.export_file();
+    assert.throws(() => centroids.query(JSON.stringify(queries[0])), error => error.code === 'unit.display');
+    assert.equal(centroids.export_file(), errorState);
+    console.log('Twelve authored centroid oracles preserve exact source/unused labels, finite physical bounds and retained Results; native1/4 threads and WASM agree.');
+  } finally { centroids.free(); }
+
+  for (const [name, expected] of [
+    ['centroid-ordinary.json', [7, 0, Number.MIN_VALUE * 3]],
+    // Three MAX-coordinate nodes, two line elements: the independent constant mean is MAX.
+    ['centroid-ordinary-extreme.json', [Number.MAX_VALUE, 1, 0]],
+  ]) {
+    const ordinaryCommands = JSON.parse(readFileSync(path.join(root, 'crates/engine/tests/fixtures/imported', name), 'utf8'));
+    const ordinary = new Engine(1);
+    try {
+      for (const command of ordinaryCommands) await ordinary.dispatch(JSON.stringify(command));
+      const before = ordinary.export_file();
+      const query = { query: 'query.set', name: 'whole' };
+      const set = JSON.parse(ordinary.query(JSON.stringify(query)));
+      assert.deepEqual(set.centroid.map(value => numberBits(value.value)), expected.map(numberBits));
+      assert.equal(ordinary.export_file(), before);
+      const file = path.join(scratch, name);
+      writeFileSync(file, before);
+      for (const threads of [1, 4]) assert.deepEqual(JSON.parse(execFileSync(native, ['run', file, '--cpu', '--threads', String(threads), '--verify', '--query', JSON.stringify(query)], { encoding: 'utf8' }))[0], set);
+      console.log(name + ': ordinary Set constant/symmetry/subnormal centroid agrees natively and in WASM.');
+    } finally { ordinary.free(); }
+  }
+
   for (const tetrahedra of [false, true]) for (const cells of [2, 4, 8]) {
     const engine = new Engine(1);
     try {

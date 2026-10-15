@@ -13312,6 +13312,100 @@ fn imported_far_unused_labels_keep_authored_extents_out_of_physical_bounds() {
 }
 
 #[test]
+fn imported_extreme_centroids_keep_finite_means_source_identity_and_retained_results() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/imported/centroid-extremes.json")).unwrap();
+    let mut outputs = Vec::new();
+    for threads in [1, 4] {
+        let mut e = Engine::new(None, Box::new(NoClock), threads);
+        for command in fixture["commands"].as_array().unwrap() {
+            ok(&mut e, &command.to_string());
+        }
+        let file = e.export_file();
+        let hash = e.model_hash();
+        let result = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap();
+        let reaction = e.field(Some("static"), Field::Reaction).unwrap().clone();
+        let mesh = mesh_summary(&mut e);
+        assert_eq!(mesh.bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+        assert_eq!(mesh.nodes, 4);
+        let source_labels = mesh.source_labels.unwrap();
+        assert_eq!(source_labels.nodes, [10, 77, 88, 301]);
+        assert_eq!(serde_json::to_value(source_labels.unused_nodes).unwrap(), fixture["unusedLabels"]);
+        let body = body_row(&mut e, 0);
+        assert_eq!(body.bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+        assert!((body.measure.value - 1. / 6.).abs() < 1e-15);
+        let mut cases = Vec::new();
+        for case in fixture["cases"].as_array().unwrap() {
+            let set = set_info(&mut e, case["name"].as_str().unwrap());
+            assert_eq!(serde_json::to_value(&set.source_node_labels).unwrap(), case["labels"]);
+            assert_eq!(serde_json::to_value(&set.unused_source_node_labels).unwrap(), case["labels"]);
+            assert_eq!(set.count as usize, case["labels"].as_array().unwrap().len());
+            for (value, expected) in set.centroid.iter().zip(case["centroidBits"].as_array().unwrap()) {
+                assert!(value.value.is_finite());
+                assert_eq!(value.value.to_bits(), u64::from_str_radix(expected.as_str().unwrap(), 16).unwrap());
+                assert_eq!(value.unit, "m");
+            }
+            assert_eq!(e.export_file(), file);
+            assert_eq!(e.model_hash(), hash);
+            assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+            assert_eq!(e.field(Some("static"), Field::Reaction).unwrap(), &reaction);
+            cases.push(set);
+        }
+        let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+        pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+        assert_eq!(replayed.export_file(), file);
+        for set in &cases {
+            assert_eq!(set_info(&mut replayed, &set.name), *set);
+        }
+        let mut opened = Engine::new(None, Box::new(NoClock), threads);
+        opened.import_file(file.clone()).unwrap();
+        assert_eq!(opened.export_file(), file);
+        for set in &cases {
+            assert_eq!(set_info(&mut opened, &set.name), *set);
+        }
+        // The finite centroid must still report a genuine requested-unit overflow.
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm"}}"#);
+        let before = e.export_file();
+        assert_eq!(
+            e.query(Query::Set { name: "part.nset_CONST_POS_3".into() }).unwrap_err().code,
+            ErrorCode::UnitDisplay
+        );
+        assert_eq!(e.export_file(), before);
+        outputs.push(cases);
+    }
+    assert_eq!(outputs[0], outputs[1]);
+}
+
+#[test]
+fn ordinary_set_centroids_preserve_constant_extremes_symmetry_and_subnormal_baselines() {
+    for (commands, expected) in [
+        (include_str!("fixtures/imported/centroid-ordinary.json"), [7.0, 0.0, f64::from_bits(3)]),
+        // Three distinct node members with constant MAX x, y = 0/1/2: exact mean [MAX,1,0].
+        // Set.count is two line elements, not the three nodes entering its centroid.
+        (include_str!("fixtures/imported/centroid-ordinary-extreme.json"), [f64::MAX, 1.0, 0.0]),
+    ] {
+        let commands: Vec<serde_json::Value> = serde_json::from_str(commands).unwrap();
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            for command in &commands {
+                ok(&mut e, &command.to_string());
+            }
+            let before = e.export_file();
+            let set = set_info(&mut e, "whole");
+            assert_eq!(set.centroid.clone().map(|v| v.value.to_bits()), expected.map(f64::to_bits));
+            assert_eq!(set.count, 2);
+            assert_eq!(set.source_node_labels, None);
+            assert!(set.unused_source_node_labels.is_empty());
+            assert_eq!(e.export_file(), before);
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&before.journal.entries, true, true)).unwrap();
+            assert_eq!(set_info(&mut replayed, "whole"), set);
+            assert_eq!(replayed.export_file(), before);
+        }
+    }
+}
+
+#[test]
 fn imported_finite_coordinates_with_unrepresentable_jacobians_fail_atomically() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);

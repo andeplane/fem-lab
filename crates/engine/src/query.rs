@@ -64,6 +64,9 @@ pub enum Query {
     /// times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
     /// the original midsurface area without requiring Material/Section; curved physical shell
     /// loads use the Section's top/bottom offsets. Builds the Mesh if needed.
+    /// The centroid averages resolved node coordinates; authored imported NSETs include
+    /// unused source labels. A bounded fixed-order fallback prevents a finite coordinate
+    /// mean overflowing through rounding, while preserving existing finite mean results.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]
