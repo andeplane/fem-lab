@@ -47,9 +47,19 @@ sections, constraints, loads, steps and output requests. One document, one file.
 _Avoid_: project, scene, case, deck, job
 
 **Geometry**:
-The shapes being analysed, defined by a script of primitives and booleans and independent of
-any mesh.
+The shapes being analysed, defined by a script of primitives, sketches, booleans or imported
+triangles, independently of the finite-element Mesh. Solid evaluation produces a tagged
+triangle boundary; the Shape tree retains primitive and sketch parameters.
 _Avoid_: CAD, part file, solid model
+
+**B-rep**:
+A CAD boundary representation of surfaces, curves and their topology. The current analysis
+Model does not retain arbitrary imported B-rep or CAD feature history. General exact CAD
+editing is deferred under [ADR 0030](docs/adr/0030-exact-cad-editing-is-deferred-and-replay-stays-portable.md).
+
+**CAD hollowing**:
+Offsetting a solid's boundary and opening selected faces to form a wall of a chosen thickness;
+also called a CAD shell operation. It is distinct from the finite-element **Shell** below.
 
 **Body**:
 One connected region of the geometry, carrying a material and a name. Explicit Bodies own
