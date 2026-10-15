@@ -26,8 +26,9 @@ every STEP application protocol or assembly convention.
 
 ## Primary-source dependency evidence
 
-The chosen candidate is the exact published `occt-import-js@0.0.23`, not the repository's
-unpublished 0.0.24 package version. Package metadata identifies wrapper commit
+The converter is a FEM Lab build of the pinned `occt-import-js@0.0.23` source with the
+minimal completeness and ES-module patches below, not the repository's unpublished 0.0.24
+version or an unchanged npm binary. Package metadata identifies wrapper commit
 [`c2148e54`](https://github.com/kovacsv/occt-import-js/tree/c2148e54b456b571238d35cac037d304053d64b2)
 and its OCCT submodule
 [`d2abb6d8`](https://github.com/Open-Cascade-SAS/OCCT/tree/d2abb6d844231cb8f29be6894440874a4700e4a5)
@@ -35,7 +36,9 @@ and its OCCT submodule
 
 The published converter consists of a 7,604,031-byte WASM executable and 96,871-byte JS glue.
 The WASM SHA-256 is `33391fc9d94ea5c869a6718488bf0a9a464222bac9bdc764dfe1690cef281952`.
-It is a standalone converter, never linked into the FEM engine. Its entire download and
+These are baseline published-artifact measurements, not measurements of our patched build.
+The patched artifact gets its own version and hashes. It is a standalone converter, never
+linked into the FEM engine. Its entire download and
 initialisation remain outside landing, preloads and engine boot. The existing landing and
 3 MiB gzip cold-boot budgets remain required.
 
@@ -46,6 +49,48 @@ documented rebuilding/replacement route. The npm archive omits the OCCT submodul
 exception text, so copying only that archive's notices is insufficient. The implementation
 must establish the source-distribution route before adding the converter to a shipped build.
 
+### Patched build and distribution route
+
+`vendor/step-converter/manifest.json` records both exact upstream commits, source-archive
+URLs/checksums, every local patch hash, toolchain version, actual build invocation and the
+resulting JS/WASM hashes. The local converter version is `occt-import-js-0.0.23+femlab.1`.
+There are no FEM engine patches. The standalone converter patches are:
+
+1. Check every recognized transfer root and reported transfer failure; do not skip a root
+   merely because its bounding box is unusable. Reject unsupported free geometric shapes
+   that would otherwise disappear. Count faces before/after triangulation, check mesher
+   completion/status and reject missing/empty triangulations. Return structured conversion
+   failure instead of `success: true` with partial geometry. Preserve doubles and winding.
+2. Produce a modular ES-module entry for the dedicated Worker/Node proof. This changes
+   packaging, not the geometric algorithm, and is recorded as a separate build patch.
+
+`tools/build-step-converter` obtains the two pinned source archives, verifies their hashes,
+applies the recorded patches and builds with Emscripten **3.1.69**, CMake Release and the
+upstream `-Oz`/exception/memory-growth settings. The exact compiler/platform/build details
+and `jobs=2` invocation are recorded with the produced artifact; no claim of identical bytes
+to the publisher's Windows build is made. The resulting standalone JS/WASM are vendored as
+distributable assets, with their notices and manifest.
+
+`tools/prepare-step-assets` prepares `public/third-party/step-converter/`: the converter,
+LGPL texts, pinned OCCT exception, human-readable notices, manifest and a complete
+`corresponding-source.tar.gz`. That source kit includes the full wrapper and OCCT source
+trees, local patches, build instructions and replacement instructions. It is assembled from
+the verified source archives/cache during the ordinary app build and included in the web
+distribution at the same origin as the converter. Missing/mismatched source or notices fail
+the build; upstream links alone are not substituted for the distributed source kit.
+
+The source kit and notices have links in the import UI and are not fetched during boot.
+Rebuilding produces an interface-compatible standalone module and an updated local manifest;
+the documented self-host build accepts that local artifact/source kit. There is no signature
+requirement or immutable hash policy that prevents rebuilding/replacing the module in a
+person's own installation. Official release hashes still identify exactly what was tested.
+
+The original published API cannot prove full source conversion: it ignores mesher status,
+can omit unusable roots, and emits empty face ranges. This is why output array checks and
+engine watertightness alone are insufficient, and why the patched-build/source-kit route is
+a prerequisite rather than an optional follow-up. The receipt describes recognized transfer
+roots/faces and supported tessellated geometry, not universal STEP entity support.
+
 ## Units and conversion contract
 
 - STEP's declared length units are read by OCCT. Ask the converter for **meters**, absolute
@@ -54,6 +99,10 @@ must establish the source-distribution route before adding the converter to a sh
 - Require a positive length Quantity for linear deflection. Convert it with checked
   `query.convert {to: 'm'}`; use the same existing unit parser for the angular Quantity
   (`to: 'rad'`). Reject wrong dimensions, nonfinite/nonpositive values and invalid ranges.
+  The pinned kernel requires absolute deflection at least `1e-7 m` in the chosen meter
+  output; expose that limit and reject it before conversion instead of silently substituting
+  the wrapper's bounding-box-mode 1 mm fallback. Requested deflection is not advertised as
+  a universal bound on volume error: source shape tolerance can supersede it.
 - The report states meter output, requested physical deflection, angular deflection,
   converter version, original-byte SHA-256, converted-byte hash, source mesh/triangle counts
   and the fidelity loss. The API does not return original STEP unit metadata, so do not

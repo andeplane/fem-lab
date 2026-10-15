@@ -16,12 +16,17 @@ existing checked `geometry.import` Command. The engine remains a headless Rust l
 [ADR 0012](0012-engine-in-rust-hosts-in-typescript.md)). The native CLI and other hosts replay
 the resulting ordinary Journal without a CAD converter or the original STEP file.
 
-Use an exact, pinned OCCT converter artifact with its corresponding source and build recipe;
-the current candidate is `occt-import-js@0.0.23`. Read declared STEP units and request meter
+Use our patched build of the pinned `occt-import-js@0.0.23` wrapper commit `c2148e54` and
+OCCT 7.6.1 commit `d2abb6d8`, with full corresponding source and build recipe. The converter
+version is `occt-import-js-0.0.23+femlab.1`. Read declared STEP units and request meter
 output, physical absolute linear deflection and explicit angular deflection. Unit conversion
 uses the engine's existing checked Query. Encode converted doubles as deterministic ASCII
 STL so the existing STL command can preserve their precision. No new Rust format or geometry
-kernel is added.
+kernel is added. A minimal wrapper patch rejects failed/omitted recognized roots, unsupported
+free geometric shapes, mesher failures and missing face triangulations; the original npm
+binary can return partial geometry and is not shipped as if those checks existed. An
+independent packaging patch enables an ES-module entry. Both patches and actual artifact
+hashes are recorded in `vendor/step-converter/manifest.json`.
 
 An import adds/reimports a named Body. It captures original session identity and stateVersion
 before any input/conversion await, then uses the ordinary WriteRequest expectedVersion
@@ -52,13 +57,23 @@ is not treated as a general exemption for the combined executable. The standalon
 converter stays separate from the MIT FEM engine/application, with its own preserved
 license notices and rebuild/replacement materials.
 
-Before distribution, provide the LGPL texts, the pinned OCCT exception, complete identified
-wrapper and OCCT source, and build scripts by the same distribution route as the converter.
+`tools/build-step-converter` verifies pinned source archives, applies the recorded patches
+and builds with Emscripten3.1.69 and the pinned CMake configuration. It records the actual
+platform/compiler/invocation and resulting hashes. `tools/prepare-step-assets` assembles
+`public/third-party/step-converter/` with converter assets, the LGPL texts, pinned OCCT
+exception, notices, manifest and a complete `corresponding-source.tar.gz` containing wrapper
+and OCCT trees, local patches and build/replacement scripts. The ordinary app build includes
+these materials at the same origin and fails if any required source/notice asset is absent
+or mismatched. Notices and source-kit links are visible in the import UI; these assets are
+not part of boot traffic.
+
 Document how to rebuild and replace the module; do not add signature or integrity policy
 that prevents a person using their compatible rebuilt module in their own installation.
 Record the exact unmodified package hashes and source metadata without claiming
 byte-reproducible upstream builds: the npm publication workflow does not attest such a
-rebuild, and the published tarball omits OCCT's source submodule and exception text.
+rebuild, and the published tarball omits OCCT's source submodule and exception text. The
+self-host replacement route accepts the user's rebuilt compatible module and regenerated
+manifest/source kit. Official hashes describe tested releases and do not lock local builds.
 
 Primary references:
 
