@@ -1,0 +1,176 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "FV52 Hex20 16x16x4"
+  },
+  {
+    "cmd": "model.setUnits",
+    "units": {
+      "length": "m",
+      "stress": "Pa",
+      "force": "N"
+    }
+  },
+  {
+    "cmd": "geometry.addBox",
+    "name": "plate",
+    "size": [
+      "10 m",
+      "10 m",
+      "1 m"
+    ],
+    "at": [
+      "0 m",
+      "0 m",
+      "-0.5 m"
+    ]
+  },
+  {
+    "cmd": "material.add",
+    "name": "mat",
+    "E": "200 GPa",
+    "nu": 0.3,
+    "rho": "8000 kg/m^3",
+    "source": "FV52 primary inputs; conflicting published reference columns retained under #639"
+  },
+  {
+    "cmd": "material.assign",
+    "material": "mat",
+    "bodies": [
+      "plate"
+    ]
+  },
+  {
+    "cmd": "mesh.set",
+    "mesher": {
+      "kind": "lattice",
+      "size": {
+        "nx": 16,
+        "ny": 16,
+        "nz": 4
+      }
+    },
+    "order": 2,
+    "formulation": "full"
+  },
+  {
+    "cmd": "geometry.nameRegion",
+    "name": "x0",
+    "where": {
+      "kind": "bbox",
+      "min": [
+        "-1e-09 m",
+        "-1e-09 m",
+        "-0.500000001 m"
+      ],
+      "max": [
+        "1e-09 m",
+        "10.000000001 m",
+        "-0.499999999 m"
+      ]
+    }
+  },
+  {
+    "cmd": "constraint.fix",
+    "name": "uz-x0",
+    "on": "x0",
+    "dofs": [
+      "uz"
+    ]
+  },
+  {
+    "cmd": "geometry.nameRegion",
+    "name": "x10",
+    "where": {
+      "kind": "bbox",
+      "min": [
+        "9.999999999 m",
+        "-1e-09 m",
+        "-0.500000001 m"
+      ],
+      "max": [
+        "10.000000001 m",
+        "10.000000001 m",
+        "-0.499999999 m"
+      ]
+    }
+  },
+  {
+    "cmd": "constraint.fix",
+    "name": "uz-x10",
+    "on": "x10",
+    "dofs": [
+      "uz"
+    ]
+  },
+  {
+    "cmd": "geometry.nameRegion",
+    "name": "y0",
+    "where": {
+      "kind": "bbox",
+      "min": [
+        "-1e-09 m",
+        "-1e-09 m",
+        "-0.500000001 m"
+      ],
+      "max": [
+        "10.000000001 m",
+        "1e-09 m",
+        "-0.499999999 m"
+      ]
+    }
+  },
+  {
+    "cmd": "constraint.fix",
+    "name": "uz-y0",
+    "on": "y0",
+    "dofs": [
+      "uz"
+    ]
+  },
+  {
+    "cmd": "geometry.nameRegion",
+    "name": "y10",
+    "where": {
+      "kind": "bbox",
+      "min": [
+        "-1e-09 m",
+        "9.999999999 m",
+        "-0.500000001 m"
+      ],
+      "max": [
+        "10.000000001 m",
+        "10.000000001 m",
+        "-0.499999999 m"
+      ]
+    }
+  },
+  {
+    "cmd": "constraint.fix",
+    "name": "uz-y10",
+    "on": "y10",
+    "dofs": [
+      "uz"
+    ]
+  },
+  {
+    "cmd": "step.add",
+    "name": "modes",
+    "procedure": "modal",
+    "constraints": [
+      "uz-x0",
+      "uz-x10",
+      "uz-y0",
+      "uz-y10"
+    ],
+    "loads": [],
+    "nModes": 10
+  },
+  {
+    "cmd": "solve.run",
+    "step": "modes",
+    "solver": "cpu-direct",
+    "tolerance": 1e-10,
+    "maxIterations": 5000
+  }
+]
