@@ -134,7 +134,7 @@ export class ScriptHost {
             if (!open()) return;
             const ack = value as Partial<Ack> | null;
             const cmd = message.value[message.kind === 'dispatch' ? 'cmd' : 'query'];
-            if (message.kind === 'dispatch' && ['file.save', 'file.export', 'file.write'].includes(String(cmd))) {
+            if (message.kind === 'dispatch' && ['file.save', 'file.export', 'file.write', 'file.download'].includes(String(cmd))) {
               const delivery = FileDelivery.safeParse(value);
               if (delivery.success) files.push(delivery.data);
             }

@@ -10,6 +10,7 @@ import { useStore } from '../ui/cmd';
 import { FemError, FileDelivery, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { CompletedFileRow } from './CompletedFileRow';
 import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
 
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
@@ -80,7 +81,7 @@ type Item =
   | { kind: 'files'; files: FileDelivery[] }
   | { kind: 'bad'; text: string };
 
-const WROTE = new Set(['file.write', 'file.save', 'file.export']);
+const WROTE = new Set(['file.write', 'file.save', 'file.export', 'file.download']);
 
 /** Only host-confirmed delivery metadata, never a requested name or script-authored return. */
 export function fileDeliveries(call: ToolCall): FileDelivery[] {
@@ -658,7 +659,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
       }}>
         {items.map((item, i) => (
-          <Item key={i} item={item} dispatch={dispatch} state={ui} />
+          <Item key={i} item={item} dispatch={dispatch} state={ui} registry={registry} />
         ))}
         {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
@@ -912,7 +913,7 @@ function flushProse(text: string, add: (item: Item) => void, record: (rows: Veri
   if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
 }
 
-function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+function Item({ item, dispatch, state, registry }: { state: UiState; item: Item; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>; registry: Registry }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -961,15 +962,7 @@ function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch:
     return (
       <div class="card files-card">
         <div class="head">Files</div>
-        {item.files.map(({ name, to }, index) => (
-          <div class="files-row" key={index}>
-            <span class="path">{name}</span>
-            <span class="faint">{to === 'folder' ? 'project folder' : 'download'}</span>
-            <Cmd cmd="clipboard.copy" title="Copy the filename" run={() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'text', text: name } })}>
-              copy
-            </Cmd>
-          </div>
-        ))}
+        {item.files.map((file, index) => <CompletedFileRow key={index} file={file} registry={registry} dispatch={dispatch} version={state.completedFilesVersion} />)}
       </div>
     );
   }
