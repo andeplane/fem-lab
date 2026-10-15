@@ -1034,6 +1034,32 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F18 | #346, logarithmic decrement: F3's SDOF hex8 released with an initial velocity (no load) at ζ = 0.05, Rayleigh pair `α = ζω, β = ζ/ω` | `δ = 2πζ/√(1−ζ²)`, measured from two parabolically-interpolated peaks four damped periods apart, `ln(peak₀/peak₄)/4` | 1 % | free-decay damping reaches the ratio the pair was chosen for, independent of F3's step-load closed form | engine test |
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
 | F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
+| F22 | #605, full-basis guided steel Hex8 harmonic response on ordinary 800–2400 Hz and extreme linear 1e99–1e100 Hz sweeps at 3/5/9 points, damping 0/0.05/0.8, native 1/4 threads | K=C11 A/L, M=ρAL/3, C=2ζ√(KM); amplitude F/hypot(K−Mω²,Cω), lag atan2(Cω,K−Mω²). At 1e100 Hz and ζ=0: 9.742421504070939e-200 m, lag π | 1e-10 relative amplitude; 1e-12 phase; positive finite amplitudes, matching retained displacement/probe values, nested quantiles and exact thread/replay identity | independent component exponent scaling preserves finite tiny responses and phases without overflowing squared denominators; true singular/nonfinite inputs retain their admission policy | engine unit + public registry + native/WASM replay + Chromium |
+
+**F22 (#605)** separately gates the complex reciprocal, without the logarithmic-grid
+correction in #602. The one-element guided bar has four free axial tip DOFs and a
+complete four-mode basis; uniform loading excites the exact axial mode. Integrating
+its linear x/L shape gives M=ρAL/3, and its constrained transverse strain gives
+K=C11 A/L. The response oracle is the closed-form damped oscillator, using these
+independent physical coefficients rather than the engine's eigenvalues.
+
+Pure complex-quotient cases use exact rational answers across smallest-subnormal,
+ordinary and maximum finite scales. Independent binary cases additionally preserve
+both coefficients for p=2^1023, a=2^-1000, b=2^500 (real 2^-977, imaginary −2^523)
+and p=2^1023, a=2^-1074, b=2 (real 2^-53, imaginary −2^1022), including swapped and
+signed components. These detect prematurely normalizing away the small numerator.
+Zero denominators and nonfinite arithmetic remain nonfinite; there is no epsilon,
+saturation or substituted zero response. The unchanged checked-display exact-resonance
+case and a finite-authored 1e200–2e200 Hz sweep with nonfinite derived coefficients
+verify rejection before publication, preserving prior modal/finite harmonic Results,
+the catalogue, Model/Journal/revision and the next accepted Result identifier.
+
+`tools/test-harmonic-reciprocal-replay.mjs` applies the same eighteen oscillator cases
+and singular/nonfinite publication boundaries to native 1/4 threads and WASM, with
+real Journal hash/replay checks. The four cases in `harmonic-reciprocal.spec.ts`
+check ordinary and extreme amplitudes, signed phases, retained modal fields and
+finite response-chart coordinates through the production Chromium app. They use
+the normal response-field selection, without overriding a selected mode.
 
 The #608 registry and Chromium regressions distinguish retained mode shapes from response
 metadata around these existing dynamic Benchmarks. `query.result.modeCount` is the number

@@ -168,6 +168,7 @@ jobs:
       - run: node tools/test-abaqus-hosts.mjs target/release/femlab
       - run: node tools/test-quadratic-measures-replay.mjs
       - run: node tools/test-random-vibration-replay.mjs
+      - run: node tools/test-harmonic-reciprocal-replay.mjs
       - name: replay every fixture natively and in wasm
         run: |
           mkdir -p hashes/native hashes/wasm

@@ -7524,6 +7524,140 @@ fn a_harmonic_sweep_strides_and_logs_like_the_schema_says() {
 }
 
 #[test]
+fn harmonic_reciprocals_preserve_extreme_finite_response_phase_and_replay_under_refinement() {
+    // One guided full-integration hex has an exact uniform axial mode. Its complete
+    // four-mode basis must reproduce the independently integrated K, M and C.
+    let (young, poisson, density, area, force) = (210e9, 0.3, 7800.0, 0.01, 10_000.0);
+    let stiffness: f64 = young * (1.0 - poisson) / ((1.0 + poisson) * (1.0 - 2.0 * poisson)) * area;
+    let mass: f64 = density * area / 3.0;
+    for (start, stop) in [(800.0, 2400.0), (1e99, 1e100)] {
+        for damping in [0.0, 0.05, 0.8] {
+            let viscous = 2.0 * damping * (stiffness * mass).sqrt();
+            let mut previous_grid: Vec<f64> = Vec::new();
+            for points in [3, 5, 9] {
+                let mut thread_snapshot = None;
+                for threads in [1, 4] {
+                    let mut e = Engine::new(None, Box::new(NoClock), threads);
+                    harmonic_bar(
+                        &mut e,
+                        &format!(
+                            r#","fStart":"{start} Hz","fStop":"{stop} Hz","points":{points},"dampingRatio":{damping},"sweep":"linear""#
+                        ),
+                    );
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+                    let modal_before = summary(&mut e, "modes");
+                    let mode_before = e.field(Some("modes"), Field::Displacement).unwrap().data.clone();
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+                    let response = summary(&mut e, "sweep");
+                    assert_eq!(response.sweep.len(), points);
+                    let mut peak: f64 = 0.0;
+                    for (i, row) in response.sweep.iter().enumerate() {
+                        let expected_frequency = start + (stop - start) * i as f64 / (points - 1) as f64;
+                        assert!((row.frequency.value / expected_frequency - 1.0).abs() < 1e-15);
+                        let omega = 2.0 * std::f64::consts::PI * row.frequency.value;
+                        let dynamic_stiffness = stiffness - mass * omega * omega;
+                        let quadrature = viscous * omega;
+                        let expected = force / dynamic_stiffness.hypot(quadrature);
+                        assert!(expected.is_finite() && expected > 0.0);
+                        assert!(row.amplitude.value.is_finite() && row.amplitude.value > 0.0);
+                        assert!(
+                            (row.amplitude.value / expected - 1.0).abs() < 1e-10,
+                            "{start}..{stop}, damping {damping}, {} Hz: {} versus {expected}",
+                            row.frequency.value,
+                            row.amplitude.value
+                        );
+                        let phase = libm::atan2(quadrature, dynamic_stiffness);
+                        let phase_error = (row.phase.value - phase + std::f64::consts::PI)
+                            .rem_euclid(2.0 * std::f64::consts::PI)
+                            - std::f64::consts::PI;
+                        assert!(phase_error.abs() < 1e-12);
+                        assert_eq!((row.amplitude.unit.as_str(), row.phase.unit.as_str()), ("m", "rad"));
+                        peak = peak.max(expected);
+                    }
+                    let field = e.field(Some("sweep"), Field::Displacement).unwrap().data.clone();
+                    assert!(field.iter().all(|value| value.is_finite()));
+                    let field_max = field.iter().copied().fold(0.0f64, f64::max);
+                    assert!(field_max > 0.0 && (field_max / peak - 1.0).abs() < 1e-10);
+                    let probe = e
+                        .query(Query::Probe {
+                            result_id: Some(response.result_id.clone()),
+                            sample: None,
+                            step: None,
+                            field: Field::Displacement,
+                            component: Some(0),
+                            at: [Q::text("1 m"), Q::text("0.05 m"), Q::text("0.05 m")],
+                        })
+                        .unwrap();
+                    let probe_value = serde_json::to_value(&probe).unwrap();
+                    let amplitude = probe_value["value"]["value"].as_f64().unwrap();
+                    assert!(amplitude > 0.0 && (amplitude / peak - 1.0).abs() < 1e-10);
+                    assert_eq!(summary(&mut e, "modes"), modal_before);
+                    assert_eq!(e.field(Some("modes"), Field::Displacement).unwrap().data, mode_before);
+                    let grid: Vec<f64> = response.sweep.iter().map(|row| row.frequency.value).collect();
+                    if threads == 1 {
+                        for (i, previous) in previous_grid.iter().enumerate() {
+                            assert_eq!(grid[2 * i], *previous, "nested linear quantiles");
+                        }
+                        previous_grid = grid.clone();
+                    }
+                    let file = e.export_file();
+                    let hash = e.model_hash();
+                    let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+                    let hashes = pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+                    assert_eq!(hashes.last(), Some(&hash));
+                    assert_eq!(replayed.export_file().model, file.model);
+                    assert_eq!(summary(&mut replayed, "sweep").sweep, response.sweep);
+                    assert_eq!(replayed.field(Some("sweep"), Field::Displacement).unwrap().data, field);
+                    assert_eq!(replayed.field(Some("modes"), Field::Displacement).unwrap().data, mode_before);
+                    let snapshot = serde_json::json!({"hash":hash,"rows":response.sweep,"field":field,
+                        "mode":mode_before,"modalFrequencies":modal_before.frequencies,"probe":probe});
+                    if let Some(previous) = &thread_snapshot {
+                        assert_eq!(previous, &snapshot, "one/four-thread physical Results");
+                    } else {
+                        thread_snapshot = Some(snapshot);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn harmonic_nonfinite_reciprocals_do_not_publish_over_the_retained_finite_response() {
+    for threads in [1, 4] {
+        let mut e = Engine::new(None, Box::new(NoClock), threads);
+        harmonic_bar(&mut e, r#", "fStart":"800 Hz", "fStop":"2400 Hz", "points":3, "dampingRatio":0.05"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"step.add","name":"unrepresentable","procedure":"harmonic",
+            "constraints":["root","guide"],"loads":["pull"],"after":"modes",
+            "fStart":"1e200 Hz","fStop":"2e200 Hz","points":3,"dampingRatio":0.05}"#,
+        );
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+        let file = e.export_file();
+        let hash = e.model_hash();
+        let revision = e.revision();
+        let catalogue = e.query(Query::Results {}).unwrap();
+        let modal = summary(&mut e, "modes");
+        let prior = summary(&mut e, "sweep");
+        let field = e.field(Some("sweep"), Field::Displacement).unwrap().data.clone();
+        let error = err(&mut e, r#"{"cmd":"solve.run","step":"unrepresentable","solver":"cpu-direct"}"#);
+        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::UnitDisplay, Some("displayUnits")));
+        assert!(error.suggestion.unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+        assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+        assert_eq!(summary(&mut e, "modes"), modal);
+        assert_eq!(summary(&mut e, "sweep"), prior);
+        assert_eq!(e.field(Some("sweep"), Field::Displacement).unwrap().data, field);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+        assert_eq!(summary(&mut e, "modes").result_id, "result-3");
+    }
+}
+
+#[test]
 fn a_harmonic_step_needs_a_current_modal_result_and_a_usable_sweep() {
     // Its predecessor has not been solved.
     let mut e = engine();
