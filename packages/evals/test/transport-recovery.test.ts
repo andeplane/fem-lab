@@ -136,3 +136,15 @@ it('exhausts one unknown-usage transport retry with both maximum debits visible 
   await collect(run.provider.chat(request));
   expect(run.count).toHaveBeenCalledTimes(2);
 });
+
+it('treats even an empty provider error as failed and never releases its text or tool', async () => {
+  const run = setup(fixture(async function* () {
+    yield { type: 'text_delta', text: 'discard' };
+    yield { type: 'tool_use', id: 'never', name: 'execute', input: {} };
+    yield { type: 'usage', usage };
+    yield { type: 'done', stopReason: 'tool_use' };
+    yield { type: 'error', message: '' };
+  }));
+  expect(await collect(run.provider.chat(request))).toEqual([{ type: 'error', message: '' }]);
+  expect(run.receipts[0]).toMatchObject({ outcome: 'stopped', discardedEvents: 5, reason: '' });
+});

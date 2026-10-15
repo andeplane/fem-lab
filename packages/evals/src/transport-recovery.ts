@@ -66,7 +66,7 @@ export function recoverableProvider(factory: (observer: ProviderObserver) => Pro
         }
         abort();
         protocolFailure ||= usageCount > 1 || doneCount > 1 || errorCount > 1;
-        if (!failure && (doneCount !== 1 || usageCount !== 1)) { failure = 'provider attempt lacks one completion and usage receipt'; protocolFailure = true; }
+        if (failure === undefined && (doneCount !== 1 || usageCount !== 1)) { failure = 'provider attempt lacks one completion and usage receipt'; protocolFailure = true; }
         if (protocolFailure) failure = 'provider attempt violated completion/usage protocol';
         const retry = failure !== undefined && !protocolFailure && attempt < options.maxTransportRetries && retryableTransport(diagnostics);
         reservation.finish(protocolFailure ? null : usage, retry ? 'retain-for-transport-retry' : undefined);
@@ -74,18 +74,19 @@ export function recoverableProvider(factory: (observer: ProviderObserver) => Pro
         // Invalid usage must never release events or admit a retry.
         if (budget.snapshot().stoppedReason !== null) failure ??= budget.snapshot().stoppedReason!;
         const mayRetry = retry && budget.snapshot().stoppedReason === null;
-        options.record({ request: budget.snapshot().requests, attempt, outcome: mayRetry ? 'retry' : failure ? 'stopped' : 'completed', diagnostics, discardedEvents: failure ? events.length : 0, unknownUsageRetained: usage === null || protocolFailure, ...(failure ? { reason: failure } : {}) });
+        options.record({ request: budget.snapshot().requests, attempt, outcome: mayRetry ? 'retry' : failure !== undefined ? 'stopped' : 'completed', diagnostics, discardedEvents: failure !== undefined ? events.length : 0, unknownUsageRetained: usage === null || protocolFailure, ...(failure !== undefined ? { reason: failure } : {}) });
         await changed();
         if (mayRetry) continue;
-        if (failure) { budget.interrupt(failure); await changed(); yield { type: 'error', message: failure }; return; }
+        if (failure !== undefined) { budget.interrupt(failure); await changed(); yield { type: 'error', message: failure }; return; }
         abort();
         for (const event of events) yield event;
         return;
       } catch (error) {
+        const heldRetained = reservation !== undefined;
         if (reservation) { reservation.finish(null); reservation = undefined; }
         const reason = error instanceof Error ? error.message : String(error);
         budget.interrupt(reason);
-        options.record({ request: budget.snapshot().requests, attempt, outcome: 'stopped', diagnostics, discardedEvents: events.length, unknownUsageRetained: usage === null, reason });
+        options.record({ request: budget.snapshot().requests, attempt, outcome: 'stopped', diagnostics, discardedEvents: events.length, unknownUsageRetained: heldRetained, reason });
         await changed();
         yield { type: 'error', message: reason }; return;
       }
