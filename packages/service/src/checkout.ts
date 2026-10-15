@@ -22,12 +22,13 @@ export interface Payments {
   checkout(input:{customer:string;price:string;accountId:string;successUrl:string;cancelUrl:string;expiresAt:number;key:string}):Promise<PaymentSession>;
   session(id:string):Promise<PaymentSession>;
   portal(customer:string,returnUrl:string):Promise<string>;
-  schedule(subscription:PaymentSubscription,price:string,key:string):Promise<string>;
+  /** Persist the provider-owned schedule identity before its first update. */
+  schedule(subscription:PaymentSubscription,price:string,key:string,receipt:(id:string)=>Promise<void>):Promise<string>;
 }
 export interface CheckoutConfig extends BillingConfig {enabled:boolean;appOrigin:string;merchantMode:BillingMerchantMode;taxMode:BillingTaxMode;projectId:string}
 // Bump for fixed wire, SDK/API version or header changes (including integration_identifier).
 const CHECKOUT_REQUEST_VERSION=1;
-const PLAN_CHANGE_REQUEST_VERSION=1;
+const PLAN_CHANGE_REQUEST_VERSION=2;
 function redirect(url:string|null,allowed:string):string {
   if(!url)throw new Error('Missing payment redirect.');
   const parsed=new URL(url);
@@ -73,6 +74,28 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
     const subscriptions=(await payments.subscriptions(customerId)).filter(row=>!['canceled','incomplete_expired'].includes(row.status));
     if(subscriptions.some(row=>row.customerId!==customerId)||subscriptions.length>1)throw new ServiceFailure(409,'billing-review','Your billing account needs review before changing a plan.','billing');
     return subscriptions[0];
+  }
+  function sourceMatches(row:Record<string,unknown>,current:PaymentSubscription):boolean {
+    return row.source_subscription_id===current.id&&row.source_price_id===current.priceId&&
+      row.source_period_start instanceof Date&&row.source_period_start.getTime()===current.start*1000&&
+      row.effective_at instanceof Date&&row.effective_at.getTime()===current.end*1000&&
+      (row.source_schedule_id!==null?row.source_schedule_id===current.scheduleId:row.schedule_id===null||row.schedule_id===current.scheduleId);
+  }
+  async function scheduleChange(row:Record<string,unknown>,current:PaymentSubscription,price:string):Promise<void> {
+    if(!sourceMatches(row,current))throw new ServiceFailure(409,'plan-change-review','The original subscription settings changed. Billing support must review this plan change.','billing','account.open');
+    // When creation lost its response, replay the original from_subscription key;
+    // never adopt an arbitrary newly attached schedule as the update target.
+    const frozen={...current,scheduleId:(row.schedule_id??row.source_schedule_id) as string|null};
+    let received=false;
+    const scheduleId=await payments.schedule(frozen,price,`femlab-plan:${row.operation_id}`,async id=>{
+      if(!/^sub_sched_[a-zA-Z0-9_]+$/.test(id)||(current.scheduleId!==null&&current.scheduleId!==id))
+        throw new ServiceFailure(409,'plan-change-review','The subscription schedule changed. Billing support must review this plan change.','billing','account.open');
+      const saved=await db.query("UPDATE plan_changes SET schedule_id=$2,updated_at=$3 WHERE account_id=$1 AND operation_id=$4 AND state='pending' AND (schedule_id IS NULL OR schedule_id=$2) RETURNING schedule_id",[row.account_id,id,now(),row.operation_id]);
+      if(!saved.rows.length)throw new Error('Plan change schedule receipt conflict.');
+      received=true;
+    });
+    if(!received)throw new Error('Missing durable schedule receipt.');
+    await db.query("UPDATE plan_changes SET state='complete',updated_at=$3 WHERE account_id=$1 AND operation_id=$4 AND schedule_id=$2",[row.account_id,scheduleId,now(),row.operation_id]);
   }
   return {
     async checkout(header:string|undefined,body:unknown) {
@@ -146,18 +169,18 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
         const operation=await transaction(db,async sql=>{
           const previous=(await sql.query('SELECT * FROM plan_changes WHERE account_id=$1',[caller.id])).rows[0];
           if(previous?.plan===parsed.data.plan&&(previous.effective_at as Date).getTime()===effectiveAt.getTime()) {
-            if(previous.request_version!==PLAN_CHANGE_REQUEST_VERSION||previous.price_id!==price||previous.purchase_use!==use)throw new ServiceFailure(409,'plan-change-review','The original scheduled purchase settings need review before retrying.','billing','account.open');
+            if(previous.request_version!==PLAN_CHANGE_REQUEST_VERSION||previous.price_id!==price||previous.purchase_use!==use||!sourceMatches(previous,current))throw new ServiceFailure(409,'plan-change-review','The original scheduled purchase settings need review before retrying.','billing','account.open');
             return previous;
           }
           const id=newId();
-          await sql.query(`INSERT INTO plan_changes(account_id,plan,effective_at,operation_id,state,updated_at,price_id,purchase_use,request_version) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8)
+          await sql.query(`INSERT INTO plan_changes(account_id,plan,effective_at,operation_id,state,updated_at,price_id,purchase_use,request_version,source_subscription_id,source_price_id,source_period_start,source_schedule_id) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9,$10,$11,$12)
             ON CONFLICT(account_id) DO UPDATE SET plan=EXCLUDED.plan,effective_at=EXCLUDED.effective_at,operation_id=EXCLUDED.operation_id,state='pending',schedule_id=NULL,updated_at=EXCLUDED.updated_at,
-            price_id=EXCLUDED.price_id,purchase_use=EXCLUDED.purchase_use,request_version=EXCLUDED.request_version`,[caller.id,parsed.data.plan,effectiveAt,id,now(),price,use,PLAN_CHANGE_REQUEST_VERSION]);
-          return {operation_id:id,state:'pending'};
+            price_id=EXCLUDED.price_id,purchase_use=EXCLUDED.purchase_use,request_version=EXCLUDED.request_version,source_subscription_id=EXCLUDED.source_subscription_id,
+            source_price_id=EXCLUDED.source_price_id,source_period_start=EXCLUDED.source_period_start,source_schedule_id=EXCLUDED.source_schedule_id`,[caller.id,parsed.data.plan,effectiveAt,id,now(),price,use,PLAN_CHANGE_REQUEST_VERSION,current.id,current.priceId,new Date(current.start*1000),current.scheduleId]);
+          return (await sql.query('SELECT * FROM plan_changes WHERE account_id=$1',[caller.id])).rows[0]!;
         });
         if(operation.state!=='complete') {
-          const scheduleId=await payments.schedule(current,price,`femlab-plan:${operation.operation_id}`);
-          await db.query("UPDATE plan_changes SET state='complete',schedule_id=$2,updated_at=$3 WHERE account_id=$1 AND operation_id=$4",[caller.id,scheduleId,now(),operation.operation_id]);
+          await scheduleChange(operation,current,price);
         }
         return {plan:parsed.data.plan,effectiveAt:effectiveAt.toISOString()};
       });
@@ -178,10 +201,9 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
           const current=await subscription(String(row.customer_id));
           if(!current||current.status!=='active'||current.end*1000!==(row.effective_at as Date).getTime()||current.end*1000<=now().getTime())throw new Error('Plan change needs review after its original period.');
           const selection=catalog.get(current.priceId);
-          if(row.request_version!==PLAN_CHANGE_REQUEST_VERSION||!selection||row.purchase_use!==selection.purchaseUse||row.price_id!==catalog.select(row.plan as PaidPlan,selection.purchaseUse))throw new Error('Plan change purchase settings require review.');
+          if(row.request_version!==PLAN_CHANGE_REQUEST_VERSION||!selection||row.purchase_use!==selection.purchaseUse||row.price_id!==catalog.select(row.plan as PaidPlan,selection.purchaseUse)||!sourceMatches(row,current))throw new Error('Plan change purchase settings require review.');
           const price=await priced(row.plan as PaidPlan,selection.purchaseUse);
-          const scheduleId=await payments.schedule(current,price,`femlab-plan:${row.operation_id}`);
-          await db.query("UPDATE plan_changes SET state='complete',schedule_id=$2,updated_at=$3 WHERE account_id=$1 AND operation_id=$4",[row.account_id,scheduleId,now(),row.operation_id]);processed++;
+          await scheduleChange(row,current,price);processed++;
         });
       }catch{failed++;}
       return {processed,failed};

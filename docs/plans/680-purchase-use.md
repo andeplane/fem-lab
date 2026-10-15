@@ -12,8 +12,9 @@ conditional policy copy is [#674](https://github.com/andeplane/fem-lab/issues/67
 The registered `account.checkout` Command and `/v1/billing/checkout` accept
 `purchaseUse: personal | business`. New managed purchases require it. The form has
 no default and sends an explicit choice; this is an argument on the callable
-Command, not a hidden persistent setting. Existing direct legacy callers without
-the new argument remain compatible. Plan changes still accept only `plan`, derive
+Command, not a hidden persistent setting. Exact direct mode sends a plan-only
+Checkout through the legacy catalog; missing/pending/unknown modes block new
+purchases even if a stale profile says available. Plan changes still accept only `plan`, derive
 the subscription's original allowed use, and keep legacy direct prices in their
 original route. Unknown/mixed aliases fail with a structured review error.
 
@@ -44,13 +45,22 @@ or either real public manifest.
 
 New Checkout intents persist request version, selected price/use, merchant/tax
 mode, return origin, customer/project identity and the original expiry. Plan-change
-intents persist request version and target price/use. Historical rows remain
+intents persist request version 2, target price/use, source subscription ID/price,
+period start/end and original schedule ID. Historical rows remain
 unversioned, without backfill. A payable intent with changed or missing frozen
 settings returns `409 checkout-open` and its original expiry, making no new Session
 creation call. Closing/canceling the browser page alone does not expire it. The
 initial window is 31 minutes, so a different selection may need to wait for the
 remaining window. Unknown plan-change contracts require review instead of new
 parameters under an old operation key.
+
+A source price, start, subscription or known schedule change refuses both
+interactive and recovery retries before another scheduling call. For an initially
+absent schedule, the adapter replays its stable creation key and retrieves current
+subscription ownership. A typed receipt records the resolved schedule ID before
+the first schedule update. An unrelated newly attached schedule fails review;
+the operation's own lost creation remains recoverable. This preserves both the
+schedule endpoint and encoded phase parameters under the existing update key.
 
 ## Verification
 

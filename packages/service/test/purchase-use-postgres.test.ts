@@ -25,7 +25,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('purchase-use authority and froz
   const schema=`purchase_${randomUUID().replaceAll('-','')}`;
   const admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
   const db=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`,max:6});
-  let clock=new Date('2026-10-15T12:00:00Z'),accountId='',loseCheckoutResponse=false,failSchedule=false;
+  let clock=new Date('2026-10-15T12:00:00Z'),accountId='',loseCheckoutResponse=false,failSchedule=false,loseScheduleCreateResponse=false,scheduleUpdates=0;
   const now=()=>new Date(clock),accounts=postgresAccounts(db,now,randomUUID),ledger=creditLedger(db,now,randomUUID);
   const checkoutCalls:CheckoutRequest[]=[],scheduleCalls:ScheduleRequest[]=[],priceCalls:string[]=[];
   const saved=new Map<string,PaymentSession>(),sessions=new Map<string,PaymentSession>(),amounts=new Map<string,number>();
@@ -44,7 +44,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('purchase-use authority and froz
     },
     async session(id){return structuredClone(sessions.get(id)!);},
     async portal(){return 'https://billing.stripe.com/p/session/fixture';},
-    async schedule(current,price,key){scheduleCalls.push({subscription:structuredClone(current),price,key});if(failSchedule)throw new Error('Schedule response lost');return 'sub_sched_purchase';},
+    async schedule(current,price,key,receipt){
+      scheduleCalls.push({subscription:structuredClone(current),price,key});
+      const id=current.scheduleId??'sub_sched_purchase';
+      if(subscriptions[0]!.scheduleId===null)subscriptions[0]!.scheduleId=id;
+      if(loseScheduleCreateResponse){loseScheduleCreateResponse=false;throw new Error('Schedule creation response lost');}
+      await receipt(id);
+      scheduleUpdates++;
+      if(failSchedule)throw new Error('Schedule response lost');
+      return id;
+    },
   };
   const owner=async()=>accounts.provision({uid:'owner',email:'owner@example.com'});
   const checkout=(config=fixture())=>checkoutService(db,payments,config,owner,now,randomUUID);
@@ -73,7 +82,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('purchase-use authority and froz
   beforeEach(async()=>{
     await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_inbox CASCADE');await db.query('TRUNCATE billing_leases');
     clock=new Date('2026-10-15T12:00:00Z');accountId=(await owner()).id;
-    checkoutCalls.length=0;scheduleCalls.length=0;priceCalls.length=0;saved.clear();sessions.clear();amounts.clear();subscriptions=[];loseCheckoutResponse=false;failSchedule=false;
+    checkoutCalls.length=0;scheduleCalls.length=0;priceCalls.length=0;saved.clear();sessions.clear();amounts.clear();subscriptions=[];loseCheckoutResponse=false;failSchedule=false;loseScheduleCreateResponse=false;scheduleUpdates=0;
     for(const [tier,amount] of [['plus',4900],['pro',14900],['studio',49900]] as const)for(const suffix of ['','_personal','_business'])amounts.set(`price_${tier}${suffix}`,amount);
     const start=clock.getTime()/1000,end=periodEnd.getTime()/1000;
     invoice={id:'in_purchase',customerId:'cus_owner',subscriptionId:'sub_purchase',status:'paid',currency:'usd',reason:'subscription_create',amountPaid:4900,lines:[{priceId:'price_plus_personal',quantity:1,proration:false,start,end}]};
@@ -159,9 +168,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('purchase-use authority and froz
     await currentSubscription(use);failSchedule=true;
     await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toThrow('Schedule response lost');
     const target=use?`price_pro_${use}`:'price_pro',pending=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
-    expect(pending).toMatchObject({request_version:1,plan:'pro',price_id:target,purchase_use:use,state:'pending'});
+    expect(pending).toMatchObject({request_version:2,plan:'pro',price_id:target,purchase_use:use,state:'pending',source_subscription_id:'sub_purchase',source_price_id:use?`price_plus_${use}`:'price_plus',source_period_start:clock,source_schedule_id:null,schedule_id:'sub_sched_purchase'});
     expect(scheduleCalls[0]!.price).toBe(target);failSchedule=false;
-    expect(await checkout().recover()).toEqual({processed:1,failed:0});expect(scheduleCalls).toHaveLength(2);expect(scheduleCalls[1]).toEqual(scheduleCalls[0]);
+    expect(await checkout().recover()).toEqual({processed:1,failed:0});expect(scheduleCalls).toHaveLength(2);
+    expect(scheduleCalls[1]).toEqual({...scheduleCalls[0]!,subscription:{...scheduleCalls[0]!.subscription,scheduleId:'sub_sched_purchase'}});
     expect((await db.query('SELECT state FROM plan_changes')).rows[0]!.state).toBe('complete');
     expect((await db.query('SELECT * FROM credit_grants')).rows).toHaveLength(0);
   });
@@ -180,12 +190,59 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('purchase-use authority and froz
     if(change==='target price'){config.purchasePrices!.pro!.personal='price_pro_personal_rotated';amounts.set('price_pro_personal_rotated',14900);}
     if(change==='current use')subscriptions[0]!.priceId='price_plus_business';
     if(change==='missing version')await db.query('UPDATE plan_changes SET request_version=NULL');
-    if(change==='new version')await db.query('UPDATE plan_changes SET request_version=2');
+    if(change==='new version')await db.query('UPDATE plan_changes SET request_version=3');
     const before=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
     expect(await checkout(config).recover()).toEqual({processed:0,failed:1});expect(scheduleCalls).toHaveLength(1);
     expect((await db.query('SELECT * FROM plan_changes')).rows[0]).toEqual(before);
     await expect(checkout(config).change('Bearer owner',{plan:'pro'})).rejects.toMatchObject({code:'plan-change-review'});
     expect(scheduleCalls).toHaveLength(1);
+  });
+
+  it.each(['source price','period start','subscription ID','created schedule','existing schedule'])('refuses interactive and job retry after %s drift without changing the old wire contract',async change=>{
+    await currentSubscription('personal');
+    if(change==='existing schedule')subscriptions[0]!.scheduleId='sub_sched_original';
+    failSchedule=true;
+    await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toThrow('Schedule response lost');failSchedule=false;
+    if(change==='source price')subscriptions[0]!.priceId='price_pro_personal';
+    if(change==='period start')subscriptions[0]!.start++;
+    if(change==='subscription ID')subscriptions[0]!.id='sub_replaced';
+    if(change==='created schedule'||change==='existing schedule')subscriptions[0]!.scheduleId='sub_sched_unrelated';
+    const before=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
+    await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toMatchObject({status:409,code:'plan-change-review'});
+    expect(await checkout().recover()).toEqual({processed:0,failed:1});
+    expect(scheduleCalls).toHaveLength(1);expect(scheduleUpdates).toBe(1);
+    expect((await db.query('SELECT * FROM plan_changes')).rows[0]).toEqual(before);
+  });
+
+  it.each(['source_subscription_id','source_price_id','source_period_start'])('does not reconstruct a missing frozen %s from the current subscription',async column=>{
+    await currentSubscription('personal');failSchedule=true;
+    await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toThrow('Schedule response lost');failSchedule=false;
+    await db.query(`UPDATE plan_changes SET ${column}=NULL`);
+    const before=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
+    await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toMatchObject({code:'plan-change-review'});
+    expect(await checkout().recover()).toEqual({processed:0,failed:1});expect(scheduleCalls).toHaveLength(1);
+    expect((await db.query('SELECT * FROM plan_changes')).rows[0]).toEqual(before);
+  });
+
+  it('reconciles its own lost schedule creation before saving the receipt and updating',async()=>{
+    await currentSubscription('personal');loseScheduleCreateResponse=true;
+    await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toThrow('Schedule creation response lost');
+    const before=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
+    expect(before.source_schedule_id).toBeNull();expect(before.schedule_id).toBeNull();expect(scheduleUpdates).toBe(0);
+    expect(subscriptions[0]!.scheduleId).toBe('sub_sched_purchase');
+    expect(await checkout().recover()).toEqual({processed:1,failed:0});
+    expect(scheduleCalls[1]).toEqual(scheduleCalls[0]);expect(scheduleUpdates).toBe(1);
+    expect((await db.query('SELECT schedule_id,state FROM plan_changes')).rows[0]).toEqual({schedule_id:'sub_sched_purchase',state:'complete'});
+  });
+
+  it('does not adopt an unrelated schedule after its own creation response was lost',async()=>{
+    await currentSubscription('personal');loseScheduleCreateResponse=true;
+    await expect(checkout().change('Bearer owner',{plan:'pro'})).rejects.toThrow('Schedule creation response lost');
+    subscriptions[0]!.scheduleId='sub_sched_unrelated';
+    const before=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
+    expect(await checkout().recover()).toEqual({processed:0,failed:1});
+    expect(scheduleCalls[1]).toEqual(scheduleCalls[0]);expect(scheduleUpdates).toBe(0);
+    expect((await db.query('SELECT * FROM plan_changes')).rows[0]).toEqual(before);
   });
 
   it.each([

@@ -27,7 +27,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     async checkout(input){calls.checkout++;paymentCalls.push(input);const session={id:'cs_fixture',url:redirect,expiresAt:input.expiresAt,status:'open'};sessions.set(session.id,session);return session;},
     async session(id){return sessions.get(id)!;},
     async portal(customer){calls.portal.push(customer);return 'https://billing.stripe.com/p/session/fixture';},
-    async schedule(_sub,price,key){calls.schedule.push(price);calls.keys.push(key);if(scheduleFails)throw new Error('fixture outage');return 'sub_sched_fixture';},
+    async schedule(_sub,price,key,receipt){calls.schedule.push(price);calls.keys.push(key);subs[0]!.scheduleId='sub_sched_fixture';await receipt('sub_sched_fixture');if(scheduleFails)throw new Error('fixture outage');return 'sub_sched_fixture';},
   };
   const owner=async(header:string|undefined)=>{if(!header?.startsWith('Bearer '))throw new ServiceFailure(401,'login-required','Sign in.','identity');return accounts.provision({uid:header.slice(7),email:`${header.slice(7)}@example.com`});};
   const config={enabled:true,live:false,merchantMode:'direct' as const,taxMode:'not_collecting' as const,projectId:'femlab-test',appOrigin:'https://femlab.app',prices:{plus:'price_plus',pro:'price_pro',studio:'price_studio'}};
@@ -197,7 +197,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     scheduleFails=true;await expect(service.change('Bearer owner',{plan:'pro'})).rejects.toThrow('fixture outage');
     expect((await service.status(account.id)).scheduledPlan).toMatchObject({plan:'pro',processing:true});
     const pending=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
-    expect(pending).toMatchObject({request_version:1,price_id:'price_pro',purchase_use:null,state:'pending'});
+    expect(pending).toMatchObject({request_version:2,price_id:'price_pro',purchase_use:null,state:'pending'});
     const paused=checkoutService(db,payments,{...config,enabled:false},owner,now,randomUUID);
     await expect(paused.change('Bearer owner',{plan:'studio'})).rejects.toMatchObject({code:'billing-unavailable'});
     await expect(paused.checkout('Bearer owner',{plan:'studio'})).rejects.toMatchObject({code:'billing-unavailable'});
