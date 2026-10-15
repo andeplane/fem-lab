@@ -3,7 +3,7 @@ status: accepted
 date: 2026-10-15
 ---
 
-# ADR 0039: MCP disk access retains a native directory capability
+# ADR 0041: MCP disk access retains a native directory capability
 
 Issue [#671](https://github.com/andeplane/fem-lab/issues/671) exposed a race in the
 Node MCP host: `realpath(parent)` followed by `open(path, O_NOFOLLOW)` protects the

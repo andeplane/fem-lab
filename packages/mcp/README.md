@@ -52,7 +52,7 @@ loader, filesystem or network APIs. `Function` and `eval` stay inside QuickJS. T
 registry proxy implements the browser and MCP `fem` APIs.
 
 Scripts may invoke the host's `fem.export.file` Command, which uses the same project export
-directory capability as `export_file` (see [ADR 0039](../../docs/adr/0039-mcp-project-directory-capability.md)). Nested `fem.script.run` calls are refused. The registry remains responsible for
+directory capability as `export_file` (see [ADR 0041](../../docs/adr/0041-mcp-project-directory-capability.md)). Nested `fem.script.run` calls are refused. The registry remains responsible for
 validating all Commands and Queries.
 `await fem.file.importAbaqus({ text, name: 'bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' })`
 uses the same import Command; solve the returned Step explicitly afterwards. The imported
