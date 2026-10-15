@@ -1,6 +1,6 @@
 import { grantFreeFixture } from './free-fixture';
 import {randomUUID} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {readFile,readdir} from 'node:fs/promises';
 import pg from 'pg';
 import {afterAll,beforeAll,beforeEach,describe,expect,it} from 'vitest';
 import {postgresAccounts} from '../src/accounts';
@@ -24,7 +24,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   const deliver=(event=envelope())=>billing.receive(new TextEncoder().encode(JSON.stringify(event)),'fixture');
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
+    const directory=new URL('../migrations/',import.meta.url);
+    const migrations=await Promise.all((await readdir(directory)).filter(name=>name.endsWith('.sql')).sort().map(async name=>({name,sql:await readFile(new URL(name,directory),'utf8')})));
     const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}
   });
   beforeEach(async()=>{

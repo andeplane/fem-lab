@@ -70,7 +70,7 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
       const result=[];
       for await(const subscription of client.subscriptions.list({customer,status:'all',limit:100})) {
         const item=subscription.items.data[0];
-        if(subscription.items.data.length!==1||item?.quantity!==1)throw new Error('Unsupported subscription items.');
+        if(subscription.items.data.length!==1||item?.quantity!==1)throw new ServiceFailure(409,'subscription-use-unknown','This subscription needs review before changing plans.','billing','account.open');
         result.push({id:subscription.id,customerId:identity(subscription.customer),status:subscription.status,priceId:item.price.id,start:item.current_period_start,end:item.current_period_end,scheduleId:subscription.schedule?identity(subscription.schedule):null});
         if(result.length>100)throw new Error('Subscription count exceeds the supported limit.');
       }

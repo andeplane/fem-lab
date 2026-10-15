@@ -349,6 +349,10 @@ and billing. It is not an engine Model, Session or Journal entry.
 purchases. It is independent of tax collection mode and does not convert an existing
 subscription. Pending cannot enable Checkout. See ADR 0032.
 
+**Purchase use** — An explicit personal/business choice for a new paid subscription,
+fixed for that subscription and preserved across tier changes. Catalog aliases map
+each use to the same tier allowance. It is independent of a tax ID. See ADR 0033.
+
 **AI token credit** — A versioned billing unit weighted by model and token category,
 separate from a raw LLM token or the browser's supplier-cost estimate.
 

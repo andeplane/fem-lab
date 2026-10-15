@@ -4,8 +4,11 @@ import type {BillingConfig} from './billing';
 import {PLANS,type PlanId} from './credits';
 import {ServiceFailure} from './errors';
 import {transaction,type Database} from './transactions';
+import {billingPrices,type PurchaseUse} from './billing-prices';
+import type {BillingMerchantMode,BillingTaxMode} from './stripe';
 
-export const CheckoutInput=z.strictObject({plan:z.enum(['plus','pro','studio'])});
+export const PlanChangeInput=z.strictObject({plan:z.enum(['plus','pro','studio'])});
+export const CheckoutInput=PlanChangeInput.extend({purchaseUse:z.enum(['personal','business']).optional()});
 export type PaidPlan=Exclude<PlanId,'free'>;
 export interface PaymentPrice {id:string;active:boolean;currency:string;amount:number|null;interval:string|null;intervalCount:number|null}
 export interface PaymentSession {id:string;url:string|null;expiresAt:number;status:string|null}
@@ -21,7 +24,10 @@ export interface Payments {
   portal(customer:string,returnUrl:string):Promise<string>;
   schedule(subscription:PaymentSubscription,price:string,key:string):Promise<string>;
 }
-export interface CheckoutConfig extends BillingConfig {enabled:boolean;appOrigin:string}
+export interface CheckoutConfig extends BillingConfig {enabled:boolean;appOrigin:string;merchantMode:BillingMerchantMode;taxMode:BillingTaxMode;projectId:string}
+// Bump for fixed wire, SDK/API version or header changes (including integration_identifier).
+const CHECKOUT_REQUEST_VERSION=1;
+const PLAN_CHANGE_REQUEST_VERSION=1;
 function redirect(url:string|null,allowed:string):string {
   if(!url)throw new Error('Missing payment redirect.');
   const parsed=new URL(url);
@@ -30,6 +36,7 @@ function redirect(url:string|null,allowed:string):string {
 }
 /** A server-owned customer and one durable checkout intent; callbacks alone never grant credits. */
 export function checkoutService(db:Database,payments:Payments,config:CheckoutConfig,account:(header:string|undefined)=>Promise<Account>,now:()=>Date,newId:()=>string) {
+  const catalog=billingPrices(config);
   const origin=new URL(config.appOrigin);
   if(origin.protocol!=='https:'||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash)throw new Error('Payment return origin must be a configured HTTPS origin.');
   const returnUrl=origin.href;
@@ -37,9 +44,11 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
     if(!config.enabled)throw new ServiceFailure(503,'billing-unavailable','Paid plans are not available yet.','billing');
     return account(header);
   }
-  async function priced(plan:PaidPlan) {
-    const price=await payments.price(config.prices[plan]);
-    if(price.id!==config.prices[plan]||!price.active||price.currency!=='usd'||price.amount!==PLANS[plan].priceUsd*100||price.interval!=='month'||price.intervalCount!==1)throw new ServiceFailure(503,'price-unavailable','This plan is temporarily unavailable.','billing');
+  async function priced(plan:PaidPlan,use:PurchaseUse|null=null) {
+    const selected=catalog.select(plan,use);
+    if(!selected)throw new ServiceFailure(503,'price-unavailable','This plan is temporarily unavailable for the selected use.','billing');
+    const price=await payments.price(selected);
+    if(price.id!==selected||!price.active||price.currency!=='usd'||price.amount!==PLANS[plan].priceUsd*100||price.interval!=='month'||price.intervalCount!==1)throw new ServiceFailure(503,'price-unavailable','This plan is temporarily unavailable.','billing');
     return price.id;
   }
   async function customer(owner:Account):Promise<string> {
@@ -69,14 +78,18 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
     async checkout(header:string|undefined,body:unknown) {
       const caller=await owner(header),parsed=CheckoutInput.safeParse(body);
       if(!parsed.success)throw new ServiceFailure(422,'invalid-plan','Choose a supported plan.','billing');
+      const use=parsed.data.purchaseUse??null;
+      if(config.merchantMode==='managed'&&!use)throw new ServiceFailure(422,'purchase-use-required','Choose personal or business use before starting checkout.','billing','account.open');
       return lock(caller.id,async()=>{
-        const price=await priced(parsed.data.plan),customerId=await customer(caller);
+        const price=await priced(parsed.data.plan,use),customerId=await customer(caller);
         if(await subscription(customerId))throw new ServiceFailure(409,'subscription-exists','Use your account to schedule a plan change or manage the current subscription.','billing','account.open');
         const paid=(await db.query("SELECT id FROM credit_grants WHERE account_id=$1 AND plan<>'free' AND expires_at>$2 LIMIT 1",[caller.id,now()])).rows;
         if(paid.length)throw new ServiceFailure(409,'paid-period-active','Your paid allowance lasts until its period ends. Schedule changes through your account.','billing','account.open');
         let intent=(await db.query('SELECT * FROM checkout_intents WHERE account_id=$1',[caller.id])).rows[0];
         if(intent&&intent.expires_at as Date > now()) {
-          if(intent.plan!==parsed.data.plan)throw new ServiceFailure(409,'checkout-open','Checkout for another plan is already open. Complete it or wait for it to expire.','billing');
+          if(intent.request_version!==CHECKOUT_REQUEST_VERSION||intent.plan!==parsed.data.plan||intent.price_id!==price||intent.purchase_use!==use||
+            intent.merchant_mode!==config.merchantMode||intent.tax_mode!==config.taxMode||intent.return_origin!==returnUrl||intent.customer_id!==customerId||intent.project_id!==config.projectId)
+            throw new ServiceFailure(409,'checkout-open',`Checkout retains its original purchase settings until ${(intent.expires_at as Date).toISOString()}. Complete it or wait before changing use or plan.`,'billing','account.open');
           if(intent.session_id) {
             const existing=await payments.session(String(intent.session_id));
             if(existing.status==='open'&&existing.expiresAt*1000>now().getTime())return {url:redirect(existing.url,'checkout.stripe.com')};
@@ -87,8 +100,11 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
         for(let retry=0;;retry++) {
           if(!intent) {
             const id=newId();
-            await db.query(`INSERT INTO checkout_intents(account_id,id,plan,expires_at,created_at) VALUES($1,$2,$3,$4,$5)
-              ON CONFLICT(account_id) DO UPDATE SET id=EXCLUDED.id,plan=EXCLUDED.plan,session_id=NULL,session_url=NULL,expires_at=EXCLUDED.expires_at,created_at=EXCLUDED.created_at`,[caller.id,id,parsed.data.plan,new Date(now().getTime()+1860000),now()]);
+            await db.query(`INSERT INTO checkout_intents(account_id,id,plan,expires_at,created_at,request_version,price_id,purchase_use,merchant_mode,tax_mode,return_origin,customer_id,project_id)
+              VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+              ON CONFLICT(account_id) DO UPDATE SET id=EXCLUDED.id,plan=EXCLUDED.plan,session_id=NULL,session_url=NULL,expires_at=EXCLUDED.expires_at,created_at=EXCLUDED.created_at,
+              request_version=EXCLUDED.request_version,price_id=EXCLUDED.price_id,purchase_use=EXCLUDED.purchase_use,merchant_mode=EXCLUDED.merchant_mode,tax_mode=EXCLUDED.tax_mode,
+              return_origin=EXCLUDED.return_origin,customer_id=EXCLUDED.customer_id,project_id=EXCLUDED.project_id`,[caller.id,id,parsed.data.plan,new Date(now().getTime()+1860000),now(),CHECKOUT_REQUEST_VERSION,price,use,config.merchantMode,config.taxMode,returnUrl,customerId,config.projectId]);
             intent=(await db.query('SELECT * FROM checkout_intents WHERE account_id=$1',[caller.id])).rows[0]!;
           }
           let session:PaymentSession;
@@ -116,19 +132,26 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
       return {url:redirect(await payments.portal(String(mapping.customer_id),returnUrl),'billing.stripe.com')};
     },
     async change(header:string|undefined,body:unknown) {
-      const caller=await owner(header),parsed=CheckoutInput.safeParse(body);
+      const caller=await owner(header),parsed=PlanChangeInput.safeParse(body);
       if(!parsed.success)throw new ServiceFailure(422,'invalid-plan','Choose a supported plan.','billing');
       return lock(caller.id,async()=>{
-        const price=await priced(parsed.data.plan),customerId=await customer(caller),current=await subscription(customerId);
-        if(!current||current.status!=='active'||!Object.values(config.prices).includes(current.priceId))throw new ServiceFailure(409,'no-active-subscription','An active paid subscription is required to schedule a change.','billing');
+        const customerId=await customer(caller),current=await subscription(customerId);
+        if(!current||current.status!=='active')throw new ServiceFailure(409,'no-active-subscription','An active paid subscription is required to schedule a change.','billing');
+        const selection=catalog.get(current.priceId);
+        if(!selection)throw new ServiceFailure(409,'subscription-use-unknown','This subscription needs review before changing plans. Manage it through billing support.','billing','account.open');
+        const use=selection.purchaseUse,price=await priced(parsed.data.plan,use);
         const effectiveAt=new Date(current.end*1000);
         if(effectiveAt<=now())throw new ServiceFailure(409,'period-changing','Your billing period is changing. Refresh and try again.','billing','account.refresh');
         const operation=await transaction(db,async sql=>{
           const previous=(await sql.query('SELECT * FROM plan_changes WHERE account_id=$1',[caller.id])).rows[0];
-          if(previous?.plan===parsed.data.plan&&(previous.effective_at as Date).getTime()===effectiveAt.getTime())return previous;
+          if(previous?.plan===parsed.data.plan&&(previous.effective_at as Date).getTime()===effectiveAt.getTime()) {
+            if(previous.request_version!==PLAN_CHANGE_REQUEST_VERSION||previous.price_id!==price||previous.purchase_use!==use)throw new ServiceFailure(409,'plan-change-review','The original scheduled purchase settings need review before retrying.','billing','account.open');
+            return previous;
+          }
           const id=newId();
-          await sql.query(`INSERT INTO plan_changes(account_id,plan,effective_at,operation_id,state,updated_at) VALUES($1,$2,$3,$4,'pending',$5)
-            ON CONFLICT(account_id) DO UPDATE SET plan=EXCLUDED.plan,effective_at=EXCLUDED.effective_at,operation_id=EXCLUDED.operation_id,state='pending',schedule_id=NULL,updated_at=EXCLUDED.updated_at`,[caller.id,parsed.data.plan,effectiveAt,id,now()]);
+          await sql.query(`INSERT INTO plan_changes(account_id,plan,effective_at,operation_id,state,updated_at,price_id,purchase_use,request_version) VALUES($1,$2,$3,$4,'pending',$5,$6,$7,$8)
+            ON CONFLICT(account_id) DO UPDATE SET plan=EXCLUDED.plan,effective_at=EXCLUDED.effective_at,operation_id=EXCLUDED.operation_id,state='pending',schedule_id=NULL,updated_at=EXCLUDED.updated_at,
+            price_id=EXCLUDED.price_id,purchase_use=EXCLUDED.purchase_use,request_version=EXCLUDED.request_version`,[caller.id,parsed.data.plan,effectiveAt,id,now(),price,use,PLAN_CHANGE_REQUEST_VERSION]);
           return {operation_id:id,state:'pending'};
         });
         if(operation.state!=='complete') {
@@ -151,8 +174,11 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
         await lock(String(row.account_id),async()=>{
           const fresh=(await db.query("SELECT operation_id,state FROM plan_changes WHERE account_id=$1",[row.account_id])).rows[0];
           if(!fresh||fresh.operation_id!==row.operation_id||fresh.state!=='pending')return;
-          const price=await priced(row.plan as PaidPlan),current=await subscription(String(row.customer_id));
+          const current=await subscription(String(row.customer_id));
           if(!current||current.status!=='active'||current.end*1000!==(row.effective_at as Date).getTime()||current.end*1000<=now().getTime())throw new Error('Plan change needs review after its original period.');
+          const selection=catalog.get(current.priceId);
+          if(row.request_version!==PLAN_CHANGE_REQUEST_VERSION||!selection||row.purchase_use!==selection.purchaseUse||row.price_id!==catalog.select(row.plan as PaidPlan,selection.purchaseUse))throw new Error('Plan change purchase settings require review.');
+          const price=await priced(row.plan as PaidPlan,selection.purchaseUse);
           const scheduleId=await payments.schedule(current,price,`femlab-plan:${row.operation_id}`);
           await db.query("UPDATE plan_changes SET state='complete',schedule_id=$2,updated_at=$3 WHERE account_id=$1 AND operation_id=$4",[row.account_id,scheduleId,now(),row.operation_id]);processed++;
         });

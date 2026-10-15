@@ -36,12 +36,18 @@ class BillingConfigTests(unittest.TestCase):
         return catalog
 
     def managed_catalog(self, mode='test'):
-        return self.update_catalog(mode, merchantMode='managed', taxMode='automatic',
+        catalog = self.update_catalog(mode, merchantMode='managed', taxMode='automatic',
                                    taxClassificationConfirmed=True, activeTaxRegistrationVerified=False,
                                    taxCollectionDecisionConfirmed=True, policyUrlsConfirmed=True,
                                    stagingCheckoutVerified=True, webhookVerified=True,
                                    managedPaymentsAccountEnabled=True, managedPaymentsTermsAccepted=(mode == 'live'),
                                    managedPaymentsEligibilityConfirmed=True, managedPaymentsCheckoutVerified=(mode == 'live'))
+        for name, plan in catalog['plans'].items():
+            plan['purchaseUses'] = {use: {'product': 'femlab_' + name + '_' + use,
+                                           'price': 'price_' + name + '_' + use,
+                                           'taxCode': 'txcd_12345678'}
+                                    for use in ('personal', 'business')}
+        return self.update_catalog(mode, plans=catalog['plans'])
 
     def gcloud(self, *args, optional=False):
         self.calls.append(args)
@@ -187,6 +193,52 @@ class BillingConfigTests(unittest.TestCase):
                 self.assertIs(verified[0][1]['activeTaxRegistrationVerified'], False)
                 self.assertIs(verified[0][1]['managedPaymentsTermsAccepted'], mode == 'live')
                 self.assertEqual(json.loads((self.root / (mode + '.json')).read_text()), catalog)
+
+    def test_each_managed_purchase_use_is_required_before_secret_access(self):
+        for tier in ('plus', 'pro', 'studio'):
+            for use in ('personal', 'business'):
+                with self.subTest(tier=tier, use=use):
+                    catalog = self.managed_catalog()
+                    del catalog['plans'][tier]['purchaseUses'][use]
+                    self.update_catalog(plans=catalog['plans'])
+                    with self.assertRaisesRegex(ValueError, 'purchaseUses.*' + tier.upper() + '_' + use.upper()):
+                        config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                       activation='enabled', root=self.root)
+                    self.assertEqual(self.calls, [])
+
+    def test_disabled_preparation_retains_partial_aliases_and_legacy_recovery_prices(self):
+        catalog = self.managed_catalog()
+        del catalog['plans']['pro']['purchaseUses']
+        del catalog['plans']['studio']['purchaseUses']['business']
+        self.update_catalog(plans=catalog['plans'])
+        result = config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                activation='disabled', root=self.root, verify=lambda *args: None)
+        self.assertEqual(result['env']['BILLING_ENABLED'], 'false')
+        for tier in ('plus', 'pro', 'studio'):
+            self.assertEqual(result['env']['STRIPE_PRICE_' + tier.upper()], catalog['plans'][tier]['price'])
+        self.assertEqual(result['env']['STRIPE_PRICE_PLUS_PERSONAL'], 'price_plus_personal')
+        self.assertEqual(result['env']['STRIPE_PRICE_PLUS_BUSINESS'], 'price_plus_business')
+        self.assertEqual(result['env']['STRIPE_PRICE_STUDIO_PERSONAL'], 'price_studio_personal')
+        for role in ('PRO_PERSONAL', 'PRO_BUSINESS', 'STUDIO_BUSINESS'):
+            self.assertNotIn('STRIPE_PRICE_' + role, result['env'])
+        self.assertEqual(set(result['secrets']), {'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'})
+
+    def test_invalid_or_ambiguous_purchase_use_never_accesses_secrets_even_when_disabled(self):
+        mutations = [lambda plans: plans['plus']['purchaseUses'].update({'commercial': plans['plus']['purchaseUses']['personal']}),
+                     lambda plans: plans['plus'].update(purchaseUses=None),
+                     lambda plans: plans['plus']['purchaseUses']['personal'].update(product='../other'),
+                     lambda plans: plans['plus']['purchaseUses']['personal'].update(taxCode='txcd_invalid'),
+                     lambda plans: plans['plus']['purchaseUses']['personal'].update(price=plans['plus']['price']),
+                     lambda plans: plans['studio']['purchaseUses']['business'].update(price=plans['pro']['purchaseUses']['personal']['price'])]
+        for mutate in mutations:
+            with self.subTest(mutation=mutations.index(mutate)):
+                catalog = self.managed_catalog()
+                mutate(catalog['plans'])
+                self.update_catalog(plans=catalog['plans'])
+                with self.assertRaisesRegex(ValueError, 'Invalid Stripe|Duplicate Stripe'):
+                    config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                   activation='disabled', root=self.root)
+                self.assertEqual(self.calls, [])
 
     def test_enabling_without_runtime_key_fails(self):
         self.missing_key = True

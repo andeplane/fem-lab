@@ -26,6 +26,9 @@ class ReleaseBillingTests(unittest.TestCase):
                            'STRIPE_PRICE_STUDIO': 'price_studio', 'STRIPE_PORTAL_CONFIGURATION': 'bpc_portal'},
                    'secrets': {'STRIPE_SECRET_KEY': 'stripe-api-key:8', 'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:7'},
                    'mode': 'live'}
+        if merchant_mode == 'managed':
+            binding['env'].update({'STRIPE_PRICE_' + tier.upper() + '_' + use.upper(): 'price_' + tier + '_' + use
+                                   for tier in ('plus', 'pro', 'studio') for use in ('personal', 'business')})
 
         def resolve(*args):
             resolved.append(args)
