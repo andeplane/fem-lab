@@ -40,11 +40,18 @@ already publish separate `_acme-challenge` values. If Firebase still requires it
 challenge after the A/CNAME records propagate, add the current value alongside those
 records. Do not copy an old temporary certificate challenge from a document.
 
-The owner confirmed purchase of `femlab.app` on 2026-10-15. The Mac is still locked and
-the authenticated Cloudflare console is unavailable. A fresh public DNS check found no
-root A/AAAA/TXT records and no `www` or `api` records. No Cloudflare write has been
-performed by this implementation. The Google provisioner has been rerun; the API
-certificate remains `PROVISIONING`, and Hosting ownership remains `OWNERSHIP_MISSING`.
+The owner confirmed purchase of `femlab.app` on 2026-10-15 and unlocked the console.
+The authenticated personal Cloudflare account shows the registration active through
+2027-10-14. All four records above have been saved with DNS-only routing, plus the two
+current Firebase certificate-verification TXT records. The existing Cloudflare-managed
+root certificate TXT values remain present alongside the Firebase challenge.
+
+Public Google DNS independently resolves the app/root and `www` to Firebase and `api`
+to `8.233.57.92`, and returns the ownership and certificate challenges. Firebase now
+reports `OWNERSHIP_ACTIVE` for both app domains. Managed certificate issuance is still
+pending; HTTPS probes fail certificate validation and the browser release has not been
+switched. The API certificate remains `PROVISIONING`; Google retries its earlier
+`FAILED_NOT_VISIBLE` domain check while provisioning continues.
 
 ## Activate and verify
 
@@ -83,4 +90,5 @@ https://femlab-app-staging.web.app. Long real streams have passed directly throu
 Run, while final-domain streaming remains pending DNS/TLS. Paid billing remains disabled.
 
 References: [Google's serverless load-balancer setup](https://docs.cloud.google.com/load-balancing/docs/https/setup-global-ext-https-serverless),
-[Firebase custom-domain API](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/projects.sites.customDomains).
+[Firebase custom-domain API](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/projects.sites.customDomains),
+[Google certificate troubleshooting](https://docs.cloud.google.com/load-balancing/docs/ssl-certificates/troubleshooting).
