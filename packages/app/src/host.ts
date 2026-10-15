@@ -587,6 +587,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
         const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
         store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);
         if (command === 'file.importAbaqus') store.togglePanel('abaqus', true);
+        if (command === 'geometry.importStep') { store.togglePanel('stepReport', false); store.togglePanel('step', true); }
       },
     },
     {

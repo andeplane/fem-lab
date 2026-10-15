@@ -152,6 +152,16 @@ export class SessionTransport implements EngineTransport {
       return this.accept(reply) as Ack;
     });
   }
+  /** A host conversion must retain admission from before its asynchronous input/conversion.
+   * In particular, queued writes and intervening reads must never refresh this expectedVersion. */
+  dispatchAtAdmission(input: Exclude<Command, { cmd: 'model.new' }>, admission: Stamp): Promise<Ack> {
+    const command = structuredClone(input); const captured = structuredClone(admission);
+    return this.ordered(async () => {
+      if (!sameSession(captured.session, this.stamp.session)) throw expired();
+      const reply = await this.channel.request({ op: 'dispatch', context: this.context(), expectedVersion: captured.stateVersion, command }, this.sink);
+      return this.accept(reply) as Ack;
+    });
+  }
   query(input: Query): Promise<QueryResult> {
     const query = structuredClone(input);
     return this.ordered(async () => {

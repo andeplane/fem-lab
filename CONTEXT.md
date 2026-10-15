@@ -331,6 +331,15 @@ only a deterministic mapping of participating nodes. Unused labels remain in the
 and exact memberships, are explicitly reported, and have no FE DOFs or Result values. Replacing the source is `mesh.set`, never editing a
 mesh cache or individual generated Set. See ADR 0026 and issue #501.
 
+**STEP geometry conversion** — A host-only, on-demand conversion of declared-unit STEP
+surfaces to one tessellated geometry Body at explicit physical deflections. The checked
+Journal stores an ordinary `geometry.import` carrying SI-scaled ASCII triangles; replay
+needs neither the original STEP file nor OCCT. The conversion receipt is transient host
+state, not a second model definition. This differs from **Imported source**, which is
+authored FE connectivity and exact membership owned by an imported Mesher. Exact B-rep,
+CAD history, original face identifiers and CAD material assignments are not retained by
+STEP conversion. Durable face targets use geometric predicates. See ADR 0029 and #351.
+
 ## Hosted AI accounts
 
 **Account** — One verified Firebase identity mapped to service-owned status, entitlements

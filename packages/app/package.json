@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "node ../../tools/build-script-declarations.mjs && node ../../tools/copy-examples.mjs",
+    "predev": "node ../../tools/build-script-declarations.mjs && node ../../tools/copy-examples.mjs && node ../../tools/prepare-step-assets.mjs",
     "dev": "vite",
-    "prebuild": "node ../../tools/build-script-declarations.mjs && node ../../tools/copy-examples.mjs",
+    "prebuild": "node ../../tools/build-script-declarations.mjs && node ../../tools/copy-examples.mjs && node ../../tools/prepare-step-assets.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run --coverage",

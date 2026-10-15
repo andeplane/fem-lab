@@ -5,7 +5,7 @@ import '@fontsource/ibm-plex-mono/latin-600.css';
 import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';
-import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, type AbaqusConversion, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
+import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, STEP_ACCEPT, type AbaqusConversion, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/runtime-schema';
 import { migratePersistentKeys } from './ai/key-storage';
@@ -27,6 +27,8 @@ import { SessionWorkspace } from './session-workspace';
 import { SessionTransport, sameSession } from './session-transport';
 import type { ReplacementSource } from './session-protocol';
 import { bindRegistryProducer, type RegistryProducer } from './producer-registry';
+import { browserAbaqusIo } from './abaqus-files';
+import { StepImporter } from './step-import';
 import './ui/style.css';
 
 declare global {
@@ -44,6 +46,12 @@ const expired = (): FemError => new FemError('session.expired', 'this action bel
 
 class Bundle {
   readonly store = new Store();
+  readonly stepImport = new StepImporter(
+    () => new Worker(new URL('./step.worker.ts', import.meta.url), { type: 'module' }),
+    new URL(`${import.meta.env.BASE_URL}third-party/step-converter/`, window.location.href).href,
+    stepImport => this.store.set({ stepImport }),
+    stepReport => this.store.set({ stepReport, panels: { ...this.store.state.panels, step: false, stepReport: true } }),
+  );
   readonly capture = new AnimationCapture(browserAnimationCaptureEnvironment());
   readonly viewer: ViewerRef = { current: null };
   readonly rightViewer: ViewerRef = { current: null };
@@ -221,6 +229,7 @@ class Bundle {
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
+    this.stepImport.dispose();
     this.detachAccount();
     this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
@@ -281,6 +290,22 @@ class Producer {
         };
       },
     }, bundle.capture, undefined, accounts.services, bundle.comparison);
+    ctx.step = {
+      import: input => {
+        const admitted = transport.stamp;
+        const io = browserAbaqusIo(document, crypto, bundle.store.state.folder, STEP_ACCEPT);
+        return bundle.stepImport.run(input, io, {
+          signal: this.lifetime.signal,
+          convert: async (quantity, to) => {
+            const result = await transport.query({ query: 'query.convert', quantity, to });
+            if (!('value' in result) || typeof result.value !== 'number') throw new FemError('internal', 'query.convert returned no numeric value');
+            return result.value;
+          },
+          commit: command => transport.dispatchAtAdmission(command, admitted),
+        });
+      },
+      cancel: name => bundle.stepImport.cancel(name),
+    };
     ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());
       try {

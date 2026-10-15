@@ -61,6 +61,40 @@ version; saved files reopen without the original `.inp`. The displayed receipt i
 the current import and is not reopened with a saved Model file. See the
 [supported slice and import plan](docs/plans/500-abaqus-import.md).
 
+### Import STEP geometry
+
+Choose **Import STEP geometry**, name the Body and supply absolute linear and angular
+deflections, then choose a `.step` or `.stp` file (at most 16 MiB). STEP's declared length
+units are converted to meters independently of display units. The converter downloads only
+when requested and runs in a dedicated cancellable Worker. The equivalent browser Command is:
+
+```ts
+await fem.geometry.importStep({ name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' });
+```
+
+This adds or re-imports one tessellated Body. All returned meshes become that Body;
+exact B-rep, CAD feature history, original face identifiers and CAD materials are discarded.
+Unsupported free topology, external references and incomplete conversion fail explicitly.
+Reported transfer warnings are also unsupported until complete conversion can be established;
+this conservatively rejects potentially harmless warnings as well as partial geometry.
+Inspect the imported patches, name durable targets with `geometry.nameFace` predicates,
+assign a Material and mesh normally. Smaller deflection adds curved-surface detail;
+source tolerances can supersede the request. The minimum absolute deflection is 0.0000001 m.
+
+`geometry.cancelStep({name: 'part'})` terminates a pending conversion before publication.
+A second pending conversion conflicts, and an intervening model edit or project switch
+rejects publication. The receipt contains source/geometry hashes, SI deflections and counts;
+it is local to the current import. The Journal stores one normal `geometry.import` with
+double-precision ASCII triangles and their hash. Saved files and Journals replay in the
+native CLI, Node and other hosts without a converter, original STEP file or file handle.
+Hosts without the converter report original-file conversion as unsupported.
+
+The separately distributed LGPL converter includes its notices and complete corresponding
+source/rebuild kit. App builds prepare and verify those assets; a first uncached build needs
+Python 3.12+ and network access to the pinned source archives. No OCCT compiler is needed for
+ordinary app builds. See the [converter build/replacement instructions](vendor/step-converter/README.md)
+and [scope and verification plan](docs/plans/351-step-import.md).
+
 Tests: `npm test` (vitest), `npm run typecheck`, and in `packages/app`,
 `npx playwright install chromium && npx playwright test` for the browser smokes.
 
