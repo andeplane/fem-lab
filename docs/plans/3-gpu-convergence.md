@@ -151,3 +151,11 @@ every raw zero-update assertion, checks public zero-update failure with the inde
 one-row A=-1/identity-preconditioner oracle, and separately requires structured f64 outer
 failure for the original positive-definite rank-loss fixture. No numeric production code
 or acceptance threshold changes accompany this correction.
+
+
+Capacity propagation is exercised through real bounded quota walks rather than invented
+ledger states. Structured setup errors now state the actual requested bytes/entry count and
+admitted limit; per-vector platform ceilings remain separate. The property advances only to
+that declared request, checks strict progress/bounded attempts and exact final-boundary
+refusal, then independently verifies Dirichlet-chain energy/transfer duality or the two-spring
+inverse. Full Plan equality supplies only the secondary resource-independence check.

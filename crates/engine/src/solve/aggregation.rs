@@ -129,6 +129,15 @@ fn too_large(what: &str) -> Error {
         .suggest("solve.run { solver: 'cpu-direct' }, or a host with a larger admitted solve budget")
 }
 
+fn requested_limit(what: &str, requested: u128, admitted: u128) -> Error {
+    Error::new(
+        ErrorCode::SolveTooLarge,
+        format!("aggregation setup requested {requested} {what}; admitted limit {admitted}"),
+    )
+    .at("solve/aggregation")
+    .suggest("solve.run { solver: 'cpu-direct' }, or a host with a larger admitted solve budget")
+}
+
 fn stalled(what: &str) -> Error {
     Error::new(ErrorCode::SolveStalled, format!("aggregation setup: {what}"))
         .at("solve/aggregation")
@@ -140,14 +149,19 @@ fn invalid(what: &str) -> Error {
 }
 
 impl Budget {
-    /// Each slice entry describes one actual Vec allocation; scratch describes live
-    /// ordered-map envelopes, not one contiguous Vec. All source lists have <=8 entries,
+    /// Each slice entry bounds a Vec or a group of disjoint output Vec payloads;
+    /// bounding a combined payload also bounds every constituent allocation. Scratch
+    /// describes live ordered-map envelopes. All source lists have <=8 entries,
     /// dimensions/NNZ are bounded by u32 and all concrete element types are <=512 bytes.
     /// Exact u128 accounting therefore cannot overflow on either supported pointer width.
     fn allocations(&mut self, vectors: &[u128], scratch: u128) -> Result<(), Error> {
         let next = self.bytes + vectors.iter().sum::<u128>() + scratch;
-        if next > self.limits.max_bytes as u128 || vectors.iter().any(|&bytes| bytes > isize::MAX as u128) {
-            return Err(too_large("byte"));
+        if next > self.limits.max_bytes as u128 {
+            return Err(requested_limit("setup bytes", next, self.limits.max_bytes as u128));
+        }
+        let largest = vectors.iter().copied().max().unwrap_or(0);
+        if largest > isize::MAX as u128 {
+            return Err(requested_limit("allocation bytes", largest, isize::MAX as u128));
         }
         self.bytes = next;
         Ok(())
@@ -168,8 +182,9 @@ impl Budget {
         // Each row has <=u32MAX unique columns and <=u32MAX rows. Its exact count
         // plus a previously admitted u32 total fits u128 before either cap is checked.
         let next = *used as u128 + entries;
-        if next > limit as u128 || next > u32::MAX as u128 {
-            return Err(too_large(name));
+        let admitted = (limit as u128).min(u32::MAX as u128);
+        if next > admitted {
+            return Err(requested_limit(name, next, admitted));
         }
         *used = next as usize;
         Ok(entries as usize)
@@ -434,7 +449,14 @@ fn add_frontier(
 fn aggregates(a: Matrix<'_>, groups: &Groups, budget: &mut Budget) -> Result<Vec<Vec<usize>>, Error> {
     let n_groups = groups.offsets.len() - 1;
     let count = n_groups.div_ceil(GROUPS_PER_AGGREGATE);
-    budget.allocations(&[vector_bytes::<bool>(n_groups), vector_bytes::<Vec<usize>>(count)], 0)?;
+    // Assigned groups partition all a.n_rows exactly once. Their output index Vecs
+    // therefore request n_rows*sizeof(usize) bytes in total, admitted before any
+    // aggregate allocation. Each constituent is bounded by this combined payload;
+    // validated u32 rows/native or existing wasm f64 row storage bound its size.
+    budget.allocations(
+        &[vector_bytes::<bool>(n_groups), vector_bytes::<Vec<usize>>(count), vector_bytes::<usize>(a.n_rows)],
+        0,
+    )?;
     let mut assigned = vec![false; n_groups];
     let mut out = Vec::with_capacity(count);
     let mut first = 0;
@@ -468,7 +490,6 @@ fn aggregates(a: Matrix<'_>, groups: &Groups, budget: &mut Budget) -> Result<Vec
         }
         budget.release_map(frontier);
         let rows = members.iter().map(|&g| groups.offsets[g + 1] - groups.offsets[g]).sum();
-        budget.vector::<usize>(rows)?;
         let mut indices = Vec::with_capacity(rows);
         for group in members {
             indices.extend_from_slice(&groups.row_order[groups.offsets[group]..groups.offsets[group + 1]]);
@@ -516,9 +537,15 @@ struct Tentative {
     coarse_groups: Vec<u32>,
 }
 
-fn tentative(n: usize, aggregates: &[Vec<usize>], basis: &[Vec<f64>], budget: &mut Budget) -> Result<Tentative, Error> {
-    budget.vector::<Vec<f64>>(basis.len())?;
-    let mut coarse_basis = vec![Vec::new(); basis.len()];
+/// The caller owns and admits the empty output-column headers with level metadata;
+/// all growing column payloads remain admitted here before each allocation.
+fn tentative(
+    n: usize,
+    aggregates: &[Vec<usize>],
+    basis: &[Vec<f64>],
+    mut coarse_basis: Vec<Vec<f64>>,
+    budget: &mut Budget,
+) -> Result<Tentative, Error> {
     let mut coarse_groups = Vec::new();
     let mut triplets: Vec<(u32, u32, f64)> = Vec::new();
     let mut coarse_n = 0;
@@ -846,14 +873,19 @@ fn level(
     if depth >= budget.limits.max_levels {
         return Err(too_large("level"));
     }
-    budget.vector::<Plan>(1)?;
-    if a.n_rows <= COARSE_ROWS {
+    let fine = uses_candidates(a.n_rows);
+    let columns = if fine { basis.len() } else { 0 };
+    // Fine levels own these output headers even before constructing their values.
+    // A direct coarse leaf neither admits nor allocates unused candidate columns.
+    budget.allocations(&[vector_bytes::<Plan>(1), vector_bytes::<Vec<f64>>(columns)], 0)?;
+    if !fine {
         return coarse(a, budget);
     }
     let (diag, high, uploaded_high) = diagonal(a, budget)?;
     let groups = groups(node_of_row, budget)?;
     let aggregates = aggregates(a, &groups, budget)?;
-    let Tentative { matrix: t, coarse_basis, coarse_groups } = tentative(a.n_rows, &aggregates, basis, budget)?;
+    let Tentative { matrix: t, coarse_basis, coarse_groups } =
+        tentative(a.n_rows, &aggregates, basis, vec![Vec::new(); columns], budget)?;
     let p = smooth_interpolation(a, &t, &diag, 0.8 / high, budget)?;
     let pt = transpose(&p, Entries::Interpolation, budget)?;
     let coarse_operator = galerkin(a, &p, &pt, budget)?;
@@ -948,8 +980,10 @@ mod tests {
     fn aggregate_local_qr_prunes_dependencies_and_reproduces_affine_candidates() {
         let basis = vec![vec![1.0; 8], vec![2.0; 8], (0..8).map(|i| i as f64).collect()];
         let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
+        budget.vector::<Vec<f64>>(basis.len()).unwrap();
+        let columns = vec![Vec::new(); basis.len()];
         let Tentative { matrix: t, coarse_basis: coarse, .. } =
-            tentative(8, &[vec![7, 2, 0, 6, 1, 3, 5, 4]], &basis, &mut budget).unwrap();
+            tentative(8, &[vec![7, 2, 0, 6, 1, 3, 5, 4]], &basis, columns, &mut budget).unwrap();
         assert_eq!(t.n_cols, 2);
         for (original, reduced) in basis.iter().zip(&coarse) {
             let reproduced = rect_mv(&t, reduced);
@@ -1008,29 +1042,36 @@ mod tests {
     #[test]
     fn raw_block_strength_selects_the_strongest_frontier_and_disconnected_ids_are_stable() {
         let n = 12;
-        let mut a = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
-        for row in 0..n {
-            for col in 0..n {
-                let value = if row == col {
-                    8.0
-                } else if (row == 0 && col == 11) || (row == 11 && col == 0) {
-                    2.0
-                } else if (row == 0 && col == 1) || (row == 1 && col == 0) {
-                    0.5
-                } else {
-                    0.0
-                };
-                if value != 0.0 {
-                    a.col_idx.push(col as u32);
-                    a.vals.push(value);
+        for strong in [11, 1] {
+            let weak = 12 - strong;
+            let mut a = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+            // Symmetric strict diagonal dominance (8 > 2 + 0.5) proves SPD.
+            // Store the zero 0<->5 edge explicitly: it must never seed a frontier.
+            for row in 0..n {
+                for col in 0..n {
+                    let value = if row == col {
+                        8.0
+                    } else if (row == 0 && col == strong) || (row == strong && col == 0) {
+                        2.0
+                    } else if (row == 0 && col == weak) || (row == weak && col == 0) {
+                        0.5
+                    } else {
+                        0.0
+                    };
+                    if value != 0.0 || (row == 0 && col == 5) || (row == 5 && col == 0) {
+                        a.col_idx.push(col as u32);
+                        a.vals.push(value);
+                    }
                 }
+                a.row_ptr.push(a.vals.len() as u32);
             }
-            a.row_ptr.push(a.vals.len() as u32);
+            let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
+            let grouping = groups(&(0..n as u32).collect::<Vec<_>>(), &mut budget).unwrap();
+            let actual = aggregates(Matrix::square(&a, &a.vals), &grouping, &mut budget).unwrap();
+            // Positive strength wins, then the remaining positive neighbor. Zero
+            // strength cannot move node5 before the stable disconnected node2.
+            assert_eq!(actual, [vec![0, strong, weak, 2, 3, 4, 5, 6], vec![7, 8, 9, 10]]);
         }
-        let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
-        let grouping = groups(&(0..n as u32).collect::<Vec<_>>(), &mut budget).unwrap();
-        let actual = aggregates(Matrix::square(&a, &a.vals), &grouping, &mut budget).unwrap();
-        assert_eq!(actual, [vec![0, 11, 1, 2, 3, 4, 5, 6], vec![7, 8, 9, 10]]);
     }
 
     #[test]
@@ -1212,5 +1253,189 @@ mod tests {
         let len = isize::MAX as usize / size_of::<f64>() + 1;
         assert_eq!(budget.vector::<f64>(len).unwrap_err().code, ErrorCode::SolveTooLarge);
         assert_eq!(budget.bytes, 0);
+    }
+
+    #[derive(Clone, Copy)]
+    enum Quota {
+        Bytes,
+        Interpolation,
+        Operator,
+    }
+
+    impl Quota {
+        fn limits(self, cap: usize) -> Limits {
+            match self {
+                Self::Bytes => Limits { max_bytes: cap, ..limits() },
+                Self::Interpolation => Limits { max_interpolation_nnz: cap, ..limits() },
+                Self::Operator => Limits { max_operator_nnz: cap, ..limits() },
+            }
+        }
+
+        fn units(self) -> &'static str {
+            match self {
+                Self::Bytes => "setup bytes",
+                Self::Interpolation => "interpolation fill",
+                Self::Operator => "operator fill",
+            }
+        }
+    }
+
+    fn requested_count(error: &Error, quota: Quota, cap: usize) -> usize {
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
+        let suffix = error.cause.strip_prefix("aggregation setup requested ").unwrap();
+        let (count, rest) = suffix.split_once(' ').unwrap();
+        let (units, admitted) = rest.split_once("; admitted limit ").unwrap();
+        assert_eq!(units, quota.units());
+        assert_eq!(admitted.parse::<usize>().unwrap(), cap);
+        let requested = count.parse::<usize>().unwrap();
+        assert!(requested > cap);
+        assert_eq!(
+            error.cause,
+            format!("aggregation setup requested {requested} {}; admitted limit {cap}", quota.units())
+        );
+        requested
+    }
+
+    /// Check physics and transfer identities independently of the resource ledger.
+    fn check_poisson_plan(plan: &Plan) {
+        match plan {
+            Plan::Coarse { n, c } => {
+                assert_eq!(*n, 2);
+                // The two Dirichlet springs have inverse (1/3)*[[2,1],[1,2]].
+                let got = [c[0] * c[0] + c[2] * c[2], c[3] * c[2]];
+                assert!((got[0] - 2.0 / 3.0).abs() < 1e-15);
+                assert!((got[1] - 1.0 / 3.0).abs() < 1e-15);
+            }
+            Plan::Fine { n, p, pt, coarse_operator, .. } => {
+                let coarse = (0..p.n_cols).map(|i| libm::sin((i + 1) as f64 * 0.31)).collect::<Vec<_>>();
+                let fine = rect_mv(p, &coarse);
+                // Dirichlet chain energy is endpoints squared plus every neighbor
+                // difference squared, independent of CSR assembly or Galerkin code.
+                let energy = fine[0] * fine[0]
+                    + fine[*n - 1] * fine[*n - 1]
+                    + fine.windows(2).map(|w| (w[1] - w[0]) * (w[1] - w[0])).sum::<f64>();
+                let mut ac = vec![0.0; coarse.len()];
+                coarse_operator.spmv(&coarse, &mut ac);
+                let reduced_energy = coarse.iter().zip(ac).map(|(a, b)| a * b).sum::<f64>();
+                assert!(energy > 0.0);
+                assert!((energy - reduced_energy).abs() <= 1e-12 * energy.max(1.0));
+                let probe = (0..*n).map(|i| libm::cos((i + 1) as f64 * 0.17)).collect::<Vec<_>>();
+                let left = fine.iter().zip(&probe).map(|(a, b)| a * b).sum::<f64>();
+                let restricted = rect_mv(pt, &probe);
+                let right = coarse.iter().zip(restricted).map(|(a, b)| a * b).sum::<f64>();
+                assert!((left - right).abs() <= 1e-12 * left.abs().max(right.abs()).max(1.0));
+            }
+        }
+    }
+
+    fn walk_quota(k: &Csr, space: Option<&NearSpace>, quota: Quota) -> Plan {
+        let scale = vec![1.0; k.n];
+        let mut cap = 0;
+        let mut attempts = 0;
+        let plan = loop {
+            attempts += 1;
+            assert!(attempts <= 512, "bounded admission walk for {} rows", k.n);
+            match build(k, &k.vals, &scale, space, quota.limits(cap)) {
+                Ok(plan) => break plan,
+                Err(error) => cap = requested_count(&error, quota, cap),
+            }
+        };
+        // A successful jump is an actual exact quota boundary, not merely a random
+        // generous limit. Coarse fill-free cases legitimately succeed at zero.
+        if cap > 0 {
+            let error = build(k, &k.vals, &scale, space, quota.limits(cap - 1)).unwrap_err();
+            requested_count(&error, quota, cap - 1);
+        }
+        check_poisson_plan(&plan);
+        plan
+    }
+
+    fn partial_physical_space(rows: usize) -> NearSpace {
+        use crate::model::Idealisation;
+        use femlab_geometry::{ElementKind, Structured};
+        // A real solid mesh, retaining ux/uy along its first straight 64-node edge.
+        // Others are prescribed; the final retained node may have only ux. Each
+        // node owns at most two of its three actual displacement coordinates.
+        let mesh = Structured { kind: ElementKind::Hex8, n: [63, 1, 1] }.box_([2.0, 1.0, 1.0]);
+        let free = (0..rows).map(|row| (3 * (row / 2) + row % 2) as u32).collect::<Vec<_>>();
+        physical::PhysicalSpace { mesh: &mesh, idealisation: &Idealisation::Solid3d, free: &free, dofs_per_node: 3 }
+            .materialize(physical::NEAR_SPACE_BYTES)
+            .unwrap()
+    }
+
+    #[test]
+    fn real_quota_boundaries_preserve_dirichlet_energy_and_transfer_duality() {
+        for n in [2, 97, 127] {
+            let k = poisson(n);
+            let physical = partial_physical_space(n);
+            for space in [None, Some(&physical)] {
+                let generous = build(&k, &k.vals, &vec![1.0; n], space, limits()).unwrap();
+                check_poisson_plan(&generous);
+                for quota in [Quota::Bytes, Quota::Interpolation, Quota::Operator] {
+                    let admitted = walk_quota(&k, space, quota);
+                    // Secondary resource independence only: the preceding closed
+                    // forms, energy and duality checks supply independent oracles.
+                    assert_eq!(admitted, generous);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn requested_resource_diagnostics_report_stable_counts_and_units() {
+        let k = poisson(2);
+        let cap = size_of::<Plan>();
+        let error = build(&k, &k.vals, &[1.0; 2], None, Limits { max_bytes: cap, ..limits() }).unwrap_err();
+        assert_eq!(requested_count(&error, Quota::Bytes, cap), cap + 64);
+        let k = poisson(97);
+        let error =
+            build(&k, &k.vals, &vec![1.0; k.n], None, Limits { max_interpolation_nnz: 0, ..limits() }).unwrap_err();
+        assert_eq!(requested_count(&error, Quota::Interpolation, 0), 1);
+    }
+
+    #[test]
+    fn a_real_prolongation_transpose_admits_all_arrays_and_cursor_at_the_exact_byte_bound() {
+        for rows in [2, 127] {
+            let a = poisson(rows);
+            let plan = build(&a, &a.vals, &vec![1.0; rows], None, limits()).unwrap();
+            match &plan {
+                Plan::Coarse { .. } => check_poisson_plan(&plan),
+                Plan::Fine { p, pt, .. } => {
+                    // Transpose needs row pointers, columns, values, and a separate
+                    // cursor for every output row. All coexist before construction.
+                    let exact = (p.n_cols + 1) * size_of::<u32>()
+                        + p.col_idx.len() * size_of::<u32>()
+                        + p.vals.len() * size_of::<f64>()
+                        + p.n_cols * size_of::<u32>();
+                    let mut admitted = Budget {
+                        limits: Limits { max_bytes: exact, ..limits() },
+                        bytes: 0,
+                        interpolation_nnz: 0,
+                        operator_nnz: 0,
+                    };
+                    let actual = transpose(p, Entries::Interpolation, &mut admitted).unwrap();
+                    assert_eq!(admitted.bytes, exact as u128);
+                    // Independent transfer duality, not a second transpose implementation.
+                    let coarse = (0..p.n_cols).map(|i| libm::sin((i + 1) as f64 * 0.31)).collect::<Vec<_>>();
+                    let fine = (0..p.n_rows).map(|i| libm::cos((i + 1) as f64 * 0.17)).collect::<Vec<_>>();
+                    let prolongated = rect_mv(p, &coarse);
+                    let restricted = rect_mv(&actual, &fine);
+                    let left = fine.iter().zip(prolongated).map(|(x, y)| x * y).sum::<f64>();
+                    let right = coarse.iter().zip(restricted).map(|(x, y)| x * y).sum::<f64>();
+                    assert!((left - right).abs() <= 1e-13 * left.abs().max(right.abs()).max(1.0));
+                    assert_eq!(&actual, pt);
+                    let mut refused = Budget {
+                        limits: Limits { max_bytes: exact - 1, ..limits() },
+                        bytes: 0,
+                        interpolation_nnz: 0,
+                        operator_nnz: 0,
+                    };
+                    let error = transpose(p, Entries::Interpolation, &mut refused).unwrap_err();
+                    assert_eq!(requested_count(&error, Quota::Bytes, exact - 1), exact);
+                    assert_eq!(refused.bytes, 0);
+                }
+            }
+        }
     }
 }

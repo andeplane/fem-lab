@@ -3191,6 +3191,14 @@ Metal's allowed contraction perturbs it to `(67108864,-67108860)`, whose exact c
 unchanged f64 outer acceptance with structured `solve.stalled`; a finite inner correction
 alone never passes this oracle.
 
+The resource-admission property uses 2/97/127-row Dirichlet chains, both scalar groups
+and actual solid-mesh ux/uy retained coordinates. Byte, interpolation and operator quotas
+start at zero and advance strictly to each structured error's requested count, with at most
+512 attempts per axis. First success must satisfy the two-spring inverse or independent
+Dirichlet energy (squared endpoints plus squared neighbor differences), transfer duality,
+and exact quota-independent Plan identity; its last nonzero cap minus one must refuse.
+The diagnostics report requested setup storage or entry counts, not resident/free memory.
+
 ## Fully prescribed affine Hex8 GPU solve (#740)
 
 `all_prescribed_affine_cube_gpu_preserves_recovery_and_journal` in `gpu_kernels.rs`
