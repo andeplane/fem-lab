@@ -784,6 +784,14 @@ checked beyond aggregate counts.
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
 | D9 | quality, volume and Set survival on a box, cylinder, sphere and box-minus-cylinder at two sizes | dihedral ∈ [10.7°, 164.8°]; volume within the stated tolerance of the closed form; every Solid tag resolves to a non-empty face Set at both sizes | as stated | the mesher's SIGGRAPH 2007 dihedral-angle guarantee, measured rather than claimed | geometry test |
 
+**D3 remains unresolved after the bounded #639 investigation.** Full Hex20 grids
+4×4×1, 8×8×2 and 16×16×4 all met the measured modal backward-residual tolerance, but
+the fixed mode 4–10 discrepancy columns change under refinement and higher indexed mode
+content changes. Neither published reference was selected, and the original 3% comparisons
+are diagnostic only. The finest grid also exposed exact 1/4-thread nonreproducibility (#640).
+See [the findings and preserved raw-data index](research/639-fv52-solid-investigation.md)
+and [the frozen plan](plans/639-fv52-dual-reference-investigation.md). Parent #7 stays open.
+
 **D4 distinguishes full gradient, engineering strain and energy (#630).** The elastic
 H1 seminorm measures the Frobenius error of every derivative of the represented nodal
 interpolant against the independently analytic Hessian of φ: nine entries in 3D and four

@@ -1,0 +1,88 @@
+"""Release smoke checks without Google credentials or network access."""
+import contextlib
+import io
+import json
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+class HostingReleaseSmoke(unittest.TestCase):
+    def release(self, *, custom=False, other_source=False, hosted_project='femlab-app', readiness='ready'):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            infra = root / 'infra/google'
+            infra.mkdir(parents=True)
+            script = infra / 'deploy-hosting.py'
+            shutil.copyfile(Path(__file__).with_name('deploy-hosting.py'), script)
+            (infra / 'firebase.production.json').write_text(json.dumps({
+                'projectId': 'femlab-app', 'appId': 'app-production', 'authDomain': 'femlab-app.web.app',
+            }))
+            (infra / 'hosting.production.json').write_text(json.dumps({'hosting': {'public': 'packages/app/dist'}}))
+            source = root / 'checkout' if other_source else root
+            commands = []
+            environments = []
+
+            def output(command, **kwargs):
+                return 'https://direct-api.example.test' if command[0] == 'gcloud' else 'source-commit'
+
+            def execute(command, **kwargs):
+                commands.append(command)
+                if command[0] == 'npm':
+                    environments.append(kwargs['env'])
+                    dist = Path(kwargs['cwd']) / 'packages/app/dist'
+                    dist.mkdir(parents=True)
+                    (dist / 'index.html').write_text('compiled artifact')
+                return subprocess.CompletedProcess(command, 0)
+
+            def response(url, **kwargs):
+                if url == 'https://femlab.app/__/firebase/init.json':
+                    return io.BytesIO(json.dumps({'projectId': hosted_project, 'appId': 'app-production'}).encode())
+                if url == 'https://api.femlab.app/ready':
+                    return io.BytesIO(json.dumps({'status': readiness}).encode())
+                raise AssertionError('Unexpected network destination: ' + url)
+
+            argv = [str(script), '--environment', 'production', '--account', 'selected-account', '--source', str(source), '--build-only']
+            if custom: argv.append('--custom-domain')
+            with patch('sys.argv', argv), patch('subprocess.check_output', output), patch('subprocess.run', execute), patch('urllib.request.urlopen', response), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                try:
+                    runpy.run_path(str(script), run_name='__main__')
+                except RuntimeError:
+                    self.assertEqual(commands, [])
+                    raise
+            self.assertEqual((root / 'packages/app/dist/index.html').read_text(), 'compiled artifact')
+            self.assertFalse(any(command[0] == 'firebase' for command in commands))
+            self.assertEqual(list(root.glob('firebase-*.json')), [])
+            return json.loads(stdout.getvalue()), environments[0]
+
+    def test_build_in_script_checkout_preserves_artifact(self):
+        manifest, environment = self.release()
+        self.assertFalse(manifest['published'])
+        self.assertEqual(manifest['apiOrigin'], 'https://direct-api.example.test')
+        self.assertEqual(json.loads(environment['FEMLAB_FIREBASE_CONFIG'])['authDomain'], 'femlab-app.web.app')
+
+    def test_build_from_other_checkout_copies_artifact(self):
+        self.release(other_source=True)
+
+    def test_custom_domain_uses_same_origin_auth_and_custom_api(self):
+        manifest, environment = self.release(custom=True)
+        self.assertEqual(manifest['url'], 'https://femlab.app')
+        self.assertEqual(environment['FEMLAB_AI_API_ORIGIN'], 'https://api.femlab.app')
+        self.assertEqual(json.loads(environment['FEMLAB_FIREBASE_CONFIG'])['authDomain'], 'femlab.app')
+        self.assertEqual(environment['FEMLAB_GOOGLE_SIGN_IN'], 'false')
+
+    def test_wrong_domain_project_cannot_build_or_publish(self):
+        with self.assertRaisesRegex(RuntimeError, 'unexpected Firebase'):
+            self.release(custom=True, hosted_project='some-other-project')
+
+    def test_unready_custom_api_cannot_build_or_publish(self):
+        with self.assertRaisesRegex(RuntimeError, 'not ready'):
+            self.release(custom=True, readiness='unavailable')
+
+
+if __name__ == '__main__':
+    unittest.main()
