@@ -40,7 +40,6 @@ export function completionService(deps:{account(authorization:string|undefined):
           } catch { throw new ServiceFailure(422,'invalid-image','Use a PNG, JPEG or WebP of at most 5 MiB and 1568 pixels on its longest edge.','request'); }
         }
       }
-      await deps.ledger.ensureFree(account.id);
       const prepared=await deps.reservations.prepare({accountId:account.id,key:call.key??'',digest:createHash('sha256').update(JSON.stringify(input)).digest('hex'),turnId:input.turnId,round:input.round,model:input.model,maxOutput:input.maxTokens});
       if(prepared.replay) return prepared;
       const request:ChatRequest={system:input.system,messages:input.messages,tools:input.tools,model:input.model,maxTokens:prepared.maxOutput,signal:call.signal};
