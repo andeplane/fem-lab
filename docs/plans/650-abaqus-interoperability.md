@@ -296,7 +296,8 @@ manually does not meet the intended easy comparison workflow. #691 adds an expli
 registry-backed browser export with coordinates/displacements in SI and separate normalized
 and original part/instance/node identities. One immutable result ID and its solved Model
 hash must govern the join. Historical or stale fields must not receive current-source
-labels; unused authored nodes must not acquire invented zero results. The frozen implementation in PR #692 passes 190 registry tests at 100% coverage,
+labels; unused authored nodes must not acquire invented zero results. The frozen
+implementation in PR #692 passes 190 registry tests at 100% coverage,
 57 focused UI tests, production build and two actual Chromium downloads. The unchanged
 published Abaqus case compares all 825 displacement components through the CSV. Concurrent
 source edits during preparation are rejected before delivery. Independent review is complete;
