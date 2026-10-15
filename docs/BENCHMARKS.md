@@ -3111,8 +3111,10 @@ four-stage forward/reverse Chebyshev smoothing, and a bounded coarse CᵀC map. 
 supply physical reduced candidates and explicit node grouping; matrix-only calls use
 an algebraic constant. ADR0040 states the admission, arithmetic and reduction contract.
 Producer `333af63e` compiled and passed the setup/admission unit tests and actual device-loss
-checks. Its aggregation GPU tests stopped on a reserved WGSL entry name; the entry rename
-awaits remote checks. GPU numerical and large-case acceptance remain open.
+checks; its aggregation execution stopped on a reserved WGSL entry name. After the entry
+rename, `12aea784` passed the bounded Poisson, zero-transfer-row, B1 and mean-dilatation
+witnesses below on Apple M4 Max (Metal). Software-GPU/100% coverage and large-case
+acceptance remain open.
 
 `aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes` uses the exact
 Dirichlet tridiagonal Laplacian at 31, 127 and 1023 rows. Its sine eigenvector and
@@ -3140,13 +3142,21 @@ The prepared floating-point boundary makes its final smoothed transfer row zero;
 Rust setup asserts that structural fact, while a real GPU solve under an injected
 508-byte per-buffer limit must preserve the exact physical solution. Empty gathered
 rows use a dummy unused index/value so their storage bindings stay valid; row offsets
-retain zero-gather semantics. These regression checks remain pending execution.
+retain zero-gather semantics. The exact `12aea784` Metal run passed this regression.
 
 The adverse setup cases also distinguish losing one interpolation row from losing an
 entire aggregate's representable candidates. A 40-row SPD tridiagonal A=L Lᵀ, with
 L diagonal 2^-26 and first subdiagonal 1, has exact positive Cholesky pivots but an
 unrepresentable inverse factor: C[row,0]=(-1)^row 2^(26(row+1)). Setup must return a
 structured numerical-range failure without declaring this original f64 matrix indefinite.
+
+The `12aea784` 66,150-equation run completed its independent direct reference and admitted
+the five-level GPU hierarchy, then failed at the first batched 36-byte scalar readback.
+It has no accepted GPU displacement, B1 or 1/4-thread result. The next device-boundary
+diagnostic preserves validation/poll/mapping outcomes and the typed loss reason in the
+same structured `internal` error. Actual invalid-copy and device-destruction tests verify
+those diagnostics separately from numerical oracles. No residual, iteration or batch
+policy changes accompany this diagnostic; the 66k and 780,300-equation gates remain open.
 
 ## Fully prescribed affine Hex8 GPU solve (#740)
 

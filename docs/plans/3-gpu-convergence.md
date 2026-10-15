@@ -59,3 +59,37 @@ checkpoint renames that entry and its host reference, updates the exact explanat
 capacity-note snapshot, moves the proposed ADR to its reserved number0040, and removes
 elapsed-time logging from the correctness harness. Numerical oracles and tolerances remain
 unchanged. Actual GPU numerical/coverage and 66k gates remain open.
+
+## Bounded Metal execution and readback diagnosis
+
+At `12aea784`, five existing bounded witnesses passed on Apple M4 Max (Metal):
+Poisson eigenmodes at 31/127/1023 rows with cycle symmetry, linearity and positive energy;
+the 127-row empty-transfer-chunk SPD solution; public 1200-equation B1 bending and
+equilibrium with exact 1/4-thread displacement identity; the 216-equation direct comparison;
+and uniaxial mean-dilatation displacement/stress at three meshes. Original tolerances and
+the f64 residual gate were unchanged. These are correctness checks, not performance claims.
+
+The one authorized 66,150-equation run at the same head remains **RED**. Symbolic-only
+preflight measured 86,223,249 supernodal factor values (689,785,992 bytes) and 163,053,183
+bytes of numeric scratch. The independent direct reference completed. The GPU hierarchy
+admitted rows `[66150,14807,2070,264,36]`, 15,473,041 operator entries including the root,
+11,336,566 transfer entries and a 221,378,772-byte conservative device payload. Its first
+batched scalar readback returned `internal` at `solve/readback` before numerical acceptance.
+OS-reported maximum RSS was 1,949,483,008 bytes, with a 2,304,232,352-byte peak memory
+footprint; no resource cap triggered. This is a device execution/readback failure, with no
+evidence of failed convergence or a long-running GPU watchdog.
+
+The next checkpoint preserves the actual validation, poll and mapping outcomes and the
+typed device-loss reason in the existing structured readback error. State belongs to the
+injected GPU, with no globals or solver-decision changes. Existing real invalid-copy and
+device-destruction tests must verify these diagnostics. The #740 zero-equation guard is
+integrated at the shared private refinement boundary, retaining its public affine recovery
+and Journal/replay test. The current software-GPU/100% gate remains on `12aea784` until its
+feedback is collected. No 66k retry or 780,300-equation allocation is accepted by these checks.
+
+The diagnostic checkpoint compiled locally and passed focused Clippy, formatting and eight
+real Metal tests: the invalid-copy diagnostic, all three actual device-loss boundaries,
+the integrated #740 affine recovery/replay case and the five bounded numerical witnesses.
+Whole-engine software-GPU coverage remains pending. A separately authorized, resource-bound
+66k diagnostic attempt may now collect the previously erased cause without changing its
+original assertions; a failed diagnostic is retained and never treated as convergence.

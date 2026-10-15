@@ -184,6 +184,10 @@ fn broken_shaders_and_tiny_limits_are_structured_errors() {
     let e = pollster::block_on(g.read_back(&small, 64)).unwrap_err();
     assert_eq!(e.code, ErrorCode::Internal);
     assert!(e.cause.contains("64 bytes"));
+    assert!(e.cause.contains("validation=Some"), "{e:?}");
+    assert!(e.cause.contains("poll="), "{e:?}");
+    assert!(e.cause.contains("mapping="), "{e:?}");
+    assert!(e.cause.contains("device_loss=None"), "{e:?}");
     assert_eq!(pollster::block_on(g.read_back(&small, 8)).unwrap(), bytemuck::cast_slice::<f32, u8>(&[1.0, 2.0]));
     // an adapter below WebGPU's guaranteed workgroup size cannot run the kernels
     g.limits.max_compute_invocations_per_workgroup = WORKGROUP - 1;
@@ -345,6 +349,9 @@ fn gpu_cg_reports_device_loss_before_initial_batch_and_correction_readbacks() {
         assert_eq!(error.where_.as_deref(), Some("solve/readback"));
         let bytes = if budget == 25 { 4 * k.n } else { 36 };
         assert!(error.cause.contains(&format!("gpu readback of {bytes} bytes failed")), "{error:?}");
+        assert!(error.cause.contains("device_loss=Some((Destroyed,"), "{error:?}");
+        assert!(error.cause.contains("poll="), "{error:?}");
+        assert!(error.cause.contains("mapping="), "{error:?}");
         assert_eq!(destroyed_between_submissions, usize::from(budget > 0));
     }
 }
