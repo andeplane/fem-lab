@@ -75,10 +75,9 @@ test('@cpu draws and colors two-bar line members while preserving visibility and
   }, commands);
 
   await expect(page.locator('.tree .name', { hasText: 'truss' })).toBeVisible();
-  // At the midpoint, reversing endpoint colors gives the same interpolated color.
-  // The physical quarter points have distinct signed-uy and magnitude colors.
-  const left = { x: 0.25, y: 0.25 };
-  const right = { x: 1.75, y: 0.25 };
+  // Preserve midpoint geometry, picking and visibility probes independently of color changes.
+  const left = { x: 0.5, y: 0.5 };
+  const right = { x: 1.5, y: 0.5 };
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.bright)).toBeGreaterThan(0);
   const geometryLeft = await patch(page, left.x, left.y);
   const geometryRight = await patch(page, right.x, right.y);
@@ -112,11 +111,14 @@ test('@cpu draws and colors two-bar line members while preserving visibility and
   await page.getByRole('button', { name: 'uy', exact: true }).click();
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.maxSat)).toBeGreaterThan(25);
   await expect.poll(() => patch(page, right.x, right.y).then((p) => p.maxSat)).toBeGreaterThan(25);
-  const uyColours = await Promise.all([patch(page, left.x, left.y), patch(page, right.x, right.y)]);
+  // Reversing endpoint colors gives the same interpolated color at a midpoint.
+  // Physical quarter points instead have distinct signed-uy and magnitude colors.
+  const colourPoints = [{ x: 0.25, y: 0.25 }, { x: 1.75, y: 0.25 }];
+  const uyColours = await Promise.all(colourPoints.map(point => patch(page, point.x, point.y)));
   await page.getByRole('button', { name: '|u|', exact: true }).click();
   await expect(page.locator('.legend-field')).toHaveText('|u|');
   const samples = [];
-  for (const [index, point] of [left, right].entries()) {
+  for (const [index, point] of colourPoints.entries()) {
     const uyColour = uyColours[index]!;
     await expect.poll(async () => {
       const umagColour = await patch(page, point.x, point.y);
