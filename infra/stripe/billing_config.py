@@ -10,7 +10,7 @@ ROOT = Path(__file__).parent
 spec = importlib.util.spec_from_file_location('stripe_key_installer', ROOT / 'install-runtime-key.py')
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
-GATES = ('taxClassificationConfirmed', 'taxCollectionDecisionConfirmed', 'policyUrlsConfirmed')
+GATES = ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed')
 
 
 def resolve(environment, project, run, previous_enabled=False, activation='preserve', root=ROOT, verify=installer.validate_prices):
@@ -29,7 +29,7 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
     if enabled:
         if tax_mode == 'pending':
             raise ValueError('Billing activation requires an explicit taxMode decision: automatic or not_collecting.')
-        gates = GATES + (('stagingCheckoutVerified', 'webhookVerified') if mode == 'live' else ())
+        gates = GATES + (('taxClassificationConfirmed',) if tax_mode == 'automatic' else ()) + (('stagingCheckoutVerified', 'webhookVerified') if mode == 'live' else ())
         missing = [gate for gate in gates if catalog.get(gate) is not True]
         if missing:
             raise ValueError('Billing activation requires recorded acceptance: ' + ', '.join(missing))

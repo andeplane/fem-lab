@@ -92,8 +92,9 @@ Portal configuration to **both** the API and recovery job, together with
 `not_collecting`. Pending or unknown collection decisions cannot enable checkout;
 disabled billing still prepares webhook and recovery processing. Automatic
 collection requires the owner-confirmed decision and separately verified active
-registration evidence. An explicit owner-confirmed non-collection decision does
-not require fabricating a registration. Both manifests remain pending; the code
+registration evidence and confirmed product classification. An explicit
+owner-confirmed non-collection decision requires neither a registration nor an
+invented product classification. Both manifests remain pending; the code
 does not infer the owner's tax obligations from company or Stripe account status.
 Production's return
 origin is `https://femlab.app`; staging uses its own Hosting origin.
@@ -123,7 +124,8 @@ recovery-job and traffic rollback gates remain in place.
    [Checkout settings](https://dashboard.stripe.com/acct_1UQmBTAAtmJJ65hf/settings/checkout).
    Required terms consent depends on those account settings; direct account policy
    URLs are a Dashboard operation. Preserve unrelated account branding/settings.
-3. Confirm product tax classification and collection policy with the owner. On
+3. Confirm collection policy with the owner; product classification is required
+   before activating automatic collection. On
    inspection, live Tax settings are active but have **no registrations and no
    default tax code**. Test mode has no registrations and an existing downloadable
    personal software default (`txcd_10202000`), which must not be silently inherited
@@ -150,6 +152,47 @@ recovery-job and traffic rollback gates remain in place.
    these tests. Record evidence and enable the live webhook before live checkout.
 5. Activate production only after the above evidence and owner decisions are
    recorded. The present manifests intentionally keep billing disabled.
+
+## Owner statement and Norway customer scope
+
+On 2026-10-15 the owner reported: “not VAT, but will work in norway”. This records
+the owner's stated absence of VAT registration; no registration or product tax
+classification was invented. An owner-confirmed `not_collecting` decision is a
+supported release path without product classification, while automatic collection
+still requires both classification and verified registration. The statement does
+not settle whether Norway describes the business location or restricts paying
+customers to Norway. The coordinating launch task owns that clarification and
+records the accepted collection decision before activation. This change leaves
+the public manifests pending and checkout disabled.
+
+Hosted Checkout's documented `billing_address_collection` accepts only `auto` or
+`required`; it has no billing-country allowlist. The `allowed_countries` field is
+specifically for shipping addresses, so adding a shipping form for a digital AI
+subscription would not enforce the intended billing policy.
+[Address collection](https://docs.stripe.com/payments/collect-addresses?payment-ui=stripe-hosted),
+[Checkout Session API](https://docs.stripe.com/api/checkout/sessions/create).
+
+If the owner chooses Norway-only paying customers, two documented options need
+separate implementation and acceptance:
+
+- Keep hosted Checkout and use a supported Radar custom rule to block
+  `is_missing(:billing_address_country:) OR :billing_address_country: != 'NO'`.
+  The country attribute and explicit missing-value handling are documented.
+  Check the account's Radar feature availability, payment-method support and
+  existing allow rules (which override block rules); test accepted Norwegian,
+  rejected foreign, missing-address and recurring-payment cases before activation.
+  This restricts provided billing information, not verified residence.
+  [Supported attributes](https://docs.stripe.com/radar/rules/supported-attributes),
+  [Rule reference](https://docs.stripe.com/radar/rules/reference),
+  [Payment-method coverage](https://docs.stripe.com/radar/supported-payment-methods).
+- Use a custom Elements checkout with a billing Address Element configured with
+  `allowedCountries: ['NO']`, plus authoritative server validation of the country
+  before confirmation. The UI country filter alone is insufficient. This changes
+  the checkout flow; it is not a flag on the existing hosted page.
+  [Address Element options](https://docs.stripe.com/js/elements_object/create_address_element).
+
+No country restriction, Radar rule, payment-method configuration or custom payment
+flow was applied as part of this review.
 
 ## Tokens and model choice
 
@@ -191,7 +234,7 @@ choosing one as the default; token price alone is insufficient.
 
 ## Verification
 
-Thirteen Python checks exercise secret stdin handling, mode/owner/currency/product
+Fourteen Python checks exercise secret stdin handling, mode/owner/currency/product
 guards, error redaction, missing-key refusal, explicit activation gates,
 preservation across releases, pinned references and both API/recovery bindings.
 The release orchestration check uses fake cloud boundaries and verifies the
