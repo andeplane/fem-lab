@@ -4,6 +4,7 @@ import { batchModule } from '../../../tools/checked-batch.mjs';
 // the field→unit table both the Worker and the viewer read.
 import { HOST_COMMANDS, Registry, type CostEstimate, type EngineSchema, type ModelSummary, type PathResult, type ResultSummary, type Valued } from '@femlab/registry';
 import { render } from 'preact';
+import { act } from 'preact/test-utils';
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -16,7 +17,8 @@ import { Store, initialState, solveLabel, stageOf, verificationState, type Assis
 import { exaggerationHelp, probeLine } from '../src/ui/App';
 import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 
-import { specOf, unavailable } from '../src/ui/Export';
+import { ExportModal, specOf, unavailable } from '../src/ui/Export';
+import type { Dispatch } from '../src/ui/cmd';
 import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
@@ -276,11 +278,45 @@ describe('the Export dialog', () => {
   it('builds the spec each row exports', () => {
     expect(specOf({ format: 'csv' } as never, 'static')).toEqual({ format: 'csv', table: 'extremes', step: 'static' });
     expect(specOf({ format: 'csv' } as never, undefined)).toEqual({ format: 'csv', table: 'extremes' });
+    expect(specOf({ format: 'csv', table: 'nodal-displacements' } as never, 'AXIAL')).toEqual({ format: 'csv', table: 'nodal-displacements', step: 'AXIAL' });
     expect(specOf({ format: 'vtu' } as never, 'static')).toEqual({ format: 'vtu', step: 'static' });
     expect(specOf({ format: 'vtu' } as never, undefined)).toEqual({ format: 'vtu' });
     expect(specOf({ format: 'webm' } as never, 'modes')).toEqual({ format: 'webm', width: 1280, height: 720 });
     expect(specOf({ format: 'stl' } as never, 'static')).toEqual({ format: 'stl' });
     expect(specOf({ format: 'png' } as never, 'static', { width: 1280, height: 720 })).toEqual({ format: 'png', width: 1280, height: 720 });
+  });
+
+  it('keeps both CSV selections independent and dispatches their tables for the selected solved Step', async () => {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const store = new Store({ ...initialState, model: MODEL, panels: { export: true } });
+    const dispatch = vi.fn<Dispatch>(async () => undefined);
+    const query = vi.fn(async () => undefined);
+    const show = () => render(<ExportModal s={store.state} store={store} dispatch={dispatch} query={query} />, root);
+    try {
+      await act(show);
+      const nodal = root.querySelector<HTMLInputElement>('[aria-label="export Nodal displacements (CSV)"]')!;
+      expect(nodal.disabled).toBe(true);
+      store.set({ result: RESULT });
+      await act(show);
+      expect(nodal.disabled).toBe(false);
+      const extrema = root.querySelector<HTMLInputElement>('[aria-label="export Result table (CSV)"]')!;
+      await act(() => nodal.click());
+      expect(nodal.checked).toBe(true);
+      expect(extrema.checked).toBe(false);
+      await act(() => extrema.click());
+      expect(nodal.checked).toBe(true);
+      const batch = [...root.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === 'Export selected')!;
+      await act(() => batch.click());
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+      expect(dispatch.mock.calls.map(([command]) => command)).toEqual([
+        { cmd: 'file.export', spec: { format: 'csv', table: 'nodal-displacements', step: 'static' } },
+        { cmd: 'file.export', spec: { format: 'csv', table: 'extremes', step: 'static' } },
+      ]);
+    } finally {
+      await act(() => render(null, root));
+      root.remove();
+    }
   });
 });
 
