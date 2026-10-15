@@ -19,9 +19,14 @@ One workflow, `ci.yml`, with the job set chosen by event:
   tests, app build)` and `browser smoke` on Chromium's CPU path. That proves the change works on
   macOS and in Chrome, the supported browser (ADR 0014).
 - A push to main, and release validation (`workflow_call` with `strict: true`), run everything
-  the PR ran plus `rust (ubuntu-latest)` with the llvm-cov 100 % lines/functions/regions gate,
-  `windows`, `native vs wasm Journal hashes`, the service-worker and WebGPU smoke variants and
-  the advisory lavapipe GPU job.
+  the PR ran plus `rust (ubuntu-latest)`, `windows`, `native vs wasm Journal hashes`, the
+  service-worker and WebGPU smoke variants and the required lavapipe GPU job. Since #19's
+  promotion, the lavapipe job owns the full engine and geometry llvm-cov gate: 100 % lines,
+  functions and regions, including GPU code, with no filename exclusions. The redundant
+  Linux CPU coverage bridge is retired; Linux still runs fmt, clippy, workspace tests and
+  the wasm target check. Ordinary pull requests continue to skip the full-matrix job; a
+  skipped job is not an executed GPU test. Chromium's separate SwiftShader smoke step keeps
+  its existing policy: advisory on ordinary main runs and required with `strict: true`.
 
 No threshold moved; only where it runs. The wasm build is its own job so the artifact every
 web-side job consumes is produced on both event kinds.

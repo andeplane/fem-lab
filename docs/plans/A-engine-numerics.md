@@ -918,13 +918,14 @@ the un-ignore and the BENCHMARKS.md edit are one commit.
   measure: `cargo llvm-cov` 0.9 reports lines, functions and regions; `--branch` is marked
   unstable (verified in `--help`), so **regions stand in for branches** and the CI config says
   so in a comment. "Statements" is not an LLVM coverage concept; regions are the finer unit.
-- **Two gates, one rule.** The full gate
+- **One full coverage gate.** The command
   `cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100`
-  runs in the **lavapipe job**, the only job where `src/gpu/` executes. Until that job is
-  promoted to required (ADR 0007: green for a week), B's `rust` job runs the same command
-  without `--features gpu-tests` and with `--ignore-filename-regex 'src/gpu/'` as a **bridge**,
-  with a comment naming the date it must be removed. The bridge never becomes the rule; C §6
-  #2's permanent exclusion is rejected.
+  runs in the required **lavapipe job**, where `src/gpu/` executes. Issue #19 promotes that
+  job after ADR 0007's elapsed observed-green interval and removes the redundant excluded
+  CPU coverage bridge. Full coverage runs on main and strict release validation under
+  ADR 0022; ordinary pull requests keep the fast gate. All CPU workspace tests remain.
+  There is no filename exclusion in the authoritative gate; C §6 #2's permanent exclusion
+  is rejected.
 - No `#[cfg_attr(coverage_nightly, coverage(off))]` (nightly). What is unreachable is
   deleted or designed out, not excluded: enums are exhaustive, every `match` arm has a test,
   no `unreachable!()`/`unwrap()` in library code except on invariants that a test provokes.

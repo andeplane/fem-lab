@@ -13,8 +13,8 @@ on:
 # Two gates (issue #441, ADR 0022). A pull request runs the fast set: Rust on macOS (fmt, clippy,
 # tests), the wasm build, the web build and Chromium smoke on the CPU path — enough to prove the
 # change works on macOS and in Chrome. A push to main, and release validation (`strict: true`),
-# run everything: Linux Rust with the 100 % coverage gate, Windows, the native-vs-wasm hash
-# comparison, every smoke variant and the advisory GPU job. So main can go red on what a PR did
+# run everything: Linux Rust, Windows, the native-vs-wasm hash comparison, every smoke variant
+# and the required lavapipe GPU job with full 100 % library coverage. So main can go red on what a PR did
 # not run; whoever merged fixes forward before anything else lands. The condition is written out
 # at each job (`github.event_name != 'pull_request' || inputs.strict`); job names are the check
 # names, so keep them.
@@ -31,7 +31,7 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
-  # macOS on every event; Linux, which carries the coverage gate, only on the full set.
+  # macOS on every event; Linux only on the full set. Full crate coverage belongs to the GPU job.
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -51,22 +51,13 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
-      # 100 % on the library crates. Regions stand in for branches: llvm-cov measures branches only on nightly.
-      # bridge: src/gpu is covered in the GPU job below; delete this exclusion when that job is
-      # required after ADR 0007's week-long green soak.
-      - name: coverage
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cargo install cargo-llvm-cov --locked
-          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
 
   # GPU kernels for real on a GPU-less runner: Mesa lavapipe is the Vulkan adapter (ADR 0007).
   # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
   gpu:
-    name: gpu kernels on lavapipe (advisory during week-long soak)
+    name: gpu kernels on lavapipe
     if: github.event_name != 'pull_request' || inputs.strict
     runs-on: ubuntu-latest
-    continue-on-error: ${{ !inputs.strict }}
     env:
       LVP_POISON_MEMORY: "true"
     steps:
