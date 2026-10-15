@@ -22,13 +22,22 @@ byte for byte.
 - **`export_file { format, path, step? }`** — writes `vtu`, `msh`, `inp`, `stl`, `report` (the
   Markdown calculation note), `script` or `journal` into the `--project` folder. Paths are
   relative to that folder; `..`, absolute paths, absolute symlink targets and symlinks out of it are refused. Relative directory links may resolve within the captured project; final file links are refused. Exports have a 64 MiB host transfer limit.
-- **`file_importAbaqus { name, body, mode, unitLength, unitForce?, text? | path? }`** — converts
-  a supported flat C3D4/C3D8 `.inp` deck into a new unsolved Model through checked portable
-  Commands. Choose `mesh` or `static`; static requires explicit Force units as well as Length
-  units. A path is scoped to `--project`; inline text needs no folder. The Node host has no
-  picker. Returns exact counts, SI bounds and named object mappings. `.odb`, `.cae`, unsupported
-  content, stale reads and failed validation preserve the current Model. See the
-  [supported import slice](../../docs/plans/500-abaqus-import.md).
+- **`file_importAbaqus { name, body, mode, unitLength, unitForce?, unitTime?, text? | path?, sourceName?, sourceFiles? }`** — converts
+  a supported UTF-8 `.inp` deck into a new unsolved Model through checked portable Commands.
+  Preserves parts and transformed assembly instances, named Sets, material regions, C3D4,
+  mean-dilatation C3D8, C3D10 and full-integration C3D20, including original quadratic geometry.
+  Choose `mesh` or `static`; supply explicit Length units, Force units for static mode and Time
+  units when density is present. Static mode translates isotropic elastic materials,
+  translational supports/displacements, nodal forces, face pressures and multiple linear-static
+  load cases. Supply either `text` or a `path` scoped to `--project`; inline text needs no folder
+  and the Node host has no picker. Includes and NODE/ELEMENT `INPUT=` files are acquired within
+  the project or supplied as exact UTF-8 contents in the relative-filename `sourceFiles` map;
+  `sourceName` identifies the submission-relative root file. The deck and includes together
+  have a 16 MiB UTF-8 limit; the engine performs no file I/O. Returns exact counts, SI bounds
+  and named object mappings. Import never solves: solve each named Step to compare its final
+  equilibrium. Binary `.odb`/`.cae` databases require a text `.inp` export. Unsupported physics
+  or element formulations fail explicitly; there is no mesh fallback. Failed validation or
+  stale reads preserve the current Model. See [Abaqus input-deck import](../../README.md#import-an-abaqus-input-deck).
 
 Validation has a separate worker and deadline: 10 s by default, configurable up to 30 s for
 `validate_script`, with a 64,000-character source limit. `run_script` first validates with the
