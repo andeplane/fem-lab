@@ -1012,3 +1012,80 @@ fn mean_dilatation_hex8_gpu_patch_matches_uniaxial_elasticity() {
         }
     }
 }
+
+/// #740: the empty reduced system has an exact solution without GPU buffer bindings.
+#[test]
+fn all_prescribed_affine_cube_gpu_preserves_recovery_and_journal() {
+    let mut e = Engine::new(Some(gpu()), Box::new(NoClock), 2);
+    for command in [
+        r#"{"cmd":"model.new","name":"all prescribed GPU witness"}"#,
+        r#"{"cmd":"geometry.addBox","name":"cube","size":["1 m","1 m","1 m"]}"#,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}},"formulation":"full"}"#,
+        r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0.25}"#,
+        r#"{"cmd":"material.assign","material":"elastic","bodies":["cube"]}"#,
+        r#"{"cmd":"constraint.fix","name":"x0","on":"cube.xmin","dofs":["ux"]}"#,
+        r#"{"cmd":"constraint.fix","name":"y0","on":"cube.ymin","dofs":["uy"]}"#,
+        r#"{"cmd":"constraint.fix","name":"z0","on":"cube.zmin","dofs":["uz"]}"#,
+        r#"{"cmd":"constraint.prescribe","name":"x1","on":"cube.xmax","dof":"ux","value":"0.001 m"}"#,
+        r#"{"cmd":"constraint.prescribe","name":"y1","on":"cube.ymax","dof":"uy","value":"-0.00025 m"}"#,
+        r#"{"cmd":"constraint.prescribe","name":"z1","on":"cube.zmax","dof":"uz","value":"-0.00025 m"}"#,
+        r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["x0","y0","z0","x1","y1","z1"],"loads":[]}"#,
+        r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
+    ] {
+        pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+    }
+    let result: femlab_engine::query::ResultSummary = serde_json::from_value(
+        serde_json::to_value(e.query(Query::Result { step: None, result_id: None }).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result.solver, "gpu-pcg");
+    assert_eq!(result.iterations, 0);
+    assert_eq!(result.residual, 0.0);
+    for (component, want) in [(0, 0.001), (1, -0.00025), (2, -0.00025)] {
+        let q=serde_json::from_value(serde_json::json!({"query":"query.probe","field":"displacement","component":component,"at":["1 m","1 m","1 m"]})).unwrap();
+        let probe: femlab_engine::query::ProbeResult =
+            serde_json::from_value(serde_json::to_value(e.query(q).unwrap()).unwrap()).unwrap();
+        assert!((probe.value.value / want - 1.0).abs() < 1e-12);
+    }
+    let stress: femlab_engine::query::ResultField = serde_json::from_value(
+        serde_json::to_value(e.query(Query::Field { step: None, result_id: None, field: "stress".into() }).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stress.components, 6);
+    assert_eq!(stress.values.len(), 48);
+    for v in stress.values.chunks_exact(6) {
+        assert!((v[0] / 200e6 - 1.0).abs() < 1e-7);
+        for x in &v[1..] {
+            assert!(x.abs() < 20.0);
+        }
+    }
+    assert_eq!(result.reactions.len(), 6);
+    for row in result.reactions {
+        let expected = if row.constraint == "x0" {
+            -200e6
+        } else if row.constraint == "x1" {
+            200e6
+        } else {
+            0.0
+        };
+        assert!((row.total[0].value - expected).abs() < 20.0);
+        assert!(row.total[1].value.abs() < 20.0);
+        assert!(row.total[2].value.abs() < 20.0);
+    }
+    let journal = e.journal().clone();
+    assert_eq!(journal.len(), 13);
+    let mut replayed = Engine::new(Some(gpu()), Box::new(NoClock), 1);
+    pollster::block_on(replayed.replay(&journal.entries, false, true)).unwrap();
+    assert_eq!(replayed.journal(), &journal);
+    for query in [
+        Query::Result { step: None, result_id: None },
+        Query::Field { step: None, result_id: None, field: "displacement".into() },
+        Query::Field { step: None, result_id: None, field: "stress".into() },
+    ] {
+        assert_eq!(
+            serde_json::to_value(e.query(query.clone()).unwrap()).unwrap(),
+            serde_json::to_value(replayed.query(query).unwrap()).unwrap()
+        );
+    }
+}

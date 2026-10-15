@@ -164,6 +164,12 @@ pub(crate) async fn solve_refined_with_space(
             .at("solve")
             .suggest("solve.run { solver: 'cpu-pcg' }")
     })?;
+    // All prescribed DOFs leave the unique empty reduced solution. Recovery still uses
+    // the prescribed values to compute stress and reactions; no GPU vectors exist to bind.
+    // Keep the device requirement above: an explicit GPU request never changes solver.
+    if k.n == 0 {
+        return Ok((Vec::new(), SolveInfo { solver: "gpu-pcg", iterations: 0, rel_residual: 0.0, time_ms: 0.0 }));
+    }
     let device_solver = GpuCg::new_with_space(gpu, k, opts, pool, space).await?;
     if !progress(Progress { phase: "solve", fraction: 0.5, message: device_solver.setup_message.clone() }) {
         return Err(Error::cancelled());
