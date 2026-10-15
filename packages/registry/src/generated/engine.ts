@@ -1544,6 +1544,13 @@ export type Command =
             body: string;
             nodes: ImportedNodeSpec[];
             elements: ImportedElement[];
+            /**
+             * Disjoint named element regions. Keys are editable Body identities; memberships use
+             * authored element labels. Elements outside regions belong to the source Body.
+             */
+            regions?: {
+              [k: string]: number[] | undefined;
+            };
             nodeSets?: {
               [k: string]: number[] | undefined;
             };
@@ -3305,6 +3312,13 @@ export type MesherSpec =
       body: string;
       nodes: ImportedNodeSpec[];
       elements: ImportedElement[];
+      /**
+       * Disjoint named element regions. Keys are editable Body identities; memberships use
+       * authored element labels. Elements outside regions belong to the source Body.
+       */
+      regions?: {
+        [k: string]: number[] | undefined;
+      };
       nodeSets?: {
         [k: string]: number[] | undefined;
       };
@@ -3870,6 +3884,9 @@ export type MesherSettings =
       body: string;
       nodes: ImportedNode[];
       elements: ImportedElement[];
+      regions?: {
+        [k: string]: number[] | undefined;
+      };
       nodeSets?: {
         [k: string]: number[] | undefined;
       };
@@ -5964,6 +5981,13 @@ export type QueryResult_Command =
             body: string;
             nodes: ImportedNodeSpec[];
             elements: ImportedElement[];
+            /**
+             * Disjoint named element regions. Keys are editable Body identities; memberships use
+             * authored element labels. Elements outside regions belong to the source Body.
+             */
+            regions?: {
+              [k: string]: number[] | undefined;
+            };
             nodeSets?: {
               [k: string]: number[] | undefined;
             };
@@ -8789,6 +8813,13 @@ export type ModelFile_Command =
             body: string;
             nodes: ImportedNodeSpec[];
             elements: ImportedElement[];
+            /**
+             * Disjoint named element regions. Keys are editable Body identities; memberships use
+             * authored element labels. Elements outside regions belong to the source Body.
+             */
+            regions?: {
+              [k: string]: number[] | undefined;
+            };
             nodeSets?: {
               [k: string]: number[] | undefined;
             };
@@ -11706,6 +11737,13 @@ export type ReadReply_Command =
             body: string;
             nodes: ImportedNodeSpec[];
             elements: ImportedElement[];
+            /**
+             * Disjoint named element regions. Keys are editable Body identities; memberships use
+             * authored element labels. Elements outside regions belong to the source Body.
+             */
+            regions?: {
+              [k: string]: number[] | undefined;
+            };
             nodeSets?: {
               [k: string]: number[] | undefined;
             };
@@ -14426,6 +14464,13 @@ export type DocumentSnapshot_Command =
             body: string;
             nodes: ImportedNodeSpec[];
             elements: ImportedElement[];
+            /**
+             * Disjoint named element regions. Keys are editable Body identities; memberships use
+             * authored element labels. Elements outside regions belong to the source Body.
+             */
+            regions?: {
+              [k: string]: number[] | undefined;
+            };
             nodeSets?: {
               [k: string]: number[] | undefined;
             };
@@ -16231,6 +16276,34 @@ export interface ImportedProvenance {
    */
   sha256: string;
   conversionVersion: string;
+  /**
+   * Immutable supplied-file manifest; paths are relative names, never host file handles.
+   */
+  sourceFiles?: {
+    [k: string]: string | undefined;
+  };
+  sourceName?: string | null;
+  /**
+   * Original assembly identities keyed by the persistent global source label.
+   */
+  nodeIdentities?: {
+    [k: string]: ImportedEntityIdentity | undefined;
+  };
+  elementIdentities?: {
+    [k: string]: ImportedEntityIdentity | undefined;
+  };
+}
+/**
+ * This interface was referenced by `undefined`'s JSON-Schema definition
+ * via the `patternProperty` "^\d+$".
+ *
+ * This interface was referenced by `undefined`'s JSON-Schema definition
+ * via the `patternProperty` "^\d+$".
+ */
+export interface ImportedEntityIdentity {
+  sourceLabel: number;
+  instance?: string | null;
+  part?: string | null;
 }
 /**
  * Local maximum edge lengths applied after the chosen mesher. Bounds are world
@@ -16971,6 +17044,9 @@ export interface Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  importedRegionAssignments?: {
+    [k: string]: ImportedRegionAssignment | undefined;
+  };
   /**
    * Thickness Section assigned to the implicit surface Body, if present.
    */
@@ -17236,6 +17312,14 @@ export interface InitialVelocity {
    * @maxItems 3
    */
   value: [number, number, number];
+}
+/**
+ * Editable assignments of an immutable imported element region.
+ */
+export interface ImportedRegionAssignment {
+  material?: string | null;
+  section?: string | null;
+  orientation?: Axis | null;
 }
 /**
  * A Plugin used by the Model (phase P).
@@ -18665,6 +18749,9 @@ export interface ModelFile_Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  importedRegionAssignments?: {
+    [k: string]: ImportedRegionAssignment | undefined;
+  };
   /**
    * Thickness Section assigned to the implicit surface Body, if present.
    */
@@ -18888,6 +18975,9 @@ export interface ReadReply_Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  importedRegionAssignments?: {
+    [k: string]: ImportedRegionAssignment | undefined;
+  };
   /**
    * Thickness Section assigned to the implicit surface Body, if present.
    */
@@ -19126,6 +19216,9 @@ export interface DocumentSnapshot_Model {
    * like any other and the name lands here.
    */
   mesherMaterial?: string | null;
+  importedRegionAssignments?: {
+    [k: string]: ImportedRegionAssignment | undefined;
+  };
   /**
    * Thickness Section assigned to the implicit surface Body, if present.
    */

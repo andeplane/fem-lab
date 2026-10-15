@@ -322,6 +322,33 @@ impl Engine {
             });
         }
         bodies.extend(implicit);
+        if let (Some(source), Some(built)) = (self.model.imported_source(), self.mesh.as_ref()) {
+            let mut elements_by_region: std::collections::BTreeMap<&str, Vec<u32>> = std::collections::BTreeMap::new();
+            for elem in 0..built.mesh.n_elems() as u32 {
+                elements_by_region.entry(built.body_of_elem(elem)).or_default().push(elem);
+            }
+            for name in source.regions.keys() {
+                let elems = &elements_by_region[name.as_str()];
+                let nodes: std::collections::BTreeSet<_> =
+                    elems.iter().flat_map(|&e| built.mesh.elem_nodes(e).iter().copied()).collect();
+                let lo = std::array::from_fn(|k| {
+                    nodes.iter().map(|&n| built.mesh.coords[n as usize * 3 + k]).fold(f64::INFINITY, f64::min)
+                });
+                let hi = std::array::from_fn(|k| {
+                    nodes.iter().map(|&n| built.mesh.coords[n as usize * 3 + k]).fold(f64::NEG_INFINITY, f64::max)
+                });
+                let measure: f64 = elems.iter().map(|&e| elem_measure(&built.mesh, e)).sum();
+                bodies.push(BodyRow {
+                    name: name.clone(),
+                    material: self.model.material_of_body(name).map(str::to_string),
+                    bbox: bbox6(&self.model, lo, hi)?,
+                    measure: display(&self.model, measure, Dimension([3, 0, 0, 0]))?,
+                    mass: None,
+                    faces: Vec::new(),
+                    patches: Vec::new(),
+                });
+            }
+        }
         let m = &self.model;
         let materials = m
             .materials
@@ -364,8 +391,9 @@ impl Engine {
                         .filter(|b| b.material.as_deref() == Some(&mat.name))
                         .map(|b| b.name.clone())
                         .chain(
-                            m.implicit_body()
-                                .filter(|_| m.mesher_material.as_deref() == Some(&mat.name))
+                            m.mesher_body_names()
+                                .into_iter()
+                                .filter(|name| m.material_of_body(name) == Some(&mat.name))
                                 .map(str::to_string),
                         )
                         .collect(),
@@ -922,6 +950,14 @@ impl Engine {
                     name: source.body.clone(),
                     summary: "immutable imported mesh source".into(),
                 });
+            }
+            if want(ObjectKind::Body) {
+                objects.extend(source.regions.keys().map(|name| ObjectRef {
+                    ref_: format!("body:{name}"),
+                    kind: "body".into(),
+                    name: name.clone(),
+                    summary: "imported element region".into(),
+                }));
             }
             if want(ObjectKind::Set) {
                 objects.extend(source.set_names().iter().map(|name| ObjectRef {

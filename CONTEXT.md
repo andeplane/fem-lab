@@ -329,7 +329,12 @@ owned by an imported Mesher in the Model. Command coordinates carry length units
 coordinates are SI. Original labels distinguish coincident nodes; dense Mesh indices are
 only a deterministic mapping of participating nodes. Unused labels remain in the source
 and exact memberships, are explicitly reported, and have no FE DOFs or Result values. Replacing the source is `mesh.set`, never editing a
-mesh cache or individual generated Set. See ADR 0026 and issue #501.
+mesh cache or individual generated Set. Optional disjoint element regions are editable Body
+identities over shared connectivity: their material/section overrides live on the Model and
+otherwise inherit the source owner assignment. The source owner retains aggregate identity
+and the qualified source Set namespace. Disconnected components retain distinct labels.
+Optional provenance maps global labels to original instance/part-local labels and records
+supplied-file hashes. See ADR 0026, ADR 0032 and issues #501/#652.
 
 **STEP geometry conversion** — A host-only, on-demand conversion of declared-unit STEP
 surfaces to one tessellated geometry Body at explicit physical deflections. The checked

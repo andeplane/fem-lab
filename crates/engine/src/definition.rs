@@ -105,7 +105,7 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
             if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
                 &m.mesh
             {
-                if source.body == name {
+                if source.body == name || source.regions.contains_key(name) {
                     return Ok(Command::MeshSet {
                         mesher: MesherSpec::Imported(crate::imported::spec(source)),
                         order: Some(1),

@@ -271,7 +271,8 @@ fn build_problem_with_temperature<'a>(
             model
                 .body(body)
                 .and_then(|b| b.orientation)
-                .or_else(|| model.mesher_orientation.filter(|_| model.implicit_body() == Some(body)))
+                .or_else(|| model.imported_region_assignments.get(body).and_then(|a| a.orientation))
+                .or_else(|| model.mesher_orientation.filter(|_| model.mesher_body_names().contains(&body.as_str())))
                 .map(|axis| {
                     let mut v = [0.0; 3];
                     v[axis.index()] = 1.0;
@@ -365,7 +366,12 @@ fn build_problem_with_temperature<'a>(
             }
             LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
             LoadKind::HeatSource { bodies, q } => {
-                heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
+                let selected = if model.implicit_body().is_some_and(|root| bodies.iter().any(|b| b == root)) {
+                    bodies.iter().cloned().chain(model.meshed_body_names().into_iter().map(str::to_string)).collect()
+                } else {
+                    bodies.clone()
+                };
+                heat_loads.push(HeatLoad::Source { bodies: selected, q: *q });
             }
             LoadKind::Torque { on, total } => {
                 let j = face_set_polar_moment(&p, on)?;
@@ -394,7 +400,9 @@ fn thermal_field(
         let load = model.load(name).expect("step.add validated the Load names");
         if let LoadKind::Temperature { bodies, value, reference } = &load.kind {
             let nodal = assigned.get_or_insert_with(|| vec![None; built.mesh.n_nodes()]);
-            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| bodies.contains(body)) {
+            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| {
+                bodies.contains(body) || model.implicit_body().is_some_and(|root| bodies.iter().any(|b| b == root))
+            }) {
                 for &node in &built.mesh.blocks[b].conn {
                     let node = node as usize;
                     let delta = previous.map_or(*value, |t| t.data[node * t.comps]) - reference;
