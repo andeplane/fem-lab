@@ -2,6 +2,10 @@
 
 Issue: [#661](https://github.com/andeplane/fem-lab/issues/661). Implementation: [#644](https://github.com/andeplane/fem-lab/issues/644).
 
+## Authorized live activation (2026-10-15)
+
+The owner explicitly accepted the presented Norway Managed Payments terms, fees, responsibilities and activation for Plus USD49/10M, Pro USD149/16M and Studio USD499/50M monthly, excluding applicable tax. The authorization includes creating and expiring one unpaid live owned Checkout; no real payment is authorized. The live manifest now records terms accepted and billing enabled. Activation is in progress using the already-verified immutable6c5d4daa image; release/readiness and the unpaid canonical Checkout are still to be recorded below before claiming acceptance complete. The account-wide Managed Payments default remains unchanged; FEM opts its Sessions in explicitly.
+
 ## Current release and monthly allowance acceptance (2026-10-15)
 
 - Both frontends, APIs and recovery jobs now run combined source `6c5d4daaf46d59fd68aca725c4b8074b06acf2a8`. Both release helpers completed successfully before 100% ready traffic moved. Production revision is `femlab-api-rec9d6678-a12fbe55`; staging is `femlab-api-r1b03e90b-58e5dcdc`. Migration 010 is applied, eligibility readers are SELECT-only, and API/jobs bind the dedicated eligibility HMAC key to immutable version 1. Evidence: `/tmp/femlab-712-runtime-release.json`.
