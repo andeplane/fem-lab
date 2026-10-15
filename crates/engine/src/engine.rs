@@ -54,14 +54,23 @@ fn constraint_drives(constraint: &Constraint, heat: bool) -> bool {
 
 /// A reference to a Body is knowable without meshing; the size of its selected Set is not.
 fn set_targets_body(model: &Model, on: &str, body: &str) -> bool {
+    // The selected imported source owner is an aggregate: a named region
+    // selector targets that source too. This is only a pre-mesh reference
+    // check, never a claim of complete rigid-mode restraint.
+    let overlaps = |selected: &str| {
+        selected == body
+            || model
+                .imported_source()
+                .is_some_and(|source| source.body == body && source.regions.contains_key(selected))
+    };
     if let Some(set) = model.sets.iter().find(|s| s.name == on) {
         match &set.source {
-            SetSource::Face { of, .. } => of == body,
-            SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
+            SetSource::Face { of, .. } => overlaps(of),
+            SetSource::Region { where_: RegionPredicate::Body { name } } => overlaps(name),
             SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
         }
     } else {
-        on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+        set_refers_to(on, body)
     }
 }
 
@@ -688,8 +697,8 @@ impl Engine {
                         .bodies
                         .iter()
                         .map(|body| body.name.as_str())
-                        .chain(implicit)
                         .filter(|body| selected_body.is_none_or(|selected| *body == selected))
+                        .chain(m.meshed_body_names())
                     {
                         let materials = m.material_of_body(body).into_iter().chain(
                             m.section_of_body(body)
@@ -1230,7 +1239,6 @@ impl Engine {
                     if let Some(body) = old_body {
                         self.check_body_unused(body)?;
                     }
-                    self.model.imported_region_assignments.clear();
                     self.model.mesher_material = None;
                     self.model.mesher_section = None;
                     self.model.mesher_orientation = None;

@@ -249,3 +249,102 @@ fn imported_regions_source_manifest_and_identity_key_validation_are_bounded() {
     assert!(run(&mut e, &command.to_string()).is_err());
     assert_eq!(e.export_file(), before);
 }
+
+#[test]
+fn imported_regions_aggregate_support_warnings_accept_quoted_sets_and_region_selectors() {
+    for target in ["quoted", "region", "face"] {
+        let mut e = engine();
+        let mut command = partitioned_bar(2, false);
+        let quoted = "\"Part.Instance\".\"Root Set\"";
+        command["mesher"]["nodeSets"][quoted] = command["mesher"]["nodeSets"]["ROOT"].clone();
+        ok(&mut e, &command.to_string());
+        for command in [
+            r#"{"cmd":"material.add","name":"stiff","E":"200 GPa","nu":0}"#,
+            r#"{"cmd":"material.add","name":"soft","E":"100 GPa","nu":0}"#,
+            r#"{"cmd":"material.assign","material":"stiff","bodies":["left"]}"#,
+            r#"{"cmd":"material.assign","material":"soft","bodies":["right"]}"#,
+        ] {
+            ok(&mut e, command);
+        }
+        let on = if target == "quoted" {
+            format!("bar.nset_{quoted}")
+        } else {
+            let selector = if target == "region" {
+                json!({"cmd":"geometry.nameRegion","name":"selected","where":{"kind":"body","name":"left"}})
+            } else {
+                json!({"cmd":"geometry.nameFace","name":"selected","of":"left","where":{"kind":"normal","normal":[-1,0,0]}})
+            };
+            ok(&mut e, &selector.to_string());
+            "selected".into()
+        };
+        ok(&mut e, &json!({"cmd":"constraint.fix","name":"held","on":on}).to_string());
+        assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"), "pre-step {target}: {:?}", e.warnings());
+        ok(&mut e, r#"{"cmd":"load.traction","name":"pull","on":"bar.surface_TIP","total":["1000 N","0 N","0 N"]}"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["held"],"loads":["pull"]}"#,
+        );
+        assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"), "step {target}: {:?}", e.warnings());
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+        let tip = e.mesh().unwrap().sets["bar.nset_TIP"].nodes.clone();
+        let displacement = e.field(Some("static"), Field::Displacement).unwrap();
+        let expected = if target == "region" { 5e-7 } else { 7.5e-7 };
+        for node in tip {
+            assert!((displacement.data[node as usize * 3] - expected).abs() < 1e-17, "{target}");
+        }
+    }
+}
+
+#[test]
+fn imported_regions_replacement_keeps_retained_region_assignments_when_root_owner_changes() {
+    let mut e = engine();
+    let original = partitioned_bar(2, false);
+    ok(&mut e, &original.to_string());
+    for command in [
+        r#"{"cmd":"material.add","name":"stiff","E":"200 GPa","nu":0}"#,
+        r#"{"cmd":"material.add","name":"soft","E":"100 GPa","nu":0}"#,
+        r#"{"cmd":"material.assign","material":"stiff","bodies":["bar","left"]}"#,
+        r#"{"cmd":"material.assign","material":"soft","bodies":["right"]}"#,
+    ] {
+        ok(&mut e, command);
+    }
+    let before = e.export_file();
+    let mut replacement = original;
+    replacement["mesher"]["body"] = json!("new_source");
+    ok(&mut e, &replacement.to_string());
+    let after = e.export_file();
+    assert_eq!(after.model.implicit_body(), Some("new_source"));
+    assert_eq!(after.model.mesher_material, None, "the removed root identity loses its default");
+    assert_eq!(after.model.imported_region_assignments, before.model.imported_region_assignments);
+    assert_eq!(after.model.material_of_body("left"), Some("stiff"));
+    assert_eq!(after.model.material_of_body("right"), Some("soft"));
+    assert!(!e.warnings().iter().any(|w| w.code == "model.no-material"));
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.export_file().model, before.model);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.export_file().model, after.model);
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&after.journal.entries, false, true)).unwrap();
+    assert_eq!(replayed.export_file().model, after.model);
+}
+
+#[test]
+fn imported_regions_gravity_density_warnings_follow_effective_region_materials() {
+    let mut e = engine();
+    ok(&mut e, &partitioned_bar(2, false).to_string());
+    for command in [
+        r#"{"cmd":"material.add","name":"dense","E":"200 GPa","nu":0,"rho":"1000 kg/m^3"}"#,
+        r#"{"cmd":"material.add","name":"missing","E":"100 GPa","nu":0}"#,
+        r#"{"cmd":"material.assign","material":"dense","bodies":["left"]}"#,
+        r#"{"cmd":"material.assign","material":"missing","bodies":["right"]}"#,
+        r#"{"cmd":"load.gravity","name":"gravity","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#,
+    ] {
+        ok(&mut e, command);
+    }
+    let warnings = e.warnings();
+    let missing: Vec<_> = warnings.iter().filter(|w| w.code == "load.no-density").collect();
+    assert_eq!(missing.len(), 1);
+    assert!(missing[0].text.contains("'right'"));
+    ok(&mut e, r#"{"cmd":"material.assign","material":"dense","bodies":["right"]}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "load.no-density"));
+}

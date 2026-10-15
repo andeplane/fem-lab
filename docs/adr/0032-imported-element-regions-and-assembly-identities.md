@@ -28,7 +28,8 @@ label order. The existing per-block numerical material and section path remains 
 used region reports its users; otherwise removing/duplicating region geometry is unsupported
 and directs callers to replace the complete source with `mesh.set`. Root removal checks
 region users too. Replacement cannot remove referenced regions, and assignments for removed
-regions are cleared. Region `query.definition` returns the complete owning mesh Command.
+regions are cleared. Assignments of retained region identities survive a root-owner name
+change through source replacement; only the removed root default is cleared. Region `query.definition` returns the complete owning mesh Command.
 Undo, save/open and replay require no original file or parser.
 
 Optional provenance identity maps retain original local source labels and original case of
