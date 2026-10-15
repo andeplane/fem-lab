@@ -1,3 +1,4 @@
+import type { AccountPrivacy } from './privacy';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import { ServiceFailure } from './errors';
@@ -16,6 +17,7 @@ export interface HttpDependencies {
   heartbeat?(callback:()=>void):()=>void;
   billing?:BillingLifecycle;
   payments?:CheckoutService;
+  privacy?:AccountPrivacy;
 }
 
 async function readBytes(req:IncomingMessage,limit:number):Promise<Buffer> {
@@ -67,6 +69,7 @@ export function serviceServer(deps: HttpDependencies) {
       res.end(JSON.stringify({ status: ready ? 'ready' : 'unavailable' }));
       return;
     }
+    if(req.method==='POST'&&['/v1/account/export','/v1/account/delete'].includes(req.url??'')){try{if(!deps.privacy)throw new ServiceFailure(503,'privacy-unavailable','Account data actions are temporarily unavailable.','account');const result=req.url==='/v1/account/export'?await deps.privacy.export(req.headers.authorization,await readJson(req)):await deps.privacy.delete(req.headers.authorization,await readJson(req));res.end(JSON.stringify(result));}catch(error){failure(res,error,requestId)}return;}
     if(req.method==='POST'&&req.url==='/v1/billing/webhook') {
       try {
         if(!deps.billing)throw new ServiceFailure(503,'billing-unavailable','Payments are not configured yet.','billing');

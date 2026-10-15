@@ -97,3 +97,28 @@ account-scoped data-flow acknowledgement. No browser provider-key setting is off
 `FEMLAB_AI_MODE=development` is an explicit local/CI supplier-fixture build only; it is
 rejected when a hosted API origin is configured. CI tests the production anonymous/login
 boundary first and then runs existing supplier wire fixtures in this development host.
+
+Account data actions require a verified owner: `POST /v1/account/export {}` queues a private
+JSON export; repeating the request returns its current status or a signed download URL.
+The URL lasts at most 15 minutes and never beyond the export's 24-hour expiry. The recovery
+job writes account, grant, debit, hold, receipt and billing metadata; no model, prompt,
+transcript, tool content or image is archived. Export generation is capped at 100,000 rows
+per record type and 32 MiB; larger histories require a support export. `EXPORT_BUCKET` must
+name the private regional bucket with public-access prevention and an expiry lifecycle.
+
+`POST /v1/account/delete {"confirm":"DELETE"}` requires original Firebase authentication
+within five minutes; refreshing an old ID token is insufficient. The request freezes new
+AI/billing admissions and queues deletion under the same account lease used for checkout.
+The job expires known checkout sessions, waits for uncertain checkout expiry, releases
+future plan schedules and confirms cancellation of renewal before deleting the Firebase
+identity. Vendor outages retain the identity and a retryable job. Accepted AI requests
+must first finish or be reconciled. Identity removal is idempotent; the final transaction
+clears login/email and disposable export/checkout/plan records while retaining immutable
+financial records under the opaque account ID. Current Stripe customer contact fields are
+cleared; historical vendor invoices are subject to the seller's required retention policy.
+Live billing activation requires that policy and seller details to be settled separately.
+
+The API identity may read and sign its private export objects. The recovery identity may
+write/delete exports and delete Firebase users. Google workload identities sign URLs;
+no service-account private key is used. Recovery logs contain counts and fixed failure
+codes, never exported content, signed URLs, credentials or vendor exception messages.
