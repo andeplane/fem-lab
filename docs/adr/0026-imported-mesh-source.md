@@ -32,8 +32,8 @@ never an undocumented cleanup of authored data. Tet4 and standard full-integrati
 the first slice.
 
 The source owns an implicit root Body under ADR 0016. Optional disjoint element regions
-are additional editable Body identities under ADR 0032; the root retains the whole-source namespace. Its immutable Set namespaces become
-`<body>.nset_<NAME>`, `<body>.elset_<NAME>` and `<body>.surface_<NAME>`. Source names preserve exact case and allow 1..256 printable ASCII bytes (ADR 0032); identical node/element Set names remain distinct. A source ELSET named
+are additional editable Body identities under ADR 0035; the root retains the whole-source namespace. Its immutable Set namespaces become
+`<body>.nset_<NAME>`, `<body>.elset_<NAME>` and `<body>.surface_<NAME>`. Source names preserve exact case and allow 1..256 printable ASCII bytes (ADR 0035); identical node/element Set names remain distinct. A source ELSET named
 ALL therefore cannot shadow the synthetic `all` element Set. Numeric node targets allocate
 `<body>.node_<label>` only when explicitly requested, rather than one object per source node.
 Source surface faces use positive, one-based Abaqus local face numbers at the boundary.

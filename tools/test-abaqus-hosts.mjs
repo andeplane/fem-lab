@@ -2,7 +2,7 @@
 // Run with the built CLI path: node tools/test-abaqus-hosts.mjs target/debug/femlab
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -33,17 +33,44 @@ const check = (result, field) => {
 };
 
 try {
-  const source = path.join(scratch, 'independent-bar.inp');
+  const submission = path.join(scratch, 'submission');
+  const source = path.join(submission, 'Root.inp');
   const saved = path.join(scratch, 'bar.femlab.json');
-  copyFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus-static/bar-hex-mm-n.inp'), source);
+  const original = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus-static/bar-hex-mm-n.inp'), 'utf8');
+  const nodeHeader = '*NODE\n';
+  const elementHeader = '*ELEMENT,TYPE=C3D8,ELSET=SOLID\n';
+  const node = original.indexOf(nodeHeader);
+  const element = original.indexOf(elementHeader);
+  const sets = original.indexOf('*NSET,NSET=ROOT\n');
+  const material = original.indexOf('*MATERIAL');
+  assert.ok(node > 0 && element > node && sets > element && material > sets);
+  const nodes = original.slice(node + nodeHeader.length, element);
+  const elements = original.slice(element + elementHeader.length, sets);
+  const mesh = original.slice(0, node) + '*NODE,INPUT=Nodes.inc\n*ELEMENT,TYPE=C3D8,ELSET=SOLID,INPUT=Elements.inc\n' + original.slice(sets, material) + '*INCLUDE,INPUT=Material.inp\n';
+  const physics = original.slice(material);
+  const input = '** Independently authored multi-file bar\n*INCLUDE,INPUT=Parts/Mesh.inc\n';
+  mkdirSync(path.join(submission, 'Parts'), { recursive: true });
+  writeFileSync(source, input);
+  writeFileSync(path.join(submission, 'Parts/Mesh.inc'), mesh);
+  writeFileSync(path.join(submission, 'Nodes.inc'), nodes);
+  writeFileSync(path.join(submission, 'Elements.inc'), elements);
+  writeFileSync(path.join(submission, 'Material.inp'), physics);
   const digest = createHash('sha256').update(readFileSync(source)).digest('hex');
-  const report = run(['import-inp', source, '--out', saved, '--name', 'cross-host import', '--body', 'bar', '--mode', 'static', '--unit-length', '1 mm', '--unit-force', '1 N', '--threads', '1', '--cpu']);
+  const report = run(['import-inp', source, '--out', saved, '--name', 'cross-host import', '--body', 'bar', '--mode', 'static', '--unit-length', '1 mm', '--unit-force', '1 N', '--unit-time', '1 s', '--threads', '1', '--cpu']);
   assert.equal(report.sha256, digest); assert.equal(report.analysis.step, 'AXIAL');
+  assert.equal(report.inputBytes, [input, mesh, nodes, elements, physics].reduce((sum, text) => sum + Buffer.byteLength(text), 0));
   const bytes = readFileSync(saved, 'utf8');
   assert.ok(Buffer.byteLength(bytes) <= 16 * 1024 * 1024);
   assert.ok(!bytes.includes(source)); assert.ok(!bytes.includes('*NODE'));
   const file = JSON.parse(bytes); assert.equal(file.format, 'femlab/1');
-  rmSync(source); // Both subsequent hosts must replay without the deck.
+  const sourceCommand = file.journal.entries.find(entry => entry.cmd.cmd === 'mesh.set').cmd;
+  assert.equal(sourceCommand.mesher.provenance.sha256, digest);
+  assert.equal(sourceCommand.mesher.provenance.sourceName, 'Root.inp');
+  assert.equal(Object.keys(sourceCommand.mesher.provenance.sourceFiles).length, 4);
+  for (const [name, text] of [['Parts/Mesh.inc', mesh], ['Nodes.inc', nodes], ['Elements.inc', elements], ['Material.inp', physics]]) {
+    assert.equal(sourceCommand.mesher.provenance.sourceFiles[name], createHash('sha256').update(text).digest('hex'));
+  }
+  rmSync(submission, { recursive: true }); // Neither subsequent host has any original source files.
   const [nativeModel, nativeMesh] = run(['run', saved, '--cpu', '--threads', '1', '--query', '{"query":"query.model"}', '--query', '{"query":"query.mesh"}']);
   assert.equal(nativeModel.steps[0].solved, false);
   assert.equal(nativeMesh.nodes, 12); assert.equal(nativeMesh.elements, 2);
@@ -75,5 +102,5 @@ try {
   check(result, query({ query: 'query.field', step: 'AXIAL', field: 'stress' }));
   assert.equal(query({ query: 'query.model' }).hash, nativeModel.hash);
   owner.cancel_run(JSON.stringify(stamp.session), lease.runId); owner.free();
-  console.log('Native CLI file import and native/WASM replay verified: 12 nodes, 2 Hex8, ux=5e-7 m, stress xx=1e5 Pa, root force=-1000 N.');
+  console.log('Native CLI nested-include import and source-free native/WASM replay verified: 12 nodes, 2 Hex8, ux=5e-7 m, stress xx=1e5 Pa, root force=-1000 N.');
 } finally { rmSync(scratch, { recursive: true, force: true }); }

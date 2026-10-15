@@ -700,6 +700,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "cap-std",
  "clap",
  "femlab-engine",
  "femlab-geometry",

@@ -334,7 +334,7 @@ identities over shared connectivity: their material/section overrides live on th
 otherwise inherit the source owner assignment. The source owner retains aggregate identity
 and the qualified source Set namespace. Disconnected components retain distinct labels.
 Optional provenance maps global labels to original instance/part-local labels and records
-supplied-file hashes. See ADR 0026, ADR 0032 and issues #501/#652.
+supplied-file hashes. See ADR 0026, ADR 0035 and issues #501/#652.
 
 **STEP geometry conversion** — A host-only, on-demand conversion of declared-unit STEP
 surfaces to one tessellated geometry Body at explicit physical deflections. The checked
@@ -364,3 +364,9 @@ separate from a raw LLM token or the browser's supplier-cost estimate.
 **Usage reservation** — An atomic hold against an Account's allowance and service
 supplier-cost budget before one provider round. It becomes a confirmed debit or
 pending reconciliation; losing the browser stream does not erase it. See ADR 0028.
+
+**Mean dilatation (`mean-dilatation`)** is the explicit small-strain Hex8 B-bar
+formulation: eight-point integration with physical-volume-averaged volumetric strain.
+It preserves deviatoric/shear strain and uses the ordinary material extension point.
+Abaqus C3D8 imports select it; other supported source kinds retain full integration.
+Existing `full` Journals keep pointwise full integration. See ADR 0034.

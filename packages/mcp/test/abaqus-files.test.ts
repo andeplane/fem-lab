@@ -16,7 +16,8 @@ it('reads an exact scoped UTF-8 deck without source paths or line-ending normali
   const io = nodeAbaqusIo(root);
   const source = await readAbaqus({ path: './decks/bar.inp' }, io);
   expect(source).toMatchObject({ text: '\ufeff*NODE\r\n1,0,0,0\r\n' });
-  expect(Object.keys(source!)).toEqual(['text', 'sha256']);
+  expect(Object.keys(source!)).toEqual(['text', 'sha256', 'sourceName']);
+  expect(source!.sourceName).toBe('bar.inp');
   expect(await io.sha256(new TextEncoder().encode('abc'))).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 });
 

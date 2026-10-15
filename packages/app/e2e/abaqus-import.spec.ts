@@ -1,6 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Command, JournalDump, ModelFile, ModelSummary, OpenProject, ResultSummary } from '@femlab/registry';
+import type { Command, JournalDump, ModelFile, ModelSummary, OpenProject, ResultField, ResultSummary } from '@femlab/registry';
 import { expect, test, type Page } from './fixtures';
 
 const fixture = fileURLToPath(new URL('../../../crates/engine/tests/fixtures/abaqus-static/bar-hex-mm-n.inp', import.meta.url));
@@ -179,7 +181,7 @@ test('@cpu invalid inline imports and unsupported database files retain the solv
     expect(await q<ResultSummary>(page, 'query.result')).toEqual(result);
     expect((await q<OpenProject>(page, 'query.project')).id).toBe(project.id);
   }
-  await page.evaluate(() => window.fem.dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { name: 'odb', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', picker: true } }));
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { name: 'odb', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', picker: true } }));
   const chosen = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Choose .inp and import', exact: true }).click();
   await (await chosen).setFiles({ name: 'results.odb', mimeType: 'application/octet-stream', buffer: Buffer.from([0xff, 0]) });
@@ -202,7 +204,7 @@ test('@cpu cancelling a picker and switching projects during an actual deferred 
   await start(page);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
   const before = await q<ModelSummary>(page, 'query.model');
-  const args = { name: 'late import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', picker: true };
+  const args = { name: 'late import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', picker: true };
   await page.evaluate(args => window.fem.dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args }), args);
   let chosen = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Choose .inp and import', exact: true }).click();
@@ -228,7 +230,7 @@ for (const producer of ['initiating', 'independent'] as const) test(`@cpu a defe
   await deferFileRead(page); await start(page);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
   await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.clear' }));
-  const args = { name: 'late import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', picker: true };
+  const args = { name: 'late import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', picker: true };
   // Selection is a view-only barrier: the test opens it only once the actual File read has
   // started, so the script's Material edit uses the importing producer during that read.
   const code = `const late = fem.file.importAbaqus(${JSON.stringify(args)}); while (!(await fem.query.selection()).refs.includes("body:beam")) await new Promise(resolve => setTimeout(resolve,10)); await fem.material.add({name:"steel",E:"220 GPa",nu:0.3}); await late;`;
@@ -264,7 +266,7 @@ test('@cpu view-only actions during a deferred read allow sequential imports on 
   test.setTimeout(90_000);
   await deferFileRead(page); await start(page);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
-  const args = { name: 'first import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', picker: true };
+  const args = { name: 'first import', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', picker: true };
   const second = { ...input(await readFile(fixture, 'utf8'), 'second awaited import'), cmd: undefined };
   const code = `await fem.file.importAbaqus(${JSON.stringify(args)}); await fem.file.importAbaqus(${JSON.stringify(second)}); return await fem.query.model();`;
   const chosen = page.waitForEvent('filechooser');
@@ -282,4 +284,163 @@ test('@cpu view-only actions during a deferred read allow sequential imports on 
   expect(scripted.result.name).toBe('second awaited import');
   expect((await q<ModelSummary>(page, 'query.model')).hash).toBe(scripted.result.hash);
   await expect(page.getByRole('dialog', { name: 'Abaqus import report', exact: true })).toBeVisible();
+});
+
+
+// Real other-application input plus independently published Abaqus results. The originals
+// and reference transcription retain their separate LGPL notices in the fixture directory.
+test('@cpu original Abaqus assembly loads from the picker, matches all author displacements, and reopens without the deck', async ({ page }, info) => {
+  test.setTimeout(180_000);
+  const vendor = fileURLToPath(new URL('../../../crates/engine/tests/fixtures/third-party/brief-finite-element-net/case06/', import.meta.url));
+  const reference = JSON.parse(await readFile(path.join(vendor, 'author-abaqus-probes-checked.json'), 'utf8')) as {
+    instance: string; displacements: Record<string, [number, number, number]>;
+  };
+  await start(page);
+  await page.getByTitle('Import Abaqus .inp', { exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Import Abaqus input deck', exact: true });
+  await dialog.getByLabel('Project name').fill('Published Abaqus assembly');
+  await dialog.getByLabel('Body name').fill('beam');
+  await dialog.getByRole('button', { name: 'm · N · s', exact: true }).click();
+  const choosing = page.waitForEvent('filechooser');
+  await dialog.getByRole('button', { name: 'Choose .inp and import', exact: true }).click();
+  await (await choosing).setFiles(path.join(vendor, 'Job-11.inp'));
+  const report = page.getByRole('dialog', { name: 'Abaqus import report', exact: true });
+  await expect(report).toBeVisible();
+  await expect(report).toContainText('275');
+  await expect(report).toContainText('160');
+  await expect(report).toContainText('not solved');
+  await expect(report).toContainText('OUTPUT');
+  const model = await q<ModelSummary>(page, 'query.model');
+  expect(model.steps).toHaveLength(1);
+  expect(model.steps[0]!.solved).toBe(false);
+  const step = model.steps[0]!.name;
+  await report.screenshot({ path: info.outputPath('original-abaqus-assembly-report.png') });
+  await report.getByTitle('Close Abaqus import report', { exact: true }).click();
+  await page.locator('canvas').screenshot({ path: info.outputPath('original-abaqus-assembly-mesh.png') });
+  const downloading = page.waitForEvent('download');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save', name: 'abaqus-assembly.femlab.json', to: 'download' }));
+  const saved = info.outputPath('abaqus-assembly.femlab.json');
+  await (await downloading).saveAs(saved);
+  const json = await readFile(saved, 'utf8');
+  const portable = JSON.parse(json) as ModelFile;
+  const imported = portable.journal.entries.map(entry => entry.cmd).find(command => command.cmd === 'mesh.set');
+  if (imported?.cmd !== 'mesh.set' || imported.mesher.kind !== 'imported') throw new Error('portable source missing');
+  const identities = imported.mesher.provenance!.nodeIdentities!;
+  expect(json).not.toContain(vendor);
+  expect(json).not.toContain('*NODE');
+  const check = async () => {
+    const mesh = await q<{ nodes: number; elements: number; sourceLabels: { nodes: number[] } }>(page, 'query.mesh');
+    expect([mesh.nodes, mesh.elements]).toEqual([275, 160]);
+    await page.evaluate(step => window.fem.dispatch({ cmd: 'solve.run', step, solver: 'cpu-direct' }), step);
+    const field = await page.evaluate(step => window.fem.registry.query({ query: 'query.field', step, field: 'displacement' }), step) as { unit: string; components: number; values: number[] };
+    expect(field.unit).toBe('m'); expect(field.components).toBe(3); expect(field.values).toHaveLength(825);
+    const maximum = Math.max(...Object.values(reference.displacements).flat().map(Math.abs));
+    // The same predeclared corpus tolerance; no browser-specific relaxation.
+    const tolerance = 1e-13 + 2e-6 * maximum;
+    const checked = new Set<number>();
+    mesh.sourceLabels.nodes.forEach((label, node) => {
+      const identity = identities[String(label)]!;
+      expect(identity.instance).toBe(reference.instance);
+      const expected = reference.displacements[String(identity.sourceLabel)]!;
+      expect(expected).toBeDefined();
+      checked.add(identity.sourceLabel);
+      expected.forEach((value, component) => expect(Math.abs(field.values[3 * node + component]! - value)).toBeLessThanOrEqual(tolerance));
+    });
+    expect(checked.size).toBe(275);
+    const result = await page.evaluate(step => window.fem.registry.query({ query: 'query.result', step }), step) as ResultSummary;
+    for (const row of result.reactions) for (const quantity of row.total) expect(quantity.unit).toBe('N');
+    const reaction = [0, 1, 2].map(axis => result.reactions.reduce((sum, row) => sum + row.total[axis]!.value, 0));
+    reaction.forEach((value, axis) => expect(Math.abs(value - (axis === 1 ? 4e6 : 0))).toBeLessThanOrEqual(1e-7 + 1e-10 * 4e6));
+    expect(result.stale).toBe(false);
+    return field.values;
+  };
+  const first = await check();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'replacement' }));
+  await page.evaluate(json => window.fem.dispatch({ cmd: 'file.open', json }), json);
+  await expect(report).toBeHidden();
+  expect(await check()).toEqual(first);
+});
+
+test('@cpu picker acquires a nested include folder, ignores unrelated files and reopens after all sources are deleted', async ({ page }, info) => {
+  test.setTimeout(180_000);
+  const submission = info.outputPath('submission');
+  await mkdir(path.join(submission, 'Parts'), { recursive: true });
+  const original = await readFile(fixture, 'utf8');
+  const nodeHeader = '*NODE\n';
+  const elementHeader = '*ELEMENT,TYPE=C3D8,ELSET=SOLID\n';
+  const node = original.indexOf(nodeHeader);
+  const element = original.indexOf(elementHeader);
+  const sets = original.indexOf('*NSET,NSET=ROOT\n');
+  const material = original.indexOf('*MATERIAL');
+  expect(node).toBeGreaterThan(0); expect(element).toBeGreaterThan(node); expect(sets).toBeGreaterThan(element); expect(material).toBeGreaterThan(sets);
+  const nodes = original.slice(node + nodeHeader.length, element);
+  const elements = original.slice(element + elementHeader.length, sets);
+  const root = '*INCLUDE,INPUT=Parts/Mesh.inc\n';
+  const mesh = original.slice(0, node) + '*NODE,INPUT=Nodes.inc\n*ELEMENT,TYPE=C3D8,ELSET=SOLID,INPUT=Elements.inc\n' + original.slice(sets, material) + '*INCLUDE,INPUT=Material.inp\n';
+  const physics = original.slice(material);
+  await writeFile(path.join(submission, 'Root.inp'), root);
+  await writeFile(path.join(submission, 'Parts/Mesh.inc'), mesh);
+  await writeFile(path.join(submission, 'Nodes.inc'), nodes);
+  await writeFile(path.join(submission, 'Elements.inc'), elements);
+  await writeFile(path.join(submission, 'Material.inp'), physics);
+  await writeFile(path.join(submission, 'private.env'), 'unrelated file must not be read');
+  await page.addInitScript(() => {
+    const state = window as unknown as { abaqusReads: string[] };
+    state.abaqusReads = [];
+    const read = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function () { state.abaqusReads.push(this.name); return read.call(this); };
+  });
+  await start(page);
+  await page.getByTitle('Import Abaqus .inp', { exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Import Abaqus input deck', exact: true });
+  await dialog.getByLabel('Project name').fill('Included axial bar');
+  await dialog.getByLabel('Body name').fill('bar');
+  await dialog.getByRole('button', { name: 'mm · N · s', exact: true }).click();
+  const choosingRoot = page.waitForEvent('filechooser');
+  await dialog.getByRole('button', { name: 'Choose .inp and import', exact: true }).click();
+  const rootPicker = await choosingRoot;
+  const choosingFolder = page.waitForEvent('filechooser');
+  await rootPicker.setFiles(path.join(submission, 'Root.inp'));
+  const folder = await choosingFolder;
+  await folder.setFiles(submission);
+  const selected = await folder.element().evaluate(element => [...((element as HTMLInputElement).files ?? [])].map(file => file.name));
+  expect(selected).toContain('private.env');
+  const report = page.getByRole('dialog', { name: 'Abaqus import report', exact: true });
+  await expect(report).toBeVisible();
+  await expect(report.locator('tr').filter({ hasText: 'Input bytes' }).locator('td').last()).toHaveText(String([root, mesh, nodes, elements, physics].reduce((sum, text) => sum + Buffer.byteLength(text), 0)));
+  const reads = await page.evaluate(() => (window as unknown as { abaqusReads: string[] }).abaqusReads);
+  expect(reads.slice(0, 2)).toEqual(['Root.inp', 'Mesh.inc']);
+  expect(reads.slice(2).sort()).toEqual(['Elements.inc', 'Material.inp', 'Nodes.inc']);
+  await report.getByTitle('Close Abaqus import report', { exact: true }).click();
+  const check = async () => {
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' }));
+    axial(await q<ResultSummary>(page, 'query.result'));
+    const stress = await page.evaluate(() => window.fem.registry.query({ query: 'query.field', step: 'AXIAL', field: 'stress' })) as ResultField;
+    expect(stress.unit).toBe('Pa'); expect(stress.components).toBe(6); expect(stress.values.length).toBeGreaterThan(0); expect(stress.values.length % 6).toBe(0);
+    stress.values.forEach((value, component) => expect(Math.abs(value - (component % 6 === 0 ? 1e5 : 0))).toBeLessThan(1e-5));
+    return stress.values;
+  };
+  const stress = await check();
+  const downloading = page.waitForEvent('download');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save', name: 'included-bar.femlab.json', to: 'download' }));
+  const saved = info.outputPath('included-bar.femlab.json'); await (await downloading).saveAs(saved);
+  const json = await readFile(saved, 'utf8');
+  expect(json).not.toContain(submission);
+  expect(json).not.toContain('private.env');
+  const portable = JSON.parse(json) as ModelFile;
+  const imported = portable.journal.entries.map(entry => entry.cmd).find(command => command.cmd === 'mesh.set');
+  if (imported?.cmd !== 'mesh.set' || imported.mesher.kind !== 'imported') throw new Error('portable source missing');
+  expect(imported.mesher.provenance?.sha256).toBe(createHash('sha256').update(root).digest('hex'));
+  expect(imported.mesher.provenance?.sourceName).toBe('Root.inp');
+  expect(imported.mesher.provenance?.sourceFiles).toEqual({
+    'Parts/Mesh.inc': createHash('sha256').update(mesh).digest('hex'),
+    'Nodes.inc': createHash('sha256').update(nodes).digest('hex'),
+    'Elements.inc': createHash('sha256').update(elements).digest('hex'),
+    'Material.inp': createHash('sha256').update(physics).digest('hex'),
+  });
+  await rm(submission, { recursive: true });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'replacement' }));
+  await page.evaluate(json => window.fem.dispatch({ cmd: 'file.open', json }), json);
+  expect(await check()).toEqual(stress);
+  expect(await page.evaluate(() => (window as unknown as { abaqusReads: string[] }).abaqusReads)).toEqual(reads);
 });

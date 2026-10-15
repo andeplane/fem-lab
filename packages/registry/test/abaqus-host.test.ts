@@ -26,12 +26,37 @@ it('requires Force in static mode and preserves an explicitly supplied Force for
   const { registry, captured } = fixture();
   await expect(registry.dispatch({ ...mesh, mode: 'static', text: '*NODE' })).rejects.toMatchObject({ code: 'schema', where: 'unitForce' });
   expect(captured.convert).not.toHaveBeenCalled();
-  await registry.dispatch({ ...mesh, mode: 'static', unitForce: { value: 1, unit: 'N' }, text: '*NODE' });
-  expect(captured.convert).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'static', unitForce: { value: 1, unit: 'N' } }));
+  await registry.dispatch({ ...mesh, mode: 'static', unitForce: { value: 1, unit: 'N' }, unitTime: { value: 1, unit: 'ms' }, text: '*NODE' });
+  expect(captured.convert).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'static', unitForce: { value: 1, unit: 'N' }, unitTime: { value: 1, unit: 'ms' } }));
   vi.mocked(captured.convert).mockRejectedValueOnce({ code: 'schema', where: 'unitForce', cause: 'mesh mode does not use force units' });
   await expect(registry.dispatch({ ...mesh, unitForce: '1 N', text: '*NODE' })).rejects.toMatchObject({ where: 'unitForce' });
   expect(captured.convert).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'mesh', unitForce: '1 N' }));
   expect(captured.replace).toHaveBeenCalledTimes(1);
+});
+
+it('keeps the admitted source owner through a deferred included-file read and cancels without publication', async () => {
+  const { registry, captured, host } = fixture();
+  vi.mocked(captured.dependencies).mockResolvedValueOnce({ missingFiles: ['Mesh.inc'] }).mockResolvedValue({ missingFiles: [] });
+  let finish!: (bytes: Uint8Array) => void;
+  const pending = new Promise<Uint8Array>(resolve => { finish = resolve; });
+  vi.mocked(captured.io.read).mockImplementation(async path => path === 'decks/Job.inp'
+    ? { name: 'Job.inp', size: 4, read: async () => new TextEncoder().encode('root') }
+    : { name: 'Mesh.inc', size: 5, read: () => pending });
+  const importing = registry.dispatch({ ...mesh, path: 'decks/Job.inp' });
+  await vi.waitFor(() => expect(captured.io.read).toHaveBeenCalledWith('decks/Mesh.inc'));
+  const newer = fakeHost().abaqus.capture();
+  vi.mocked(host.abaqus.capture).mockReturnValue(newer);
+  finish(new TextEncoder().encode('nodes'));
+  await importing;
+  expect(captured.convert).toHaveBeenCalledWith(expect.objectContaining({ sourceName: 'Job.inp', sourceFiles: { 'Mesh.inc': 'nodes' } }));
+  expect(captured.replace).toHaveBeenCalledOnce();
+  expect(newer.dependencies).not.toHaveBeenCalled();
+  expect(newer.convert).not.toHaveBeenCalled();
+  const cancelled = fixture();
+  vi.mocked(cancelled.captured.dependencies).mockResolvedValue({ missingFiles: ['Mesh.inc'] });
+  cancelled.captured.io.pickIncludes = vi.fn(async () => null);
+  expect(await cancelled.registry.dispatch({ ...mesh, picker: true })).toEqual({ cancelled: true });
+  expect(cancelled.captured.replace).not.toHaveBeenCalled();
 });
 
 it('returns picker cancellation without conversion or publication', async () => {
@@ -62,8 +87,8 @@ it('captures input and publication authority once before a deferred scoped file 
 
 it('propagates conversion and prepared-publication failures without a successful receipt', async () => {
   const { registry, captured } = fixture();
-  vi.mocked(captured.convert).mockRejectedValueOnce({ code: 'unsupported', cause: 'PART is unsupported' });
-  await expect(registry.dispatch({ ...mesh, text: '*PART' })).rejects.toMatchObject({ code: 'unsupported' });
+  vi.mocked(captured.convert).mockRejectedValueOnce({ code: 'unsupported', cause: 'DYNAMIC is unsupported' });
+  await expect(registry.dispatch({ ...mesh, text: '*DYNAMIC' })).rejects.toMatchObject({ code: 'unsupported' });
   expect(captured.replace).not.toHaveBeenCalled();
   vi.mocked(captured.replace).mockRejectedValueOnce({ code: 'schema', where: 'file', cause: 'encoded file exceeds the limit' });
   await expect(registry.dispatch({ ...mesh, picker: true })).rejects.toMatchObject({ where: 'file' });

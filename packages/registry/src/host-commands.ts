@@ -7,9 +7,11 @@
 import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
 import type { AbaqusConversion, AbaqusConversionReport, ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, Query, ResultSummary } from './generated/engine';
-import { AbaqusImport, readAbaqus, type AbaqusIo } from './abaqus-import';
+import { AbaqusImport, readAbaqusBundle, type AbaqusIo, type AbaqusDependencyQuery } from './abaqus-import';
 import { StepImport, type StepImportHost } from './step-import';
 import { FemError } from './error';
+import { csvRow as row } from './csv';
+import { exportNodalDisplacements } from './nodal-csv';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
 import type { Skill } from './skills';
@@ -148,6 +150,7 @@ export interface HostContext {
   /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
   abaqus: { capture(): {
     io: AbaqusIo;
+    dependencies: AbaqusDependencyQuery;
     convert(query: Extract<Query, { query: 'query.convertAbaqus' }>): Promise<AbaqusConversion>;
     replace(commands: Command[], report: AbaqusConversionReport): Promise<void>;
   } };
@@ -304,6 +307,8 @@ async function importText(ctx: HostContext, text: string) {
 export interface ExportFormatRow {
   /** The `spec.format` that writes it. */
   format: string;
+  /** CSV tables share a format but remain independently selectable export rows. */
+  table?: 'extremes' | 'nodal-displacements';
   ext: string;
   name: string;
   note: string;
@@ -318,19 +323,13 @@ export const EXPORT_FORMATS: ExportFormatRow[] = [
   { format: 'stl', ext: 'stl', name: 'STL surface', note: 'The mesh boundary as triangles, for a 3D viewer or a printer.', group: 'Model & mesh', needs: 'mesh' },
   { format: 'vtu', ext: 'vtu', name: 'VTK unstructured grid', note: 'The mesh with every nodal field of the Step. Opens in ParaView.', group: 'Results', needs: 'mesh' },
   { format: 'csv', ext: 'csv', name: 'Result table (CSV)', note: 'One table: extremes, reactions, or a sampled path.', group: 'Results', needs: 'result' },
+  { format: 'csv', table: 'nodal-displacements', ext: 'csv', name: 'Nodal displacements (CSV)', note: 'Every solved node in metres, with original source labels, instances and parts; unused nodes are marked uncomputed.', group: 'Results', needs: 'result' },
   { format: 'png', ext: 'png', name: 'Viewer image', note: 'Exactly what the viewer shows, with the legend burned in.', group: 'Results', needs: 'none' },
   { format: 'webm', ext: 'webm', name: 'Viewer animation', note: 'One mode-shape sweep at an explicit resolution, encoded by Chromium as WebM.', group: 'Results', needs: 'animation' },
   { format: 'script', ext: 'ts', name: 'TypeScript script', note: 'The Journal, typed: run it back and the Model rebuilds.', group: 'Document & model file', needs: 'none' },
   { format: 'journal', ext: 'json', name: 'Model file (femlab/1)', note: 'The Model and its Journal, what file.open reads back.', group: 'Document & model file', needs: 'none' },
   { format: 'report', ext: 'md', name: 'Calculation note', note: 'Assumptions, mesh, loads, results and the Journal as Markdown.', group: 'Document & model file', needs: 'none' },
 ];
-
-/** A CSV cell: quoted only when it has to be, so a diff of two exports stays readable. */
-function cell(v: string | number): string {
-  const text = String(v);
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-const row = (cells: (string | number)[]): string => cells.map(cell).join(',');
 
 /** The Results tab's Extremes table, as a file. */
 export function extremesCsv(r: ResultSummary): string {
@@ -386,6 +385,10 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | 
     }
     const { text } = (await ctx.transport.query({ query: 'query.script' })) as { text: string };
     return { filename: `${file.model.name}.ts`, mime: 'text/typescript', data: text };
+  }
+  if (spec.format === 'csv' && spec['table'] === 'nodal-displacements') {
+    const out = await exportNodalDisplacements(ctx.transport, spec['step'] as string | undefined, spec['resultId'] as string | undefined);
+    return { ...out, mime: 'text/csv' };
   }
   const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
   if (spec.format === 'png') {
@@ -483,12 +486,12 @@ export const HOST_COMMANDS: HostDef[] = [
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
   }),
-  def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck (at most 16 MiB) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity; static additionally requires unitForce, while mesh refuses it. Source units are independent of display units. The supported slice is one flat C3D4/C3D8 Body with named Sets; static adds one isotropic elastic Material, translational constraints, CLOAD and one linear STATIC Step. PART/ASSEMBLY/INSTANCE, INCLUDE, OUTPUT, .odb and .cae are unsupported. Unsupported static content is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
+  def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck and its include files (at most 16 MiB total) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity. Static additionally requires unitForce; supply unitTime when density is present. Mesh mode refuses force and time units. Source units are independent of display units. Parts, transformed instances, named Sets, material regions and full-integration C3D4/C3D8/C3D10/C3D20 solids are retained. Static mode translates supported isotropic elastic regions, translational constraints, nodal forces, face pressures and named linear-static load cases. Normal output requests are recorded in the report. Include contents are supplied explicitly or read by the host from the submission folder; the engine performs no file I/O. Binary .odb/.cae databases require a text .inp export. Unsupported physical behavior is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
     const captured = ctx.abaqus.capture();
-    const source = await readAbaqus(how, captured.io);
+    const source = await readAbaqusBundle(how, captured.io, captured.dependencies);
     if (source === null) return { cancelled: true };
-    const { name, body, mode, unitLength, unitForce } = how;
-    const conversion = await captured.convert({ query: 'query.convertAbaqus', ...source, name, body, mode, unitLength, ...(unitForce === undefined ? {} : { unitForce }) });
+    const { name, body, mode, unitLength, unitForce, unitTime } = how;
+    const conversion = await captured.convert({ query: 'query.convertAbaqus', ...source, name, body, mode, unitLength, ...(unitForce === undefined ? {} : { unitForce }), ...(unitTime === undefined ? {} : { unitTime }) });
     await captured.replace(conversion.commands, conversion.report);
     return { report: conversion.report };
   }),
@@ -525,10 +528,11 @@ export const HOST_COMMANDS: HostDef[] = [
     completeSave(file.journal);
     return receipt;
   }),
-  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. CSV table is extremes (default), reactions, path or nodal-displacements; unknown tables fail. Nodal displacements export scientific f64 coordinates and three displacement components in metres, independent of display units, with original source label, instance and part plus the normalized label. Unused authored nodes have blank displacement cells and status unused. This table pins one Result id and requires its solved Model hash to match the current document; stale or changed source identities fail before delivery, including edits during scientific reads. CSV text cells retain exact source names with standard quoting for machine-readable interchange; consumers must interpret identity columns as text. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
     spec: z.union([
       AnimationCaptureOptions.extend({ format: z.literal('webm') }),
-      z.looseObject({ format: z.string().refine((format) => format !== 'webm') }),
+      z.looseObject({ format: z.literal('csv'), table: z.enum(['extremes', 'reactions', 'path', 'nodal-displacements']).optional(), step: z.string().optional(), resultId: z.string().optional() }),
+      z.looseObject({ format: z.string().refine((format) => format !== 'webm' && format !== 'csv') }),
     ]),
     name: z.string().optional(),
     to: Destination,

@@ -775,6 +775,9 @@ returns `export.unavailable`. It writes no Materials, Constraints, Loads or Step
 
 Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
+`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
+strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
+retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
 `formulation: full` is the textbook linear element that locks in bending: keep the
 default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
 owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
@@ -787,13 +790,14 @@ geometry: the selected mesher still determines the boundary approximation, and t
 mesher is the one that meshes a curved solid freely. `formulation` has no effect when
 `simplices` is true, or under the `tet` mesher, because simplex elements have no
 incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
-default to full integration, and require order 1, solid3d, no simplex split/refinement.
+default to full integration, and require solid3d, no simplex split/refinement.
+Their element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.
 Removing or emptying a referenced imported Set fails without mutation.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | mesher | yes | <code>{"$ref":"#/$defs/MesherSpec"}</code> | Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and Sets. |
-| order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> | Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require 1. |
+| order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> | Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1. Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order. |
 | formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> | Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for imported sources. Simplex elements ignore this setting. |
 | simplices | no | <code>{"type":["boolean","null"]}</code> | Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and imported sources require false. |
 | refinement | no | <code>{"anyOf":[{"$ref":"#/$defs/LocalRefinementSpec"},{"type":"null"}]}</code> | Optional local size field on the resulting linear simplex mesh. A new mesh.set replaces this field; omit it to return to the base mesh. |
@@ -1711,6 +1715,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Full integration: the textbook linear element, which locks in bending.",
       "type": "string",
       "const": "full"
+    },
+    {
+      "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+      "type": "string",
+      "const": "mean-dilatation"
     }
   ]
 }
@@ -1834,7 +1843,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "$ref": "#/$defs/ImportedElementKind"
     },
     "nodes": {
-      "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+      "description": "Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -1859,11 +1868,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Only the explicitly supported standard, first-order 3D solids.",
+  "description": "Authored 3D solid families; interpolation and source connectivity are retained.\nHex8 uses the explicit mesh formulation; other kinds retain standard full integration.",
   "type": "string",
   "enum": [
     "tet4",
-    "hex8"
+    "hex8",
+    "tet10",
+    "hex20"
   ]
 }
 ```
@@ -1918,7 +1929,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "minimum": 0
     },
     "face": {
-      "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+      "description": "Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.",
       "type": "integer",
       "format": "uint8",
       "minimum": 0,
@@ -2308,7 +2319,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full\nintegration or explicit mean-dilatation (B-bar). Requires solid3d,\nunchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
       "type": "object",
       "properties": {
         "body": {
@@ -4577,6 +4588,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ## Queries
 
+- [query.abaqusDependencies](#queries-query-abaqusDependencies)
 - [query.capabilities](#queries-query-capabilities)
 - [query.convert](#queries-query-convert)
 - [query.convertAbaqus](#queries-query-convertAbaqus)
@@ -4601,6 +4613,25 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.script](#queries-query-script)
 - [query.set](#queries-query-set)
 - [query.surface](#queries-query-surface)
+
+<a id="queries-query-abaqusDependencies"></a>
+
+### query.abaqusDependencies
+
+Inspect the supplied Abaqus bundle for missing INCLUDE and NODE/ELEMENT INPUT files.
+Uses the same bounded lexer and safe relative-path graph as conversion. This read
+performs no model/physics conversion or file/network I/O; hosts can acquire listed
+files through their captured scoped I/O and repeat until the bundle is complete.
+The actual conversion still rejects missing files and never publishes partial data.
+
+Returns: `AbaqusDependencies`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| text | yes | <code>{"type":"string"}</code> |  |
+| sourceName | no | <code>{"type":["string","null"]}</code> |  |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.abaqusDependencies"}</code> |  |
 
 <a id="queries-query-capabilities"></a>
 
@@ -4637,34 +4668,22 @@ Returns: `Converted`.
 
 ### query.convertAbaqus
 
-Check a bounded Abaqus text deck using an explicit positive length Quantity per
-source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
-portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
-(standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
-SURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming
-Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized
-uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
-keyword spellings, 256-character physical lines and comma keyword continuation.
-Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
-keyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.
-Static mode additionally requires a positive force Quantity per source force and
-supports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one
-SOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct
-displacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements
-scale by L, forces by F and modulus by F/L²; no units are inferred. Model-data
-BOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;
-numeric targets get explicit singleton Sets. Conflicting prescribed values and
-overlapping CLOAD updates fail. Static accepts absent/default increment fields
-only (zero also denotes the default in its first three fields), imports final
-linear equilibrium without increment history, and never solves.
-Density/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT
-requests remain unsupported. Bounds: 250000 nodes,
-250000 elements and 1000000 expanded membership declarations before deduplication.
-No paths, includes, file I/O or active Model mutation. Input and serialized response
-are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
-checked conversion, not publication approval:
-hosts must prepare the Commands through Candidate, enforce the exact serialized
-Model-file limit and publish atomically before replacing the active document.
+Convert a bounded Abaqus text deck to checked portable Commands without mutating
+the active Model or solving. Explicit positive unitLength and static-mode unitForce
+define source units; coordinates/displacements scale by L, forces by F and stress
+by F/L². Structural instances, labels, exact Sets and surfaces are normalized by
+the typed deck reader. The report records all translated analysis Steps and notes
+recognized requests whose output/increment execution differs from FEM Lab.
+Static mode imports constant isotropic materials and exact nonoverlapping solid
+section regions covering every element, direct or solid symbolic BOUNDARY,
+CLOAD and uniform DLOAD Pn / DSLOAD P pressure. Multiple small-displacement static
+Steps retain effective inherited loads/supports; OP=NEW resets that family's state,
+OP=MOD updates it. Conflicting repeated definitions within one Step fail explicitly.
+Each Step configures its final linear equilibrium, without source increment history.
+Unsupported physics/formulations/parameters fail rather than being discarded.
+Mesh mode configures no analysis. Neither mode infers missing physical units.
+Input and serialized response are bounded to 16 MiB; hosts must privately prepare
+all returned Commands through Candidate and publish one validated replacement.
 
 Returns: `AbaqusConversion`.
 
@@ -4676,6 +4695,9 @@ Returns: `AbaqusConversion`.
 | mode | yes | <code>{"$ref":"#/$defs/AbaqusImportMode"}</code> |  |
 | unitLength | yes | <code>{"$ref":"#/$defs/Q_length"}</code> |  |
 | unitForce | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_force"},{"type":"null"}]}</code> | Mandatory in static mode; absent in mesh mode. Positive force per source force. |
+| unitTime | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Positive seconds per source time. Required when a DENSITY is translated: source density scales by F T²/L⁴. No time or mass unit is inferred. |
+| sourceName | no | <code>{"type":["string","null"]}</code> | Logical root filename for resolving an explicitly supplied include bundle. Paths identify bundle entries only; the engine never reads a file system. |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> | Explicit relative filenames and UTF-8 contents for INCLUDE and NODE/ELEMENT INPUT. Missing/cyclic/escaping references fail; the engine never fetches a file. |
 | sha256 | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.convertAbaqus"}</code> |  |
 
@@ -5985,7 +6007,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar\nstrain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals\nretain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -5993,7 +6015,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "$ref": "#/$defs/MesherSpec"
         },
         "order": {
-          "description": "Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require\n1.",
+          "description": "Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.\nImported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.",
           "type": [
             "integer",
             "null"
@@ -8028,6 +8050,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Full integration: the textbook linear element, which locks in bending.",
       "type": "string",
       "const": "full"
+    },
+    {
+      "description": "Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.\nOther element kinds retain full integration. This is the Abaqus C3D8 formulation,\nnot uniformly reduced integration; finite-deformation Hex8 steps are unsupported.",
+      "type": "string",
+      "const": "mean-dilatation"
     }
   ]
 }
@@ -8202,7 +8229,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "$ref": "#/$defs/ImportedElementKind"
     },
     "nodes": {
-      "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+      "description": "Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -8227,11 +8254,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Only the explicitly supported standard, first-order 3D solids.",
+  "description": "Authored 3D solid families; interpolation and source connectivity are retained.\nHex8 uses the explicit mesh formulation; other kinds retain standard full integration.",
   "type": "string",
   "enum": [
     "tet4",
-    "hex8"
+    "hex8",
+    "tet10",
+    "hex20"
   ]
 }
 ```
@@ -8286,7 +8315,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "minimum": 0
     },
     "face": {
-      "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+      "description": "Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.",
       "type": "integer",
       "format": "uint8",
       "minimum": 0,
@@ -8729,7 +8758,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+      "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full\nintegration or explicit mean-dilatation (B-bar). Requires solid3d,\nunchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
       "type": "object",
       "properties": {
         "body": {

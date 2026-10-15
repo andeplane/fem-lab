@@ -5,7 +5,7 @@ import '@fontsource/ibm-plex-mono/latin-600.css';
 import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';
-import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, STEP_ACCEPT, type AbaqusConversion, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
+import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, STEP_ACCEPT, type AbaqusConversion, type AbaqusDependencies, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/runtime-schema';
 import { migratePersistentKeys } from './ai/key-storage';
@@ -293,6 +293,7 @@ class Producer {
       captureImport: () => {
         const admitted = transport.stamp;
         return {
+          dependencies: async source => await transport.query({ query: 'query.abaqusDependencies', ...source }) as AbaqusDependencies,
           convert: async query => await transport.query(query) as AbaqusConversion,
           replace: async (commands, abaqusReport) => { await transport.replaceWith({ kind: 'commands', commands, abaqusReport }, admitted); },
         };
