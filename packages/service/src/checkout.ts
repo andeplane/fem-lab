@@ -148,10 +148,11 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
       });
     },
     async portal(header:string|undefined,body:unknown={}) {
-      const caller=await owner(header);
+      const caller=await account(header);
       if(!z.strictObject({}).safeParse(body).success)throw new ServiceFailure(422,'invalid-billing-request','This billing action accepts no customer or return-location overrides.','billing');
-      const mapping=(await db.query('SELECT customer_id FROM billing_accounts WHERE account_id=$1',[caller.id])).rows[0];
-      if(!mapping)throw new ServiceFailure(409,'no-subscription','Choose a paid plan before opening subscription management.','billing','account.open');
+      const mapping=(await db.query('SELECT a.status,b.customer_id FROM accounts a LEFT JOIN billing_accounts b ON b.account_id=a.id WHERE a.id=$1',[caller.id])).rows[0];
+      if(mapping?.status!=='active')throw new ServiceFailure(403,'account-inactive','This account cannot manage billing.','account');
+      if(!mapping.customer_id)throw new ServiceFailure(409,'no-subscription','Choose a paid plan before opening subscription management.','billing','account.open');
       return {url:redirect(await payments.portal(String(mapping.customer_id),returnUrl),'billing.stripe.com')};
     },
     async change(header:string|undefined,body:unknown) {
@@ -185,12 +186,12 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
       });
     },
     async status(accountId:string) {
-      const mapping=(await db.query('SELECT subscription_status,cancel_at_period_end,period_end,blocked FROM billing_accounts WHERE account_id=$1',[accountId])).rows[0];
+      const mapping=(await db.query("SELECT b.customer_id,b.subscription_status,b.cancel_at_period_end,b.period_end,b.blocked FROM billing_accounts b JOIN accounts a ON a.id=b.account_id WHERE b.account_id=$1 AND a.status='active'",[accountId])).rows[0];
       const change=(await db.query("SELECT plan,effective_at,state FROM plan_changes WHERE account_id=$1 AND (effective_at>$2 OR state='pending')",[accountId,now()])).rows[0];
-      return {available:config.enabled,status:mapping?.subscription_status??'none',cancelAtPeriodEnd:Boolean(mapping?.cancel_at_period_end),periodEndsAt:(mapping?.period_end as Date|undefined)?.toISOString()??null,reviewRequired:Boolean(mapping?.blocked),scheduledPlan:change?{plan:change.plan,effectiveAt:(change.effective_at as Date).toISOString(),processing:change.state==='pending'}:null};
+      return {available:config.enabled,canManage:Boolean(mapping?.customer_id),status:mapping?.subscription_status??'none',cancelAtPeriodEnd:Boolean(mapping?.cancel_at_period_end),periodEndsAt:(mapping?.period_end as Date|undefined)?.toISOString()??null,reviewRequired:Boolean(mapping?.blocked),scheduledPlan:change?{plan:change.plan,effectiveAt:(change.effective_at as Date).toISOString(),processing:change.state==='pending'}:null};
     },
     async recover() {
-      if(!config.enabled)return {processed:0,failed:0};
+      // A sales pause cannot abandon a previously accepted, frozen plan change.
       const rows=(await db.query("SELECT p.*,b.customer_id FROM plan_changes p JOIN accounts a ON a.id=p.account_id JOIN billing_accounts b ON b.account_id=p.account_id WHERE p.state='pending' AND a.status='active' AND NOT b.blocked ORDER BY p.updated_at LIMIT 100")).rows;
       let processed=0,failed=0;
       for(const row of rows)try {

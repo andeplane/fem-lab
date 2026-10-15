@@ -1,13 +1,16 @@
 import { grantFreeFixture } from './free-fixture';
 import {randomUUID} from 'node:crypto';
+import {once} from 'node:events';
+import type {AddressInfo} from 'node:net';
 import {readFile,readdir} from 'node:fs/promises';
 import pg from 'pg';
-import {afterAll,beforeAll,beforeEach,describe,expect,it} from 'vitest';
-import {postgresAccounts} from '../src/accounts';
+import {afterAll,afterEach,beforeAll,beforeEach,describe,expect,it} from 'vitest';
+import {postgresAccounts,type AccountResponse} from '../src/accounts';
 import {creditLedger} from '../src/ledger';
 import {migrate} from '../src/migrations';
 import {CheckoutNotCreated,checkoutService,type Payments,type PaymentSubscription} from '../src/checkout';
 import {ServiceFailure} from '../src/errors';
+import {serviceServer} from '../src/http';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real Postgres',()=>{
   const schema=`checkout_${randomUUID().replaceAll('-','')}`,admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
@@ -29,6 +32,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
   const owner=async(header:string|undefined)=>{if(!header?.startsWith('Bearer '))throw new ServiceFailure(401,'login-required','Sign in.','identity');return accounts.provision({uid:header.slice(7),email:`${header.slice(7)}@example.com`});};
   const config={enabled:true,live:false,merchantMode:'direct' as const,taxMode:'not_collecting' as const,projectId:'femlab-test',appOrigin:'https://femlab.app',prices:{plus:'price_plus',pro:'price_pro',studio:'price_studio'}};
   const service=checkoutService(db,payments,config,owner,now,randomUUID);
+  const servers:ReturnType<typeof serviceServer>[]=[];
+  afterEach(async()=>{for(const server of servers.splice(0)){server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}});
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);const dir=new URL('../migrations/',import.meta.url);
     const migrations=await Promise.all((await readdir(dir)).filter(name=>name.endsWith('.sql')).sort().map(async name=>({name,sql:await readFile(new URL(name,dir),'utf8')})));
@@ -129,6 +134,42 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     await service.checkout('Bearer owner',{plan:'plus'});await service.portal('Bearer owner');expect(calls.portal).toEqual(['cus_owner']);
     await expect(service.portal('Bearer other')).rejects.toMatchObject({code:'no-subscription'});
   });
+  it('serves owned Portal management and its public signal while sales and a paid account are financially frozen',async()=>{
+    const account=await owner('Bearer owner');
+    await db.query("INSERT INTO billing_accounts(account_id,customer_id,subscription_status,blocked,updated_at) VALUES($1,'cus_owner','active',true,$2)",[account.id,now()]);
+    await ledger.grant({accountId:account.id,source:'paid-frozen',plan:'plus',startsAt:now(),expiresAt:new Date('2026-11-14T12:00:00Z')});
+    const paused=checkoutService(db,payments,{...config,enabled:false},owner,now,randomUUID);
+    const server=serviceServer({now,newId:randomUUID,ready:async()=>true,payments:paused,account:async header=>{
+      const active=await owner(header);return {...active,usage:await ledger.balance(active.id),billing:await paused.status(active.id)};
+    }});
+    servers.push(server);server.listen(0,'127.0.0.1');await once(server,'listening');
+    const base=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post=(path:string,authorization?:string,body:unknown={})=>fetch(base+path,{method:'POST',headers:{'content-type':'application/json',...(authorization?{authorization}:{})},body:JSON.stringify(body)});
+    const profile=await fetch(base+'/v1/account',{headers:{authorization:'Bearer owner'}});
+    expect(profile.status).toBe(200);const publicProfile=await profile.json() as AccountResponse;
+    expect(publicProfile.billing).toMatchObject({available:false,canManage:true,reviewRequired:true});
+    expect(publicProfile.usage).toMatchObject({plan:'free',availableCredits:0});
+    expect(JSON.stringify(publicProfile)).not.toContain('cus_owner');
+    const portal=await post('/v1/billing/portal','Bearer owner');expect(portal.status).toBe(200);
+    expect(await portal.json()).toEqual({url:'https://billing.stripe.com/p/session/fixture'});expect(calls.portal).toEqual(['cus_owner']);
+    expect((await post('/v1/billing/portal')).status).toBe(401);
+    expect((await post('/v1/billing/portal','Bearer other')).status).toBe(409);
+    expect((await post('/v1/billing/portal','Bearer owner',{customerId:'cus_other'})).status).toBe(422);
+    const other=await owner('Bearer other');expect(await paused.status(other.id)).toMatchObject({available:false,canManage:false});
+    for(const path of ['/v1/billing/checkout','/v1/billing/plan'])expect((await post(path,'Bearer owner',{plan:'pro'})).status).toBe(503);
+    expect(calls.customer).toBe(0);expect(calls.checkout).toBe(0);expect(calls.schedule).toEqual([]);expect(calls.portal).toEqual(['cus_owner']);
+    expect((await db.query('SELECT * FROM checkout_intents')).rows).toHaveLength(0);expect((await db.query('SELECT * FROM plan_changes')).rows).toHaveLength(0);
+  });
+  it.each(['deleting','deleted'])('refuses Portal management for a %s account even after an earlier identity read',async status=>{
+    const account=await owner('Bearer owner');await db.query("INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,'cus_owner',$2)",[account.id,now()]);
+    const paused=checkoutService(db,payments,{...config,enabled:false},owner,now,randomUUID);
+    const staleIdentity=checkoutService(db,payments,{...config,enabled:false},async()=>account,now,randomUUID);
+    expect(await paused.status(account.id)).toMatchObject({canManage:true});
+    await db.query('UPDATE accounts SET status=$2 WHERE id=$1',[account.id,status]);
+    expect(await paused.status(account.id)).toMatchObject({canManage:false});
+    await expect(paused.portal('Bearer owner')).rejects.toMatchObject({code:'account-inactive'});
+    await expect(staleIdentity.portal('Bearer owner')).rejects.toMatchObject({code:'account-inactive'});expect(calls.portal).toEqual([]);
+  });
   it('validates the configured monthly amount/currency and the redirect origin',async()=>{
     currency='eur';await expect(service.checkout('Bearer owner',{plan:'plus'})).rejects.toMatchObject({code:'price-unavailable'});expect(calls.checkout).toBe(0);
     currency='usd';redirect='https://checkout.stripe.com.evil.example/c';await expect(service.checkout('Bearer owner',{plan:'plus'})).rejects.toThrow('Untrusted payment redirect');
@@ -150,12 +191,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     await db.query('UPDATE billing_accounts SET blocked=true WHERE account_id=$1',[account.id]);
     await expect(service.change('Bearer owner',{plan:'studio'})).rejects.toMatchObject({code:'billing-review'});
   });
-  it('persists an uncertain plan change and reuses its operation key during job recovery',async()=>{
+  it('recovers an already accepted frozen plan change during a sales pause without accepting new changes',async()=>{
     const account=await owner('Bearer owner');await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[account.id,'cus_owner',now()]);
     const end=new Date('2026-11-14T12:00:00Z');subs=[{id:'sub_one',customerId:'cus_owner',status:'active',priceId:'price_plus',start:now().getTime()/1000,end:end.getTime()/1000,scheduleId:null}];
     scheduleFails=true;await expect(service.change('Bearer owner',{plan:'pro'})).rejects.toThrow('fixture outage');
     expect((await service.status(account.id)).scheduledPlan).toMatchObject({plan:'pro',processing:true});
-    scheduleFails=false;expect(await service.recover()).toEqual({processed:1,failed:0});expect(calls.keys[0]).toBe(calls.keys[1]);
+    const pending=(await db.query('SELECT * FROM plan_changes')).rows[0]!;
+    expect(pending).toMatchObject({request_version:2,price_id:'price_pro',purchase_use:null,state:'pending'});
+    const paused=checkoutService(db,payments,{...config,enabled:false},owner,now,randomUUID);
+    await expect(paused.change('Bearer owner',{plan:'studio'})).rejects.toMatchObject({code:'billing-unavailable'});
+    await expect(paused.checkout('Bearer owner',{plan:'studio'})).rejects.toMatchObject({code:'billing-unavailable'});
+    expect((await db.query('SELECT * FROM plan_changes')).rows[0]).toEqual(pending);
+    scheduleFails=false;expect(await paused.recover()).toEqual({processed:1,failed:0});expect(calls.keys[0]).toBe(calls.keys[1]);expect(calls.schedule).toEqual(['price_pro','price_pro']);
     expect((await service.status(account.id)).scheduledPlan).toMatchObject({processing:false});
+  });
+  it.each(['financial review','deleting','deleted','unversioned'])('keeps accepted recovery closed for %s during a sales pause',async reason=>{
+    const account=await owner('Bearer owner');await db.query("INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,'cus_owner',$2)",[account.id,now()]);
+    const end=new Date('2026-11-14T12:00:00Z');subs=[{id:'sub_one',customerId:'cus_owner',status:'active',priceId:'price_plus',start:now().getTime()/1000,end:end.getTime()/1000,scheduleId:null}];
+    scheduleFails=true;await expect(service.change('Bearer owner',{plan:'pro'})).rejects.toThrow('fixture outage');scheduleFails=false;
+    if(reason==='financial review')await db.query('UPDATE billing_accounts SET blocked=true WHERE account_id=$1',[account.id]);
+    else if(reason==='unversioned')await db.query('UPDATE plan_changes SET request_version=NULL WHERE account_id=$1',[account.id]);
+    else await db.query('UPDATE accounts SET status=$2 WHERE id=$1',[account.id,reason]);
+    const paused=checkoutService(db,payments,{...config,enabled:false},owner,now,randomUUID);
+    expect(await paused.recover()).toEqual({processed:0,failed:reason==='unversioned'?1:0});expect(calls.schedule).toEqual(['price_pro']);
+    expect((await db.query('SELECT state FROM plan_changes')).rows[0]!.state).toBe('pending');
   });
 });

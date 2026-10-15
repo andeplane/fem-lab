@@ -17,9 +17,27 @@ it('renders server balance and disables purchases when billing is unavailable',(
   expect(container.textContent).toContain('199,946');for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(true);expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.delete"]')?.disabled).toBe(true);act(()=>render(null,container));container.remove();
 });
 function signedIn(plan:AccountPlan='free',merchantMode:NonNullable<AccountInfo['billing']>['merchantMode']='managed'){
-  const billing:NonNullable<AccountInfo['billing']>={available:true,merchantMode,status:'active',cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null};
+  const billing:NonNullable<AccountInfo['billing']>={available:true,canManage:false,merchantMode,status:'active',cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null};
   return {...structuredClone(initialState),panels:{account:true},account:{...EMPTY_ACCOUNT,configured:true,status:'active' as const,uid:'a',email:'a@example.com',profile:{id:'a',email:'a@example.com',createdAt:'2026-10-14T00:00:00Z',status:'active' as const,usage:{plan,totalCredits:200000,availableCredits:199946,reservedCredits:0,periodEndsAt:'2026-11-01T00:00:00Z',models:['gpt-5.4-mini'],maxOutput:4096,contextLimit:64000,tariffVersion:'v1'},billing}}};
 }
+it.each(['plus','free'] as const)('keeps owned management with %s allowance under financial review while sales are paused',plan=>{
+  const s=signedIn(plan);Object.assign(s.account.profile.billing,{available:false,canManage:true,reviewRequired:true});
+  if(plan==='free')Object.assign(s.account.profile.usage,{totalCredits:0,availableCredits:0});
+  const dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  expect(container.textContent).toContain('New purchases and plan changes are currently unavailable.');
+  for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.changePlan"],[data-cmd="account.checkout"]'))expect(button.disabled).toBe(true);
+  const manage=container.querySelector<HTMLButtonElement>('[data-cmd="account.portal"]');expect(manage).not.toBeNull();expect(manage!.disabled).toBe(false);
+  act(()=>manage!.click());expect(dispatch).toHaveBeenCalledWith({cmd:'account.portal'});
+  act(()=>render(null,container));container.remove();
+});
+it.each([false,true])('does not offer management without an owned customer when sales availability is %s',available=>{
+  const s=signedIn();s.account.profile.billing.available=available;
+  const container=document.createElement('div');document.body.append(container);
+  act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
+  expect(container.querySelector('[data-cmd="account.portal"]')).toBeNull();
+  act(()=>render(null,container));container.remove();
+});
 it('requires a personal or business choice before a new managed purchase and passes the chosen use',()=>{
   const s=signedIn(),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
   act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
@@ -64,7 +82,7 @@ it('blocks new checkout with stale availability while the merchant mode is missi
 it('keeps paid plan changes available without presenting or accepting a use override',()=>{
   const dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
   for(const merchantMode of ['managed','direct','pending',undefined,'future-mode'] as const){
-    const s=signedIn('plus');Object.assign(s.account.profile.billing,{merchantMode});
+    const s=signedIn('plus');Object.assign(s.account.profile.billing,{merchantMode,canManage:true});
     act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
     expect(container.querySelector('select')).toBeNull();expect(container.querySelector('[data-cmd="account.checkout"]')).toBeNull();
     const buttons=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.changePlan"]');expect(buttons[0]?.disabled).toBe(true);expect(buttons[1]?.disabled).toBe(false);
@@ -91,6 +109,6 @@ it.each([
   expect(container.textContent).not.toContain('Stripe is the seller');
   expect(container.textContent).toContain('USD list prices exclude applicable tax');
   for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(!available||mode!=='direct');
-  if(!available)expect(container.textContent).toContain('Paid plans are not available yet.');
+  if(!available)expect(container.textContent).toContain('New purchases and plan changes are currently unavailable.');
   act(()=>render(null,container));container.remove();
 });
