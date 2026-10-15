@@ -1,6 +1,15 @@
 import Stripe from 'stripe';
 import type {BillingEnvelope,BillingGateway} from './billing';
 import type {Payments} from './checkout';
+import {ServiceFailure} from './errors';
+
+export type BillingTaxMode='pending'|'automatic'|'not_collecting';
+/** The host must record an explicit collection decision before enabling checkout. */
+export function billingTaxMode(value:string|undefined,enabled:boolean):BillingTaxMode {
+  const mode=value==='automatic'||value==='not_collecting'?value:'pending';
+  if(enabled&&mode==='pending')throw new Error('BILLING_TAX_MODE must be automatic or not_collecting before enabling billing.');
+  return mode;
+}
 
 const identity=(value:string|{id:string})=>typeof value==='string'?value:value.id;
 /** The SDK receives the raw webhook bytes and the host clock; public payloads contain no payment PII. */
@@ -37,7 +46,7 @@ export function stripeGateway(client:Stripe,webhookSecret:string):BillingGateway
 }
 
 /** Hosted Checkout/Portal only: card/payment credentials never pass through FEM Lab. */
-export function stripePayments(client:Stripe,portalConfiguration:string,projectId:string):Payments {
+export function stripePayments(client:Stripe,portalConfiguration:string,projectId:string,taxMode:BillingTaxMode):Payments {
   return {
     async customer(account,key) {
       const existing=await client.customers.search({query:`metadata['femlab_account_id']:'${account.id}' AND metadata['femlab_project']:'${projectId}'`,limit:2});
@@ -60,9 +69,10 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
       return result;
     },
     async checkout(input) {
+      if(taxMode==='pending')throw new ServiceFailure(503,'billing-tax-pending','Paid plans are unavailable until billing setup is complete.','billing');
       const session=await client.checkout.sessions.create({mode:'subscription',customer:input.customer,client_reference_id:input.accountId,
         line_items:[{price:input.price,quantity:1}],success_url:input.successUrl,cancel_url:input.cancelUrl,expires_at:input.expiresAt,
-        automatic_tax:{enabled:true},customer_update:{address:'auto'},billing_address_collection:'required',
+        automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto'},billing_address_collection:'required',
         consent_collection:{terms_of_service:'required'},allow_promotion_codes:false,
         subscription_data:{metadata:{femlab_account_id:input.accountId,femlab_project:projectId}},
       },{idempotencyKey:input.key});
