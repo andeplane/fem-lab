@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,7 +45,7 @@ def without_clock(value):
 
 
 def run_measured(command, stdout, stderr, max_rss_mib, timeout):
-    """Own one child, retain exact stdout/stderr and kernel peak RSS (macOS bytes)."""
+    """Own one child, retain exact stdout/stderr and kernel peak RSS, normalized from platform ru_maxrss units."""
     started = time.monotonic()
     stop = None
     with stdout.open("xb") as out, stderr.open("xb") as err:
@@ -65,7 +66,7 @@ def run_measured(command, stdout, stderr, max_rss_mib, timeout):
                     os.killpg(proc.pid, signal.SIGKILL)
             time.sleep(0.25)
     return {"exitCode": proc.returncode, "elapsedSeconds": time.monotonic() - started,
-            "peakRssBytes": usage.ru_maxrss, "resourceStop": stop,
+            "peakRssBytes": usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024), "resourceStop": stop,
             "stdoutSha256": sha(stdout), "stderrSha256": sha(stderr)}
 
 
@@ -180,7 +181,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = {"issue": 639, "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                 "cliSha256": sha(args.native), "runnerSha256": sha(Path(__file__)),
-                "timeoutSeconds": args.timeout_seconds, "maxRssMiB": args.max_rss_mib,
+                "ruMaxRssPlatform": sys.platform, "timeoutSeconds": args.timeout_seconds, "maxRssMiB": args.max_rss_mib,
                 "schemaSha256": sha(ROOT / "packages/registry/src/generated/engine.schema.json"),
                 "references": REFERENCES, "scope": "native investigative evidence only; no accepted FV52 target/rate", "cases": []}
     for grid in GRIDS:
