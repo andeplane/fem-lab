@@ -55,6 +55,31 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     expect((await db.query('SELECT * FROM credit_grants')).rows).toHaveLength(0);
     expect((await db.query('SELECT * FROM ai_requests')).rows).toHaveLength(0);
   });
+  it('staging initialization denies free and test-paid credits before counting or generation',async()=>{
+    const original=(await db.query('SELECT * FROM ai_limits WHERE id=true')).rows[0];
+    const paid=await account('Bearer paid');
+    await ledger.grant({accountId:paid.id,source:'stripe-test-paid',plan:'plus',startsAt:now(),expiresAt:new Date('2026-11-14T12:00:00Z')});
+    const pause=await readFile(new URL('../../../infra/google/sql-staging-ai-paused.sql',import.meta.url),'utf8');
+    try {
+      await db.query(pause);await db.query(pause);
+      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
+        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
+      for(const uid of ['free','paid']) {
+        const response=await send('paused',body,`Bearer ${uid}`);
+        expect(response.status).toBe(503);expect(await response.json()).toMatchObject({code:'ai-unavailable'});
+      }
+      expect(counted).toBeUndefined();expect(generated).toBe(0);
+      expect((await db.query('SELECT * FROM ai_requests')).rows).toHaveLength(0);
+      expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
+      expect((await ledger.balance(paid.id)).availableCredits).toBe(4000000);
+      await db.query('DELETE FROM ai_limits');await db.query('INSERT INTO ai_limits(id) VALUES(true)');
+      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
+        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
+    } finally {
+      await db.query('UPDATE ai_limits SET enabled=$1,daily_micros=$2,monthly_micros=$3,free_daily_micros=$4,uncertain_micros=$5 WHERE id=true',
+        [original.enabled,original.daily_micros,original.monthly_micros,original.free_daily_micros,original.uncertain_micros]);
+    }
+  });
   it('streams normalized calls/continuation, with the authoritative receipt before executable tools',async()=>{
     const response=await send();expect(response.status).toBe(200);expect(response.headers.get('content-type')).toBe('text/event-stream');
     const stream=await response.text();expect(stream).toContain('query_nodes');expect(stream).toContain('continuation');
