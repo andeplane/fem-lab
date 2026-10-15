@@ -72,7 +72,8 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
       if(taxMode==='pending')throw new ServiceFailure(503,'billing-tax-pending','Paid plans are unavailable until billing setup is complete.','billing');
       const session=await client.checkout.sessions.create({mode:'subscription',customer:input.customer,client_reference_id:input.accountId,
         line_items:[{price:input.price,quantity:1}],success_url:input.successUrl,cancel_url:input.cancelUrl,expires_at:input.expiresAt,
-        automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto'},billing_address_collection:'required',
+        managed_payments:{enabled:false},
+        automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto',name:'auto'},billing_address_collection:'required',
         tax_id_collection:{enabled:true},
         consent_collection:{terms_of_service:'required'},allow_promotion_codes:false,
         subscription_data:{metadata:{femlab_account_id:input.accountId,femlab_project:projectId}},
