@@ -4,9 +4,9 @@
   "project": "femlab-app",
   "apiVersion": "2026-09-30.endive",
   "billingEnabled": false,
-  "taxClassificationConfirmed": false,
+  "taxClassificationConfirmed": true,
   "taxMode": "automatic",
-  "taxCollectionDecisionConfirmed": false,
+  "taxCollectionDecisionConfirmed": true,
   "policyUrlsConfirmed": true,
   "stagingCheckoutVerified": true,
   "webhookVerified": true,
@@ -16,19 +16,55 @@
       "product": "femlab_plus_2026_10",
       "price": "price_1UQmWyAAtmJJ65hf91LvyAFE",
       "amountUsdCents": 4900,
-      "credits": 4000000
+      "credits": 4000000,
+      "purchaseUses": {
+        "business": {
+          "product": "femlab_plus_mp_business_2026_10",
+          "price": "price_1UQsLIAAtmJJ65hfN8Ef4UPR",
+          "taxCode": "txcd_10105002"
+        },
+        "personal": {
+          "product": "femlab_plus_mp_personal_2026_10",
+          "price": "price_1UQsL9AAtmJJ65hfYJbaKog0",
+          "taxCode": "txcd_10105001"
+        }
+      }
     },
     "pro": {
       "product": "femlab_pro_2026_10",
       "price": "price_1UQmWzAAtmJJ65hfnlgp7daG",
       "amountUsdCents": 14900,
-      "credits": 16000000
+      "credits": 16000000,
+      "purchaseUses": {
+        "business": {
+          "product": "femlab_pro_mp_business_2026_10",
+          "price": "price_1UQsLLAAtmJJ65hffU0T1IBJ",
+          "taxCode": "txcd_10105002"
+        },
+        "personal": {
+          "product": "femlab_pro_mp_personal_2026_10",
+          "price": "price_1UQsLKAAtmJJ65hf9j4SZllt",
+          "taxCode": "txcd_10105001"
+        }
+      }
     },
     "studio": {
       "product": "femlab_studio_2026_10",
       "price": "price_1UQmX1AAtmJJ65hfZVJOQV7T",
       "amountUsdCents": 49900,
-      "credits": 50000000
+      "credits": 50000000,
+      "purchaseUses": {
+        "business": {
+          "product": "femlab_studio_mp_business_2026_10",
+          "price": "price_1UQsLOAAtmJJ65hfmNCb6D5U",
+          "taxCode": "txcd_10105002"
+        },
+        "personal": {
+          "product": "femlab_studio_mp_personal_2026_10",
+          "price": "price_1UQsLNAAtmJJ65hfcVDNB8Ma",
+          "taxCode": "txcd_10105001"
+        }
+      }
     }
   },
   "portalConfiguration": "bpc_1UQmX1AAtmJJ65hfnQBmiZSJ",
@@ -49,8 +85,8 @@
     "secretName": "stripe-webhook-secret"
   },
   "merchantMode": "managed",
-  "managedPaymentsAccountEnabled": false,
-  "managedPaymentsEligibilityConfirmed": false,
+  "managedPaymentsAccountEnabled": true,
+  "managedPaymentsEligibilityConfirmed": true,
   "managedPaymentsTermsAccepted": false,
   "managedPaymentsCheckoutVerified": false
 }
