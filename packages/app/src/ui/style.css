@@ -751,6 +751,16 @@ textarea:focus {
 .comparison-controls select { max-width: 100%; min-width: 0; font-size: 11px; padding: 3px; }
 .comparison-controls fieldset select:first-of-type { flex: 1; width: 100px; }
 .comparison-controls p { margin: 5px 0 0; color: var(--text-low); }
+.comparison-playback { padding: 6px 10px; background: var(--bg-panel); border-bottom: 1px solid var(--border-divider); font-size: 11px; min-width: 0; }
+.comparison-playback label, .comparison-shared-clock { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.comparison-frame-controls { display: flex; flex-wrap: wrap; gap: 10px; }
+.comparison-frame-controls fieldset { flex: 1; min-width: 180px; border: 0; margin: 3px 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.comparison-frame-controls legend { padding: 0; color: var(--text-low); overflow-wrap: anywhere; }
+.comparison-playback select, .comparison-playback input { min-width: 0; max-width: 100%; font-size: 11px; padding: 3px; }
+.comparison-frame-controls input[type=range] { flex: 1; min-width: 90px; }
+.comparison-time-seek { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.comparison-time-seek input { width: 80px; }
+.comparison-playback button { padding: 3px 6px; font-size: 11px; }
 .comparison-error, .comparison-warnings { color: var(--warn-text); overflow-wrap: anywhere; }
 .comparison-pane-title { position: absolute; top: 75px; left: 10px; right: 150px; display: flex; flex-direction: column; font-size: 11px; gap: 2px; pointer-events: none; overflow-wrap: anywhere; }
 .comparison-pane-title.stale { color: var(--warn-text); }

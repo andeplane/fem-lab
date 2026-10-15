@@ -1,4 +1,4 @@
-import type { ComparisonConfiguration, ComparisonOperandInput, ComparisonPaneName, ComparisonPaneState, ResultSummary } from '@femlab/registry';
+import { FemError, type ComparisonConfiguration, type ComparisonOperandInput, type ComparisonPaneName, type ComparisonPaneState, type FramesResult, type ResultSummary } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import { fieldChoices, formatNumber, legendTicks, type FieldChoice } from '../fields';
 import type { UiState } from '../store';
@@ -6,8 +6,8 @@ import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import { Cmd, type Dispatch } from './cmd';
 import type { Query } from './SchemaForm';
 
-function operandChoice(choice: FieldChoice, resultId: string): ComparisonOperandInput {
-  return { resultId, field: choice.field, ...(choice.component == null ? {} : { component: choice.component }) };
+function operandChoice(choice: FieldChoice, resultId: string, sample?: ComparisonOperandInput['sample']): ComparisonOperandInput {
+  return { resultId, field: choice.field, ...(choice.component == null ? {} : { component: choice.component }), ...(sample ? { sample } : {}) };
 }
 function sameChoice(choice: FieldChoice, operand: ComparisonOperandInput): boolean {
   return choice.field === operand.field && (choice.component ?? undefined) === operand.component;
@@ -21,6 +21,7 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
   const [left, setLeft] = useState<ComparisonOperandInput>({ resultId: '', field: '' });
   const [right, setRight] = useState<ComparisonOperandInput>({ resultId: '', field: '' });
   const [summaries, setSummaries] = useState<Record<string, ResultSummary>>({});
+  const [histories, setHistories] = useState<Record<string, FramesResult | null>>({});
   const [fieldsLoading, setFieldsLoading] = useState(false);
   useEffect(() => {
     if (configuration.mode !== 'single') {
@@ -35,10 +36,18 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
     let gone = false;
     const ids = [...new Set([left.resultId, right.resultId].filter(Boolean))];
     setFieldsLoading(ids.length > 0);
-    void Promise.allSettled(ids.map(async resultId => [resultId, await query({ query: 'query.result', resultId }) as ResultSummary] as const))
+    void Promise.allSettled(ids.map(async resultId => {
+      const [summary, frames] = await Promise.all([query({ query: 'query.result', resultId }) as Promise<ResultSummary>,
+        (query({ query: 'query.frames', resultId }) as Promise<FramesResult>).catch(error => {
+          if (error instanceof FemError && error.code === 'unsupported') return null;
+          throw error;
+        })]);
+      return [resultId, summary, frames] as const;
+    }))
       .then(results => {
         if (gone) return;
-        setSummaries(Object.fromEntries(results.flatMap(result => result.status === 'fulfilled' && result.value[0] === result.value[1].resultId ? [result.value] : [])));
+        setSummaries(Object.fromEntries(results.flatMap(result => result.status === 'fulfilled' && result.value[0] === result.value[1].resultId ? [[result.value[0], result.value[1]]] : [])));
+        setHistories(Object.fromEntries(results.flatMap(result => result.status === 'fulfilled' && result.value[0] === result.value[1].resultId ? [[result.value[0], result.value[2]]] : [])));
         setFieldsLoading(false);
       });
     return () => { gone = true; };
@@ -46,19 +55,19 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
   const choices = (operand: ComparisonOperandInput): FieldChoice[] => {
     const summary = summaries[operand.resultId];
     // Derived safety fields require solved Material metadata; only retained engine fields enter comparison.
-    return summary ? fieldChoices(summary.extremes.map(e => e.field), summary) : [];
+    return summary ? fieldChoices(operand.sample ? histories[operand.resultId] ? [histories[operand.resultId]!.field] : [] : summary.extremes.map(e => e.field), summary) : [];
   };
   const resolve = (operand: ComparisonOperandInput): ComparisonOperandInput | null => {
     const available = choices(operand);
     const choice = available.find(c => sameChoice(c, operand)) ?? available[0];
-    return choice ? operandChoice(choice, operand.resultId) : null;
+    return choice ? operandChoice(choice, operand.resultId, operand.sample) : null;
   };
   const a = resolve(left), b = resolve(right);
   const input: ComparisonConfiguration | null = a && b ? mode === 'difference' ? { mode, left: a, right: b, onto } : { mode, left: a, right: b } : null;
   // Keep this strip mounted before the first solve: filling the retained catalogue must
   // not move or resize the single-Result canvas and invalidate its framing and picks.
   const operandForm = (side: 'left' | 'right', operand: ComparisonOperandInput, set: (next: ComparisonOperandInput) => void) => {
-    const options = choices(operand), selected = resolve(operand);
+    const options = choices(operand), selected = resolve(operand), frames = histories[operand.resultId];
     return <fieldset>
       <legend>{side}</legend>
       <select aria-label={`${side} Result`} data-cmd="view.compareResults" value={operand.resultId} onChange={e => set({ resultId: e.currentTarget.value, field: '' })}>
@@ -66,11 +75,31 @@ export function ComparisonControls({ s, dispatch, query }: { s: UiState; dispatc
         {records.map(record => <option key={record.id} value={record.id}>{record.step} · rev {record.solvedRevision} · {record.id} · {record.stale ? 'stale' : 'current'}</option>)}
       </select>
       <select aria-label={`${side} field`} data-cmd="view.compareResults" value={options.find(c => selected && sameChoice(c, selected))?.key ?? ''} onChange={e => {
-        const choice = options.find(c => c.key === e.currentTarget.value); if (choice) set(operandChoice(choice, operand.resultId));
+        const choice = options.find(c => c.key === e.currentTarget.value); if (choice) set(operandChoice(choice, operand.resultId, operand.sample));
       }}>
         {!options.length ? <option value="">{fieldsLoading ? 'Loading fields…' : 'No available fields'}</option> : null}
         {options.map(choice => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
       </select>
+      <select aria-label={`${side} sample selection`} data-cmd="view.compareResults" value={operand.sample?.kind ?? 'final'} onChange={e => {
+        const kind = e.currentTarget.value;
+        if (kind === 'final') { set({ ...operand, sample: undefined }); return; }
+        if (!frames) return;
+        const primary = fieldChoices([frames.field], summaries[operand.resultId])[0];
+        if (!primary) return;
+        set(operandChoice(primary, operand.resultId, kind === 'frame' ? { kind, index: 0 } : { kind: 'time', time: `${frames.frames[0]!.time.value} ${frames.frames[0]!.time.unit}`, sampling: 'exact' }));
+      }}>
+        <option value="final">Final field</option>
+        {frames ? <><option value="frame">Retained index</option><option value="time">Physical time</option></> : null}
+      </select>
+      {operand.sample?.kind === 'frame' && frames ? <select aria-label={`${side} retained frame`} data-cmd="view.compareResults" value={operand.sample.index} onChange={e => set({ ...operand, sample: { kind: 'frame', index: Number(e.currentTarget.value) } })}>
+        {frames.frames.map(frame => <option key={frame.index} value={frame.index}>{frame.index} · {formatNumber(frame.time.value)} {frame.time.unit}</option>)}
+      </select> : null}
+      {operand.sample?.kind === 'time' ? <>
+        <input aria-label={`${side} physical time`} data-cmd="view.compareResults" value={typeof operand.sample.time === 'string' ? operand.sample.time : `${operand.sample.time.value} ${operand.sample.time.unit}`} onInput={e => set({ ...operand, sample: { kind: 'time', time: e.currentTarget.value, sampling: operand.sample?.kind === 'time' ? operand.sample.sampling : 'exact' } })} />
+        <select aria-label={`${side} time sampling`} data-cmd="view.compareResults" value={operand.sample.sampling} onChange={e => {
+          if (operand.sample?.kind === 'time') set({ ...operand, sample: { ...operand.sample, sampling: e.currentTarget.value === 'nearest' ? 'nearest' : 'exact' } });
+        }}><option value="exact">Exact retained time</option><option value="nearest">Nearest retained time</option></select>
+      </> : null}
     </fieldset>;
   };
   return <div class="comparison-controls" aria-label="Result comparison workspace">
@@ -99,6 +128,8 @@ export function ComparisonPaneChrome({ pane, name, s, dispatch }: { pane: Compar
     <div class={`comparison-pane-title ${pane.summary.stale ? 'stale' : ''}`}>
       <strong>{name === 'difference' ? 'Left − right' : name} · {pane.summary.step}</strong>
       <span class="mono">{pane.operand.resultId}</span>
+      {pane.sample ? <span>frame {pane.sample.frame.index} · {formatNumber(pane.sample.frame.time.value)} {pane.sample.frame.time.unit}</span> : <span>final field</span>}
+      {name === 'difference' ? <span>left {s.resultComparison.left?.sample ? `${s.resultComparison.left.sample.frame.index} · ${formatNumber(s.resultComparison.left.sample.frame.time.value)} ${s.resultComparison.left.sample.frame.time.unit}` : 'final'} · right {s.resultComparison.right?.sample ? `${s.resultComparison.right.sample.frame.index} · ${formatNumber(s.resultComparison.right.sample.frame.time.value)} ${s.resultComparison.right.sample.frame.time.unit}` : 'final'}</span> : null}
       <span>{record?.modelName ?? ''} · rev {pane.summary.revision} · {pane.summary.stale ? 'stale' : 'current'}</span>
       {record ? <span class="comparison-mesh">Mesh · nodes {record.nodes} · elements {record.elements}</span> : null}
       {name === 'difference' && s.resultComparison.coverage ? <span>onto {pane.operand.resultId} · {s.resultComparison.coverage.insideNodes}/{s.resultComparison.coverage.totalNodes} nodes covered{s.resultComparison.interpolated ? ' · interpolated' : ''}</span> : null}
@@ -121,7 +152,7 @@ export function ComparisonPaneChrome({ pane, name, s, dispatch }: { pane: Compar
       </> : <span>No covered data · neutral surface</span>}
       <Cmd cmd="view.setComparisonLegend" dispatch={dispatch} args={{ ...target, range: 'auto' }} pressed={legend?.automatic}>Auto</Cmd>
     </div> : null}
-    {pane.pick ? <div class="probe mono">{pane.operand.resultId} · node {pane.pick.node} · {pane.pick.value ? `${formatNumber(pane.pick.value.value)} ${pane.pick.difference ? 'Δ ' : ''}${pane.pick.value.unit}` : 'unavailable coverage'}</div> : null}
+    {pane.pick ? <div class="probe mono">{pane.operand.resultId} · node {pane.pick.node} · {pane.pick.value ? `${formatNumber(pane.pick.value.value)} ${pane.pick.difference ? 'Δ ' : ''}${pane.pick.value.unit}` : 'unavailable coverage'}{pane.sample ? ` · frame ${pane.sample.frame.index} · ${formatNumber(pane.sample.frame.time.value)} ${pane.sample.frame.time.unit}` : ''}</div> : null}
     {name === 'difference' && s.resultComparison.warnings.length ? <div class="comparison-warnings" role="status">{s.resultComparison.warnings.map(w => <span>{w.code} · {w.text}</span>)}</div> : null}
   </>;
 }

@@ -9462,6 +9462,8 @@ fn frame_payload_time_selection_uses_the_same_resolver_as_sampled_probes() {
 
 #[path = "registry/retained_cases.rs"]
 mod retained_cases;
+#[path = "registry/transient_comparison.rs"]
+mod transient_comparison;
 
 const IMPLICIT_TEMPERATURE: &str =
     r#"{"cmd":"load.temperature","name":"heated","bodies":["sheet"],"value":"343.15 K","reference":"293.15 K"}"#;

@@ -2683,3 +2683,86 @@ the stiff interior-ply outer face agrees with this independent constant-curvatur
 remain below0.1Pa. A selected stress-unit factor≈1e-308 admits those fields and rejects
 the interior ply. Failed current reads and new solves preserve the prior original-unit
 Result and consume no Result ID; restoring SI lets the next solve publish result-2.
+
+### Retained transient-frame difference reads (#286)
+
+The public `query.difference` accepts each operand's existing typed `FrameSample`
+independently. Its result identifies both resolved retained indices/times and the
+explicit target Mesh. No time interpolation, extrapolation or final derived-field
+substitution is performed. Omitted samples preserve final-field behavior.
+
+The conservation fixture retains uniform `T_left(t)=t K` and `T_right(t)=2t K`
+on 2/4/8 axial cells against twice those counts, at both element orders. Its
+different integration/output schedules retain left 0/0.4/0.8/1 s and right
+0/0.3/0.6/0.9 s. Exact 400 ms versus explicitly nearest 450 ms resolves to
+0.4 s versus 0.3 s (the earlier midpoint tie), so every target-node scalar
+difference is −0.2 K within `1e-10 K`. Reversing operands gives +0.2 K; both
+target meshes must agree with the closed form. The old solved Celsius/minute
+metadata stays attached to the old id after current units change to Kelvin/seconds.
+Mixed final/sampled reads and final-frame equality are checked. Full transient
+temperature layout remains x with zero y/z; scalar reads explicitly select
+component 0, preserving the existing unsampled wire layout.
+
+The rigid free-fall fixture compares actual intermediate left output against the
+right final output from independently retained 1.3/1.7 ms schedules and 0.5/0.9
+CFL factors. Mapped quad4/quad8 and lattice hex8/hex20 use 1/2/4 axial cells
+against twice those counts. Every target node must satisfy
+`Delta u_y = −4.905 (t_left² − t_right²) m` within `1e-12 m`; x/z remain zero,
+including the 2D zero-padding convention. Complete vector, component 1, reversal
+and both projection targets are checked. These exact rigid fields must pass at
+every refinement; no asymptotic rate is invented for this patch case.
+
+Full-solve thermal replay at one/four native threads checks exact Journal hashes,
+solved files and retained catalogues/times. Every pair of saved times is read on
+both target meshes, checked bit-exactly across thread counts and independently
+against `Delta T=t_left−t_right K`. Skip-solves replay reports missing ids.
+Invalid index/time/dimensions, historical derived fields, final-only History and
+evicted ids fail without changing the authoritative file or retained catalogue.
+The same-id fixture selects 0.4/0.8 s from one stale retained solve after a live
+source edit. The direct-layout path must still give −0.4 K and distinct frame
+identities, preserving the file and catalogue. Shifted uniform-heating bodies
+repeat both orders and 2/4/8 versus twice those cells: overlap values give −0.4 K,
+while every outside node remains null on both targets, with exact coverage ids.
+
+An amplitude-driven axial bar uses `F=1000 N`, `E=200 GPa`, `nu=0`, and
+`A=0.01 m²`. Consistent end traction and root restraint give
+`u_x(x,t)=F*a(t)*x/(E*A)`. Unequal 0/0.4/0.8/1 s and 0/0.3/0.6/0.9 s
+schedules select amplitudes 0.4 and 0.3 on both orders and 2/4/8 versus twice
+those cells. Every target node must give `Delta u_x=5e-8*x m` within
+`1e-15 m`, with zero transverse components; no numerical reference solve is
+used for this affine projection patch.
+
+The forced-slab E5 pointwise solution is
+`T(x,t)=x*(1-x)/2 − sum_(odd n) 4*sin(n*pi*x)*exp(−n²*pi²*t)/(n*pi)³ K`
+for `k=rho=cp=L=q=1`, initially zero, zero-temperature end faces and insulated
+sides. Each field difference is checked at every node against the two continuum
+values at 0.05/0.10 s and 0.10/0.15 s. The 50 odd terms n=1..99 have a
+conservative tail bound `4*exp(−a*101²)/(pi³*101³*(1−exp(−203*a)))` for
+each operand, where `a=pi²*0.05`; the two-operand tail is below `1e-2192 K`.
+No finer engine solve supplies the answer.
+
+Spatial refinement uses 8/16/32 versus 16/32/64 axial cells, Crank–Nicolson
+left dt=1e-5 s and right dt=2e-5 s, retained strides 5000/2500, and endpoints
+0.15/0.20 s. Both target errors decrease and the coarsest stays below 0.002 K.
+Observed linear rates are 2.006 on coarse target nodes and 1.918 on projected
+fine nodes (both gates >=1.8); quadratic rates are 3.965 on coarse nodes
+(gate >=3.5) and 2.984 on fine noncoincident nodes (gate >=2.8). The latter is
+the expected third-order quadratic interpolation error, rather than the
+fourth-order nodal error. Finest linear errors are 2.937e-5/1.178e-4 K and
+quadratic errors 7.283e-9/5.926e-7 K. Backward-Euler dt=0.02/0.01/0.005 s
+on 32/64 cells compares 0.10/0.20 s at both orders and on both targets; the
+coarsest error stays below 0.01 K and every halving reduces it by >1.7.
+
+The permanent `tools/test-transient-replay.mjs` additionally records two solves for
+thermal, explicit 2D and explicit 3D cases at both orders and 2/4 versus 4/8 axial
+cells. Native one/four-thread and fresh Node-WASM full-solve replay preserve exact
+Journal hashes, catalogue/sample metadata and immutable file state. All retained
+primary frames and sampled/final/mixed/same-id/reversed differences use the uniform
+heating or rigid-fall formulas above (`1e-10 K` / `1e-12 m`). Shifted thermal bodies
+give exact null coverage on both targets. Detaching/mutating transferred difference
+values and validity arrays cannot change a subsequent read; skip-solves replay
+refuses the absent sampled ids. All twelve new comparison variants and twelve
+existing primary-History variants pass on authenticated frozen-source native/WASM.
+
+Production two-pane scrubbing/playback/browser and full strict coverage acceptance
+remain required by #286's linked plan before closing it.

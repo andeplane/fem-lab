@@ -1,11 +1,19 @@
 import { z } from 'zod';
-import type { DifferenceCoverage, EngineError, ResultSummary, RetainedResults, Valued, Warning } from './generated/engine';
+import type { DifferenceCoverage, EngineError, FramesResult, ResolvedFrame, ResultSummary, RetainedResults, Valued, Warning } from './generated/engine';
+
+export const RetainedTimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
+/** The existing engine FrameSample protocol; retained indices never mean integration steps. */
+export const RetainedFrameSample = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('frame'), index: z.number().int().nonnegative().max(4294967295) }),
+  z.object({ kind: z.literal('time'), time: RetainedTimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
+]);
 
 /** A comparison identifies immutable solves; Step names cannot identify repeated solves. */
 export const ComparisonOperand = z.object({
   resultId: z.string().min(1).describe('Immutable solve id from query.results, scoped to the current project engine.'),
   field: z.string().min(1).describe('Retained engine field name from query.result for this id, such as displacement, vonMises, or temperature.'),
   component: z.number().int().nonnegative().optional().describe('Zero-based component. Omit for a scalar, or to show a displacement/mode vector magnitude.'),
+  sample: RetainedFrameSample.optional().describe('Omit for the final field. Otherwise select an independently retained primary frame by zero-based index or physical time with explicit exact/nearest sampling. No interpolation, extrapolation or historical derived fields.'),
 });
 export const ComparisonConfig = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('single').describe('Restore the existing single-Result view.') }),
@@ -54,6 +62,31 @@ export type ComparisonLegendSpec = z.output<typeof ComparisonLegendInput>;
 export type ComparisonVisibilitySpec = z.output<typeof ComparisonVisibilityInput>;
 export type ComparisonPickSpec = z.output<typeof ComparisonPickInput>;
 
+export const ComparisonPlaybackInput = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('independent'), pane: z.enum(['left', 'right']), resultId: z.string().min(1), playing: z.boolean(),
+    speed: z.number().positive().optional(), sample: RetainedFrameSample.optional() }),
+  z.object({ mode: z.literal('synchronized'), leftResultId: z.string().min(1), rightResultId: z.string().min(1), playing: z.boolean(),
+    speed: z.number().positive().optional(), time: RetainedTimeQuantity.optional(), sampling: z.enum(['exact', 'nearest']) }),
+]);
+export type ComparisonPlaybackSpec = z.output<typeof ComparisonPlaybackInput>;
+export interface ComparisonPlaybackPane {
+  resultId: string;
+  sample: ResolvedFrame;
+  playing: boolean;
+  speed: number;
+  playheadSi: number;
+}
+/** Physical playhead and held samples are distinct on unequal schedules. */
+export interface ComparisonPlaybackState {
+  mode: 'independent' | 'synchronized';
+  left: ComparisonPlaybackPane | null;
+  right: ComparisonPlaybackPane | null;
+  playheadSi: number | null;
+  interval: { startSi: number; endSi: number } | null;
+  /** Explicit seek/starting policy. Subsequent playback holds each actual schedule. */
+  sampling: 'exact' | 'nearest' | null;
+}
+
 export interface ComparisonLegendState {
   min: Valued;
   max: Valued;
@@ -75,6 +108,8 @@ export interface ComparisonPick {
   /** Exact engine field value in SI; null means unavailable difference coverage. */
   value: Valued | null;
   difference: boolean;
+  /** Actual immutable frame identities; final operands have no sample. */
+  samples: { left: ResolvedFrame | null; right: ResolvedFrame | null };
 }
 export interface ComparisonPaneState {
   operand: ComparisonOperandInput;
@@ -85,6 +120,9 @@ export interface ComparisonPaneState {
   hiddenBodies: string[];
   /** The selected retained payload contains a displacement/mode field usable for deformation. */
   canDeform: boolean;
+  /** Available primary History and the actual selected sample, never final-field labels. */
+  frames: FramesResult | null;
+  sample: ResolvedFrame | null;
   pick: ComparisonPick | null;
   error: EngineError | null;
 }
@@ -101,10 +139,12 @@ export interface ResultComparisonState {
   warnings: Warning[];
   loading: boolean;
   error: EngineError | null;
+  playback: ComparisonPlaybackState | null;
 }
 /** A browser implements this typed boundary; a headless host explicitly lacks the workspace. */
 export interface ResultComparisonHost {
   configure(input: ComparisonConfiguration): void | Promise<void>;
+  play(input: ComparisonPlaybackSpec): void | Promise<void>;
   legend(input: ComparisonLegendSpec): void | Promise<void>;
   visible(input: ComparisonVisibilitySpec): void | Promise<void>;
   pick(input: ComparisonPickSpec): ComparisonPick | null | Promise<ComparisonPick | null>;

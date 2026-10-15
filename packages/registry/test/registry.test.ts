@@ -18,6 +18,7 @@ const schemaQueries = engineSchema.queries.oneOf.map((v) => v.properties['query'
 /** One valid input per host Command; a Command without a sample fails the exhaustive test below. */
 const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.compareResults': { mode: 'single' },
+  'view.playComparison': { mode: 'independent', pane: 'left', resultId: 'result-1', playing: false, sample: { kind: 'frame', index: 0 } },
   'view.setComparisonLegend': { pane: 'left', resultId: 'r1', range: [{ value: 0, unit: 'MPa' }, { value: 10, unit: 'MPa' }] },
   'view.setComparisonVisible': { pane: 'right', resultId: 'r2', bodies: ['beam'], on: false },
   'view.pickComparison': { pane: 'left', resultId: 'r1', at: [{ value: 1, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }] },

@@ -70,11 +70,12 @@ class Bundle {
   constructor(readonly transport: SessionTransport) {
     this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
-    this.results = new ResultsView(this.store, transport, this.viewer, { now: () => performance.now(), schedule: (cb, ms) => setTimeout(cb, ms), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) });
+    const playbackClock = { now: () => performance.now(), schedule: (cb: () => void, ms: number) => setTimeout(cb, ms), cancel: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+    this.results = new ResultsView(this.store, transport, this.viewer, playbackClock);
     this.comparison = new ResultComparison(this.store, transport, { left: this.viewer, right: this.rightViewer }, {
       pauseSingle: () => { this.results.invalidateTransient(); this.viewer.current?.animate(false); },
       restoreSingle: () => this.results.refresh(true),
-    });
+    }, playbackClock);
     this.rightViewer.onReady = () => this.comparison.resume();
     this.viewer.onReady = () => {
       if (this.fitAfterOpen) this.initialCamera = this.viewer.current?.getCamera();
@@ -325,6 +326,7 @@ class Producer {
         const seq = (ack as { seq?: number } | undefined)?.seq;
         if (typeof seq === 'number' && seq >= 0) current.store.set({ journalWho: { ...current.store.state.journalWho, [seq]: { who, at: Date.now() } } });
         current.results.invalidateTransient();
+        current.comparison.pausePlayback();
         await current.refresh();
         await current.results.onAck(ack);
         current.comparison.resume();

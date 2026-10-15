@@ -3780,10 +3780,6 @@ export type Query =
  */
 export type ObjectKind = "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
 /**
- * The retained Result whose Mesh receives the difference values.
- */
-export type DifferenceOnto = "left" | "right";
-/**
  * How to select retained output; there is no temporal interpolation or extrapolation.
  */
 export type FrameSample =
@@ -3811,6 +3807,10 @@ export type FrameSample =
  * Both reject times outside the retained interval (except endpoint conversion roundoff).
  */
 export type TimeSampling = "exact" | "nearest";
+/**
+ * The retained Result whose Mesh receives the difference values.
+ */
+export type DifferenceOnto = "left" | "right";
 /**
  * A number with a unit, as text or as parts.
  */
@@ -16378,6 +16378,11 @@ export interface DifferenceOperand {
   resultId: string;
   field: string;
   component?: number | null;
+  /**
+   * Omit for the final field. A sample selects only the retained primary field through
+   * query.frame's exact/nearest resolver, with earlier ties and no extrapolation.
+   */
+  sample?: FrameSample | null;
 }
 /**
  * Append-only list of applied Commands (undo truncates it).
@@ -17953,6 +17958,31 @@ export interface ResolvedDifferenceOperand {
   field: string;
   component?: number | null;
   sourceComponents: number;
+  /**
+   * The actual retained frame used by this operand; absent for a final field.
+   */
+  sample?: ResolvedFrame | null;
+}
+/**
+ * Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
+ * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
+ */
+export interface ResolvedFrame {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
+  step: string;
+  modelHash: string;
+  frame: FrameStamp;
+}
+/**
+ * One retained frame's zero-based index and time in seconds and Model display units.
+ */
+export interface FrameStamp {
+  index: number;
+  timeSi: number;
+  time: Valued;
 }
 /**
  * Nodewise coverage of the selected comparison Mesh by the other Mesh.
@@ -17988,14 +18018,6 @@ export interface FramesResult {
   frames: FrameStamp[];
 }
 /**
- * One retained frame's zero-based index and time in seconds and Model display units.
- */
-export interface FrameStamp {
-  index: number;
-  timeSi: number;
-  time: Valued;
-}
-/**
  * `query.frame` response: SI values in the existing component-fastest FieldData layout.
  */
 export interface FrameResult {
@@ -18008,19 +18030,6 @@ export interface FrameResult {
    */
   unit: string;
   values: number[];
-}
-/**
- * Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
- * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
- */
-export interface ResolvedFrame {
-  /**
-   * Opaque identity scoped to the Engine instance that produced this solve.
-   */
-  resultId: string;
-  step: string;
-  modelHash: string;
-  frame: FrameStamp;
 }
 /**
  * `query.probe` response.

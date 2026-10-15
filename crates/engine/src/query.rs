@@ -140,7 +140,10 @@ pub enum Query {
     /// Subtract two explicitly retained nodal fields as `left - right` on either Result's
     /// Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
     /// null values; nonfinite arithmetic is a structured error. No current Result, display
-    /// conversion, or node-number pairing is implied.
+    /// conversion, or node-number pairing is implied. Each operand may independently select
+    /// a retained primary frame with the existing exact/nearest FrameSample protocol; resolved
+    /// indices and physical times are returned. Historical derived fields are unavailable.
+    /// Omitted samples preserve final-field comparison. There is no temporal interpolation.
     #[serde(rename = "query.difference", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "DifferenceField"))]
@@ -1514,6 +1517,10 @@ pub struct DifferenceOperand {
     pub field: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<u8>,
+    /// Omit for the final field. A sample selects only the retained primary field through
+    /// query.frame's exact/nearest resolver, with earlier ties and no extrapolation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<FrameSample>,
 }
 
 /// The retained Result whose Mesh receives the difference values.
@@ -1534,6 +1541,9 @@ pub struct ResolvedDifferenceOperand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<u8>,
     pub source_components: usize,
+    /// The actual retained frame used by this operand; absent for a final field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<ResolvedFrame>,
 }
 
 /// Nodewise coverage of the selected comparison Mesh by the other Mesh.
