@@ -88,6 +88,6 @@
   "managedPaymentsAccountEnabled": true,
   "managedPaymentsEligibilityConfirmed": true,
   "managedPaymentsTermsAccepted": false,
-  "managedPaymentsCheckoutVerified": false,
+  "managedPaymentsCheckoutVerified": true,
   "creditUnit": "usd-milli-v1"
 }
