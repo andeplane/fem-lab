@@ -593,3 +593,47 @@ fn a_tied_assembly_solves_on_the_gpu_and_matches_the_direct_solver() {
     // The slave rows left the free set before the solver saw the matrix: no empty row reaches it.
     assert!((0..k.n).all(|r| k.row_ptr[r] < k.row_ptr[r + 1]), "every reduced row has entries");
 }
+
+/// #673: exercise the actual assembled B-bar operator, GPU Jacobi preconditioner and
+/// refinement against uniaxial elasticity, including Poisson contraction and recovered stress.
+#[test]
+fn mean_dilatation_hex8_gpu_patch_matches_uniaxial_elasticity() {
+    let mut e = Engine::new(Some(gpu()), Box::new(NoClock), 2);
+    for n in [2, 4, 8] {
+        let mesh=serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":1,"nz":1}},"formulation":"mean-dilatation"}).to_string();
+        for command in [
+            r#"{"cmd":"model.new","name":"GPU B-bar patch"}"#,
+            r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","1 m","1 m"]}"#,
+            &mesh,
+            r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0.25}"#,
+            r#"{"cmd":"material.assign","material":"elastic","bodies":["bar"]}"#,
+            r#"{"cmd":"constraint.fix","name":"x","on":"bar.xmin","dofs":["ux"]}"#,
+            r#"{"cmd":"constraint.fix","name":"y","on":"bar.ymin","dofs":["uy"]}"#,
+            r#"{"cmd":"constraint.fix","name":"z","on":"bar.zmin","dofs":["uz"]}"#,
+            r#"{"cmd":"load.traction","name":"pull","on":"bar.xmax","total":["200 MN","0 N","0 N"]}"#,
+            r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["x","y","z"],"loads":["pull"]}"#,
+            r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
+        ] {
+            pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+        }
+        let result: serde_json::Value =
+            serde_json::to_value(e.query(Query::Result { step: None, result_id: None }).unwrap()).unwrap();
+        assert_eq!(result["solver"], "gpu-pcg");
+        for (component, want) in [(0, 0.001), (1, -0.00025), (2, -0.00025)] {
+            let query=serde_json::from_value(serde_json::json!({"query":"query.probe","step":"s","field":"displacement","component":component,"at":["1 m","1 m","1 m"]})).unwrap();
+            let value: serde_json::Value = serde_json::to_value(e.query(query).unwrap()).unwrap();
+            let got = value["value"]["value"].as_f64().unwrap();
+            assert!((got / want - 1.0).abs() < 1e-7, "n={n},component={component}: {got} vs {want}");
+        }
+        let value: serde_json::Value = serde_json::to_value(
+            e.query(Query::Field { step: None, result_id: None, field: "stress".into() }).unwrap(),
+        )
+        .unwrap();
+        for stress in value["values"].as_array().unwrap().chunks_exact(6) {
+            assert!((stress[0].as_f64().unwrap() / 200e6 - 1.0).abs() < 1e-7);
+            for other in &stress[1..] {
+                assert!(other.as_f64().unwrap().abs() < 20.0);
+            }
+        }
+    }
+}

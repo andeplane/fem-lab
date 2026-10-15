@@ -14,7 +14,7 @@ use crate::query::{
 };
 use crate::units::{Density, Force, Length, Stress, Time, Q};
 
-pub const CONVERSION_VERSION: &str = "abaqus-static/2";
+pub const CONVERSION_VERSION: &str = "abaqus-static/3";
 const SUGGESTION: &str = "query.convertAbaqus with mode static, a supported deck, explicit unitLength and unitForce";
 
 type Nodal = BTreeMap<(u32, u8), f64>;

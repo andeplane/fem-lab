@@ -3428,7 +3428,8 @@ export type SurfaceProjectionSpec =
       kind: "cylinder";
     };
 /**
- * Standard full-integration 3D solids; interpolation and source connectivity are retained.
+ * Authored 3D solid families; interpolation and source connectivity are retained.
+ * Hex8 uses the explicit mesh formulation; other kinds retain standard full integration.
  */
 export type ImportedElementKind = "tet4" | "hex8" | "tet10" | "hex20";
 /**
@@ -3456,7 +3457,7 @@ export type SweepSpec =
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
-export type Formulation = "incompatible-modes" | "full";
+export type Formulation = "incompatible-modes" | "full" | "mean-dilatation";
 /**
  * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
  * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);

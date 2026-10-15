@@ -356,3 +356,9 @@ separate from a raw LLM token or the browser's supplier-cost estimate.
 **Usage reservation** — An atomic hold against an Account's allowance and service
 supplier-cost budget before one provider round. It becomes a confirmed debit or
 pending reconciliation; losing the browser stream does not erase it. See ADR 0028.
+
+**Mean dilatation (`mean-dilatation`)** is the explicit small-strain Hex8 B-bar
+formulation: eight-point integration with physical-volume-averaged volumetric strain.
+It preserves deviatoric/shear strain and uses the ordinary material extension point.
+Abaqus C3D8 imports select it; other supported source kinds retain full integration.
+Existing `full` Journals keep pointwise full integration. See ADR 0034.

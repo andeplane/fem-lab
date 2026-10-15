@@ -1060,7 +1060,7 @@ fn element_stiffness_is_symmetric_and_annihilates_the_rigid_modes() {
         assert_eq!(el.n_gp(), rule_of(kind).points.len());
         let coords = distorted(kind);
         for id in idealisations(kind) {
-            for form in [Formulation::Full, Formulation::IncompatibleModes] {
+            for form in [Formulation::Full, Formulation::IncompatibleModes, Formulation::MeanDilatation] {
                 let c = ctx(&coords, &mat, id.clone(), form);
                 let mut k = vec![0.0; n * n];
                 let det = el.stiffness(&c, &mut k).expect("a valid element");
@@ -1159,7 +1159,7 @@ fn a_single_hex8_has_six_rigid_modes_and_eighteen_stiff_ones() {
     let mat = steel();
     let coords = distorted(ElementKind::Hex8);
     let el = element_for(ElementKind::Hex8);
-    for form in [Formulation::Full, Formulation::IncompatibleModes] {
+    for form in [Formulation::Full, Formulation::IncompatibleModes, Formulation::MeanDilatation] {
         let c = ctx(&coords, &mat, Idealisation::Solid3d, form);
         let mut k = vec![0.0; 24 * 24];
         el.stiffness(&c, &mut k).expect("ok");
@@ -1181,7 +1181,7 @@ fn one_distorted_element_reproduces_every_constant_strain_state() {
         let n_gp = el.n_gp();
         let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
         for id in idealisations(kind) {
-            for form in [Formulation::Full, Formulation::IncompatibleModes] {
+            for form in [Formulation::Full, Formulation::IncompatibleModes, Formulation::MeanDilatation] {
                 for e in patch_modes(&id) {
                     let c = ctx(&coords, &mat, id.clone(), form);
                     let u = patch_displacement(kind, &id, &coords, &e);
@@ -17226,4 +17226,113 @@ fn modal_native_controls_reject_nonfinite_tolerance_and_metadata_matches_the_pen
         res.solver.rel_residual
     );
     assert_eq!(res.scalars["rel_residual"], res.solver.rel_residual);
+}
+
+// #673: independent polynomial fields distinguish volume-averaged dilatation from both
+// pointwise full integration and a centroid shortcut, without mirroring the B-bar kernel.
+#[test]
+fn mean_dilatation_hex8_has_the_closed_form_energy_and_volume_average() {
+    let mut mat = steel();
+    mat.props = vec![120.0, 0.25]; // mu = 48, bulk = 80.
+    let kind = ElementKind::Hex8;
+    let el = element_for(kind);
+    let coords: Vec<f64> = node_xi(kind).iter().flatten().copied().collect();
+    let u: Vec<f64> = node_xi(kind).iter().flat_map(|x| [x[0] * x[1], 0.0, 0.0]).collect();
+    for (form, energy) in
+        [(Formulation::Full, 48.0 * 28.0 / 9.0 + 80.0 * 4.0 / 3.0), (Formulation::MeanDilatation, 48.0 * 28.0 / 9.0)]
+    {
+        let c = ctx(&coords, &mat, Idealisation::Solid3d, form);
+        let mut k = vec![0.0; 24 * 24];
+        el.stiffness(&c, &mut k).unwrap();
+        let ku = mat_vec(&k, 24, &u);
+        let actual = u.iter().zip(ku).map(|(a, b)| a * b).sum::<f64>() / 2.0;
+        assert!((actual - energy).abs() < 1e-11, "{form:?}: {actual} vs {energy}");
+    }
+    // F=(xi,eta,zeta*(1+b*xi)+a*xi*eta), det J=1+b*xi, u=(eta*zeta,0,0).
+    // The physical-volume average of div u is -a/3, while its centroid value is zero.
+    let (a, b) = (0.3, 0.2);
+    let warped: Vec<f64> =
+        node_xi(kind).iter().flat_map(|x| [x[0], x[1], x[2] * (1.0 + b * x[0]) + a * x[0] * x[1]]).collect();
+    let u: Vec<f64> = node_xi(kind).iter().flat_map(|x| [x[1] * x[2], 0.0, 0.0]).collect();
+    let c = ctx(&warped, &mat, Idealisation::Solid3d, Formulation::MeanDilatation);
+    let (mut stress, mut strain) = (vec![0.0; 48], vec![0.0; 48]);
+    el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+    for g in 0..8 {
+        let xi = el.gp_xi(g);
+        let divergence = -xi[1] * (b * xi[2] + a * xi[1]) / (1.0 + b * xi[0]);
+        let gamma_xy = xi[2] - xi[1] * a * xi[0] / (1.0 + b * xi[0]);
+        let gamma_xz = xi[1] / (1.0 + b * xi[0]);
+        let correction = (-a / 3.0 - divergence) / 3.0;
+        close(
+            &strain[g * 6..g * 6 + 6],
+            &[divergence + correction, correction, correction, gamma_xy, gamma_xz, 0.0],
+            1e-13,
+        );
+        let expected = isotropic_d(120.0, 0.25);
+        let sig: Vec<f64> =
+            expected.iter().map(|row| row.iter().zip(&strain[g * 6..g * 6 + 6]).map(|(d, e)| d * e).sum()).collect();
+        close(&stress[g * 6..g * 6 + 6], &sig, 1e-12);
+    }
+}
+
+#[test]
+fn mean_dilatation_projection_converges_at_first_order_to_a_smooth_strain_field() {
+    let el = element_for(ElementKind::Hex8);
+    let mat = steel();
+    let mut errors = Vec::new();
+    for n in [2, 4, 8] {
+        let h = 1.0 / f64::from(n);
+        let mut error2 = 0.0;
+        // Translation in x,z does not affect this field's error, so each y-layer represents n² cells.
+        for j in 0..n {
+            let coords: Vec<f64> = node_xi(ElementKind::Hex8)
+                .iter()
+                .flat_map(|x| [(x[0] + 1.0) * h / 2.0, (f64::from(j) + (x[1] + 1.0) / 2.0) * h, (x[2] + 1.0) * h / 2.0])
+                .collect();
+            let u: Vec<f64> = coords.chunks_exact(3).flat_map(|x| [x[0] * x[1], 0.0, 0.0]).collect();
+            let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::MeanDilatation);
+            let (mut stress, mut strain) = (vec![0.0; 48], vec![0.0; 48]);
+            el.recover(&c, &u, &mut stress, &mut strain).unwrap();
+            for g in 0..8 {
+                let xi = el.gp_xi(g);
+                let (x, y) = ((xi[0] + 1.0) * h / 2.0, (f64::from(j) + (xi[1] + 1.0) / 2.0) * h);
+                let exact = [y, 0.0, 0.0, x, 0.0, 0.0];
+                error2 += f64::from(n * n) * h.powi(3) / 8.0
+                    * strain[g * 6..g * 6 + 6].iter().zip(exact).map(|(v, e)| (v - e).powi(2)).sum::<f64>();
+            }
+        }
+        let error = error2.sqrt();
+        assert!((error - h / 6.0).abs() < 1e-13);
+        errors.push(error);
+    }
+    for pair in errors.windows(2) {
+        assert!((pair[0] / pair[1] - 2.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn mean_dilatation_does_not_alias_other_element_kinds_or_finite_strain() {
+    let mat = steel();
+    for kind in ALL_KINDS {
+        if kind == ElementKind::Hex8 {
+            continue;
+        }
+        let coords = distorted(kind);
+        for id in idealisations(kind) {
+            let el = element_for(kind);
+            let nd = el.n_dof();
+            let (mut full, mut mean) = (vec![0.0; nd * nd], vec![0.0; nd * nd]);
+            el.stiffness(&ctx(&coords, &mat, id.clone(), Formulation::Full), &mut full).unwrap();
+            el.stiffness(&ctx(&coords, &mat, id, Formulation::MeanDilatation), &mut mean).unwrap();
+            assert_eq!(full, mean);
+        }
+    }
+    let coords = distorted(ElementKind::Hex8);
+    let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::MeanDilatation);
+    let (mut k, mut f, mut stress, mut strain, mut state) =
+        (vec![0.0; 576], vec![0.0; 24], vec![0.0; 48], vec![0.0; 48], Vec::new());
+    let out = TangentOut { k: &mut k, f: &mut f, stress: &mut stress, strain: &mut strain, state: &mut state };
+    let error = element_for(ElementKind::Hex8).tangent_and_force(&c, &[0.0; 24], &[], out).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.cause.contains("small strain"));
 }

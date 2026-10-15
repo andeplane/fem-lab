@@ -19,7 +19,7 @@ pub const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ENTITIES: usize = 250_000;
 const MAX_MEMBERSHIPS: usize = 1_000_000;
-pub const CONVERSION_VERSION: &str = "abaqus-mesh/1";
+pub const CONVERSION_VERSION: &str = "abaqus-mesh/2";
 const SUGGESTION: &str = "query.convertAbaqus with a supported deck and explicit unitLength";
 
 /// Parsed source plus presentation metadata. Coordinates and Commands use explicit SI units.
@@ -1098,6 +1098,11 @@ pub(crate) fn conversion_from_mesh(
             count: members.len() as u32,
         });
     }
+    let formulation = if parsed.source.elements.iter().any(|e| e.kind == ImportedElementKind::Hex8) {
+        Formulation::MeanDilatation
+    } else {
+        Formulation::Full
+    };
     let report = AbaqusConversionReport {
         mode: AbaqusImportMode::Mesh,
         sha256: digest.to_string(),
@@ -1135,7 +1140,7 @@ pub(crate) fn conversion_from_mesh(
             Command::MeshSet {
                 mesher: MesherSpec::Imported(parsed.source),
                 order,
-                formulation: Some(Formulation::Full),
+                formulation: Some(formulation),
                 simplices: None,
                 refinement: None,
             },

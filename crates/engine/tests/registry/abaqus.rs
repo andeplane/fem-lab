@@ -63,7 +63,7 @@ fn abaqus_sparse_labels_sets_faces_and_si_replay_have_independent_oracles() {
     assert_eq!(source["mesher"]["nodeSets"]["FROM_ELEMENTS"], json!([10, 20, 40, 70]));
     assert_eq!(source["mesher"]["elementSets"]["SAME"], json!([900]));
     assert_eq!(source["mesher"]["provenance"]["sha256"], sha256_hex(TET.as_bytes()));
-    assert_eq!(source["mesher"]["provenance"]["conversionVersion"], "abaqus-mesh/1");
+    assert_eq!(source["mesher"]["provenance"]["conversionVersion"], "abaqus-mesh/2");
     install(&mut e, &conversion);
     let model = read(&mut e, json!({"query":"query.model"}));
     assert_eq!(model["bodies"][0]["name"], "part");
@@ -534,5 +534,36 @@ proptest! {
         let expected = x * y * z * scale * scale * scale / 6.0;
         let actual = model["bodies"][0]["measure"]["value"].as_f64().unwrap();
         prop_assert!((actual - expected).abs() < expected * 1e-12);
+    }
+}
+
+#[test]
+fn abaqus_c3d8_selects_explicit_mean_dilatation_but_existing_full_journals_survive() {
+    let mut e = engine();
+    let conversion = converted(&mut e, HEX, "1 mm");
+    let wire = serde_json::to_value(&conversion.commands[2]).unwrap();
+    assert_eq!(wire["formulation"], "mean-dilatation");
+    install(&mut e, &conversion);
+    assert_eq!(e.model().mesh.as_ref().unwrap().formulation, femlab_engine::command::Formulation::MeanDilatation);
+    let new_file = e.export_file();
+    let mut replay = engine();
+    pollster::block_on(replay.replay(&new_file.journal.entries, true, true)).unwrap();
+    assert_eq!(replay.model_hash(), e.model_hash());
+    assert_eq!(replay.export_file(), new_file);
+    for explicit in [false, true] {
+        let mut legacy = wire.clone();
+        if explicit {
+            legacy["formulation"] = json!("full");
+        } else {
+            legacy.as_object_mut().unwrap().remove("formulation");
+        }
+        let mut old = engine();
+        run(&mut old, &legacy.to_string()).unwrap();
+        assert_eq!(old.model().mesh.as_ref().unwrap().formulation, femlab_engine::command::Formulation::Full);
+        let file = old.export_file();
+        let mut opened = engine();
+        pollster::block_on(opened.replay(&file.journal.entries, true, true)).unwrap();
+        assert_eq!(opened.export_file(), file);
+        assert_eq!(opened.mesh().unwrap().mesh, e.mesh().unwrap().mesh);
     }
 }
