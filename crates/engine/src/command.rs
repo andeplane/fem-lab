@@ -2438,6 +2438,13 @@ pub enum Command {
     /// solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
     /// (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
     /// direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+    /// Modal solves verify every requested eigenpair's normwise backward residual against
+    /// `tolerance` and return solve.stalled without storing a Result when `maxIterations`
+    /// subspace sweeps are exhausted. The reported residual is the largest requested-pair
+    /// residual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.
+    /// Resolved Ritz values must also stabilize to relative change 1e-10. Values unresolved
+    /// at the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency
+    /// warnings; their backward residual passed, but relative frequency convergence is not certified.
     /// On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
     /// assembly and triangular solves retain the engine thread count.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
@@ -2448,11 +2455,12 @@ pub enum Command {
         /// Linear solver implementation; omitted means auto, which selects an available compatible backend.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         solver: Option<Solver>,
-        /// Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
-        /// settings control nonlinear convergence.
+        /// Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+        /// normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tolerance: Option<f64>,
-        /// Linear iterative solver iteration budget; omitted means 5000.
+        /// Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+        /// A modal budget must be greater than zero.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_iterations: Option<u32>,
     },

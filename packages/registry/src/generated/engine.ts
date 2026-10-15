@@ -2497,12 +2497,13 @@ export type Command =
        */
       solver?: Solver | null;
       /**
-       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
-       * settings control nonlinear convergence.
+       * Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+       * normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
        */
       tolerance?: number | null;
       /**
-       * Linear iterative solver iteration budget; omitted means 5000.
+       * Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+       * A modal budget must be greater than zero.
        */
       maxIterations?: number | null;
       /**
@@ -6917,12 +6918,13 @@ export type QueryResult_Command =
        */
       solver?: Solver | null;
       /**
-       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
-       * settings control nonlinear convergence.
+       * Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+       * normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
        */
       tolerance?: number | null;
       /**
-       * Linear iterative solver iteration budget; omitted means 5000.
+       * Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+       * A modal budget must be greater than zero.
        */
       maxIterations?: number | null;
       /**
@@ -9741,12 +9743,13 @@ export type ModelFile_Command =
        */
       solver?: Solver | null;
       /**
-       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
-       * settings control nonlinear convergence.
+       * Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+       * normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
        */
       tolerance?: number | null;
       /**
-       * Linear iterative solver iteration budget; omitted means 5000.
+       * Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+       * A modal budget must be greater than zero.
        */
       maxIterations?: number | null;
       /**
@@ -12657,12 +12660,13 @@ export type ReadReply_Command =
        */
       solver?: Solver | null;
       /**
-       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
-       * settings control nonlinear convergence.
+       * Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+       * normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
        */
       tolerance?: number | null;
       /**
-       * Linear iterative solver iteration budget; omitted means 5000.
+       * Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+       * A modal budget must be greater than zero.
        */
       maxIterations?: number | null;
       /**
@@ -15376,12 +15380,13 @@ export type DocumentSnapshot_Command =
        */
       solver?: Solver | null;
       /**
-       * Positive finite relative residual tolerance of the linear solver; omitted means 1e-10. Separate Step
-       * settings control nonlinear convergence.
+       * Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+       * normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
        */
       tolerance?: number | null;
       /**
-       * Linear iterative solver iteration budget; omitted means 5000.
+       * Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+       * A modal budget must be greater than zero.
        */
       maxIterations?: number | null;
       /**
@@ -17552,6 +17557,10 @@ export interface ResultSummary {
   stale: boolean;
   solver: string;
   iterations: number;
+  /**
+   * The solver's measured residual. For modal Results, the maximum requested-pair normwise
+   * generalized-eigenproblem backward residual, not a frequency or mesh error estimate.
+   */
   residual: number;
   timeMs: number;
   extremes: Extreme[];

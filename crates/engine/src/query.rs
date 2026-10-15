@@ -763,6 +763,8 @@ pub struct ResultSummary {
     pub stale: bool,
     pub solver: String,
     pub iterations: u32,
+    /// The solver's measured residual. For modal Results, the maximum requested-pair normwise
+    /// generalized-eigenproblem backward residual, not a frequency or mesh error estimate.
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,

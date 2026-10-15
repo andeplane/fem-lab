@@ -14823,3 +14823,6 @@ fn display_unit_underflow_rejects_public_reads_without_changing_saved_state() {
     assert_eq!(model["materials"][0]["E"]["value"].as_f64().unwrap().to_bits(), 2024);
     assert_eq!(model["materials"][0]["E"]["unit"], "Pa");
 }
+
+#[path = "registry/modal_convergence.rs"]
+mod modal_convergence;

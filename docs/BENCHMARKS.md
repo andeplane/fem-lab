@@ -2868,3 +2868,46 @@ and Journal are copied into an isolated directory with only a native executable 
 checked FEM Node module pair. `tools/step-replay-only.mjs` replays native one/four threads
 and Node WASM, comparing every Journal hash and the complete Model, Mesh and resolved Set.
 The replay directory contains no original STEP, converter module or dependency tree.
+
+
+### Modal algebraic acceptance (#633; prerequisite to unresolved FV52 D3)
+
+Every requested modal eigenpair is checked on the original reduced pencil after identical
+constraint/MPC reduction of the mass and the elastic-plus-prestress stiffness:
+
+`eta_i = ||K phi_i - lambda_i M phi_i||_infinity / ((||K||_infinity + |lambda_i| ||M||_infinity) ||phi_i||_infinity)`.
+
+The matrix infinity norms are absolute row sums. `solve.run.tolerance` (default `1e-10`)
+bounds the maximum `eta_i`, reported as the Result's residual and its `rel_residual` scalar.
+`maxIterations` is the actual modal subspace-sweep budget (default 5000). Exhaustion or a
+nonfinite residual returns structured `solve.stalled` before Result publication. Invalid
+nonpositive/nonfinite tolerances and zero budgets are schema errors. Common binary-exponent
+scaling preserves the definition for huge/subnormal matrices and arbitrary nonzero mode
+normalizations; zero vectors are rejected.
+
+Backward accuracy does not certify a soft frequency's forward error. Resolved Ritz values
+must additionally meet the existing `1e-10` relative eigenvalue-change test. Only a value
+within its own Rayleigh stiffness-contraction cancellation resolution is exempt from that
+relative test: `|lambda| |phi^T M phi| <= gamma_s |phi|^T |K| |phi|`, where
+`gamma_s = s*u/(1-s*u)`, `u = f64::EPSILON/2`, and `s = 2*maxRowNnz + 2*n` bounds the
+CSR matvec/dot operation depth. This is an arithmetic-resolution diagnostic, not a physical
+rigid-mode classifier or a certified eigenvalue-error interval. A positive finite mass
+contraction is required; a nonzero weighted-mass contraction erased by unrelated huge
+matrix entries conservatively retains Ritz stabilization. Each exempt mode carries
+`modal.unresolved-frequency`, explicitly denying relative frequency-convergence certification.
+The residual uses the signed Ritz eigenvalue before the existing near-buckling
+nonpositive-frequency clamp, which is preserved; a displayed zero frequency does not imply
+that the underlying signed Ritz value was exactly zero.
+
+Independent scalar/matrix oracles include exact and deliberately wrong generalized pairs,
+rigid nullspaces, an isolated `1e-20` soft mode, a coupled cancellation-dominated resolved
+soft mode, and overflow/subnormal scaling. Public Engine regressions at 1/4 threads prove
+one-sweep nonconvergence preserves the complete Model/Journal, prior Result catalogue and
+retained field, and a later successful retry receives the next unconsumed Result identity.
+The actual reported residual is also checked against its reduced-pencil definition.
+Existing B4/B7/B13/B26/F11 frequency/refinement gates remain unchanged; in particular B26
+rejects a residual-only early-stopping policy. Free rigid modes and the existing prestressed
+near-buckling/zero-preload cases remain separate physical controls. No FV52 reference is
+selected or accepted by this prerequisite.
+
+Primary numerical convention: [SLEPc norm-based generalized-eigenproblem convergence](https://slepc.upv.es/release/manualpages/EPS/EPSConv.html).

@@ -21,7 +21,9 @@ use crate::query::CostEstimate;
 /// What a Command asked of the solver. `rel_tol` is the accuracy the *answer* must have, which
 /// the f64 refinement loop is measured against; `inner_tol` and `max_iterations` are the
 /// approximate inner solver's own, much looser, budget. The direct path verifies and reports
-/// its residual against the same f64 acceptance floor.
+/// its residual against the same f64 acceptance floor. Modal analysis uses `rel_tol` directly
+/// for its normwise generalized-eigenpair backward residual and `max_iterations` for its
+/// subspace sweeps; exhausted sweeps return `solve.stalled`, never a partial spectrum.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveOptions {
     pub solver: Solver,
