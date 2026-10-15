@@ -1,0 +1,17 @@
+[package]
+name = "femlab-project-io"
+description = "Handle-relative project filesystem capability for the Node MCP host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cap-std = "4.0.3"
+cap-fs-ext = "4.0.3"
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"

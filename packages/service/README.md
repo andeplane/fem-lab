@@ -14,12 +14,22 @@ For real database tests set `TEST_DATABASE_URL` to a disposable Postgres 17 data
 The tests create isolated schemas and remove only those schemas; CI runs them against
 its own Postgres service. Without that variable these integration tests are skipped.
 
-Account reads add the current UTC monthly free grant idempotently and report balance,
-plan, model allowlist and output ceiling. Grants expire without rollover. Paid grants
-will be admitted only from the verified billing lifecycle, never from a client plan ID.
+Account reads report balance, plan, model allowlist, output ceiling and monthly free
+eligibility without creating grants. Verified signup starts at zero. An operator
+reviews a stable person reference using `tools/manage-free-allowance.mts` (the Google
+wrapper is `infra/google/manage-free-allowance.py`). Approved accounts explicitly
+claim via `POST /v1/account/free-allowance {}`: 6,666,666 weighted credits per UTC
+month, once per reviewed person, subject to the shared monthly free pool. Revoke,
+email review and rebind are operator-only. Retained keyed email/claim markers prevent
+recreation from resetting the month; `FREE_ELIGIBILITY_HMAC_KEY` must be configured.
+Runtime roles cannot approve eligibility. Legacy one-time invitations remain 200k
+and do not stack with monthly eligibility. Grants expire without rollover. Paid grants
+are admitted only from the verified billing lifecycle, never from a client plan ID.
 Tariff `2026-10-14.v1` stores 30 integer subcredits per public credit, including cache
 writes once and reasoning inside total output. Financial grants/debits are immutable
-database rows. Reservation/settlement admission follows in #549.
+database rows. Reservations enforce per-account credits and aggregate/free daily,
+monthly and outstanding supplier budgets before generation. See
+[the monthly free allowance plan](../../docs/plans/712-free-monthly-allowance.md).
 
 Payment webhooks use `POST /v1/billing/webhook`, with the original raw bytes and
 Stripe signature. The durable inbox stores event/object/customer IDs and a digest,

@@ -361,6 +361,12 @@ each use to the same tier allowance. It is independent of a tax ID. See ADR 0033
 **AI token credit** — A versioned billing unit weighted by model and token category,
 separate from a raw LLM token or the browser's supplier-cost estimate.
 
+**Reviewed free eligibility** — An operator-approved person reference and retained
+keyed email fingerprints bound to one active Account. Login is not approval. An
+explicit claim funds at most one expiring allowance per principal and UTC month;
+deletion/rebind never resets that month. Revocation and shared budgets still apply.
+See ADR 0037.
+
 **Usage reservation** — An atomic hold against an Account's allowance and service
 supplier-cost budget before one provider round. It becomes a confirmed debit or
 pending reconciliation; losing the browser stream does not erase it. See ADR 0028.

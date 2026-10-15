@@ -19,13 +19,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
   const digest='a'.repeat(64);
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
+    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql','010-free-monthly-allowance.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
     const connection=await db.connect(); try { await migrate(connection,migrations); } finally { connection.release(); }
   });
   beforeEach(async()=>{
     clock=new Date('2026-10-14T12:00:00Z');
     await db.query('TRUNCATE accounts CASCADE');
-    await db.query('UPDATE ai_limits SET enabled=true,daily_micros=100000000,monthly_micros=1000000000,free_daily_micros=20000000,uncertain_micros=10000000,concurrent=16');
+    await db.query('UPDATE ai_limits SET enabled=true,daily_micros=100000000,monthly_micros=1000000000,free_daily_micros=20000000,free_monthly_micros=50000000,uncertain_micros=10000000,concurrent=16');
   });
   afterAll(async()=>{ await db.end(); await otherProcess.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
   async function owner(uid='owner') { const account=await accounts.provision({uid,email:`${uid}@example.com`}); await grantFreeFixture(ledger, account.id, clock); return account.id; }
@@ -71,7 +71,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
     const replay=await prepare(accountId,(await db.query('SELECT idempotency_key FROM ai_requests WHERE id=$1',[id])).rows[0].idempotency_key);
     expect(replay.receipt).toEqual(receipts[0]); expect(replay.replay).toBe(true);
   });
-  it.each(['daily_micros','monthly_micros','free_daily_micros','uncertain_micros'])('global %s includes outstanding holds across processes',async column=>{
+  it.each(['daily_micros','monthly_micros','free_daily_micros','free_monthly_micros','uncertain_micros'])('global %s includes outstanding holds across processes',async column=>{
     await db.query(`UPDATE ai_limits SET ${column}=6000`);
     const one=await owner('one'),two=await owner('two');
     const r1=await prepare(one),r2=await prepare(two);

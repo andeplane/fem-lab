@@ -1,6 +1,7 @@
 // The web build must distribute the preferred converter source with its executable.
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readFile, readdir, stat, access } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, access } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,11 +11,29 @@ const safe = path => {
   if (typeof path !== 'string' || !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(path) || path.split('/').some(p => p === '..' || p === '.')) throw new Error('invalid converter manifest path');
   return path;
 };
-export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vendor/step-converter'), output = join(repo, 'packages/app/public/third-party/step-converter'), buildSource = () => {
-  const result = spawnSync(process.env.PYTHON ?? 'python3', [join(repo, 'tools/build-step-converter.py'), '--source-kit-only', '--output-dir', vendor], { stdio: 'inherit' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error('complete STEP corresponding-source assembly failed');
-} } = {}) {
+/**
+ * @param {string} repo
+ * @param {string} vendor
+ * @param {(command: string, args: string[], options: {stdio: 'inherit'}) => {error?: Error, status: number | null}} run
+ * @param {(directory: string, options: {recursive: true, force: true}) => Promise<void>} cleanup
+ */
+export async function buildStepSource(repo, vendor, run = spawnSync, cleanup = rm) {
+  // The packaging host owns this directory; caller-managed recipe directories are untouched.
+  const work = await mkdtemp(join(tmpdir(), 'femlab-step-assets-build-'));
+  let failed = false;
+  try {
+    const result = run(process.env.PYTHON ?? 'python3', [join(repo, 'tools/build-step-converter.py'), '--source-kit-only', '--output-dir', vendor, '--work-dir', work], { stdio: 'inherit' });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error('complete STEP corresponding-source assembly failed');
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    try { await cleanup(work, { recursive: true, force: true }); }
+    catch (error) { if (!failed) throw error; }
+  }
+}
+export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vendor/step-converter'), output = join(repo, 'packages/app/public/third-party/step-converter'), buildSource = () => buildStepSource(repo, vendor) } = {}) {
   const manifest = JSON.parse(await readFile(join(vendor, 'manifest.json'), 'utf8'));
   if (manifest.version !== 'occt-import-js-0.0.23+femlab.1') throw new Error('unsupported STEP converter manifest');
   const source = manifest.artifacts?.sourceKit;
