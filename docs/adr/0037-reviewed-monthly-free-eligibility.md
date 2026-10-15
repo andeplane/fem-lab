@@ -29,6 +29,8 @@ recreation. Credits expire at the next UTC month boundary without rollover.
 There is no signup, account-read or completion-triggered grant and no backdated
 claim. Existing 200k one-time invitations keep their recorded amounts/expiry;
 monthly eligibility hides legacy free grants rather than stacking them.
+ADR 0039 subsequently changes public presentation to 5,000 supplier-dollar credits
+through explicit API negotiation; these integer grant amounts remain unchanged.
 
 Runtime roles can only read eligibility/fingerprint tables. Approval, revocation
 and rebind use the operator's migrator identity. Eligibility, account state and

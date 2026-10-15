@@ -21,6 +21,7 @@ import {checkoutService} from './checkout';
 import { serviceServer } from './http.js';
 import {freeEmailFingerprint} from './free-eligibility';
 import {monthlyFreeAllowance} from './free-allowance';
+import type {PublicCreditUnit} from '@femlab/registry';
 
 const port = Number(process.env.PORT ?? 8080);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer from 1 to 65535');
@@ -76,10 +77,10 @@ if (process.argv.includes('--migrate')) {
   const freeAllowance=pool&&readAccount?monthlyFreeAllowance(pool,readAccount,now,randomUUID,fingerprint):undefined;
   const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
   const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider}):undefined;
-  const account = readAccount && ledger ? async (authorization: string | undefined) => {
+  const account = readAccount && ledger ? async (authorization: string | undefined,creditUnit?:PublicCreditUnit) => {
     const owner = await readAccount(authorization);
     const status=await payments?.status(owner.id);
-    return { ...owner, usage: await ledger.balance(owner.id),freeAllowance:await freeAllowance?.status(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:status?{...status,merchantMode}:undefined };
+    return { ...owner, usage: await ledger.balance(owner.id,creditUnit),freeAllowance:await freeAllowance?.status(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:status?{...status,merchantMode}:undefined };
   } : undefined;
   const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,freeAllowance,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},

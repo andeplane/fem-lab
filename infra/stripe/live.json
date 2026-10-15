@@ -3,6 +3,7 @@
   "livemode": true,
   "project": "femlab-app",
   "apiVersion": "2026-09-30.endive",
+  "creditUnit": "usd-milli-v1",
   "billingEnabled": false,
   "taxClassificationConfirmed": false,
   "taxMode": "not_collecting",
@@ -12,9 +13,9 @@
   "webhookVerified": false,
   "activeTaxRegistrationVerified": false,
   "plans": {
-    "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmWyAAtmJJ65hf91LvyAFE", "amountUsdCents": 4900, "credits": 10000000},
-    "pro": {"product": "femlab_pro_2026_10", "price": "price_1UQmWzAAtmJJ65hfnlgp7daG", "amountUsdCents": 14900, "credits": 16000000},
-    "studio": {"product": "femlab_studio_2026_10", "price": "price_1UQmX1AAtmJJ65hfZVJOQV7T", "amountUsdCents": 49900, "credits": 50000000}
+    "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmWyAAtmJJ65hf91LvyAFE", "amountUsdCents": 4900, "credits": 7500},
+    "pro": {"product": "femlab_pro_2026_10", "price": "price_1UQmWzAAtmJJ65hfnlgp7daG", "amountUsdCents": 14900, "credits": 12000},
+    "studio": {"product": "femlab_studio_2026_10", "price": "price_1UQmX1AAtmJJ65hfZVJOQV7T", "amountUsdCents": 49900, "credits": 37500}
   },
   "portalConfiguration": "bpc_1UQmX1AAtmJJ65hfnQBmiZSJ",
   "webhook": {

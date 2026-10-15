@@ -1,5 +1,6 @@
 import type { Sql } from './accounts';
-import { calendarPeriod, CREDIT_SCALE, FREE_MONTHLY_CREDITS, PLANS, TARIFF_VERSION, type PlanId } from './credits';
+import { calendarPeriod, balanceCredits, CREDIT_SCALE, FREE_MONTHLY_CREDITS, PLANS, TARIFF_VERSION, type PlanId } from './credits';
+import type {PublicCreditUnit} from '@femlab/registry';
 import {freePolicy,freeGrantAllowed,type EmailFingerprint} from './free-eligibility';
 
 export interface Grant {
@@ -17,7 +18,7 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string, fin
     const row = (await sql.query('SELECT account_id, plan, starts_at, expires_at FROM credit_grants WHERE source=$1', [input.source])).rows[0];
     if (!row || row.account_id !== input.accountId || row.plan !== input.plan || (row.starts_at as Date).getTime() !== input.startsAt.getTime() || (row.expires_at as Date).getTime() !== input.expiresAt.getTime()) throw new Error('Conflicting immutable grant source.');
   }
-  async function balance(accountId: string) {
+  async function balance(accountId: string,unit?:PublicCreditUnit) {
     const clock = now();
     const rows = (await sql.query(`SELECT g.id, g.plan, g.source, g.amount, g.expires_at, g.starts_at,
       g.amount + COALESCE((SELECT sum(e.amount) FROM credit_entries e WHERE e.grant_id=g.id),0)
@@ -35,7 +36,7 @@ export function creditLedger(sql: Sql, now: () => Date, newId: () => string, fin
     const plan = (activePaid?.plan ?? 'free') as PlanId;
     const period = calendarPeriod(clock);
     const reserved = (await sql.query('SELECT COALESCE(sum(held_subcredits),0) AS amount FROM ai_requests WHERE account_id=$1 AND state=ANY($2)', [accountId, ['reserved','dispatched','pending_reconciliation']])).rows[0]!;
-    return { plan, totalCredits: Number(total / CREDIT_SCALE), availableCredits: Number(remaining / CREDIT_SCALE), reservedCredits: Number(BigInt(String(reserved.amount)) / CREDIT_SCALE),
+    return { plan, totalCredits: balanceCredits(total,unit), availableCredits: balanceCredits(remaining,unit), reservedCredits: balanceCredits(BigInt(String(reserved.amount)),unit),
       periodEndsAt: (activePaid?.expires_at as Date | undefined ?? eligible[0]?.expires_at as Date | undefined ?? period.end).toISOString(), models: [...PLANS[plan].models], maxOutput: PLANS[plan].maxOutput, contextLimit:plan==='free'?64000:128000, tariffVersion: TARIFF_VERSION };
   }
   // Free grants require an explicit operator approval, just as paid grants require an invoice.
