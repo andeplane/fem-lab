@@ -4,12 +4,13 @@ import { ServiceFailure } from './errors';
 import type { CreditLedger } from './ledger';
 import type {CheckoutService} from './checkout';
 import type {BillingMerchantMode} from './stripe';
+import type {FreeAllowanceStatus} from './free-allowance';
 
 export interface SqlResult { rows: Record<string, unknown>[]; rowCount: number | null }
 export interface Sql { query(text: string, values?: unknown[]): Promise<SqlResult> }
 export const AccountView = z.strictObject({ id: z.string().uuid(), email: z.string(), createdAt: z.string().datetime(), status: z.literal('active') });
 export type Account = z.infer<typeof AccountView>;
-export type AccountResponse = Account & { usage?: Awaited<ReturnType<CreditLedger['balance']>>; billingAvailable?: boolean;billing?:Awaited<ReturnType<CheckoutService['status']>>&{merchantMode?:BillingMerchantMode} };
+export type AccountResponse = Account & { usage?: Awaited<ReturnType<CreditLedger['balance']>>;freeAllowance?:FreeAllowanceStatus; billingAvailable?: boolean;billing?:Awaited<ReturnType<CheckoutService['status']>>&{merchantMode?:BillingMerchantMode} };
 export interface Accounts { provision(identity: Identity): Promise<Account> }
 
 /** UID is the only identity key. Email changes and sign-in providers cannot mint another account. */

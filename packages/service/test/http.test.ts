@@ -63,6 +63,16 @@ describe('headless service host', () => {
     const refused = await fetch(`${url}/v1/account`, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
     expect(refused.status).toBe(403); expect(refused.headers.get('access-control-allow-origin')).toBeNull();
   });
+  it('passes monthly claims through authenticated ownership and redacts failures without implicit reads',async()=>{
+    let called=0;const view={status:'eligible' as const,credits:6666666,periodStartsAt:'2026-10-01T00:00:00.000Z',periodEndsAt:'2026-11-01T00:00:00.000Z'};
+    const url=await host(async()=>true,{freeAllowance:{status:async()=>view,claim:async(header,body)=>{
+      called++;if(!header)throw new ServiceFailure(401,'login-required','Sign in to claim an allowance.','identity');if(header==='Bearer broken')throw new Error('private HMAC key');expect(body).toEqual({});return {...view,status:'claimed',replay:false};
+    }}});
+    expect((await fetch(url+'/v1/account/free-allowance')).status).toBe(404);expect(called).toBe(0);
+    const send=(authorization?:string)=>fetch(url+'/v1/account/free-allowance',{method:'POST',headers:{'content-type':'application/json',...(authorization?{authorization}:{})},body:'{}'});
+    expect((await send()).status).toBe(401);expect(await (await send('Bearer owner')).json()).toMatchObject({status:'claimed',credits:6666666});const failed=await send('Bearer broken');expect(failed.status).toBe(503);expect(await failed.text()).not.toContain('HMAC');
+    const unavailable=await fetch(`${await host(async()=>true)}/v1/account/free-allowance`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});expect(unavailable.status).toBe(503);
+  });
   it('passes original payment webhook bytes/signature and refuses an unconfigured payment service',async()=>{
     let raw='',signature:string|undefined;
     const url=await host(async()=>true,{billing:{receive:async(bytes,header)=>{raw=new TextDecoder().decode(bytes);signature=header;return {received:true};},process:async()=>false,recover:async()=>({processed:0,failed:0})}});

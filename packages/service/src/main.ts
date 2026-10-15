@@ -19,6 +19,8 @@ import {billingMerchantMode,billingTaxMode,stripeGateway,stripePayments} from '.
 import {billingLifecycle} from './billing';
 import {checkoutService} from './checkout';
 import { serviceServer } from './http.js';
+import {freeEmailFingerprint} from './free-eligibility';
+import {monthlyFreeAllowance} from './free-allowance';
 
 const port = Number(process.env.PORT ?? 8080);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer from 1 to 65535');
@@ -27,6 +29,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT m
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const pool = projectId ? new pg.Pool({ max: 8, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 }) : undefined;
 const now = () => new Date();
+const fingerprint=process.env.FREE_ELIGIBILITY_HMAC_KEY?freeEmailFingerprint(process.env.FREE_ELIGIBILITY_HMAC_KEY):undefined;
 const auth=projectId?getAuth(initializeApp({projectId})):undefined;
 
 const prices={plus:process.env.STRIPE_PRICE_PLUS??'',pro:process.env.STRIPE_PRICE_PRO??'',studio:process.env.STRIPE_PRICE_STUDIO??''};
@@ -55,7 +58,7 @@ if (process.argv.includes('--migrate')) {
   if(!pool) throw new Error('Recovery requires a configured database.');
   try {
     // store:false does not archive Responses for retrieval. Unknown usage is resolved conservatively.
-    const result=await reservations(pool,now,randomUUID).recover(async()=>undefined);
+    const result=await reservations(pool,now,randomUUID,fingerprint).recover(async()=>undefined);
     process.stdout.write(JSON.stringify({event:'usage-recovery',...result})+'\n');
     if(privacy){const result=await privacy.recover();process.stdout.write(JSON.stringify({event:'privacy-recovery',severity:result.failed?'ERROR':'INFO',...result})+'\n');if(result.failed)process.exitCode=1;}
     if(billing){const payments=await billing.recover();process.stdout.write(JSON.stringify({event:'billing-recovery',severity:payments.failed?'ERROR':'INFO',...payments})+'\n');if(payments.failed)process.exitCode=1;}
@@ -68,19 +71,20 @@ if (process.argv.includes('--migrate')) {
   const readAccount = pool && projectId ? accountReader(identityVerifier(auth!, projectId, now), postgresAccounts(pool, now, randomUUID)) : undefined;
   const payments=pool&&stripe&&billing&&readAccount&&projectId&&process.env.STRIPE_PORTAL_CONFIGURATION&&process.env.APP_RETURN_ORIGIN?
     checkoutService(pool,stripePayments(stripe,process.env.STRIPE_PORTAL_CONFIGURATION,projectId,taxMode,merchantMode),{live:process.env.BILLING_MODE==='live',prices,purchasePrices,merchantMode,taxMode,projectId,enabled:billingEnabled,appOrigin:process.env.APP_RETURN_ORIGIN},readAccount,now,randomUUID):undefined;
-  const ledger = pool ? creditLedger(pool, now, randomUUID) : undefined;
-  const holds=pool?reservations(pool,now,randomUUID):undefined;
+  const ledger = pool ? creditLedger(pool, now, randomUUID,fingerprint) : undefined;
+  const holds=pool?reservations(pool,now,randomUUID,fingerprint):undefined;
+  const freeAllowance=pool&&readAccount?monthlyFreeAllowance(pool,readAccount,now,randomUUID,fingerprint):undefined;
   const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
   const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider}):undefined;
   const account = readAccount && ledger ? async (authorization: string | undefined) => {
     const owner = await readAccount(authorization);
     const status=await payments?.status(owner.id);
-    return { ...owner, usage: await ledger.balance(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:status?{...status,merchantMode}:undefined };
+    return { ...owner, usage: await ledger.balance(owner.id),freeAllowance:await freeAllowance?.status(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:status?{...status,merchantMode}:undefined };
   } : undefined;
-  const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,
+  const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,freeAllowance,
     heartbeat(callback){const timer=setInterval(callback,15000); return()=>clearInterval(timer);},
     origins: (process.env.APP_ORIGINS ?? '').split(',').filter(Boolean),
-    ready: async () => { if (!pool||!completions||!privacy) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='009-purchase-use-contract.sql'"); return versions.rowCount===1; },
+    ready: async () => { if (!pool||!completions||!privacy||!fingerprint) return false; const versions=await pool.query("SELECT name FROM service_migrations WHERE name='010-free-monthly-allowance.sql'"); return versions.rowCount===1; },
   });
   server.listen(port, '0.0.0.0');
   server.requestTimeout=120000; server.headersTimeout=30000;
