@@ -19,7 +19,7 @@ try {
   const context=await browser.newContext({serviceWorkers:'block'});
   await context.exposeBinding('recordAuthPolicy',(_source,value)=>evidence.violations.push(value));
   await context.exposeBinding('recordAuthDocument',(_source,value)=>evidence.authDocuments.push(value));
-  await context.addInitScript(()=>{if(location.pathname==='/signin.html')void window.recordAuthDocument({url:location.origin+location.pathname,isolated:crossOriginIsolated});addEventListener('securitypolicyviolation',event=>{
+  await context.addInitScript(()=>{if(location.pathname==='/signin.html')addEventListener('DOMContentLoaded',()=>{const policy=document.querySelector('meta[http-equiv="Content-Security-Policy"]').content;void window.recordAuthDocument({url:location.origin+location.pathname,isolated:crossOriginIsolated,framePolicy:policy.split(';').map(p=>p.trim()).find(p=>p.startsWith('frame-src '))});});addEventListener('securitypolicyviolation',event=>{
     let blocked=event.blockedURI;try{const u=new URL(blocked);blocked=u.origin+u.pathname;}catch{}
     let source=event.sourceFile;try{const u=new URL(source);source=u.origin+u.pathname;}catch{}
     void window.recordAuthPolicy({document:location.origin+location.pathname,directive:event.effectiveDirective,blocked,source,line:event.lineNumber});
@@ -57,7 +57,7 @@ try {
   // The engine's existing Zod JIT feature probe is caught by its strict CSP. Keep that
   // evidence visible; this regression gate concerns resources needed by the auth host.
   if(evidence.violations.some(v=>v.document===`${origin}/signin.html`)||evidence.failures.length)throw new Error('Candidate auth emitted CSP or request failures.');
-  if(evidence.authDocuments.length<3||evidence.authDocuments.some(v=>v.isolated))throw new Error('Auth document isolation boundary failed.');
+  if(evidence.authDocuments.length<3||evidence.authDocuments.some(v=>v.isolated||v.framePolicy!==`frame-src ${origin}/__/auth/iframe`))throw new Error('Auth document isolation/frame boundary failed.');
   if(evidence.helperResponses.length===0||evidence.helperResponses.some(r=>r.status!==200))throw new Error('The real Firebase helper did not load.');
   console.log(JSON.stringify({...evidence,result:'start, canceled return, and retry passed; owner consent/authenticated return unverified'},null,2));
 } catch(error) {
