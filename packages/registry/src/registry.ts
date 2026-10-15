@@ -27,13 +27,13 @@ export interface CommandDef {
 export type QueryDef = Omit<CommandDef, 'journaled'>;
 
 /** A host Command or Query as `host-commands.ts` declares it: zod schema in, `HostContext` call out. */
-export interface HostDef<S extends z.ZodType = z.ZodType> {
+export interface HostDef<S extends z.ZodType = z.ZodType, C = HostContext> {
   execution: ExecutionPolicy;
   name: string;
   description: string;
   schema: S;
   tool: boolean;
-  run(input: z.output<S>, ctx: HostContext): unknown;
+  run(input: z.output<S>, ctx: C): unknown;
 }
 
 interface Variant {
@@ -60,21 +60,39 @@ export interface RegistryOptions {
   hostQueries?: HostDef[];
 }
 
+/** A real host phase with no engine authority. Definitions use the same validation/router;
+ * context contains only that phase's services, never a fabricated HostContext/transport. */
+export interface HostOnlyRegistryOptions<C> {
+  schema: EngineSchema;
+  context: C;
+  hostCommands: HostDef<z.ZodType, C>[];
+  hostQueries: HostDef<z.ZodType, C>[];
+  /** Reject a retained host registry after its owner hands off or is disposed. */
+  guard(): void;
+  /** Structured readiness failure for an engine operation during this host phase. */
+  unavailable(): FemError;
+}
+
 /**
  * Engine Commands ∪ host Commands behind one `dispatch`, one `query`, one list. The engine
  * provider is the transport (Rust validates); the host provider is a table of zod-validated
  * functions over `HostContext`. A host Query with an engine Query's name wraps it
  * (`query.capabilities` merges engine and browser facts).
  */
-export class Registry {
+export class Registry<C = HostContext> {
   private readonly commands = new Map<string, CommandDef>();
   private readonly queries = new Map<string, QueryDef>();
   /** The engine's `$defs`, for inlining `$ref`s into self-contained tool schemas. */
   readonly defs: Record<string, unknown>;
-  private readonly transport: EngineTransport;
+  private readonly engine: { transport: EngineTransport } | { unavailable(): FemError };
+  private readonly guard: (() => void) | undefined;
 
-  constructor({ schema, host, hostCommands = HOST_COMMANDS, hostQueries = HOST_QUERIES }: RegistryOptions) {
-    this.transport = host.transport;
+  static hostOnly<C>(options: HostOnlyRegistryOptions<C>): Registry<C> { return new Registry<C>(options); }
+
+  constructor(options: RegistryOptions | HostOnlyRegistryOptions<C>) {
+    const { schema } = options;
+    this.engine = 'host' in options ? { transport: options.host.transport } : { unavailable: options.unavailable };
+    this.guard = 'host' in options ? undefined : options.guard;
     this.defs = { ...schema.commands.$defs, ...schema.queries.$defs };
     for (const v of schema.commands.oneOf) {
       const name = v.properties['cmd']!.const!;
@@ -84,8 +102,14 @@ export class Registry {
       const name = v.properties['query']!.const!;
       this.queries.set(name, engineDef(name, v));
     }
-    for (const d of hostCommands) this.commands.set(d.name, { ...hostDef(d, host), journaled: false });
-    for (const d of hostQueries) this.queries.set(d.name, hostDef(d, host));
+    if ('host' in options) {
+      const { host, hostCommands = HOST_COMMANDS, hostQueries = HOST_QUERIES } = options;
+      for (const d of hostCommands) this.commands.set(d.name, { ...hostDef(d, () => ({ ...host, transport: policyTransport(host.transport, d.execution, d.name) })), journaled: false });
+      for (const d of hostQueries) this.queries.set(d.name, hostDef(d, () => ({ ...host, transport: policyTransport(host.transport, d.execution, d.name) })));
+    } else {
+      for (const d of options.hostCommands) this.commands.set(d.name, { ...hostDef(d, () => options.context), journaled: false });
+      for (const d of options.hostQueries) this.queries.set(d.name, hostDef(d, () => options.context));
+    }
   }
 
   list(): { commands: CommandDef[]; queries: QueryDef[] } {
@@ -100,17 +124,25 @@ export class Registry {
 
   /** The single entry point for the UI, `window.fem`, the script Worker and the AI. */
   async dispatch(cmd: { cmd: string } & Record<string, unknown>): Promise<Ack | unknown> {
+    this.guard?.();
     const def = this.commands.get(cmd.cmd);
     if (!def) throw this.unknown(cmd.cmd, 'cmd', this.commands.keys());
-    if (def.provider === 'engine') return this.transport.dispatch(cmd as unknown as Command);
+    if (def.provider === 'engine') {
+      if ('unavailable' in this.engine) throw this.engine.unavailable();
+      return this.engine.transport.dispatch(cmd as unknown as Command);
+    }
     const { cmd: _, ...input } = cmd;
     return def.run!(input);
   }
 
   async query(q: { query: string } & Record<string, unknown>): Promise<QueryResult | unknown> {
+    this.guard?.();
     const def = this.queries.get(q.query);
     if (!def) throw this.unknown(q.query, 'query', this.queries.keys());
-    if (def.provider === 'engine') return this.transport.query(q as unknown as Query);
+    if (def.provider === 'engine') {
+      if ('unavailable' in this.engine) throw this.engine.unavailable();
+      return this.engine.transport.query(q as unknown as Query);
+    }
     const { query: _, ...input } = q;
     return def.run!(input);
   }
@@ -124,7 +156,7 @@ function engineDef(name: string, v: Variant): QueryDef {
   return { name, execution: executionPolicy(v['x-execution'], name), description: v.description, schema: v, provider: 'engine', tool: v['x-status'] !== 'stub' };
 }
 
-function hostDef(d: HostDef, ctx: HostContext): QueryDef {
+function hostDef<S extends z.ZodType, C>(d: HostDef<S, C>, context: () => C): QueryDef {
   const { $schema: _, ...schema } = z.toJSONSchema(d.schema);
   const execution = executionPolicy(d.execution, d.name);
   return {
@@ -137,7 +169,7 @@ function hostDef(d: HostDef, ctx: HostContext): QueryDef {
     run: async (input) => {
       const parsed = d.schema.safeParse(input);
       if (!parsed.success) throw schemaError(d.name, parsed.error);
-      return d.run(parsed.data, { ...ctx, transport: policyTransport(ctx.transport, execution, d.name) });
+      return d.run(parsed.data, context());
     },
   };
 }
