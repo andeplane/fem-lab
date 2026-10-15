@@ -798,6 +798,14 @@ describe('the shell', () => {
     expect(bar).toContain('file.save');
   });
 
+  it('describes the implemented Share action and dispatches its registered Command', async () => {
+    const { root, commands } = mount();
+    const share = root.querySelector<HTMLButtonElement>('.topbar [data-cmd="file.shareLink"]')!;
+    expect(share.title).toBe('Copy a URL that reopens this Model');
+    await act(async () => share.click());
+    expect(commands).toEqual([{ cmd: 'file.shareLink' }]);
+  });
+
   it('says the project is saving, and says so plainly when the background save is off', async () => {
     const at = Date.now();
     const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };

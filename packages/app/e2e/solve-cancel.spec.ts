@@ -63,6 +63,7 @@ test('@cpu dense real integration progress preserves Cancel recovery and a later
 
   await page.locator('.topbar button[data-cmd="solve.run"]').click();
   await expect(page.locator('.solving-card .solving-meta')).toContainText('solve ·');
+  await expect(page.locator('.solving-card .solving-message')).toHaveText('stepping in time');
   const cancel = page.locator('.solving-card button[data-cmd="solve.cancel"]');
   await expect(cancel).toBeVisible();
   await expect(cancel).toBeEnabled();
