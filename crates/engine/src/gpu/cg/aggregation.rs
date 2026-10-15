@@ -131,19 +131,42 @@ fn admit_positive(values: &[f64], stride: usize, transform: fn(f64) -> f64) -> R
     Ok(())
 }
 
-fn admit_plan(plan: &Plan) -> Result<(), Error> {
-    match plan {
-        Plan::Coarse { n, c } => {
-            admit_values(c)?;
-            admit_positive(c, n + 1, std::convert::identity)
+enum DeviceField<'a> {
+    Coefficients(&'a [f64]),
+    Positive(&'a [f64], usize, fn(f64) -> f64),
+}
+
+fn admit_plan(mut plan: &Plan) -> Result<(), Error> {
+    loop {
+        // One field admission boundary, in the original per-level order. Every
+        // coefficient and normal-positive diagonal/weight is still checked; no
+        // field needs a separate propagation arm for the same range error.
+        let fields = match plan {
+            Plan::Coarse { n, c } => [
+                Some(DeviceField::Coefficients(c)),
+                Some(DeviceField::Positive(c, n + 1, std::convert::identity)),
+                None,
+                None,
+                None,
+            ],
+            Plan::Fine { diag, weights, p, pt, coarse_operator, .. } => [
+                Some(DeviceField::Coefficients(&p.vals)),
+                Some(DeviceField::Coefficients(&pt.vals)),
+                Some(DeviceField::Coefficients(&coarse_operator.vals)),
+                Some(DeviceField::Positive(diag, 1, inverse)),
+                Some(DeviceField::Positive(weights, 1, std::convert::identity)),
+            ],
+        };
+        for field in fields.into_iter().flatten() {
+            let admission = match field {
+                DeviceField::Coefficients(values) => admit_values(values),
+                DeviceField::Positive(values, stride, transform) => admit_positive(values, stride, transform),
+            };
+            admission?;
         }
-        Plan::Fine { diag, weights, p, pt, coarse_operator, next, .. } => {
-            admit_values(&p.vals)?;
-            admit_values(&pt.vals)?;
-            admit_values(&coarse_operator.vals)?;
-            admit_positive(diag, 1, inverse)?;
-            admit_positive(weights, 1, std::convert::identity)?;
-            admit_plan(next)
+        match plan {
+            Plan::Coarse { .. } => return Ok(()),
+            Plan::Fine { next, .. } => plan = next,
         }
     }
 }
@@ -325,27 +348,26 @@ enum Node {
     },
 }
 
+pub(super) const PIPELINE_KEYS: &[(&str, &str)] = &[
+    ("aggregation_vec.wgsl", "clear"),
+    ("aggregation_vec.wgsl", "chebyshev_update"),
+    ("aggregation_vec.wgsl", "restrict_residual"),
+    ("aggregation_vec.wgsl", "add_correction"),
+];
+
 impl DevicePlan {
-    pub(super) async fn new(
+    pub(super) fn new(
         gpu: &Gpu,
         context: &CgContext,
         plan: AdmittedPlan,
         rhs: &wgpu::Buffer,
         solution: &wgpu::Buffer,
-    ) -> Result<Self, Error> {
-        let vectors = gpu
-            .pipelines(&[
-                ("aggregation_vec.wgsl", "clear"),
-                ("aggregation_vec.wgsl", "chebyshev_update"),
-                ("aggregation_vec.wgsl", "restrict_residual"),
-                ("aggregation_vec.wgsl", "add_correction"),
-            ])
-            .await?;
+        vectors: Vec<wgpu::ComputePipeline>,
+    ) -> Self {
         let spmv = context.pipelines[SPMV].clone();
-        // The caller injects this GPU's immutable limit into admit. Keep that admitted
-        // limit for chunking rather than querying and revalidating during allocation.
+        // The CPU boundary admitted every upload with this immutable device limit.
         let node = Node::upload(gpu, context, plan.plan, plan.max_buffer_bytes, None, rhs, solution, &spmv, &vectors);
-        Ok(Self { node, spmv, vectors })
+        Self { node, spmv, vectors }
     }
 
     pub(super) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -597,25 +619,31 @@ mod tests {
             }
         }
         let plan = crate::solve::aggregation::build(&k, &scaled, &scale, None, limits()).unwrap();
-        let mut checked = false;
-        if let Plan::Fine { p, .. } = &plan {
-            checked = true;
-            assert_eq!(p.row_ptr[n - 1], p.row_ptr[n]);
-            let spans = chunk_spans(RowOffsets::Sparse(&p.row_ptr), 508).collect::<Vec<_>>();
-            assert_eq!(spans.last(), Some(&(n - 1, 1)));
-            let end = p.row_ptr[n] as usize;
-            let (columns, values) = packed_chunk(&p.col_idx[end..end], &p.vals[end..end]);
-            assert_eq!(columns, [0]);
-            assert_eq!(values, [0.0]);
-            // Last chunk's actual offsets + dummy column/value + uniform are 24 bytes.
-            assert_eq!(matrix_bytes(1, 0), 24);
-            let nonempty = p.row_ptr[1] as usize;
-            let (columns, values) = packed_chunk(&p.col_idx[..nonempty], &p.vals[..nonempty]);
-            assert_eq!(columns, &p.col_idx[..nonempty]);
-            assert_eq!(values.len(), nonempty);
-            assert!(values.iter().zip(&p.vals[..nonempty]).all(|(&v, &exact)| v == exact as f32));
+        let coarse = diagonal_plan(2, 1.0);
+        for case in [&coarse, &plan] {
+            match case {
+                Plan::Coarse { n, c } => {
+                    assert_eq!(*n, 2);
+                    assert_eq!(c, &[1.0, 0.0, 0.0, 1.0]);
+                }
+                Plan::Fine { p, .. } => {
+                    assert_eq!(p.row_ptr[n - 1], p.row_ptr[n]);
+                    let spans = chunk_spans(RowOffsets::Sparse(&p.row_ptr), 508).collect::<Vec<_>>();
+                    assert_eq!(spans.last(), Some(&(n - 1, 1)));
+                    let end = p.row_ptr[n] as usize;
+                    let (columns, values) = packed_chunk(&p.col_idx[end..end], &p.vals[end..end]);
+                    assert_eq!(columns, [0]);
+                    assert_eq!(values, [0.0]);
+                    // Last chunk's actual offsets + dummy column/value + uniform are 24 bytes.
+                    assert_eq!(matrix_bytes(1, 0), 24);
+                    let nonempty = p.row_ptr[1] as usize;
+                    let (columns, values) = packed_chunk(&p.col_idx[..nonempty], &p.vals[..nonempty]);
+                    assert_eq!(columns, &p.col_idx[..nonempty]);
+                    assert_eq!(values.len(), nonempty);
+                    assert!(values.iter().zip(&p.vals[..nonempty]).all(|(&v, &exact)| v == exact as f32));
+                }
+            }
         }
-        assert!(checked);
         admit(plan, 1 << 20, 508).unwrap();
     }
 
@@ -642,26 +670,27 @@ mod tests {
 
     #[test]
     fn admitted_chunking_covers_dense_rows_and_sparse_sentinels_exactly() {
-        let dense = diagonal_plan(9, 1.0);
-        let mut checked_dense = false;
-        if let Plan::Coarse { n, .. } = dense {
-            checked_dense = true;
-            let spans = chunk_spans(RowOffsets::Dense(n), 36).collect::<Vec<_>>();
-            assert_eq!(spans, (0..9).map(|r| (r, 1)).collect::<Vec<_>>());
-            assert_eq!(matrix_buffer_bytes(RowOffsets::Dense(n), 36), 36);
+        // Both genuine setup variants pass the same exhaustive inspection. Dense
+        // rows keep their sentinel; a Fine plan must cover every interpolation row.
+        for plan in [diagonal_plan(9, 1.0), diagonal_plan(1, 1.0), coupled_plan()] {
+            match plan {
+                Plan::Coarse { n, .. } => {
+                    assert_eq!(
+                        chunk_spans(RowOffsets::Dense(n), 36).collect::<Vec<_>>(),
+                        (0..n).map(|row| (row, 1)).collect::<Vec<_>>()
+                    );
+                    assert_eq!(matrix_buffer_bytes(RowOffsets::Dense(n), 36), (n as u64 * 4).max(8));
+                    let offsets = (0..=n).map(|i| (i * n) as u32).collect::<Vec<_>>();
+                    assert_eq!(matrix_buffer_bytes(RowOffsets::Sparse(&offsets), 36), (n as u64 * 4).max(8));
+                }
+                Plan::Fine { n, p, .. } => {
+                    let spans = chunk_spans(RowOffsets::Sparse(&p.row_ptr), 508).collect::<Vec<_>>();
+                    assert_eq!(spans.first().unwrap().0, 0);
+                    assert_eq!(spans.iter().map(|span| span.1).sum::<usize>(), n);
+                    assert!(matrix_buffer_bytes(RowOffsets::Sparse(&p.row_ptr), 508) <= 508);
+                }
+            }
         }
-        assert!(checked_dense);
-        // Even a one-entry row needs two offsets. Derive its CSR offsets from the
-        // real setup's one-row coarsest factor rather than inventing an invalid plan.
-        let one = diagonal_plan(1, 1.0);
-        let mut checked_one = false;
-        if let Plan::Coarse { n, .. } = one {
-            checked_one = true;
-            let offsets = (0..=n).map(|i| (i * n) as u32).collect::<Vec<_>>();
-            assert_eq!(matrix_buffer_bytes(RowOffsets::Sparse(&offsets), 36), 8);
-            assert_eq!(chunk_spans(RowOffsets::Sparse(&offsets), 36).collect::<Vec<_>>(), [(0, 1)]);
-        }
-        assert!(checked_one);
         // Empty setup is legal and allocates no matrix chunks.
         let empty = diagonal_plan(0, 1.0);
         assert_eq!(required_buffer_bytes(&empty, 36), 0);

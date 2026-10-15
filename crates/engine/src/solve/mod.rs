@@ -136,7 +136,7 @@ pub(crate) async fn solve_reusable_with_space(
     opts: &SolveOptions,
     pool: &Pool,
     gpu: Option<&crate::gpu::Gpu>,
-    space: Option<&aggregation::NearSpace>,
+    space: Option<&aggregation::physical::PhysicalSpace<'_>>,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo, Option<direct::Direct>), Error> {
     let chosen = resolve_solver(opts.solver, k.n, gpu.is_some());

@@ -21,7 +21,11 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::Csr;
 use crate::gpu::{Gpu, MAX_PER_DIM, WORKGROUP};
 use crate::par::Pool;
-use crate::solve::aggregation::{self as setup, Limits, NearSpace};
+use crate::solve::aggregation::{
+    self as setup,
+    physical::{PhysicalSpace, NEAR_SPACE_BYTES},
+    Limits,
+};
 use crate::solve::pcg::{inv_diagonal, CpuPcg};
 use crate::solve::{refine::refine, LinearSolve, SolveInfo, SolveOptions};
 
@@ -156,7 +160,7 @@ pub(crate) async fn solve_refined_with_space(
     b: &[f64],
     opts: &SolveOptions,
     pool: Option<&Pool>,
-    space: Option<&NearSpace>,
+    space: Option<&PhysicalSpace<'_>>,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo), Error> {
     let gpu = gpu.ok_or_else(|| {
@@ -217,15 +221,92 @@ fn admit_fine_payload(n: usize, nnz: usize, setup_limit: usize, device_limit: u6
     })
 }
 
-fn setup_limits(k: &Csr, fine_setup_bytes: usize) -> Limits {
+fn setup_limits(k: &Csr) -> Limits {
     let root = k.nnz().max(k.n);
     Limits {
         max_levels: 16,
-        max_bytes: SETUP_BYTES.saturating_sub(fine_setup_bytes),
+        max_bytes: SETUP_BYTES,
         max_interpolation_nnz: root.saturating_mul(16).min(u32::MAX as usize),
         max_operator_nnz: root.saturating_mul(32).min(u32::MAX as usize),
     }
 }
+
+/// All CPU preparation uses explicit construction limits. Production constants remain
+/// host-specific; tiny real matrices can verify each refusal without giant allocations.
+#[derive(Clone, Copy)]
+struct InputLimits {
+    setup: Limits,
+    device_bytes: u64,
+    physical_bytes: usize,
+    max_buffer_bytes: u64,
+}
+
+#[derive(Debug)]
+struct PreparedInput {
+    scale: Vec<f64>,
+    vals: Vec<f32>,
+    spans: Vec<(usize, usize)>,
+    plan: Option<aggregation::AdmittedPlan>,
+    message: String,
+}
+
+fn prepare_input(
+    k: &Csr,
+    chunk_rows: Option<usize>,
+    space: Option<&PhysicalSpace<'_>>,
+    mut limits: InputLimits,
+) -> Result<PreparedInput, Error> {
+    // The fine admission precedes even the per-chunk span Vec. Physical candidates
+    // stay borrowed until this GPU-only boundary has admitted every full column.
+    let fine = admit_fine_payload(k.n, k.nnz(), limits.setup.max_bytes, limits.device_bytes)?;
+    let spans = CgContext::admit(k, chunk_rows, limits.max_buffer_bytes)?;
+    let mut scale = inv_diagonal(k);
+    // Reuse the admitted f64 diagonal allocation explicitly, rather than relying
+    // on a particular IntoIter/map collection's in-place specialization.
+    for value in &mut scale {
+        *value = value.sqrt();
+    }
+    let mut scaled = vec![0.0f64; k.nnz()];
+    let mut vals = vec![0.0f32; k.nnz()];
+    for row in 0..k.n {
+        for e in k.row_ptr[row] as usize..k.row_ptr[row + 1] as usize {
+            scaled[e] = scale[row] * k.vals[e] * scale[k.col_idx[e] as usize];
+            vals[e] = scaled[e] as f32;
+        }
+    }
+    let (plan, message) = if setup::needs_aggregation(k) {
+        let physical = if setup::uses_candidates(k.n) {
+            space.map(|input| input.materialize(limits.physical_bytes)).transpose()?
+        } else {
+            None
+        };
+        limits.setup.max_bytes -= fine.setup_bytes;
+        let plan = setup::build(k, &scaled, &scale, physical.as_ref(), limits.setup)?;
+        let message = hierarchy_message(k, &plan, fine.device_bytes.saturating_add(aggregation::device_bytes(&plan)));
+        (Some(aggregation::admit(plan, fine.remaining_device_bytes, limits.max_buffer_bytes)?), message)
+    } else {
+        (
+            None,
+            format!(
+                "GPU preconditioner: exact identity on {} equations; fine payload bound {} bytes",
+                k.n, fine.device_bytes
+            ),
+        )
+    };
+    Ok(PreparedInput { scale, vals, spans, plan, message })
+}
+
+const CG_KEYS: &[(&str, &str)] = &[
+    ("spmv_csr.wgsl", "spmv"),
+    ("dot.wgsl", "dot_partial"),
+    ("dot.wgsl", "dot_final"),
+    ("cg_vec.wgsl", "init"),
+    ("cg_vec.wgsl", "alpha"),
+    ("cg_vec.wgsl", "update_x_r"),
+    ("cg_vec.wgsl", "beta"),
+    ("cg_vec.wgsl", "update_p"),
+    ("cg_vec.wgsl", "start_p"),
+];
 
 /// Retained sizes, not a process/driver peak or timing estimate. Arithmetic is
 /// bounded by at most 16 setup levels and u32 sparse-entry admission at each level.
@@ -269,49 +350,30 @@ impl<'a> GpuCg<'a> {
         k: &Csr,
         opts: &SolveOptions,
         pool: Option<&Pool>,
-        space: Option<&NearSpace>,
+        space: Option<&PhysicalSpace<'_>>,
     ) -> Result<GpuCg<'a>, Error> {
-        // Device capacity and construction payloads are independent admissions. Refuse
-        // before allocating scaled copies or constructing the hierarchy; no CPU retry.
-        let FineAdmission {
-            device_bytes: fine_bytes,
-            remaining_device_bytes: remaining,
-            setup_bytes: fine_setup_bytes,
-        } = admit_fine_payload(k.n, k.nnz(), SETUP_BYTES, DEVICE_BYTES)?;
-        CgContext::admit(gpu, k, opts.gpu_chunk_rows)?;
-        let scale: Vec<f64> = inv_diagonal(k).into_iter().map(f64::sqrt).collect();
-        let mut scaled = vec![0.0f64; k.nnz()];
-        let mut vals = vec![0.0f32; k.nnz()];
-        for row in 0..k.n {
-            for e in k.row_ptr[row] as usize..k.row_ptr[row + 1] as usize {
-                scaled[e] = scale[row] * k.vals[e] * scale[k.col_idx[e] as usize];
-                vals[e] = scaled[e] as f32;
-            }
-        }
-        // A diagonal's symmetric Jacobi scaling already has the exact identity
-        // preconditioner. This is an algebraic specialization, never a failure fallback.
-        let (admitted, setup_message) = if setup::needs_aggregation(k) {
-            let limits = setup_limits(k, fine_setup_bytes);
-            let build = || setup::build(k, &scaled, &scale, space, limits);
-            let plan = match pool {
-                Some(pool) => pool.install(build),
-                None => build(),
-            }?;
-            let message = hierarchy_message(k, &plan, fine_bytes.saturating_add(aggregation::device_bytes(&plan)));
-            (Some(aggregation::admit(plan, remaining, gpu.max_buffer_bytes())?), message)
-        } else {
-            (
-                None,
-                format!(
-                    "GPU preconditioner: exact identity on {} equations; fine payload bound {fine_bytes} bytes",
-                    k.n
-                ),
-            )
+        let limits = InputLimits {
+            setup: setup_limits(k),
+            device_bytes: DEVICE_BYTES,
+            physical_bytes: NEAR_SPACE_BYTES,
+            max_buffer_bytes: gpu.max_buffer_bytes(),
         };
-        let mut ctx = CgContext::new(gpu, k, &vals, opts.gpu_chunk_rows).await?;
-        if let Some(plan) = admitted {
-            let preconditioner = aggregation::DevicePlan::new(gpu, &ctx, plan, &ctx._kept[0], &ctx.z).await?;
-            ctx.preconditioner = Some(preconditioner);
+        let prepare = || prepare_input(k, opts.gpu_chunk_rows, space, limits);
+        let PreparedInput { scale, vals, spans, plan, message: setup_message } = match pool {
+            Some(pool) => pool.install(prepare),
+            None => prepare(),
+        }?;
+        // Compile the complete required bundle before creating any solve buffers.
+        // Upload is infallible because PreparedInput carries all CPU admissions.
+        let mut keys = CG_KEYS.to_vec();
+        if plan.is_some() {
+            keys.extend_from_slice(aggregation::PIPELINE_KEYS);
+        }
+        let mut pipelines = gpu.pipelines(&keys).await?;
+        let vectors = pipelines.split_off(CG_KEYS.len());
+        let mut ctx = CgContext::upload(gpu, k, &vals, spans, pipelines);
+        if let Some(plan) = plan {
+            ctx.preconditioner = Some(aggregation::DevicePlan::new(gpu, &ctx, plan, &ctx._kept[0], &ctx.z, vectors));
             gpu.queue.write_buffer(&ctx._kept[2], 4, bytemuck::bytes_of(&1u32));
         }
         Ok(GpuCg {
@@ -427,7 +489,9 @@ fn grid(n: usize) -> [u32; 2] {
 /// longer than `cap` rows. A single row wider than `max_nnz` still gets its own chunk; the size
 /// check that follows is what reports it.
 fn split_rows(k: &Csr, max_nnz: usize, cap: usize) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
+    // Fine admission charges one span per row. Reserve that exact worst case:
+    // geometric growth could otherwise request nearly twice the admitted capacity.
+    let mut out = Vec::with_capacity(k.n);
     let mut row0 = 0;
     while row0 < k.n {
         let mut rows = 1;
@@ -440,38 +504,46 @@ fn split_rows(k: &Csr, max_nnz: usize, cap: usize) -> Vec<(usize, usize)> {
     out
 }
 
+fn check_buffer_bytes(bytes: u64, max: u64) -> Result<(), Error> {
+    if bytes > max {
+        return Err(Error::new(
+            ErrorCode::GpuTooLarge,
+            format!("the gpu conjugate gradient needs {bytes} bytes in a buffer but this adapter allows {max}"),
+        )
+        .at("solve")
+        .suggest("use solver: 'cpu-direct' or a coarser mesh"));
+    }
+    Ok(())
+}
+
 impl CgContext {
-    fn admit(gpu: &Gpu, k: &Csr, chunk_rows: Option<usize>) -> Result<Vec<(usize, usize)>, Error> {
-        gpu.check_size("the gpu conjugate gradient", (k.n as u64).saturating_mul(4))
-            .map_err(|error| error.at("solve"))?;
-        let max_entries = gpu.max_buffer_bytes() / 4;
+    fn admit(k: &Csr, chunk_rows: Option<usize>, max_buffer_bytes: u64) -> Result<Vec<(usize, usize)>, Error> {
+        check_buffer_bytes((k.n as u64).saturating_mul(4), max_buffer_bytes)?;
+        let max_entries = max_buffer_bytes / 4;
         let cap = max_entries.saturating_sub(1).min(u32::MAX as u64) as usize;
         let spans = split_rows(k, max_entries as usize, chunk_rows.unwrap_or(cap).min(cap).max(1));
         // row_ptr includes a sentinel, even when a diagonal has only one entry per row.
         let biggest = spans.iter().fold((k.n as u64).saturating_mul(4).max(SCALARS * 4), |m, &(row0, rows)| {
             m.max((k.row_ptr[row0 + rows] - k.row_ptr[row0]) as u64 * 4).max((rows as u64 + 1) * 4)
         });
-        gpu.check_size("the gpu conjugate gradient", biggest).map_err(|error| error.at("solve"))?;
+        check_buffer_bytes(biggest, max_buffer_bytes)?;
         Ok(spans)
     }
 
     /// Compile the kernels, split the matrix into chunks and upload everything once.
     pub async fn new(gpu: &Gpu, k: &Csr, vals: &[f32], chunk_rows: Option<usize>) -> Result<CgContext, Error> {
-        let pipelines = gpu
-            .pipelines(&[
-                ("spmv_csr.wgsl", "spmv"),
-                ("dot.wgsl", "dot_partial"),
-                ("dot.wgsl", "dot_final"),
-                ("cg_vec.wgsl", "init"),
-                ("cg_vec.wgsl", "alpha"),
-                ("cg_vec.wgsl", "update_x_r"),
-                ("cg_vec.wgsl", "beta"),
-                ("cg_vec.wgsl", "update_p"),
-                ("cg_vec.wgsl", "start_p"),
-            ])
-            .await?;
-        let spans = Self::admit(gpu, k, chunk_rows)?;
+        let spans = Self::admit(k, chunk_rows, gpu.max_buffer_bytes())?;
+        let pipelines = gpu.pipelines(CG_KEYS).await?;
+        Ok(Self::upload(gpu, k, vals, spans, pipelines))
+    }
 
+    fn upload(
+        gpu: &Gpu,
+        k: &Csr,
+        vals: &[f32],
+        spans: Vec<(usize, usize)>,
+        pipelines: Vec<wgpu::ComputePipeline>,
+    ) -> CgContext {
         let storage = wgpu::BufferUsages::STORAGE;
         let zeros = vec![0.0f32; k.n];
         let x = gpu.buffer_f32("cg x", &zeros, storage | wgpu::BufferUsages::COPY_SRC);
@@ -582,7 +654,7 @@ impl CgContext {
             vec_bind("start_p", START_P, &[2, 5, 6, 7]),
             dot_bind("dot r·z", DOT_PARTIAL, &r, &z, 0),
         ];
-        Ok(CgContext {
+        CgContext {
             chunks,
             x,
             b,
@@ -597,7 +669,7 @@ impl CgContext {
             p,
             q,
             _kept: [r, dot_params, vec_params],
-        })
+        }
     }
 
     /// `dot_partial` over a pair, then the single-thread `dot_final`: the result lands in
@@ -776,6 +848,97 @@ impl CgContext {
 #[cfg(test)]
 mod admission_tests {
     use super::*;
+
+    fn input_limits(k: &Csr) -> InputLimits {
+        InputLimits {
+            setup: setup_limits(k),
+            device_bytes: DEVICE_BYTES,
+            physical_bytes: NEAR_SPACE_BYTES,
+            max_buffer_bytes: 1 << 20,
+        }
+    }
+
+    fn two_springs() -> Csr {
+        Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![4.0, -2.0, -2.0, 4.0] }
+    }
+
+    #[test]
+    fn cpu_preparation_admits_every_phase_before_upload_and_preserves_jacobi_scaling() {
+        use crate::model::Idealisation;
+        use femlab_geometry::{ElementKind, Structured};
+        let k = two_springs();
+        let limits = input_limits(&k);
+        let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+        let physical =
+            PhysicalSpace { mesh: &mesh, idealisation: &Idealisation::Solid3d, free: &[0, 1], dofs_per_node: 3 };
+        let prepared = prepare_input(&k, Some(1), Some(&physical), limits).unwrap();
+        assert_eq!(prepared.scale, [0.5, 0.5]);
+        assert_eq!(prepared.vals, [1.0, -0.5, -0.5, 1.0]);
+        assert_eq!(prepared.spans, [(0, 1), (1, 1)]);
+        assert!(prepared.plan.is_some());
+        assert!(prepared.message.contains("rows [2]"));
+        let error = prepare_input(&k, None, None, InputLimits { device_bytes: 0, ..limits }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::GpuTooLarge);
+        let error =
+            prepare_input(&k, None, None, InputLimits { setup: Limits { max_bytes: 0, ..limits.setup }, ..limits })
+                .unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        let error = prepare_input(&k, None, None, InputLimits { max_buffer_bytes: 7, ..limits }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::GpuTooLarge);
+        assert!(error.cause.contains("8 bytes"));
+        let error = prepare_input(&k, None, None, InputLimits { max_buffer_bytes: 35, ..limits }).unwrap_err();
+        assert!(error.cause.contains("36 bytes"));
+        // The selected two-row coarse factor does not consume any physical columns.
+        prepare_input(&k, None, Some(&physical), InputLimits { physical_bytes: 0, ..limits }).unwrap();
+        let error =
+            prepare_input(&k, None, None, InputLimits { setup: Limits { max_levels: 0, ..limits.setup }, ..limits })
+                .unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert!(error.cause.contains("level"));
+        // Fine payload=8312; this actual two-row factor needs another168 bytes.
+        prepare_input(&k, None, None, InputLimits { device_bytes: 8480, ..limits }).unwrap();
+        let error = prepare_input(&k, None, None, InputLimits { device_bytes: 8479, ..limits }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::GpuTooLarge);
+        assert!(error.cause.contains("aggregation payload"));
+        assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
+        // A diagonal never materializes physical columns or builds a hierarchy.
+        // Its exact scaled identity is an algebraic specialization, not a fallback.
+        let diagonal = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![4.0, 16.0] };
+        let prepared =
+            prepare_input(&diagonal, None, Some(&physical), InputLimits { physical_bytes: 0, ..limits }).unwrap();
+        assert_eq!(prepared.scale, [0.5, 0.25]);
+        assert_eq!(prepared.vals, [1.0, 1.0]);
+        assert!(prepared.plan.is_none());
+        assert!(prepared.message.contains("exact identity"));
+    }
+
+    #[test]
+    fn fine_preparation_admits_real_physical_metadata_before_any_candidate_column() {
+        use crate::model::Idealisation;
+        use femlab_geometry::{ElementKind, Structured};
+        let mesh = Structured { kind: ElementKind::Hex8, n: [15, 1, 1] }.box_([2.0, 1.0, 1.0]);
+        let free = (0..127).collect::<Vec<_>>();
+        let physical =
+            PhysicalSpace { mesh: &mesh, idealisation: &Idealisation::Solid3d, free: &free, dofs_per_node: 3 };
+        let mut k = Csr { n: 127, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+        for row in 0..k.n {
+            for col in row.saturating_sub(1)..=(row + 1).min(k.n - 1) {
+                k.col_idx.push(col as u32);
+                k.vals.push(if row == col { 2.0 } else { -1.0 });
+            }
+            k.row_ptr.push(k.vals.len() as u32);
+        }
+        let exact = (mesh.n_nodes() * 3 + free.len()) * 48 + free.len() * 4 + 1024;
+        let limits = InputLimits { physical_bytes: exact, ..input_limits(&k) };
+        let prepared = prepare_input(&k, None, Some(&physical), limits).unwrap();
+        assert!(prepared.plan.is_some());
+        assert!(prepared.message.contains("rows [127,"));
+        let error =
+            prepare_input(&k, None, Some(&physical), InputLimits { physical_bytes: exact - 1, ..limits }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
+        assert!(error.cause.contains("near space"));
+    }
 
     #[test]
     fn fine_construction_and_device_limits_are_independent_exact_cardinality_guards() {

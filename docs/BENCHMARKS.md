@@ -791,7 +791,7 @@ checked beyond aggregate counts.
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
-| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Earlier Jacobi 66k result was green at residual 4.8e-10; the new aggregation source and asserted 780,300 case remain pending actual GPU acceptance | GPU PCG + f64 refinement at scale, without CPU fallback | pending #3 |
+| D5 | 780,300-equation incompatible-mode Hex8 cantilever (`[100,50,50]`, ignored real-device run) and its 66k CI sibling (`[50,20,20]`) | B1 Timoshenko tip deflection; direct factorisation as secondary 66k cross-check | Unchanged 2% B1 tip gate and f64 residual below 1e-8; global force/moment residual below .001 N/.001 N m for the 1 kN load; 66k displacement `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖`; repeated 1/4-thread fields exactly equal. Aggregation 66k passed unchanged on real Metal in debug/release at residual 4.802661830863288e-10; asserted 780,300 case remains pending actual GPU acceptance | GPU PCG + f64 refinement at scale, without CPU fallback | pending #3 |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
@@ -3166,6 +3166,30 @@ wgpu 30 records a native body and transition command buffer per pass, exceeding 
 complete V-cycle in one compute pass with identical dispatch order, bindings and arithmetic.
 The same bounded independent witnesses and the original 66k assertions gate this repair;
 the dispatch count is not a substitute for the numerical tests. Large-case acceptance remains open.
+
+The scheduling repair at `c09f13be` passed the original 66k test on actual Metal,
+in debug and release. Both kept the unchanged B1/equilibrium/direct-displacement gates,
+8 f64 refinements, 1049 actual inner updates, residual `4.802661830863288e-10` and exact
+1/4-thread displacement equality. This does not accept the unexecuted 780,300-row case.
+Software-GPU `12aea784` passed all 19 numerical/device tests; its coverage failure is tracked
+separately from these numerical results.
+
+The preparation boundary is tested with real two-spring and 127-row Poisson operators:
+exact Jacobi-scaled values, CPU/device/individual-buffer limits, hierarchy depth, coarse
+factor payload and real mesh rigid-column storage. Exact bounds admit; one-byte-lower bounds
+refuse before the associated allocation. A side-two cube checks retained translations
+`1/sqrt(8)` and rotation components `1/4` independently. Coarse and exact-diagonal roots
+accept a zero physical-column budget because those algorithms consume no candidates.
+The public prepared solver must retain `internal`, `solve/readback` and the actual destroyed
+device reason instead of returning a correction when loss follows a successful upload.
+
+The raw rounded rank-one adverse case keeps its exact `(1,-1)` zero-curvature assertions.
+It does not assert that a separately rounded C/CT preconditioner preserves that null vector:
+Metal's allowed contraction perturbs it to `(67108864,-67108860)`, whose exact curvature is
+16. Public zero-update failure instead uses A=-1 with identity preconditioning, where
+`p*A*p=-1` is invariant. The original positive-definite rank-loss fixture must still fail the
+unchanged f64 outer acceptance with structured `solve.stalled`; a finite inner correction
+alone never passes this oracle.
 
 ## Fully prescribed affine Hex8 GPU solve (#740)
 

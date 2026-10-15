@@ -4,6 +4,8 @@
 //! small inverse Cholesky factor are retained. The caller supplies every resource limit;
 //! this module chooses neither a host memory budget nor a fallback solver.
 
+pub(crate) mod physical;
+
 use std::collections::BTreeMap;
 use std::mem::size_of;
 
@@ -18,6 +20,12 @@ const RANK_TOL: f64 = 1e-10;
 // Conservative admission for one live BTreeMap entry, including its partially filled node.
 const MAP_ENTRY_BYTES: usize = 512;
 const ROW_PARTITIONS: usize = 4;
+
+/// Only Fine roots construct tentative candidate columns. A bounded coarse solve
+/// uses its factor directly, regardless of unused physical geometry metadata.
+pub(crate) fn uses_candidates(rows: usize) -> bool {
+    rows > COARSE_ROWS
+}
 
 /// Exact diagonal systems already have an identity operator after Jacobi scaling. Stored
 /// zero off-diagonal entries do not change that optimal strategy.
@@ -85,7 +93,6 @@ pub(crate) enum Plan {
 #[derive(Clone, Copy)]
 struct Matrix<'a> {
     n_rows: usize,
-    n_cols: usize,
     row_ptr: &'a [u32],
     col_idx: &'a [u32],
     vals: &'a [f64],
@@ -93,10 +100,10 @@ struct Matrix<'a> {
 
 impl<'a> Matrix<'a> {
     fn square(k: &'a Csr, vals: &'a [f64]) -> Self {
-        Self { n_rows: k.n, n_cols: k.n, row_ptr: &k.row_ptr, col_idx: &k.col_idx, vals }
+        Self { n_rows: k.n, row_ptr: &k.row_ptr, col_idx: &k.col_idx, vals }
     }
     fn rect(k: &'a RectCsr) -> Self {
-        Self { n_rows: k.n_rows, n_cols: k.n_cols, row_ptr: &k.row_ptr, col_idx: &k.col_idx, vals: &k.vals }
+        Self { n_rows: k.n_rows, row_ptr: &k.row_ptr, col_idx: &k.col_idx, vals: &k.vals }
     }
     fn row(self, row: usize) -> std::ops::Range<usize> {
         self.row_ptr[row] as usize..self.row_ptr[row + 1] as usize
@@ -111,7 +118,7 @@ enum Entries {
 
 struct Budget {
     limits: Limits,
-    bytes: usize,
+    bytes: u128,
     interpolation_nnz: usize,
     operator_nnz: usize,
 }
@@ -133,35 +140,48 @@ fn invalid(what: &str) -> Error {
 }
 
 impl Budget {
-    fn bytes(&mut self, bytes: usize) -> Result<(), Error> {
-        let next = self.bytes.checked_add(bytes).ok_or_else(|| too_large("byte"))?;
-        if next > self.limits.max_bytes {
+    /// Each slice entry describes one actual Vec allocation; scratch describes live
+    /// ordered-map envelopes, not one contiguous Vec. All source lists have <=8 entries,
+    /// dimensions/NNZ are bounded by u32 and all concrete element types are <=512 bytes.
+    /// Exact u128 accounting therefore cannot overflow on either supported pointer width.
+    fn allocations(&mut self, vectors: &[u128], scratch: u128) -> Result<(), Error> {
+        let next = self.bytes + vectors.iter().sum::<u128>() + scratch;
+        if next > self.limits.max_bytes as u128 || vectors.iter().any(|&bytes| bytes > isize::MAX as u128) {
             return Err(too_large("byte"));
         }
         self.bytes = next;
         Ok(())
     }
-    fn vector<T>(&mut self, len: usize) -> Result<(), Error> {
-        self.bytes(len.checked_mul(size_of::<T>()).ok_or_else(|| too_large("byte"))?)
+    fn bytes(&mut self, bytes: u128) -> Result<(), Error> {
+        self.allocations(&[], bytes)
     }
-    fn entries(&mut self, entries: usize, kind: Entries) -> Result<(), Error> {
+    fn vector<T>(&mut self, len: usize) -> Result<(), Error> {
+        self.allocations(&[vector_bytes::<T>(len)], 0)
+    }
+    fn entries(&mut self, entries: u128, kind: Entries) -> Result<usize, Error> {
         let (used, limit, name) = match kind {
             Entries::Interpolation => {
                 (&mut self.interpolation_nnz, self.limits.max_interpolation_nnz, "interpolation fill")
             }
             Entries::Operator => (&mut self.operator_nnz, self.limits.max_operator_nnz, "operator fill"),
         };
-        let next = used.checked_add(entries).ok_or_else(|| too_large(name))?;
-        if next > limit || next > u32::MAX as usize {
+        // Each row has <=u32MAX unique columns and <=u32MAX rows. Its exact count
+        // plus a previously admitted u32 total fits u128 before either cap is checked.
+        let next = *used as u128 + entries;
+        if next > limit as u128 || next > u32::MAX as u128 {
             return Err(too_large(name));
         }
-        *used = next;
-        Ok(())
+        *used = next as usize;
+        Ok(entries as usize)
     }
     fn room<T>(&mut self, out: &mut Vec<T>, additional: usize) -> Result<(), Error> {
-        let needed = out.len().checked_add(additional).ok_or_else(|| too_large("byte"))?;
+        // Only u32/f64/triplet Vecs grow here, by <=7/<=7/1 elements. Native lengths
+        // are bounded by u32 admission; wasm non-ZST Vec lengths by isizeMAX/size_of.
+        // Both len+additional and its next power of two therefore fit usize. Their
+        // actual allocation bytes still pass vector()'s separate isize/caller caps.
+        let needed = out.len() + additional;
         if needed > out.capacity() {
-            let cap = needed.checked_next_power_of_two().ok_or_else(|| too_large("byte"))?;
+            let cap = needed.next_power_of_two();
             // Charge the complete replacement buffer, so growth also admits the old/new overlap.
             self.vector::<T>(cap)?;
             out.reserve_exact(cap - out.len());
@@ -170,33 +190,56 @@ impl Budget {
     }
     fn add(&mut self, row: &mut BTreeMap<u32, f64>, col: u32, value: f64) -> Result<(), Error> {
         if value != 0.0 && !row.contains_key(&col) {
-            self.bytes(MAP_ENTRY_BYTES)?;
+            self.bytes(MAP_ENTRY_BYTES as u128)?;
         }
-        add_value(row, col, value)
+        add_value(row, col, value);
+        Ok(())
     }
     fn map(&mut self) -> Result<BTreeMap<u32, f64>, Error> {
         // An emptied BTreeMap can retain its root allocation until it is dropped.
-        self.bytes(MAP_ENTRY_BYTES)?;
+        self.bytes(MAP_ENTRY_BYTES as u128)?;
         Ok(BTreeMap::new())
     }
     fn release_map(&mut self, row: BTreeMap<u32, f64>) {
-        self.bytes -= (row.len() + 1) * MAP_ENTRY_BYTES;
+        self.bytes -= (row.len() as u128 + 1) * MAP_ENTRY_BYTES as u128;
     }
 }
 
-fn add_value(row: &mut BTreeMap<u32, f64>, col: u32, value: f64) -> Result<(), Error> {
-    if value == 0.0 {
-        return Ok(());
+// A usize element count times a usize element size fits u128 exactly. Allocation
+// and cumulative caller caps are checked together before any Vec construction.
+fn vector_bytes<T>(len: usize) -> u128 {
+    len as u128 * size_of::<T>() as u128
+}
+
+/// Accumulate admitted internal setup arithmetic in its original fixed order.
+/// Root scaling/validation and bounded coarse factorisation remain fallible.
+///
+/// Finiteness proof (ordinary IEEE f64, including gradual underflow):
+/// - Seven candidates and eight-group aggregation give next_n<=7*ceil(n/8). Fine
+///   levels have n>96: n>=98 contracts by<=15/16, while97 immediately reaches91.
+///   Since (15/16)^11<1/2 and root n<2^32, there are fewer than288 Fine levels.
+/// - Robust normalization's scaled square sum contains1, so computed norm>=max|v|
+///   and every retained |Tij|<=1. Its gamma_n<2^-20 for n<=u32MAX; even a subnormal
+///   norm product rounds to>=2/3 of its unrounded positive value. Thus ||q||2<2,
+///   without assuming exact orthogonality or that relative rank pruning is perfect.
+/// - Use envelopes G>=1 to include absolute subnormal dot/update errors (<2^52*eta,
+///   eta the least subnormal), rather than an invalid purely relative error bound.
+///   Propagating QᵀB grows G by<8 per level; at most12 GS projections grow it by
+///   <8^12. Root G<=2^16, so residuals stay<2^916; even absolute partial sums stay
+///   <2^948 and robust norm products<2^932. This closes the finite-QR induction.
+/// - Before each Fine level diagonal() proves |Aij|<2^128 and a normal positive
+///   f32 reciprocal; high>=1, hence |omega/d|<2^129. With |Tij|<=1 and at most2^32
+///   terms per unique output key, conservative rounded bounds are |Pij|<2^292,
+///   |APij|<2^453 and |PT*AP|<2^778. Every product and absolute partial sum fits.
+/// - Symmetrization adds at most two half-scaled finite entries. Raw aggregate
+///   strengths sum at most u32MAX squared admitted entries, bounded by2^288.
+///
+/// Arbitrary unadmitted Matrix inputs are outside this private kernel's contract.
+/// Never use these bounds to relax physical input, representability or coarse guards.
+fn add_value(row: &mut BTreeMap<u32, f64>, col: u32, value: f64) {
+    if value != 0.0 {
+        *row.entry(col).or_default() += value;
     }
-    if !value.is_finite() {
-        return Err(stalled("a setup product is nonfinite"));
-    }
-    let sum = row.entry(col).or_default();
-    *sum += value;
-    if !sum.is_finite() {
-        return Err(stalled("a setup sum is nonfinite"));
-    }
-    Ok(())
 }
 
 fn validate(k: &Csr, vals: &[f64], scale: &[f64], space: Option<&NearSpace>) -> Result<(), Error> {
@@ -249,14 +292,15 @@ pub(crate) fn build(
     }
     let mut budget = Budget { limits, bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
     let a = Matrix::square(k, vals);
-    if k.n <= COARSE_ROWS {
+    if !uses_candidates(k.n) {
         return level(a, &[], &[], 0, &mut budget);
     }
     let count = space.map_or(1, |s| s.modes.len() + 1);
-    budget.vector::<Vec<f64>>(count)?;
+    let mut storage = [vector_bytes::<f64>(k.n); MAX_MODES + 1];
+    storage[0] = vector_bytes::<Vec<f64>>(count);
+    budget.allocations(&storage[..=count], 0)?;
     let mut basis = Vec::with_capacity(count);
     for col in 0..count {
-        budget.vector::<f64>(k.n)?;
         let mut vector = Vec::with_capacity(k.n);
         for (row, &s) in scale.iter().enumerate() {
             let value = if col == 0 {
@@ -350,8 +394,7 @@ fn groups(node_of_row: &[u32], budget: &mut Budget) -> Result<Groups, Error> {
         .enumerate()
         .filter(|&(i, &row)| i == 0 || node_of_row[row] != node_of_row[row_order[i - 1]])
         .count();
-    budget.vector::<u32>(n)?;
-    budget.vector::<usize>(count + 1)?;
+    budget.allocations(&[vector_bytes::<u32>(n), vector_bytes::<usize>(count + 1)], 0)?;
     let mut group_of_row = vec![0; n];
     let mut offsets = Vec::with_capacity(count + 1);
     for (i, &row) in row_order.iter().enumerate() {
@@ -390,10 +433,9 @@ fn add_frontier(
 
 fn aggregates(a: Matrix<'_>, groups: &Groups, budget: &mut Budget) -> Result<Vec<Vec<usize>>, Error> {
     let n_groups = groups.offsets.len() - 1;
-    budget.vector::<bool>(n_groups)?;
-    let mut assigned = vec![false; n_groups];
     let count = n_groups.div_ceil(GROUPS_PER_AGGREGATE);
-    budget.vector::<Vec<usize>>(count)?;
+    budget.allocations(&[vector_bytes::<bool>(n_groups), vector_bytes::<Vec<usize>>(count)], 0)?;
+    let mut assigned = vec![false; n_groups];
     let mut out = Vec::with_capacity(count);
     let mut first = 0;
     while first < n_groups {
@@ -405,7 +447,7 @@ fn aggregates(a: Matrix<'_>, groups: &Groups, budget: &mut Budget) -> Result<Vec
             assigned[next] = true;
             members.push(next);
             if frontier.remove(&(next as u32)).is_some() {
-                budget.bytes -= MAP_ENTRY_BYTES;
+                budget.bytes -= MAP_ENTRY_BYTES as u128;
             }
             while first < n_groups && assigned[first] {
                 first += 1;
@@ -437,10 +479,13 @@ fn aggregates(a: Matrix<'_>, groups: &Groups, budget: &mut Budget) -> Result<Vec
 }
 
 fn local_basis(indices: &[usize], basis: &[Vec<f64>], budget: &mut Budget) -> Result<Vec<Vec<f64>>, Error> {
-    budget.vector::<Vec<f64>>(basis.len())?;
+    // At most seven candidate residual Vecs are requested, cumulatively, even when
+    // local rank pruning discards one. Check each actual allocation separately.
+    let mut storage = [vector_bytes::<f64>(indices.len()); MAX_MODES + 1];
+    storage[0] = vector_bytes::<Vec<f64>>(basis.len());
+    budget.allocations(&storage[..=basis.len()], 0)?;
     let mut q: Vec<Vec<f64>> = Vec::with_capacity(basis.len());
     for vector in basis {
-        budget.vector::<f64>(indices.len())?;
         let mut v = indices.iter().map(|&i| vector[i]).collect::<Vec<_>>();
         let original = norm(&v);
         for _ in 0..2 {
@@ -499,9 +544,10 @@ fn tentative(n: usize, aggregates: &[Vec<usize>], basis: &[Vec<f64>], budget: &m
         coarse_n += q.len();
     }
     triplets.sort_unstable_by_key(|&(row, col, _)| (row, col));
-    budget.vector::<u32>(n + 1)?;
-    budget.vector::<u32>(triplets.len())?;
-    budget.vector::<f64>(triplets.len())?;
+    budget.allocations(
+        &[vector_bytes::<u32>(n + 1), vector_bytes::<u32>(triplets.len()), vector_bytes::<f64>(triplets.len())],
+        0,
+    )?;
     let mut t = RectCsr {
         n_rows: n,
         n_cols: coarse_n,
@@ -523,9 +569,9 @@ fn tentative(n: usize, aggregates: &[Vec<usize>], basis: &[Vec<f64>], budget: &m
     Ok(Tentative { matrix: t, coarse_basis, coarse_groups })
 }
 
-fn empty_rect(n_rows: usize, n_cols: usize, budget: &mut Budget) -> Result<RectCsr, Error> {
-    budget.vector::<u32>(n_rows + 1)?;
-    Ok(RectCsr { n_rows, n_cols, row_ptr: vec![0; n_rows + 1], col_idx: Vec::new(), vals: Vec::new() })
+fn empty_rect(n_rows: usize, n_cols: usize) -> RectCsr {
+    // All three arrays and transpose's cursor were admitted by the caller.
+    RectCsr { n_rows, n_cols, row_ptr: vec![0; n_rows + 1], col_idx: Vec::new(), vals: Vec::new() }
 }
 
 /// Only the three sparse row operations used during setup. Each numerical row always sums
@@ -564,39 +610,39 @@ impl RowOp<'_> {
                 .min(a.n_cols),
         }
     }
-    fn row(self, row: usize) -> Result<BTreeMap<u32, f64>, Error> {
+    fn row(self, row: usize) -> BTreeMap<u32, f64> {
         let mut out = BTreeMap::new();
         match self {
             Self::Product { a, b } => {
                 for e in a.row(row) {
                     let middle = a.col_idx[e] as usize;
                     for f in b.row_ptr[middle] as usize..b.row_ptr[middle + 1] as usize {
-                        add_value(&mut out, b.col_idx[f], a.vals[e] * b.vals[f])?;
+                        add_value(&mut out, b.col_idx[f], a.vals[e] * b.vals[f]);
                     }
                 }
             }
             Self::Smooth { a, t, diag, omega } => {
                 for e in t.row_ptr[row] as usize..t.row_ptr[row + 1] as usize {
-                    add_value(&mut out, t.col_idx[e], t.vals[e])?;
+                    add_value(&mut out, t.col_idx[e], t.vals[e]);
                 }
                 let factor = -(omega / diag[row]);
                 for e in a.row(row) {
                     let middle = a.col_idx[e] as usize;
                     let coefficient = factor * a.vals[e];
                     for f in t.row_ptr[middle] as usize..t.row_ptr[middle + 1] as usize {
-                        add_value(&mut out, t.col_idx[f], coefficient * t.vals[f])?;
+                        add_value(&mut out, t.col_idx[f], coefficient * t.vals[f]);
                     }
                 }
             }
             Self::Symmetric { a, transpose } => {
                 for matrix in [a, transpose] {
                     for e in matrix.row_ptr[row] as usize..matrix.row_ptr[row + 1] as usize {
-                        add_value(&mut out, matrix.col_idx[e], 0.5 * matrix.vals[e])?;
+                        add_value(&mut out, matrix.col_idx[e], 0.5 * matrix.vals[e]);
                     }
                 }
             }
         }
-        Ok(out)
+        out
     }
 }
 
@@ -617,43 +663,38 @@ struct RowBlock {
 /// the four blocks and their final merged copy are admitted before the second pass.
 fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<RectCsr, Error> {
     let (n_rows, n_cols) = op.shape();
-    let mut scratch = 0usize;
+    let mut scratch = 0u128;
     for slot in 0..ROW_PARTITIONS {
         let bound = rows(n_rows, slot).map(|row| op.row_bound(row)).max().unwrap_or(0);
-        let bytes =
-            bound.checked_add(1).and_then(|n| n.checked_mul(MAP_ENTRY_BYTES)).ok_or_else(|| too_large("byte"))?;
-        scratch = scratch.checked_add(bytes).ok_or_else(|| too_large("byte"))?;
+        scratch += (bound as u128 + 1) * MAP_ENTRY_BYTES as u128;
     }
-    budget.bytes(scratch)?;
-    budget.vector::<usize>(n_rows)?;
-    budget.vector::<Vec<usize>>(ROW_PARTITIONS * 2)?;
-    budget.vector::<Result<Vec<usize>, Error>>(ROW_PARTITIONS)?;
+    budget.allocations(&[vector_bytes::<usize>(n_rows), vector_bytes::<Vec<usize>>(ROW_PARTITIONS)], scratch)?;
     let counts = par::map_collect(ROW_PARTITIONS, |slot| {
         let range = rows(n_rows, slot);
         let mut out = Vec::with_capacity(range.len());
         for row in range {
-            let values = op.row(row)?;
+            let values = op.row(row);
             out.push(values.values().filter(|&&v| v != 0.0).count());
         }
-        Ok::<_, Error>(out)
-    })
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()?;
-    let mut nnz = 0usize;
-    for block in &counts {
-        for &count in block {
-            nnz = nnz.checked_add(count).ok_or_else(|| too_large("sparse fill"))?;
-        }
-    }
-    budget.entries(nnz, kind)?;
-    budget.vector::<RowBlock>(ROW_PARTITIONS)?;
+        out
+    });
+    let nnz = counts.iter().flatten().map(|&count| count as u128).sum();
+    let nnz = budget.entries(nnz, kind)?;
+    // All dimensions are <=root n. Native n<=u32MAX; wasm scale:&[f64] gives
+    // n<=isizeMAX/8, so n_rows+4 and n_rows+1 fit usize without a second overflow arm.
     // The disjoint output blocks and final CSR coexist during their ordered merge.
-    budget.vector::<u32>(n_rows.checked_add(ROW_PARTITIONS).ok_or_else(|| too_large("byte"))?)?;
-    budget.vector::<u32>(nnz)?;
-    budget.vector::<f64>(nnz)?;
-    budget.vector::<u32>(n_rows.checked_add(1).ok_or_else(|| too_large("byte"))?)?;
-    budget.vector::<u32>(nnz)?;
-    budget.vector::<f64>(nnz)?;
+    budget.allocations(
+        &[
+            vector_bytes::<RowBlock>(ROW_PARTITIONS),
+            vector_bytes::<u32>(n_rows + ROW_PARTITIONS),
+            vector_bytes::<u32>(nnz),
+            vector_bytes::<f64>(nnz),
+            vector_bytes::<u32>(n_rows + 1),
+            vector_bytes::<u32>(nnz),
+            vector_bytes::<f64>(nnz),
+        ],
+        0,
+    )?;
     let blocks = par::map_collect(ROW_PARTITIONS, |slot| {
         let range = rows(n_rows, slot);
         let block_nnz = counts[slot].iter().sum();
@@ -664,9 +705,8 @@ fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<Rect
         };
         out.row_ptr.push(0);
         for row in range {
-            // Count and fill use the same immutable operands and arithmetic order. Any
-            // numerical error was already returned by the count pass, before output allocation.
-            let values = op.row(row).expect("the identical count pass accepted this numerical row");
+            // Count and fill use the same admitted operands and fixed arithmetic order.
+            let values = op.row(row);
             for (col, value) in values {
                 if value != 0.0 {
                     out.col_idx.push(col);
@@ -696,9 +736,8 @@ fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<Rect
 }
 
 fn multiply(a: Matrix<'_>, b: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr, Error> {
-    if a.n_cols != b.n_rows {
-        return Err(invalid("setup product dimensions do not agree"));
-    }
+    // Only galerkin calls this: A(n,n)*P(n,m), then PT(m,n)*AP(n,m). Dimensions
+    // originate together from tentative interpolation and its actual transpose.
     sparse_rows(RowOp::Product { a, b }, kind, budget)
 }
 
@@ -713,10 +752,17 @@ fn smooth_interpolation(
 }
 
 fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr, Error> {
-    budget.entries(a.vals.len(), kind)?;
-    let mut out = empty_rect(a.n_cols, a.n_rows, budget)?;
-    budget.vector::<u32>(a.col_idx.len())?;
-    budget.vector::<f64>(a.vals.len())?;
+    budget.entries(a.vals.len() as u128, kind)?;
+    budget.allocations(
+        &[
+            vector_bytes::<u32>(a.n_cols + 1),
+            vector_bytes::<u32>(a.col_idx.len()),
+            vector_bytes::<f64>(a.vals.len()),
+            vector_bytes::<u32>(a.n_cols),
+        ],
+        0,
+    )?;
+    let mut out = empty_rect(a.n_cols, a.n_rows);
     out.col_idx = vec![0; a.col_idx.len()];
     out.vals = vec![0.0; a.vals.len()];
     for &col in &a.col_idx {
@@ -725,7 +771,6 @@ fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr,
     for row in 0..out.n_rows {
         out.row_ptr[row + 1] += out.row_ptr[row];
     }
-    budget.vector::<u32>(out.n_rows)?;
     let mut cursor = out.row_ptr[..out.n_rows].to_vec();
     for row in 0..a.n_rows {
         for e in a.row_ptr[row] as usize..a.row_ptr[row + 1] as usize {
@@ -751,8 +796,7 @@ fn coarse(a: Matrix<'_>, budget: &mut Budget) -> Result<Plan, Error> {
     let n = a.n_rows;
     // level() reaches this factorization only for n <= COARSE_ROWS (96).
     let count = n * n;
-    budget.vector::<f64>(count)?;
-    budget.vector::<f64>(count)?;
+    budget.allocations(&[vector_bytes::<f64>(count), vector_bytes::<f64>(count)], 0)?;
     let mut l = vec![0.0; count];
     let mut c = vec![0.0; count];
     for row in 0..n {
@@ -862,19 +906,42 @@ mod tests {
     }
 
     #[test]
-    fn bounded_factor_applies_the_closed_form_two_spring_inverse() {
-        let a = poisson(2);
-        let plan = build(&a, &a.vals, &[1.0; 2], None, limits()).unwrap();
-        let mut checked = false;
-        if let Plan::Coarse { n, c } = plan {
-            checked = true;
-            assert_eq!(n, 2);
-            let x = [c[0] * c[0] + c[2] * c[2], c[3] * c[2]];
-            assert!((x[0] - 2.0 / 3.0).abs() < 1e-15);
-            assert!((x[1] - 1.0 / 3.0).abs() < 1e-15);
-            assert_eq!(c[1], 0.0);
+    fn coarse_factor_and_fine_galerkin_match_independent_oracles() {
+        // Both variants arise from real setup. Exhaustive matching exercises both
+        // analytical checks without an impossible opposite-variant test branch.
+        for rows in [2, 127] {
+            let a = poisson(rows);
+            let plan = build(&a, &a.vals, &vec![1.0; rows], None, limits()).unwrap();
+            match plan {
+                Plan::Coarse { n, c } => {
+                    assert_eq!(n, 2);
+                    let x = [c[0] * c[0] + c[2] * c[2], c[3] * c[2]];
+                    assert!((x[0] - 2.0 / 3.0).abs() < 1e-15);
+                    assert!((x[1] - 1.0 / 3.0).abs() < 1e-15);
+                    assert_eq!(c[1], 0.0);
+                }
+                Plan::Fine { n, diag, weights, p, pt, coarse_operator, .. } => {
+                    assert_eq!(n, a.n);
+                    assert!(coarse_operator.n < a.n);
+                    assert_eq!(diag, vec![2.0; a.n]);
+                    assert!(weights.iter().all(|w| w.is_finite() && *w > 0.0));
+                    let y = (0..p.n_cols).map(|i| libm::sin((i + 1) as f64)).collect::<Vec<_>>();
+                    let py = rect_mv(&p, &y);
+                    let mut apy = vec![0.0; a.n];
+                    a.spmv(&py, &mut apy);
+                    let ptapy = rect_mv(&pt, &apy);
+                    let mut acy = vec![0.0; y.len()];
+                    coarse_operator.spmv(&y, &mut acy);
+                    for (&left, &right) in ptapy.iter().zip(&acy) {
+                        assert!((left - right).abs() < 1e-13);
+                    }
+                    let fine_energy = py.iter().zip(&apy).map(|(x, y)| x * y).sum::<f64>();
+                    let coarse_energy = y.iter().zip(&acy).map(|(x, y)| x * y).sum::<f64>();
+                    assert!(fine_energy > 0.0);
+                    assert!((fine_energy - coarse_energy).abs() < 1e-13);
+                }
+            }
         }
-        assert!(checked);
     }
 
     #[test]
@@ -890,35 +957,6 @@ mod tests {
                 assert!((left - right).abs() < 1e-13);
             }
         }
-    }
-
-    #[test]
-    fn restriction_is_the_actual_transpose_and_galerkin_preserves_energy() {
-        let a = poisson(127);
-        let plan = build(&a, &a.vals, &vec![1.0; a.n], None, limits()).unwrap();
-        let mut checked = false;
-        if let Plan::Fine { n, diag, weights, p, pt, coarse_operator, .. } = plan {
-            checked = true;
-            assert_eq!(n, a.n);
-            assert!(coarse_operator.n < a.n);
-            assert_eq!(diag, vec![2.0; a.n]);
-            assert!(weights.iter().all(|w| w.is_finite() && *w > 0.0));
-            let y = (0..p.n_cols).map(|i| libm::sin((i + 1) as f64)).collect::<Vec<_>>();
-            let py = rect_mv(&p, &y);
-            let mut apy = vec![0.0; a.n];
-            a.spmv(&py, &mut apy);
-            let ptapy = rect_mv(&pt, &apy);
-            let mut acy = vec![0.0; y.len()];
-            coarse_operator.spmv(&y, &mut acy);
-            for (&left, &right) in ptapy.iter().zip(&acy) {
-                assert!((left - right).abs() < 1e-13);
-            }
-            let fine_energy = py.iter().zip(&apy).map(|(x, y)| x * y).sum::<f64>();
-            let coarse_energy = y.iter().zip(&acy).map(|(x, y)| x * y).sum::<f64>();
-            assert!(fine_energy > 0.0);
-            assert!((fine_energy - coarse_energy).abs() < 1e-13);
-        }
-        assert!(checked);
     }
 
     #[test]
@@ -1114,13 +1152,16 @@ mod tests {
 
     #[test]
     fn parallel_sparse_products_preserve_exact_dot_products_and_cancellation() {
-        let a = Matrix { n_rows: 1, n_cols: 2, row_ptr: &[0, 2], col_idx: &[0, 1], vals: &[2.0, 3.0] };
+        let a = Matrix { n_rows: 1, row_ptr: &[0, 2], col_idx: &[0, 1], vals: &[2.0, 3.0] };
         let b = RectCsr { n_rows: 2, n_cols: 1, row_ptr: vec![0, 1, 2], col_idx: vec![0, 0], vals: vec![5.0, 7.0] };
         let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
         let product = multiply(a, &b, Entries::Operator, &mut budget).unwrap();
         assert_eq!(product.row_ptr, [0, 1]);
         assert_eq!(product.col_idx, [0]);
         assert_eq!(product.vals, [31.0]);
+        let stored_zero = Matrix { vals: &[0.0, 3.0], ..a };
+        let product = multiply(stored_zero, &b, Entries::Operator, &mut budget).unwrap();
+        assert_eq!(product.vals, [21.0]);
         let opposite = RectCsr { vals: vec![3.0, -2.0], ..b };
         let zero = multiply(a, &opposite, Entries::Operator, &mut budget).unwrap();
         assert_eq!(zero.row_ptr, [0, 0]);
@@ -1128,22 +1169,48 @@ mod tests {
     }
 
     #[test]
-    fn count_pass_reports_numerical_errors_before_publishing_output_fill() {
-        let a = Matrix { n_rows: 1, n_cols: 2, row_ptr: &[0, 2], col_idx: &[0, 1], vals: &[f64::MAX, f64::MAX] };
-        let b = RectCsr { n_rows: 2, n_cols: 1, row_ptr: vec![0, 1, 2], col_idx: vec![0, 0], vals: vec![1.0, 1.0] };
-        let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
-        assert_eq!(multiply(a, &b, Entries::Operator, &mut budget).unwrap_err().code, ErrorCode::SolveStalled);
+    fn exact_sparse_fill_is_refused_before_output_allocation() {
+        let a = Matrix { n_rows: 1, row_ptr: &[0, 2], col_idx: &[0, 1], vals: &[2.0, 3.0] };
+        let b = RectCsr { n_rows: 2, n_cols: 1, row_ptr: vec![0, 1, 2], col_idx: vec![0, 0], vals: vec![5.0, 7.0] };
+        let mut budget = Budget {
+            limits: Limits { max_operator_nnz: 0, ..limits() },
+            bytes: 0,
+            interpolation_nnz: 0,
+            operator_nnz: 0,
+        };
+        assert_eq!(multiply(a, &b, Entries::Operator, &mut budget).unwrap_err().code, ErrorCode::SolveTooLarge);
         assert_eq!(budget.operator_nnz, 0);
-        let overflow_product = RectCsr { vals: vec![2.0, 1.0], ..b };
-        assert_eq!(
-            multiply(a, &overflow_product, Entries::Operator, &mut budget).unwrap_err().code,
-            ErrorCode::SolveStalled
-        );
-        assert_eq!(budget.operator_nnz, 0);
-        let bad_shape = Matrix { n_cols: 3, ..a };
-        assert_eq!(
-            multiply(bad_shape, &overflow_product, Entries::Operator, &mut budget).unwrap_err().code,
-            ErrorCode::Schema
-        );
+    }
+
+    #[test]
+    fn coarse_workspace_and_later_interpolation_obey_actual_storage_caps() {
+        let a = poisson(2);
+        let exact = size_of::<Plan>() + 2 * 4 * size_of::<f64>();
+        let plan = build(&a, &a.vals, &[1.0; 2], None, Limits { max_bytes: exact, ..limits() }).unwrap();
+        assert_eq!(plan, build(&a, &a.vals, &[1.0; 2], None, limits()).unwrap());
+        let error = build(&a, &a.vals, &[1.0; 2], None, Limits { max_bytes: exact - 1, ..limits() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        let a = poisson(127);
+        // Constant-only tentative interpolation has exactly one entry per fine row.
+        let error =
+            build(&a, &a.vals, &vec![1.0; a.n], None, Limits { max_interpolation_nnz: a.n, ..limits() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        assert!(error.cause.contains("interpolation fill"));
+    }
+
+    #[test]
+    fn a_real_vector_request_above_the_platform_allocation_ceiling_is_refused() {
+        // An ordinary empty ledger, not a fabricated allocated Vec or near-overflow
+        // accounting state. This is a legitimate impossible allocation request; no
+        // allocation occurs because admission precedes Vec construction.
+        let mut budget = Budget {
+            limits: Limits { max_bytes: usize::MAX, ..limits() },
+            bytes: 0,
+            interpolation_nnz: 0,
+            operator_nnz: 0,
+        };
+        let len = isize::MAX as usize / size_of::<f64>() + 1;
+        assert_eq!(budget.vector::<f64>(len).unwrap_err().code, ErrorCode::SolveTooLarge);
+        assert_eq!(budget.bytes, 0);
     }
 }

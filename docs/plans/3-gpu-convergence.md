@@ -116,3 +116,38 @@ The pass-fusion source checkpoint compiled and passed focused Clippy/formatting 
 same eight bounded real Metal tests. Independent source review confirmed wgpu's per-dispatch
 usage validation/barriers when storage buffers change read/write roles inside a pass.
 The original 66k regression and software-GPU/whole-engine coverage remain pending.
+
+
+## Actual pass-fusion and preparation acceptance
+
+The unchanged 66,150-equation regression passed on Apple M4 Max Metal at `c09f13be`
+in both debug and production release profiles: B1/equilibrium, f64 residual and the original
+`1e-8` direct displacement comparison, with exact 1/4-thread fields. Release retained
+8 outer refinements, 1049 actual inner updates and residual `4.802661830863288e-10`.
+The fully monitored release numerical run had OS maximum RSS 1,981,005,824 bytes;
+this is resource evidence for that fixture, not a 780k peak bound or performance claim.
+
+Exact `12aea784` software-GPU strict passed all 19 GPU tests, 165 engine unit and
+392 engine integration tests. Its remaining failure was coverage: 109 regions, ten
+functions and 17 lines across setup/admission/procedure propagation. The new preparation
+checkpoint consolidates those admissions into one pure, explicitly limited boundary.
+A borrowed physical descriptor allocates no columns until a Fine GPU root consumes them;
+coarse/diagonal roots and CPU solves skip that storage. Complete pipelines compile before
+admitted uploads. Widened exact phase accounting and proven internal row bounds replace
+unreachable overflow/numeric propagation, without changing arithmetic order or tolerances.
+Tiny exact/exact-minus-one resource oracles, physical translations/rotations and actual
+device-loss propagation accompany the refactor. Fresh coverage remains required before
+publication; the old RED and c09 numerical receipts remain immutable. No 780k allocation
+has been performed.
+
+
+The broader bounded Metal run exposed an existing oracle error, reproduced by the sealed
+c09 binary: the raw rounded rank-one operator has zero curvature for `(1,-1)`, but applying
+rounded C and CT first can perturb that direction. Actual Metal returned
+`(67108864,-67108860)`, matching independent f32 fused arithmetic; its exact curvature under
+the all-ones operator is 16. One finite inner update is therefore valid partial progress,
+not a physical solution; the original f64 outer solve refused it. The corrected test retains
+every raw zero-update assertion, checks public zero-update failure with the independent
+one-row A=-1/identity-preconditioner oracle, and separately requires structured f64 outer
+failure for the original positive-definite rank-loss fixture. No numeric production code
+or acceptance threshold changes accompany this correction.

@@ -356,6 +356,24 @@ fn gpu_cg_reports_device_loss_before_initial_batch_and_correction_readbacks() {
     }
 }
 
+/// The public refined solver preserves the actual readback failure, including when
+/// its admitted hierarchy was already uploaded successfully before device loss.
+#[test]
+fn gpu_prepared_solver_preserves_device_loss_instead_of_returning_a_correction() {
+    let g = gpu();
+    let k = poisson(127);
+    let mut solver = pollster::block_on(GpuCg::new(&g, &k, &SolveOptions::default())).unwrap();
+    let scope = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    g.device.destroy();
+    let error = pollster::block_on(solver.solve(&vec![1.0; k.n], &mut vec![0.0; k.n], &mut nop)).unwrap_err();
+    let _ = pollster::block_on(scope.pop());
+    assert_eq!(error.code, ErrorCode::Internal);
+    assert_eq!(error.where_.as_deref(), Some("solve/readback"));
+    assert!(error.cause.contains("gpu readback of 36 bytes failed"), "{error:?}");
+    assert!(error.cause.contains("device_loss=Some((Destroyed,"), "{error:?}");
+    assert_eq!(solver.iterations, 0);
+}
+
 /// A9: Jacobi scaling turns every positive diagonal into an identity. The oracle is b_i/d_i,
 /// including the whole f64 refinement path and both CPU thread counts, never another solver.
 #[test]
@@ -477,8 +495,28 @@ fn gpu_cg_reports_updates_budget_and_rounded_operator_breakdown() {
     assert_eq!(report.submitted_iterations, 25);
     assert_eq!(report.relative_residual, 1.0);
     assert_eq!(x, [0.0, 0.0]);
-    let mut inner = pollster::block_on(GpuCg::new(&g, &k, &SolveOptions::default())).unwrap();
-    let error = pollster::block_on(inner.solve(&[1.0, -1.0], &mut [0.0; 2], &mut nop)).unwrap_err();
+    // The public solver applies C then CT. Allowed fused arithmetic can perturb
+    // (1,-1) out of the rounded operator's null space, so that fixture cannot
+    // independently require its preconditioned inner solve to make zero updates.
+    // The true f64 outer acceptance must still refuse this rank-lost calculation.
+    let error = pollster::block_on(femlab_engine::gpu::cg::solve_refined(
+        Some(&g),
+        &k,
+        &[1.0, -1.0],
+        &SolveOptions::default(),
+        &mut nop,
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert_eq!(error.where_.as_deref(), Some("solve"));
+    assert_eq!(error.suggestion.as_deref(), Some("solve.run { solver: 'cpu-direct' }"));
+
+    // Exact negative curvature is invariant here: Jacobi uses scale1 for d=-1,
+    // the diagonal specialization is identity, p=1 and p*A*p=-1. No preconditioned
+    // cancellation or backend contraction can turn this into a usable first step.
+    let negative = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![-1.0] };
+    let mut inner = pollster::block_on(GpuCg::new(&g, &negative, &SolveOptions::default())).unwrap();
+    let error = pollster::block_on(inner.solve(&[1.0], &mut [0.0], &mut nop)).unwrap_err();
     assert_eq!(error.code, ErrorCode::SolveStalled);
     assert!(error.cause.contains("nonpositive curvature in the uploaded f32 operator"));
     assert_eq!(error.where_.as_deref(), Some("solve"));
@@ -859,6 +897,10 @@ fn the_gpu_solver_reports_a_matrix_too_big_for_the_device_and_obeys_a_cancel() {
     let e = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&small), &mut nop)).expect_err("no such workgroup");
     assert_eq!(e.code, ErrorCode::GpuTooLarge);
     assert!(e.cause.contains("threads per workgroup"), "{}", e.cause);
+    // The public raw context has the same typed compiler/capability boundary.
+    let error = pollster::block_on(CgContext::new(&small, &tiny, &vals, None)).err().unwrap();
+    assert_eq!(error.code, ErrorCode::GpuTooLarge);
+    assert!(error.cause.contains("threads per workgroup"));
 }
 
 #[test]
