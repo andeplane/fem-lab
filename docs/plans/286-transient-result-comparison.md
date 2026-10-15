@@ -280,8 +280,12 @@ trying to seek an unretained0.45s playhead between left0.2s/right0.3s frames. Ex
 controls without an explicit time now use the ordinary held indices, preserving elapsed time and
 actual displayed timestamps. Explicit seeks and new/restarted clocks keep exact/nearest selection;
 an explicit450ms exact request still fails atomically. The original failure and52-case focused
-green/types receipts are retained. The production receipt above predates this narrow clock fix;
-the final coherent composition will rerun the actual browser gates.
+green/types receipts are retained. A subsequent rebuilt0bf production run passes the same two
+Chromium cases without retries, now keeping exact policy through shared-clock pause, speed and
+resume. Both actual timestamps remain unequal and each brackets the physical playhead with its
+next retained timestamp; shorter-endpoint, physical fields, gesture/lifecycle and default-fit
+oracles remain unchanged. The original production receipts stay separate. The final coherent
+parent composition will rerun the required integration gates.
 
 The next coherent parent composition and final full host/strict coverage remain open. These
 scoped runtime results are not a current-main claim. #286 is incomplete until those gates pass.

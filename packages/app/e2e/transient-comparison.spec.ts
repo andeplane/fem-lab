@@ -129,16 +129,25 @@ test('@cpu sampled thermal comparison resolves independent unequal schedules and
   const held = await state(page);
   expect(held.left!.sample!.frame.timeSi).toBe(0.4); expect(held.right!.sample!.frame.timeSi).toBe(0.3);
   await expect(page.getByLabel('shared physical playhead')).toContainText('actual retained times');
+  await seek('common', '0 s', 'exact');
+  await expect.poll(async () => (await state(page)).playback?.playheadSi).toBe(0);
   await page.getByLabel('shared comparison playback speed', { exact: true }).selectOption('0.1');
   await expect.poll(async () => (await state(page)).playback?.left?.speed).toBe(0.1);
   await page.getByRole('button', { name: 'Play both', exact: true }).click();
-  await expect.poll(async () => (await state(page)).playback?.playheadSi ?? 0).toBeGreaterThan(0.5);
+  await expect.poll(async () => (await state(page)).playback?.playheadSi ?? 0).toBeGreaterThan(0.3);
   await page.getByRole('button', { name: 'Pause both', exact: true }).click();
   await expect.poll(async () => (await state(page)).playback?.left?.playing).toBe(false);
   const paused = await state(page);
   expect(paused.playback!.playheadSi).toBeLessThan(0.9);
+  expect(paused.playback!.sampling).toBe('exact');
+  expect(paused.left!.sample!.frame.timeSi).not.toBe(paused.right!.sample!.frame.timeSi);
   expect(paused.playback!.left!.playing).toBe(false); expect(paused.playback!.right!.playing).toBe(false);
-  for (const side of ['left', 'right'] as const) expect(paused[side]!.legend!.max.value).toBeCloseTo(26.85 + paused[side]!.sample!.frame.timeSi, 8);
+  for (const side of ['left', 'right'] as const) {
+    const pane = paused[side]!, time = paused.playback!.playheadSi!;
+    expect(pane.sample!.frame.timeSi).toBeLessThanOrEqual(time);
+    expect(pane.frames!.frames[pane.sample!.frame.index + 1]!.timeSi).toBeGreaterThan(time);
+    expect(pane.legend!.max.value).toBeCloseTo(26.85 + pane.sample!.frame.timeSi, 8);
+  }
   await page.getByLabel('shared comparison playback speed', { exact: true }).selectOption('10');
   await page.getByRole('button', { name: 'Play both', exact: true }).click();
   await expect.poll(async () => (await state(page)).playback?.playheadSi).toBe(0.9);
