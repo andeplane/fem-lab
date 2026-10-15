@@ -28,6 +28,24 @@ PRINTED = """
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_offline_lgpl_fixture_preserves_original_bytes_and_all_author_vectors(self):
+        folder = corpus.ROOT / "crates/engine/tests/fixtures/third-party/brief-finite-element-net/case06"
+        provenance = json.loads((folder / "provenance.json").read_text())
+        for original in provenance["files"]:
+            corpus.checked((folder / original["file"]).read_bytes(), original)
+        source = (folder / "Job-11.inp").read_text()
+        report = (folder / "Displacements").read_text()
+        derived = json.loads((folder / "author-abaqus-probes-checked.json").read_text())
+        rows = corpus.abaqus_probe_reference(report, "BEAM-1", source)
+        self.assertEqual({str(label): values for label, values in rows.items()}, derived["displacements"])
+        self.assertEqual(len(rows), 275)
+        nodes, elements = corpus.flat_source_inventory(source, "C3D8")
+        self.assertEqual((len(nodes), len(elements)), (275, 160))
+        self.assertEqual(derived["consistent_duplicate_attached_element_rows"], 1005)
+        self.assertEqual(provenance["declaredUnitLength"], "1 m")
+        self.assertEqual(provenance["declaredUnitForce"], "1 N")
+        self.assertFalse(provenance["freshLocalAbaqusExecution"])
+
     def test_author_probe_uses_direct_u_and_checks_duplicate_attachments(self):
         source = "*PART,NAME=Beam\n*NODE\n7,1.5,2,3\n205,4,5,6\n*END PART\n"
         probe = """Variable: U, All direct

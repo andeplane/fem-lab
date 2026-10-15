@@ -64,7 +64,7 @@ The distribution is separate third-party reference data under GPL-2.0-only, not 
 license. [Upstream](https://www.dhondt.de/) links its GPLv2 terms; the
 [Debian source copyright record](https://metadata.ftp-master.debian.org/changelogs/main/c/calculix-ccx/calculix-ccx_2.23-1_copyright)
 identifies the upstream copyright/license. The repository commits the acquisition metadata
-and our harness, not vendor input/reference originals. Do not relabel downloaded files as MIT.
+and our harness, not CalculiX input/reference originals. Do not relabel downloaded files as MIT.
 
 ## Untouched FreeCAD export, with independently published definition checks
 
@@ -115,7 +115,10 @@ input must still pass complete conversion and explicit solve against the compose
 provides an unchanged `Job-11.inp`, original textual `Displacements` probe report and an
 adjacent `Validator.cs` that explicitly names this input and an **ABAQUS** nodal-displacement
 comparison. The fetcher pins those primary author artifacts and the original LGPLv3 license
-outside the checkout. The source's actual Abaqus version and CAE export workflow are unknown;
+outside the checkout. For the offline #673 numerical regression, unchanged originals and a
+checked transcription are also retained in a [separately licensed third-party fixture directory](../third-party/brief-finite-element-net/case06/README.md)
+with both LGPLv3/GPLv3 texts and exact provenance; the root MIT license does not relicense them.
+The source's actual Abaqus version and CAE export workflow are unknown;
 neither a verified modern CAE export nor a fresh local Abaqus execution is claimed. The author
 validator code documents their comparison intent; it was not executed here, and its literal
 report filename differs from the published file's name.
