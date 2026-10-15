@@ -57,7 +57,8 @@ export function nativeProjectBridge(root: string, launch: SpawnProjectHelper = s
   void failed.catch(() => {});
   child.stdin.on('error', error => rejectProcess(unavailable(`project filesystem request channel failed: ${error.message}`)));
   child.on('error', error => rejectProcess(unavailable(`project filesystem helper could not start: ${error.message}`)));
-  child.on('exit', () => rejectProcess(unavailable('the project filesystem capability has closed')));
+  // Process exit can precede delivery of its final stdout record. Let readline drain
+  // that record; EOF below still rejects a helper that closed without a response.
   const read = async () => {
     const line = await Promise.race([iterator.next(), failed]);
     if (line.done) throw unavailable('the project filesystem helper closed its response channel');
