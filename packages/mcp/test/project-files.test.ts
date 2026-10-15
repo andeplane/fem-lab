@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { ChildProcess, spawn, type ChildProcessByStdio } from 'node:child_process';
+import { PassThrough, type Readable, type Writable } from 'node:stream';
 import { afterEach, expect, it } from 'vitest';
 import { errorText } from '../src/server';
 import { helperPath, nodeProjectFiles, nativeProjectBridge, type ProjectBridge, type ProjectFiles } from '../src/project-files';
@@ -155,4 +156,66 @@ it('can close before initialization and never admits a read cancelled during sta
   slow.close();
   opened();
   await expect(pending).rejects.toThrow('closed');
+});
+
+// Real Node stream buffering with a typed, unspawned ChildProcess controls the event order.
+// No scheduler delay or native process timing decides whether the final protocol record wins.
+class HelperPipe extends PassThrough {
+  ref() { return this; }
+  unref() { return this; }
+}
+function bufferedHelper() {
+  const stdin = new HelperPipe();
+  const stdout = new HelperPipe();
+  const stdio: ChildProcessByStdio<Writable, Readable, null>['stdio'] = [stdin, stdout, null, undefined, undefined];
+  const child: ChildProcessByStdio<Writable, Readable, null> = Object.assign(new ChildProcess(), { stdin, stdout, stderr: null, stdio, kill: () => true, ref: () => {}, unref: () => {} });
+  return { child, stdin, stdout };
+}
+
+it.each(['file.not-found', 'file.scope'])('retains the final structured %s startup record when exit precedes stdout delivery', async code => {
+  const { child, stdout } = bufferedHelper();
+  const bridge = nativeProjectBridge('/missing-root', () => child);
+  const error = { code, cause: 'native root capture refused', where: 'path', suggestion: 'choose an existing regular project folder' };
+  const checked = expect(bridge.ready()).rejects.toMatchObject(error);
+  child.emit('exit', 0, null);
+  await Promise.resolve();
+  stdout.end(JSON.stringify({ error }) + '\n');
+  child.emit('close', 0, null);
+  try { await checked; } finally { bridge.close(); }
+});
+
+it('rejects an exited helper with no protocol record after its response stream drains', async () => {
+  const { child, stdout } = bufferedHelper();
+  const bridge = nativeProjectBridge('/missing-root', () => child);
+  const checked = expect(bridge.ready()).rejects.toMatchObject({ code: 'file.scope', cause: 'the project filesystem helper closed its response channel' });
+  child.emit('exit', 1, null);
+  stdout.end();
+  child.emit('close', 1, null);
+  try { await checked; } finally { bridge.close(); }
+});
+
+it('delivers the final in-flight response after exit but rejects a later operation on EOF', async () => {
+  const { child, stdin, stdout } = bufferedHelper();
+  const bridge = nativeProjectBridge('/captured-root', () => child);
+  stdout.write(JSON.stringify({ ready: true }) + '\n');
+  await bridge.ready();
+  stdin.once('data', () => {
+    child.emit('exit', 0, null);
+    stdout.end(JSON.stringify({ size: 17 }) + '\n');
+    child.emit('close', 0, null);
+  });
+  try {
+    expect(await bridge.request({ op: 'stat', path: 'input' })).toEqual({ size: 17 });
+    await expect(bridge.request({ op: 'stat', path: 'later' })).rejects.toMatchObject({ code: 'file.scope', cause: 'the project filesystem helper closed its response channel' });
+  } finally { bridge.close(); }
+});
+
+it('repeatedly preserves the actual native helper missing-root startup failure', async () => {
+  const root = path.join(await scratch(), 'missing');
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const files = nodeProjectFiles(root);
+    try {
+      await expect(files.ready()).rejects.toMatchObject({ code: 'file.not-found', where: 'path', cause: expect.any(String), suggestion: 'use a regular file inside the configured project folder' });
+    } finally { files.close(); }
+  }
 });
