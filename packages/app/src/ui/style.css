@@ -693,6 +693,8 @@ textarea:focus {
 .centre {
   display: grid;
   --bottom-used: min(var(--bottom-height, 252px), max(184px, calc(100% - 460px)));
+  /* The bottom tabs' min-content width must not widen the viewer over Properties. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(460px, 1fr) var(--bottom-used);
   position: relative;
   min-height: 0;
@@ -918,6 +920,10 @@ textarea:focus {
   align-items: stretch;
   padding: 0 8px;
   border-bottom: 1px solid var(--border-divider);
+  overflow-x: auto;
+}
+.tabs :focus-visible {
+  outline-offset: -2px;
 }
 .tab {
   display: flex;
