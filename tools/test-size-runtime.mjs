@@ -25,3 +25,13 @@ test('fails closed when the emitted engine graph cannot be identified', () => {
   assert.throws(() => runtimeClosures([], () => ''), /one emitted session Worker/);
   assert.throws(() => runtimeClosures(['assets/session.worker-a.js'], () => ''), /portable and threaded engine WASM/);
 });
+
+test('rejects an eager runtime import rather than hiding its startup traffic', () => {
+  const sources = {
+    'assets/session.worker-a.js': 'import "./portable-a.js"; import("./threaded-b.js")',
+    'assets/portable-a.js': 'new URL("./portable-d.wasm", import.meta.url)',
+    'assets/threaded-b.js': 'new URL("./threaded-e.wasm", import.meta.url)',
+    'assets/portable-d.wasm': '', 'assets/threaded-e.wasm': '',
+  };
+  assert.throws(() => runtimeClosures(Object.keys(sources), file => sources[file]), /selection must remain dynamic/);
+});

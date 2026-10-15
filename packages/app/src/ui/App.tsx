@@ -770,7 +770,10 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
         <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
           <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
-            <Banner s={s} dispatch={dispatch} />
+            <div>
+              {s.notes.length > 0 ? <div class="banner capability-notes" role="status">{s.notes.map(note => <span key={note}>{note}</span>)}</div> : null}
+              <Banner s={s} dispatch={dispatch} />
+            </div>
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
               <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />

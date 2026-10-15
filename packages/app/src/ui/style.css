@@ -1411,6 +1411,12 @@ textarea:focus {
 .banner .code {
   color: var(--yellow);
 }
+.banner.capability-notes {
+  height: auto;
+  min-height: 32px;
+  flex-wrap: wrap;
+  padding-block: 6px;
+}
 .banner.error {
   background: var(--red-bg);
   border-bottom-color: var(--red-border);

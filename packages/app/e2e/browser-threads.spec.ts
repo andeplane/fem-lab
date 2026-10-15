@@ -38,8 +38,22 @@ async function solveBars(page: Page) {
 test('@cpu @sw browser CPU results and Journal hashes are exact at one and four real workers', async ({ browser, baseURL }, testInfo) => {
   test.setTimeout(180_000);
   const outputs = [];
+  const lifecycles = [];
   for (const threads of [1, 4]) {
     const context = await browser.newContext();
+    const pageErrors: string[] = [];
+    context.on('page', page => page.on('pageerror', error => pageErrors.push(error.message)));
+    const cdp = await browser.newBrowserCDPSession();
+    const workers = new Map<string, string>();
+    const destroyed = new Set<string>();
+    const remember = ({ targetInfo }: { targetInfo: { type: string; targetId: string; url: string } }) => {
+      if (targetInfo.type === 'worker') workers.set(targetInfo.targetId, targetInfo.url);
+    };
+    cdp.on('Target.targetCreated', remember);
+    cdp.on('Target.targetInfoChanged', remember);
+    cdp.on('Target.targetDestroyed', ({ targetId }) => destroyed.add(targetId));
+    await cdp.send('Target.setDiscoverTargets', { discover: true });
+    let owned: [string, string][] = [];
     try {
       await context.addInitScript(count => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => count }), threads);
       const page = await context.newPage();
@@ -57,14 +71,29 @@ test('@cpu @sw browser CPU results and Journal hashes are exact at one and four 
         expect(Math.abs(bar.reaction + 1000)).toBeLessThan(1e-8);
       }
       outputs.push(output);
-    } finally { await context.close(); }
+      const active = () => [...workers].filter(([id]) => !destroyed.has(id));
+      await expect.poll(() => active().filter(([, url]) => /workerHelpers-[^/]+\.js$/.test(url)).length).toBe(threads);
+      owned = [...workers].filter(([, url]) => /(?:session\.worker|workerHelpers)-[^/]+\.js$/.test(url));
+      expect(active().filter(([, url]) => /session\.worker-/.test(url))).toHaveLength(1);
+      expect(active().filter(([, url]) => /(?:session\.worker|workerHelpers)-[^/]+\.js$/.test(url))).toHaveLength(threads + 1);
+    } finally {
+      try {
+        await context.close();
+        expect(pageErrors, 'uncaught page errors in the owned context').toEqual([]);
+        await expect.poll(() => owned.filter(([id]) => !destroyed.has(id)).length).toBe(0);
+        lifecycles.push({ threads, workers: owned.map(([id, url]) => ({ id, url, destroyed: destroyed.has(id) })) });
+      } finally { await cdp.detach(); }
+    }
   }
   expect(outputs[1]!.cases).toEqual(outputs[0]!.cases);
   await testInfo.attach('browser-thread-determinism.json', { body: JSON.stringify(outputs), contentType: 'application/json' });
+  await testInfo.attach('browser-thread-lifecycle.json', { body: JSON.stringify(lifecycles), contentType: 'application/json' });
 });
 
-test('@cpu browser without cross-origin isolation runs honestly on one CPU thread', async ({ browser, baseURL }) => {
+test('@cpu browser without cross-origin isolation runs honestly on one CPU thread', async ({ browser, baseURL }, testInfo) => {
   const context = await browser.newContext();
+  const pageErrors: string[] = [];
+  context.on('page', page => page.on('pageerror', error => pageErrors.push(error.message)));
   try {
     // Headerless origin with service workers unavailable exercises the real portable runtime.
     const url = new URL(baseURL!); url.port = String(Number(url.port) + 7);
@@ -78,5 +107,6 @@ test('@cpu browser without cross-origin isolation runs honestly on one CPU threa
     const output = await solveBars(page);
     expect(output.capabilities.threads).toBe(1);
     await expect(page.getByText('Running single-threaded; open in Chrome and reload to enable threads.', { exact: true })).toBeVisible();
-  } finally { await context.close(); }
+    await testInfo.attach('single-thread-capability-note.png', { body: await page.getByRole('status').screenshot(), contentType: 'image/png' });
+  } finally { await context.close(); expect(pageErrors, 'uncaught page errors in the owned context').toEqual([]); }
 });
