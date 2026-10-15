@@ -3692,6 +3692,10 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     assert_eq!(e.code, ErrorCode::Unsupported);
     assert_eq!(e.cause, "no GPU adapter; use cpu-pcg or cpu-direct");
     assert_eq!(e.suggestion.as_deref(), Some("solve.run { solver: 'cpu-pcg' }"));
+    let empty = Csr { n: 0, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+    let empty_error = pollster::block_on(solve(&empty, &[], &opts, &Pool::new(2), None, &mut nop))
+        .expect_err("even an empty explicit GPU solve requires a device");
+    assert_eq!(empty_error, e);
     assert_eq!(solver_name(Solver::CpuDirect), "cpu-direct");
 
     let opts = SolveOptions::default();
