@@ -1,5 +1,7 @@
 // #17: actual threaded wasm in Chromium, with server headers and the Pages COI worker.
 import { test, expect, type Page } from './fixtures';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 async function solveBars(page: Page) {
   await page.waitForFunction(() => window.fem !== undefined, undefined, { timeout: 60_000 });
@@ -109,4 +111,45 @@ test('@cpu browser without cross-origin isolation runs honestly on one CPU threa
     await expect(page.getByText('Running single-threaded; open in Chrome and reload to enable threads.', { exact: true })).toBeVisible();
     await testInfo.attach('single-thread-capability-note.png', { body: await page.getByRole('status').screenshot(), contentType: 'image/png' });
   } finally { await context.close(); expect(pageErrors, 'uncaught page errors in the owned context').toEqual([]); }
+});
+
+test('@sw cold Pages bootstrap waits for real SW control and downloads only the threaded engine body', async ({ browser, request, baseURL }, testInfo) => {
+  test.setTimeout(60_000);
+  const origin = new URL(baseURL!).origin;
+  type BodyReceipt = { file: string; bytes: number; gzip: number; sha256: string; completed: boolean };
+  const status = async () => (await (await request.get(`${origin}/__femlab_test__/status`)).json()) as { pending: number; requests: BodyReceipt[] };
+  await request.post(`${origin}/__femlab_test__/hold`);
+  const context = await browser.newContext();
+  const errors: string[] = [];
+  context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
+  try {
+    await context.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
+    const page = await context.newPage();
+    await page.goto(baseURL!, { waitUntil: 'commit' });
+    // This handshake holds the actual script response at the headerless HTTP server. The
+    // real browser registration stays pending; no service worker or engine is simulated.
+    await expect.poll(async () => (await status()).pending).toBe(1);
+    const before = await status();
+    expect(before.requests.filter(body => /(?:session\.worker-[^/]+\.js|\.wasm)$/.test(body.file))).toEqual([]);
+    await request.post(`${origin}/__femlab_test__/release`);
+    await page.waitForFunction(() => crossOriginIsolated && window.fem !== undefined, undefined, { timeout: 30_000 });
+    expect((await page.evaluate(() => window.fem.query.capabilities())).threads).toBe(4);
+    const after = await status();
+    const engineBodies = after.requests.filter(body => /femlab_engine_wasm_bg-[^/]+\.wasm$/.test(body.file));
+    expect(engineBodies).toHaveLength(1);
+    const expected = readFileSync('src/generated/wasm-threads/femlab_engine_wasm_bg.wasm');
+    expect(engineBodies[0]!.sha256).toBe(createHash('sha256').update(expected).digest('hex'));
+    expect(engineBodies[0]!.bytes).toBe(expected.length);
+    expect(engineBodies[0]!.completed).toBe(true);
+    // Same JS/CSS/document/engine budget as size-check, counting repeated response bodies
+    // through both navigations instead of deduplicating URLs. Charge even interrupted
+    // responses at their full size, giving a conservative upper bound on transferred bodies.
+    const boot = after.requests.filter(body => /\.(?:js|css|html|wasm)$/.test(body.file));
+    expect(boot.reduce((sum, body) => sum + body.gzip, 0)).toBeLessThanOrEqual(3 * 1024 * 1024);
+    await testInfo.attach('cold-pages-network-bodies.json', { body: JSON.stringify({ before, after, fullResponseGzipUpperBound: boot.reduce((sum, body) => sum + body.gzip, 0) }), contentType: 'application/json' });
+  } finally {
+    await request.post(`${origin}/__femlab_test__/release`);
+    await context.close();
+    expect(errors).toEqual([]);
+  }
 });

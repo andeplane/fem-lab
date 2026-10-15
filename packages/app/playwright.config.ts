@@ -24,7 +24,7 @@ export default defineConfig({
   use: { trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   webServer: [
     { command: `npm run preview -- --port ${PORT} --strictPort`, url: PREVIEW, reuseExistingServer: !CI, timeout: 120_000 },
-    { command: `node ../../tools/static-serve.mjs dist ${PORT + 7}`, url: HEADERLESS, reuseExistingServer: !CI, timeout: 120_000 },
+    { command: `node ../../tools/static-serve.mjs dist ${PORT + 7} --test-sw-gate`, url: HEADERLESS, reuseExistingServer: !CI, timeout: 120_000 },
   ],
   projects: [
     { name: 'cpu', grep: /@cpu/, use: { ...devices['Desktop Chrome'], baseURL: PREVIEW } },

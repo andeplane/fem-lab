@@ -234,6 +234,7 @@ jobs:
       - run: npm run codegen:check
       - run: node --test tools/test-step-assets.mjs
       - run: node --test tools/test-size-runtime.mjs
+      - run: node --test tools/test-static-serve.mjs
       - run: npm run typecheck
       - run: npm run test -w packages/registry
       - run: npm run test -w packages/ai

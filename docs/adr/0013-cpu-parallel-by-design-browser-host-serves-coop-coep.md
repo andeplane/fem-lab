@@ -54,6 +54,21 @@ The portable stable-1.94 browser and Node modules remain a matched pair. A separ
 The build limits shared memory to the existing wasm32 4 GiB ceiling; this is a maximum,
 not a reservation. Native builds and portable wasm retain the stable toolchain.
 
+The browser host settles isolation before reading capabilities or creating an engine Worker.
+Header-isolated pages proceed immediately. A headerless secure page registers the real COI
+worker and waits for controllerchange before one guarded reload; the old document never
+starts its engine. A rejected registration or a 10-second injected-clock deadline starts
+the visible portable fallback and removes the reload listener, including for late control.
+The host unregisters timed-out registrations. This avoids downloading portable WASM before
+reloading into threaded WASM. A tiny bootstrap defers the application module itself until this decision. The cold-boot
+size gate charges the initial bootstrap/preloads/document twice, the application startup
+closure once, one selected engine closure and the isolation script, even when HTTP caching
+saves bytes. The landing-JS gate still counts the application needed for the usable start screen.
+A delayed real service-worker HTTP transport test records served bodies, checks that no
+engine Worker/WASM starts while registration is held, and verifies only the actual threaded
+WASM body after controlled navigation. That new network gate requires Chromium execution;
+source and unit tests alone do not establish its runtime receipt.
+
 Each dedicated session Worker owns one wasm module and one wasm-bindgen-rayon pool.
 The browser host selects this runtime only with cross-origin isolation and
 SharedArrayBuffer, initializes the pool before any session or replacement candidate,
