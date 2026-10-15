@@ -76,7 +76,9 @@ class HostingReleaseSmoke(unittest.TestCase):
             self.assertEqual((root / 'packages/app/dist/index.html').read_text(), 'compiled artifact')
             self.assertFalse(any(command[0] == 'firebase' for command in commands))
             self.assertEqual(list(root.glob('firebase-*.json')), [])
-            return json.loads(stdout.getvalue()), environments[0]
+            manifest = json.loads(stdout.getvalue())
+            self.assertEqual(manifest['billing'], 'runtime-controlled')
+            return manifest, environments[0]
 
     def test_build_in_script_checkout_preserves_artifact(self):
         manifest, environment = self.release()

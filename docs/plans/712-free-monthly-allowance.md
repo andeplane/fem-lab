@@ -4,6 +4,10 @@ Issue [#712](https://github.com/andeplane/fem-lab/issues/712); decision
 [ADR 0037](../adr/0037-reviewed-monthly-free-eligibility.md). Paid Plus's 10M credits
 remain independently implemented by [#709](709-monthly-ai-allowance.md).
 
+The weighted-credit quantities below describe immutable legacy allocation units.
+[#728](728-credit-scale.md) presents monthly free usage as 5,000 credits using the
+explicit `usd-milli-v1` public unit without rewriting any grant or eligibility rule.
+
 Approved free users explicitly claim 6,666,666 weighted credits per UTC calendar
 month, approximately $5 of supplier usage. Signup stays open with zero grants;
 email/Google login never approves eligibility. A stable reviewed-person reference

@@ -14,12 +14,13 @@ authenticated token, refreshes authoritative state, and rejects late responses a
 an identity change. It cannot approve eligibility or mint local credits. The Command
 is excluded from Assistant tools/scripts and never enters the engine Journal.
 
-Approved free accounts can claim 6,666,666 weighted credits in a UTC calendar month,
+Following the display-unit change in [#728](728-credit-display.md), approved free
+accounts can claim 5,000 displayed AI credits in a UTC calendar month,
 approximately $5 at the current supplier-accounting tariff. Each month requires a
 new explicit claim. Unused credits expire at 00:00 UTC on the first of the following
 month, without rollover. Approval/revocation, one reviewed-person claim per month
 across aliases/account recreation, paid-plan exclusion and shared budget availability
-are backend decisions. Historical one-time 200,000-credit previews retain their
+are backend decisions. Historical one-time previews retain their
 recorded amount/expiry and do not stack with reviewed monthly access or become a
 revocation fallback.
 
