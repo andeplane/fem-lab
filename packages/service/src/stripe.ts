@@ -4,10 +4,18 @@ import {CheckoutNotCreated,type Payments} from './checkout';
 import {ServiceFailure} from './errors';
 
 export type BillingTaxMode='pending'|'automatic'|'not_collecting';
+export type BillingMerchantMode='pending'|'direct'|'managed';
 /** The host must record an explicit collection decision before enabling checkout. */
 export function billingTaxMode(value:string|undefined,enabled:boolean):BillingTaxMode {
   const mode=value==='automatic'||value==='not_collecting'?value:'pending';
   if(enabled&&mode==='pending')throw new Error('BILLING_TAX_MODE must be automatic or not_collecting before enabling billing.');
+  return mode;
+}
+/** Merchant responsibility is explicit; an account default must never select it. */
+export function billingMerchantMode(value:string|undefined,enabled:boolean,taxMode:BillingTaxMode):BillingMerchantMode {
+  const mode=value==='direct'||value==='managed'?value:'pending';
+  if(enabled&&mode==='pending')throw new Error('BILLING_MERCHANT_MODE must be direct or managed before enabling billing.');
+  if(enabled&&mode==='managed'&&taxMode!=='automatic')throw new Error('Managed Payments requires BILLING_TAX_MODE=automatic.');
   return mode;
 }
 
@@ -46,7 +54,7 @@ export function stripeGateway(client:Stripe,webhookSecret:string):BillingGateway
 }
 
 /** Hosted Checkout/Portal only: card/payment credentials never pass through FEM Lab. */
-export function stripePayments(client:Stripe,portalConfiguration:string,projectId:string,taxMode:BillingTaxMode):Payments {
+export function stripePayments(client:Stripe,portalConfiguration:string,projectId:string,taxMode:BillingTaxMode,merchantMode:BillingMerchantMode):Payments {
   return {
     async customer(account,key) {
       const existing=await client.customers.search({query:`metadata['femlab_account_id']:'${account.id}' AND metadata['femlab_project']:'${projectId}'`,limit:2});
@@ -69,14 +77,20 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
       return result;
     },
     async checkout(input) {
+      if(merchantMode!=='direct'&&merchantMode!=='managed')throw new ServiceFailure(503,'billing-merchant-pending','Paid plans are unavailable until billing setup is complete.','billing');
       if(taxMode==='pending')throw new ServiceFailure(503,'billing-tax-pending','Paid plans are unavailable until billing setup is complete.','billing');
+      if(merchantMode==='managed'&&taxMode!=='automatic')throw new ServiceFailure(503,'billing-tax-pending','Managed Payments tax setup is incomplete.','billing');
+      // Managed Payments owns tax, customer updates and tax-ID collection. Sending
+      // these direct-merchant parameters is unsupported by its Checkout contract.
+      const direct:Stripe.Checkout.SessionCreateParams=merchantMode==='direct'?{
+        automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto',name:'auto'},tax_id_collection:{enabled:true},
+      }:{};
       let session:Stripe.Checkout.Session;
       try {
         session=await client.checkout.sessions.create({mode:'subscription',customer:input.customer,client_reference_id:input.accountId,
+          integration_identifier:'femlab_hosted_ai_kkdxrxlz',
           line_items:[{price:input.price,quantity:1}],success_url:input.successUrl,cancel_url:input.cancelUrl,expires_at:input.expiresAt,
-          managed_payments:{enabled:false},
-          automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto',name:'auto'},billing_address_collection:'required',
-          tax_id_collection:{enabled:true},
+          ...direct,managed_payments:{enabled:merchantMode==='managed'},billing_address_collection:'required',
           consent_collection:{terms_of_service:'required'},allow_promotion_codes:false,
           subscription_data:{metadata:{femlab_account_id:input.accountId,femlab_project:projectId}},
         },{idempotencyKey:input.key});

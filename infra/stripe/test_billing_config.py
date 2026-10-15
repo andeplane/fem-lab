@@ -18,24 +18,43 @@ class BillingConfigTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.calls = []
         self.missing_key = False
+        self.key_mode = 'test'
         for mode in ('test', 'live'):
             catalog = json.loads(Path(__file__).with_name(mode + '.json').read_text())
             catalog['taxMode'] = 'not_collecting'
-            for gate in config.GATES + ('stagingCheckoutVerified', 'webhookVerified'):
+            catalog['merchantMode'] = 'direct'
+            for gate in ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed',
+                         'stagingCheckoutVerified', 'webhookVerified'):
                 catalog[gate] = True
             (self.root / (mode + '.json')).write_text(json.dumps(catalog))
+
+    def update_catalog(self, mode='test', **changes):
+        path = self.root / (mode + '.json')
+        catalog = json.loads(path.read_text())
+        catalog.update(changes)
+        path.write_text(json.dumps(catalog))
+        return catalog
+
+    def managed_catalog(self, mode='test'):
+        return self.update_catalog(mode, merchantMode='managed', taxMode='automatic',
+                                   taxClassificationConfirmed=True, activeTaxRegistrationVerified=False,
+                                   taxCollectionDecisionConfirmed=True, policyUrlsConfirmed=True,
+                                   stagingCheckoutVerified=True, webhookVerified=True,
+                                   managedPaymentsAccountEnabled=True, managedPaymentsTermsAccepted=True,
+                                   managedPaymentsEligibilityConfirmed=True, managedPaymentsCheckoutVerified=(mode == 'live'))
 
     def gcloud(self, *args, optional=False):
         self.calls.append(args)
         if args[:3] == ('secrets', 'versions', 'access'):
-            return SimpleNamespace(returncode=0, stdout='rk_test_' + 'T' * 32)
+            return SimpleNamespace(returncode=0, stdout='rk_' + self.key_mode + '_' + 'T' * 32)
         missing = self.missing_key and args[3] == 'stripe-api-key'
         return SimpleNamespace(returncode=1 if missing else 0, stdout='' if missing else '7\n')
 
     def test_unconfigured_remains_disabled_and_does_not_read_any_key(self):
         self.missing_key = True
         result = config.resolve('staging', 'femlab-app-staging', self.gcloud, root=self.root)
-        self.assertEqual(result['env'], {'BILLING_ENABLED': 'false', 'BILLING_TAX_MODE': 'not_collecting'})
+        self.assertEqual(result['env'], {'BILLING_ENABLED': 'false', 'BILLING_TAX_MODE': 'not_collecting',
+                                         'BILLING_MERCHANT_MODE': 'direct'})
         self.assertEqual(result['secrets'], {})
         self.assertFalse(any('access' in args for args in self.calls))
 
@@ -47,6 +66,7 @@ class BillingConfigTests(unittest.TestCase):
         self.assertEqual(result['env']['BILLING_ENABLED'], 'false')
         self.assertEqual(result['env']['BILLING_MODE'], 'test')
         self.assertEqual(result['env']['BILLING_TAX_MODE'], 'not_collecting')
+        self.assertEqual(result['env']['BILLING_MERCHANT_MODE'], 'direct')
         self.assertEqual(result['secrets'], {'STRIPE_SECRET_KEY': 'stripe-api-key:7', 'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:7'})
         self.assertNotIn('rk_test_', json.dumps(result))
 
@@ -57,7 +77,8 @@ class BillingConfigTests(unittest.TestCase):
             self.assertEqual(result['env']['BILLING_ENABLED'], expected)
 
     def test_missing_legal_or_acceptance_gate_blocks_before_secret_access(self):
-        for gate in config.GATES + ('stagingCheckoutVerified', 'webhookVerified'):
+        for gate in ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed',
+                     'stagingCheckoutVerified', 'webhookVerified'):
             path = self.root / 'live.json'
             catalog = json.loads(path.read_text())
             catalog[gate] = False
@@ -67,6 +88,104 @@ class BillingConfigTests(unittest.TestCase):
             catalog[gate] = True
             path.write_text(json.dumps(catalog))
         self.assertEqual(self.calls, [])
+
+    def test_pending_merchant_mode_keeps_disabled_webhook_and_recovery_bindings(self):
+        for configured in (False, True):
+            for merchant_mode in ('pending', None):
+                with self.subTest(configured=configured, merchant_mode=merchant_mode):
+                    catalog = self.update_catalog(merchantMode='pending', taxMode='pending')
+                    if merchant_mode is None:
+                        del catalog['merchantMode']
+                        (self.root / 'test.json').write_text(json.dumps(catalog))
+                    self.missing_key = not configured
+                    self.calls.clear()
+                    result = config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                            activation='disabled', root=self.root, verify=lambda *args: None)
+                    self.assertEqual(result['env']['BILLING_ENABLED'], 'false')
+                    self.assertEqual(result['env']['BILLING_MERCHANT_MODE'], 'pending')
+                    self.assertEqual(result['env']['BILLING_TAX_MODE'], 'pending')
+                    if configured:
+                        self.assertEqual(result['secrets'], {'STRIPE_SECRET_KEY': 'stripe-api-key:7',
+                                                             'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:7'})
+                    else:
+                        self.assertEqual(result['secrets'], {})
+                        self.assertFalse(any('access' in args for args in self.calls))
+
+    def test_pending_or_absent_merchant_mode_never_activates_billing(self):
+        for merchant_mode in ('pending', None):
+            for activation in ('enabled', 'preserve'):
+                with self.subTest(merchant_mode=merchant_mode, activation=activation):
+                    catalog = self.update_catalog(merchantMode='pending')
+                    if merchant_mode is None:
+                        del catalog['merchantMode']
+                        (self.root / 'test.json').write_text(json.dumps(catalog))
+                    with self.assertRaisesRegex(ValueError, 'merchantMode|merchant mode'):
+                        config.resolve('staging', 'femlab-app-staging', self.gcloud, previous_enabled=True,
+                                       activation=activation, root=self.root)
+                    self.assertEqual(self.calls, [])
+
+    def test_unknown_merchant_mode_fails_even_while_disabled(self):
+        self.update_catalog(merchantMode='unknown')
+        for activation in ('enabled', 'disabled', 'preserve'):
+            with self.subTest(activation=activation):
+                with self.assertRaisesRegex(ValueError, 'merchantMode|merchant mode'):
+                    config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                   activation=activation, root=self.root)
+                self.assertEqual(self.calls, [])
+
+    def test_managed_payments_requires_automatic_tax_before_secret_access(self):
+        self.managed_catalog()
+        for tax_mode in ('pending', 'not_collecting'):
+            with self.subTest(tax_mode=tax_mode):
+                self.update_catalog(taxMode=tax_mode)
+                with self.assertRaisesRegex(ValueError, 'taxMode|automatic'):
+                    config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                   activation='enabled', root=self.root)
+                self.assertEqual(self.calls, [])
+
+    def test_each_managed_gate_blocks_before_secret_access(self):
+        gates = ('taxCollectionDecisionConfirmed', 'policyUrlsConfirmed', 'taxClassificationConfirmed',
+                 'managedPaymentsAccountEnabled', 'managedPaymentsTermsAccepted',
+                 'managedPaymentsEligibilityConfirmed')
+        for gate in gates:
+            for value in (False, None):
+                with self.subTest(gate=gate, value=value):
+                    catalog = self.managed_catalog()
+                    if value is None:
+                        catalog.pop(gate)
+                    else:
+                        catalog[gate] = value
+                    (self.root / 'test.json').write_text(json.dumps(catalog))
+                    with self.assertRaisesRegex(ValueError, gate):
+                        config.resolve('staging', 'femlab-app-staging', self.gcloud,
+                                       activation='enabled', root=self.root)
+                    self.assertEqual(self.calls, [])
+
+    def test_live_managed_payments_requires_all_checkout_and_webhook_evidence(self):
+        for gate in ('managedPaymentsCheckoutVerified', 'stagingCheckoutVerified', 'webhookVerified'):
+            with self.subTest(gate=gate):
+                self.managed_catalog('live')
+                self.update_catalog('live', **{gate: False})
+                with self.assertRaisesRegex(ValueError, gate):
+                    config.resolve('production', 'femlab-app', self.gcloud,
+                                   activation='enabled', root=self.root)
+                self.assertEqual(self.calls, [])
+
+    def test_managed_activation_does_not_require_or_fabricate_owner_registration(self):
+        for environment, project, mode in (('staging', 'femlab-app-staging', 'test'),
+                                           ('production', 'femlab-app', 'live')):
+            with self.subTest(environment=environment):
+                catalog = self.managed_catalog(mode)
+                self.key_mode = mode
+                verified = []
+                result = config.resolve(environment, project, self.gcloud, activation='enabled', root=self.root,
+                                        verify=lambda key, key_mode, manifest: verified.append((key_mode, manifest.copy())))
+                self.assertEqual(result['env']['BILLING_ENABLED'], 'true')
+                self.assertEqual(result['env']['BILLING_MERCHANT_MODE'], 'managed')
+                self.assertEqual(result['env']['BILLING_TAX_MODE'], 'automatic')
+                self.assertEqual(verified, [(mode, catalog)])
+                self.assertIs(verified[0][1]['activeTaxRegistrationVerified'], False)
+                self.assertEqual(json.loads((self.root / (mode + '.json')).read_text()), catalog)
 
     def test_enabling_without_runtime_key_fails(self):
         self.missing_key = True
