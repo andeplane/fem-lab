@@ -1,3 +1,4 @@
+import {formatAiCredits} from '../account/credits';
 import { accounts } from '../account/browser';
 import { hostedProvider, hostedTools, HOSTED_COMMAND_INSTRUCTIONS } from './hosted';
 import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
@@ -830,7 +831,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div>
 
         {__HOSTED_AI__ ? <div class="hosted-account">
-          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${Math.floor(ui.account.profile?.usage?.availableCredits ?? 0).toLocaleString()} AI credits · Account` : 'Sign in for AI'}</Cmd>
+          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${formatAiCredits(ui.account.profile?.usage?.availableCredits ?? 0)} AI credits · Account` : 'Sign in for AI'}</Cmd>
           {ui.account.uid && !ui.account.disclosureAccepted ? <div class="ai-disclosure"><p>Your messages, selected model and project context, tool results and attached images pass through FEM Lab to OpenAI. Conversations stay in this browser; OpenAI processes requests under its API data policy. Review sensitive project content before sending.</p><a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noreferrer">Provider data policy</a><Cmd cmd="ai.acceptDisclosure" run={() => dispatch({cmd:'ai.acceptDisclosure'})}>Accept and enable AI</Cmd></div> : null}
         </div> : null}
         <div class="model-row">
@@ -850,7 +851,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div> : null}
         <div class="cost">
           <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${__HOSTED_AI__ || turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{__HOSTED_AI__ ? `${charged.toLocaleString()} AI credits used${pendingUsage ? ' · usage pending' : ''}` : key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{__HOSTED_AI__ ? `${formatAiCredits(charged)} AI credits used${pendingUsage ? ' · usage pending' : ''}` : key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
