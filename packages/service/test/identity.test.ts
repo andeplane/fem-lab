@@ -43,3 +43,9 @@ describe('verified account identity', () => {
     await expect(accounts.provision({ uid: 'deleting', email: 'old@example.com' })).rejects.toMatchObject({ status: 403, code: 'account-inactive' });
   });
 });
+
+it('requires recent original authentication for account deletion even after an ID-token refresh',async()=>{
+  const verify=identityVerifier({verifyIdToken:async()=>({...valid,auth_time:now().getTime()/1000-301})},'femlab-test',now,{maxAuthenticationAge:300});
+  await expect(verify('Bearer fresh-token')).rejects.toMatchObject({code:'recent-login-required'});
+  expect(await identityVerifier({verifyIdToken:async()=>valid},'femlab-test',now,{maxAuthenticationAge:300})('Bearer token')).toEqual({uid:valid.uid,email:valid.email});
+});

@@ -339,6 +339,19 @@ therefore holds every node across the bar axis with one `geometry.nameRegion` bo
 and B11's joints are braced by members that are not collinear. A named `constraint.mechanism`
 check is a separate issue.
 
+**Finite translated line joints (#595).** The weld-grid neighbour scan clamps its i64
+indices at the same bounds as its absolute-coordinate grid keys; actual coordinate distance
+still decides coincidence. A geometry-kernel regression translates each coordinate axis to
+both ±f64::MAX, then independently checks points separated by 1.2 tolerances remain distinct,
+a point within 0.6 tolerances of both selects the lowest original id, an exact duplicate
+joins that survivor, and a point outside tolerance remains separate. It checks exact
+connectivity, sorted/deduplicated node Sets, unchanged element Sets and idempotent welding.
+The public registry regression builds metre-long line members at x = ±f64::MAX m, checks
+`query.mesh` bounds/counts/edge lengths and shared versus separate joint identities, and
+compares one/four-thread builds and Journal replay byte-for-byte. Mesh reads and rejected
+zero-length/nonfinite input preserve the authored Model and Journal. This is a geometry
+admission/welding oracle; it does not claim an extreme-coordinate structural solve.
+
 **Stress is averaged at a joint.** `average_at_nodes` smooths across elements of the same
 material, and at a truss joint that means averaging the axial stresses of members pointing in
 different directions. B10 and B11 are symmetric, so every member meeting at the probed joint
