@@ -96,7 +96,9 @@ folder holding `femlab_engine_wasm.js` if the engine lives somewhere unusual.
 Project disk access uses a native helper with a retained directory handle. The installed
 package supplies that helper on Linux x64, Windows x64 and macOS arm64/x64; it needs no Rust
 compiler or runtime download. An unsupported platform or missing helper reports `file.scope`
-and suggests the checkout build command. Inline input and engine tools remain available.
+and suggests the checkout build command. With `--project`, startup waits for the helper
+to acknowledge the captured directory before connecting MCP. To use inline input and engine
+tools without project disk access, start without `--project`.
 
 ### Build and verify an npm artifact
 

@@ -10,13 +10,15 @@ import { createInterface } from 'node:readline';
 import { z } from 'zod';
 
 export interface ProjectFiles {
+  /** Completes only after the configured root handle is captured; no file I/O warms it. */
+  ready(): Promise<void>;
   size(path: string, signal?: AbortSignal): Promise<number>;
   read(path: string, signal?: AbortSignal): Promise<Uint8Array>;
   write(path: string, bytes: Uint8Array, signal?: AbortSignal): Promise<void>;
   close(): void;
 }
 type Request = { op: 'stat' | 'read'; path: string } | { op: 'write'; path: string; data: string };
-export interface ProjectBridge { request(value: Request): Promise<unknown>; close(): void }
+export interface ProjectBridge { ready(): Promise<void>; request(value: Request): Promise<unknown>; close(): void }
 export type ProjectBridgeFactory = (root: string) => ProjectBridge;
 const failure = z.object({ error: z.object({ code: z.enum(['file.scope', 'file.not-found']), cause: z.string(), where: z.string(), suggestion: z.string() }) });
 const unavailable = (cause: string) => new FemError('file.scope', cause, 'path', 'install the MCP package for a supported platform, or supply inline input text');
@@ -70,6 +72,7 @@ export function nativeProjectBridge(root: string, launch: SpawnProjectHelper = s
   void ready.finally(settled).catch(() => {});
   let tail: Promise<unknown> = ready;
   return {
+    ready: () => ready,
     request: value => {
       pending++;
       lifetime(true);
@@ -89,19 +92,31 @@ export function nativeProjectBridge(root: string, launch: SpawnProjectHelper = s
 export function nodeProjectFiles(root: string | undefined, factory: ProjectBridgeFactory = nativeProjectBridge): ProjectFiles {
   let bridge: ProjectBridge | undefined;
   let closed = false;
+  const initialized = Promise.resolve().then(async () => {
+    if (root === undefined) return;
+    if (closed) throw unavailable('the project filesystem capability has closed');
+    bridge = factory(root);
+    await bridge.ready();
+  });
+  // Construction starts capture; startup and every registry request await this barrier.
+  // A caller that only describes tools must not create an unhandled startup rejection.
+  void initialized.catch(() => {});
   const request = async (value: Request, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     if (closed) throw unavailable('the project filesystem capability has closed');
     if (root === undefined) throw unavailable('this server has no project folder; start it with --project <dir>');
     value.path = assertInside(value.path).join('/');
-    bridge ??= factory(root);
-    const result = await bridge.request(value);
+    await initialized;
+    signal?.throwIfAborted();
+    if (closed) throw unavailable('the project filesystem capability has closed');
+    const result = await bridge!.request(value);
     signal?.throwIfAborted();
     const error = failure.safeParse(result);
     if (error.success) throw new FemError(error.data.error.code, error.data.error.cause, error.data.error.where, error.data.error.suggestion);
     return result;
   };
   return {
+    ready: () => initialized,
     size: async (input, signal) => z.object({ size: z.number().int().nonnegative().safe() }).parse(await request({ op: 'stat', path: input }, signal)).size,
     read: async (input, signal) => {
       const { data } = z.object({ data: z.string().max(4 * Math.ceil((MAX_ABAQUS_BYTES + 1) / 3)) }).parse(await request({ op: 'read', path: input }, signal));

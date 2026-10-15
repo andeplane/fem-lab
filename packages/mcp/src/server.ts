@@ -109,6 +109,7 @@ export function createRegistry(input: ServerDeps): Registry {
   const unavailable = (): never => { throw new FemError('session.expired', 'no request lease'); };
   const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, replaceCommands: unavailable, captureImport: unavailable, modelFile: unavailable, release: unavailable } });
   const request = async <T>(run: (scoped: Registry) => Promise<T>): Promise<T> => {
+    await deps.projectFiles.ready();
     const engine = await deps.engine.acquire();
     try { return await run(scopedRegistry({ ...deps, engine })); }
     finally { await engine.release(); }
@@ -180,13 +181,17 @@ export function errorText(e: unknown): string {
 }
 
 /** The MCP `Server`, with the four handlers this host answers. */
-export function createServer(deps: ServerDeps): { server: Server; registry: Registry } {
+export function createServer(deps: ServerDeps): { server: Server; registry: Registry; ready: Promise<void> } {
   const files = deps.projectFiles ?? nodeProjectFiles(deps.project);
   const registry = createRegistry({ ...deps, projectFiles: files });
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, resources: {} } },
   );
+  const ready = files.ready();
+  const connect = server.connect.bind(server);
+  // A custom embedded host calling server.connect directly gets the same startup barrier.
+  server.connect = async transport => { await ready; await connect(transport); };
   server.onclose = () => files.close();
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: toolList(registry) }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
@@ -201,5 +206,5 @@ export function createServer(deps: ServerDeps): { server: Server; registry: Regi
   server.setRequestHandler(ReadResourceRequestSchema, async (req) => ({
     contents: [{ uri: req.params.uri, mimeType: 'application/json', text: await readResource(registry, req.params.uri) }],
   }));
-  return { server, registry };
+  return { server, registry, ready };
 }

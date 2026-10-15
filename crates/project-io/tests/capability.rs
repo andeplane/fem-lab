@@ -28,6 +28,10 @@ fn independently_replaced_ancestor_cannot_redirect_prepared_read_or_write() {
     fs::write(root.path().join("nested/deep/file.inp"), b"inside bytes").unwrap();
     fs::create_dir(outside.path().join("deep")).unwrap();
     fs::write(outside.path().join("deep/file.inp"), b"OUTSIDE SENTINEL").unwrap();
+    // Positive control: the same fixture can be renamed before any capability is open.
+    // A later Windows denial must not be an ambient permission/setup failure.
+    fs::rename(root.path().join("nested"), root.path().join("original")).unwrap();
+    fs::rename(root.path().join("original"), root.path().join("nested")).unwrap();
     let project = Project::open(root.path()).unwrap();
     let prepared_read = project.prepare("nested/deep/file.inp", false).unwrap();
     let prepared_write = project.prepare("nested/deep/file.inp", true).unwrap();
@@ -37,16 +41,29 @@ fn independently_replaced_ancestor_cannot_redirect_prepared_read_or_write() {
     // The adversary is independent of the I/O implementation, and controls the exact
     // vulnerable interval after parent acquisition and before the final file open.
     let attacker = std::thread::spawn(move || {
-        fs::rename(root_path.join("nested"), root_path.join("original")).unwrap();
-        directory_link(&outside_path, &root_path.join("nested"));
-        swap.send(()).unwrap();
+        let replacement = fs::rename(root_path.join("nested"), root_path.join("original"));
+        if replacement.is_ok() {
+            directory_link(&outside_path, &root_path.join("nested"));
+        }
+        swap.send(replacement).unwrap();
     });
-    acknowledge.recv().unwrap();
+    let replacement = acknowledge.recv().unwrap();
+    #[cfg(not(windows))]
+    assert!(replacement.is_ok(), "the controlled ancestor substitution must succeed");
+    #[cfg(windows)]
+    if let Err(error) = &replacement {
+        // cap-std directory handles deny delete/rename sharing on Windows. The OS
+        // may prevent the attack itself; require the precise sharing/access denial.
+        assert!([Some(5), Some(32)].contains(&error.raw_os_error()), "{error}");
+    }
     assert_eq!(prepared_read.read().unwrap(), b"inside bytes");
     prepared_write.write(b"new inside").unwrap();
     assert_eq!(fs::read(outside.path().join("deep/file.inp")).unwrap(), b"OUTSIDE SENTINEL");
-    assert_eq!(fs::read(root.path().join("original/deep/file.inp")).unwrap(), b"new inside");
-    assert!(project.prepare("nested/file.inp", false).is_err());
+    let captured_path = if replacement.is_ok() { "original/deep/file.inp" } else { "nested/deep/file.inp" };
+    assert_eq!(fs::read(root.path().join(captured_path)).unwrap(), b"new inside");
+    if replacement.is_ok() {
+        assert!(project.prepare("nested/file.inp", false).is_err());
+    }
     attacker.join().unwrap();
 }
 
@@ -62,10 +79,20 @@ fn nested_creation_and_internal_directory_links_remain_confined() {
     let root_path = parent.path().join("root");
     fs::create_dir(&root_path).unwrap();
     fs::write(root_path.join("file"), b"captured").unwrap();
-    let captured = Project::open(&root_path).unwrap();
     fs::rename(&root_path, parent.path().join("old")).unwrap();
-    fs::create_dir(&root_path).unwrap();
-    fs::write(root_path.join("file"), b"replacement").unwrap();
+    fs::rename(parent.path().join("old"), &root_path).unwrap();
+    let captured = Project::open(&root_path).unwrap();
+    let replacement = fs::rename(&root_path, parent.path().join("old"));
+    #[cfg(not(windows))]
+    assert!(replacement.is_ok(), "the controlled root substitution must succeed");
+    #[cfg(windows)]
+    if let Err(error) = &replacement {
+        assert!([Some(5), Some(32)].contains(&error.raw_os_error()), "{error}");
+    }
+    if replacement.is_ok() {
+        fs::create_dir(&root_path).unwrap();
+        fs::write(root_path.join("file"), b"replacement").unwrap();
+    }
     assert_eq!(captured.prepare("file", false).unwrap().read().unwrap(), b"captured");
 }
 

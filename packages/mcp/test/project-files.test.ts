@@ -45,14 +45,15 @@ it('refuses intermediate and final links without reading or changing an outside 
   expect(await readFile(path.join(outside, 'sentinel'), 'utf8')).toBe('OUTSIDE');
 });
 
-it('requires authority and rejects cancellation before admission without creating a bridge', async () => {
+it('requires authority and rejects cancellation before admitting a disk operation', async () => {
   let factories = 0;
-  const bridge: ProjectBridge = { request: async () => { throw new Error('must not admit I/O'); }, close: () => {} };
+  const bridge: ProjectBridge = { ready: async () => {}, request: async () => { throw new Error('must not admit I/O'); }, close: () => {} };
   const factory = () => { factories++; return bridge; };
   const unscoped = nodeProjectFiles(undefined, factory);
   await expect(unscoped.read('input')).rejects.toMatchObject({ code: 'file.scope' });
   unscoped.close();
   const files = nodeProjectFiles('/unused', factory);
+  await files.ready();
   const abort = AbortSignal.abort(new Error('cancelled before admission'));
   await expect(files.read('input', abort)).rejects.toThrow('cancelled before admission');
   await expect(files.write('output', Buffer.from('bad'), abort)).rejects.toThrow('cancelled before admission');
@@ -60,7 +61,7 @@ it('requires authority and rejects cancellation before admission without creatin
   await expect(files.write('huge', new Uint8Array(64 * 1024 * 1024 + 1))).rejects.toMatchObject({ code: 'file.scope' });
   files.close();
   await expect(files.size('input')).rejects.toMatchObject({ code: 'file.scope' });
-  expect(factories).toBe(0);
+  expect(factories).toBe(1);
 });
 
 it('discards cancelled asynchronous reads and preserves typed helper failure details', async () => {
@@ -69,6 +70,7 @@ it('discards cancelled asynchronous reads and preserves typed helper failure det
   let calls = 0;
   let closes = 0;
   const files = nodeProjectFiles('/injected', () => ({
+    ready: async () => {},
     request: async () => { calls++; if (calls === 2) abort.abort(new Error('cancelled snapshot')); return replies.shift(); },
     close: () => { closes++; },
   }));
@@ -127,4 +129,28 @@ it('refuses another operation after a capability closes and propagates a broken 
   await new Promise(resolve => setTimeout(resolve,100));
   await expect(pipe.request({op:'stat',path:'file'})).rejects.toThrow();
   pipe.close();
+});
+
+it('can close before initialization and never admits a read cancelled during startup', async () => {
+  const closed = nodeProjectFiles('/unused', () => { throw new Error('must not capture after close'); });
+  closed.close();
+  await expect(closed.ready()).rejects.toThrow('closed');
+  let initialized!: () => void;
+  const gate = new Promise<void>(resolve => { initialized = resolve; });
+  let reads = 0;
+  const files = nodeProjectFiles('/unused', () => ({ ready: () => gate, request: async () => { reads++; return {data:'YQ=='}; }, close: () => {} }));
+  const abort = new AbortController();
+  const cancelled = files.read('input', abort.signal);
+  abort.abort(new Error('cancelled before startup completed'));
+  initialized();
+  await expect(cancelled).rejects.toThrow('cancelled before startup completed');
+  expect(reads).toBe(0);
+  files.close();
+  let opened!: () => void;
+  const slow = nodeProjectFiles('/unused', () => ({ ready: () => new Promise<void>(resolve => { opened = resolve; }), request: async () => { throw new Error('must not read after close'); }, close: () => {} }));
+  const pending = slow.read('input');
+  await Promise.resolve();
+  slow.close();
+  opened();
+  await expect(pending).rejects.toThrow('closed');
 });

@@ -14,7 +14,10 @@ API does not expose portable directory-relative opens.
 The TypeScript host retains an injected `ProjectFiles` boundary, implemented by a
 small engine-independent Rust helper using `cap-std` and `cap-fs-ext`. The helper
 captures the configured project directory once and uses relative operations on
-that handle. Preparing an operation captures a parent directory handle; the final
+that handle. Host startup awaits the helper's ready acknowledgement before MCP transport
+connection or tool admission, including embedded `createServer` callers. A directory
+replacement after session advertisement and before the first file operation cannot
+change that authority. Preparing an operation captures a parent directory handle; the final
 file open uses that handle with symlink following disabled. Metadata and reads or
 truncation use the opened regular file handle. Replacement of an ancestor cannot
 redirect the operation to a different directory. Only initial root acquisition
@@ -47,6 +50,10 @@ The deterministic regression captures the real production parent capability,
 then an independent thread replaces its ancestor with a link to an outside
 sentinel before read/write. The returned bytes and changed file must belong to
 the original captured directory and the outside sentinel must remain unchanged.
+On Windows, captured directory handles can instead prevent the attempted rename with
+access/sharing denial (Win32 5/32); the regression requires those precise OS errors,
+then verifies inside operations and the unchanged outside sentinel. It never skips
+an unsupported substitution or treats arbitrary I/O failure as a passing oracle.
 Cross-platform CI executes this test without substituting a fake filesystem.
 
 The upstream contracts are [directory-relative cap-std operations](https://docs.rs/cap-std/4.0.3/cap_std/fs/struct.Dir.html)
