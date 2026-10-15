@@ -1,15 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { Provider } from '../../app/src/ai/eval-api';
 import type { QueryDef } from '@femlab/registry';
 import { EVAL_CASES } from '../src/cases';
+import { boundedProvider, EvaluationBudget } from '../src/budget';
 import { evaluateCase, type RemoteEngine } from '../src/remote';
 import { scoreCase } from '../src/score';
-import { credentialAvailability, runLane, serializeArtifact, type EvalAdapter, type EvaluationArtifact } from '../src/runner';
+import { credentialAvailability, runCheckpointedLane, runLane, serializeArtifact, type EvalAdapter, type EvaluationArtifact } from '../src/runner';
 import { assertInFrozenPackage, serveFrozenApp } from '../src/static-app';
-import type { EvalCase, EvalEvidence, HostKind, ToolTrace } from '../src/types';
+import type { EvalCase, EvalEvidence, HostKind, LaneResult, ToolTrace } from '../src/types';
 
 const valued = (value: number, unit: string) => ({ value, unit });
 const entry = (cmd: Record<string, unknown>, seq: number) => ({ seq, hashAfter: `h${seq}`, cmd });
@@ -316,6 +317,107 @@ function scriptedAdapter(host: HostKind, seen: string[], live = false): EvalAdap
 }
 
 describe('lane orchestration and artifacts', () => {
+  it('durably retains failed and completed prefixes during later admissions and request checkpoints across hosts', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'femlab-prefix-'));
+    const output = path.join(directory, 'checkpoint.json');
+    const lanes: LaneResult[] = [];
+    let caseInFlight = false;
+    const budget = new EvaluationBudget({ model: 'gpt-6.1-sol', maxUsd: 1, maxRequests: 4, maxInputTokens: 1000 });
+    const persist = async () => { await writeFile(output, JSON.stringify({ lanes, caseInFlight, budget: budget.snapshot() })); };
+    const read = async () => JSON.parse(await readFile(output, 'utf8')) as { lanes: LaneResult[]; caseInFlight: boolean; budget: ReturnType<EvaluationBudget['snapshot']> };
+    const firstEvidence = complete(EVAL_CASES[0]!);
+    // Keep a real failed observation, including its immutable solve identity and journal.
+    (firstEvidence.result as { extremes: { max: { value: number } }[] }).extremes[0]!.max.value *= 2;
+    const expectedFirst = JSON.parse(JSON.stringify(scoreCase(EVAL_CASES[0]!, firstEvidence)));
+    expect(expectedFirst.passed).toBe(false);
+    const seen: string[] = [];
+    try {
+      for (const host of ['browser', 'mcp'] as const) {
+        let release!: () => void;
+        let entered!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const inSecond = new Promise<void>(resolve => { entered = resolve; });
+        let finishRequest!: () => void;
+        let settled!: () => void;
+        const requestHeld = new Promise<void>(resolve => { finishRequest = resolve; });
+        const requestSettled = new Promise<void>(resolve => { settled = resolve; });
+        const fakeProvider: Provider = {
+          id: 'openai', models: ['gpt-6.1-sol'],
+          async *chat() {
+            entered();
+            await requestHeld;
+            yield { type: 'usage', usage: { input: 90, cacheRead: 10, output: 20 } };
+            yield { type: 'done', stopReason: 'stop' };
+          },
+        };
+        const provider = boundedProvider(fakeProvider, budget, async () => 100, async () => undefined, async () => {
+          await persist();
+          if (budget.snapshot().inFlightRequests === 0) settled();
+        });
+        const completedBrowser = host === 'mcp' ? JSON.parse(JSON.stringify(lanes[0])) : undefined;
+        const running = runCheckpointedLane({
+          host, live: true, availability: async () => ({ available: true }), close: async () => undefined,
+          execute: async spec => {
+            seen.push(`${host}:${spec.id}`);
+            if (spec.id === EVAL_CASES[1]!.id) {
+              for await (const event of provider.chat({ system: 'fixture only', messages: [], tools: [], model: 'gpt-6.1-sol', maxTokens: 1000 })) {
+                expect(event.type).not.toBe('error');
+              }
+              await held;
+            }
+            return spec.id === EVAL_CASES[0]!.id ? firstEvidence : complete(spec);
+          },
+        }, EVAL_CASES, lanes, {
+          beforeCase: async () => {
+            caseInFlight = true;
+            await persist();
+            if (seen.includes(`${host}:${EVAL_CASES[0]!.id}`)) {
+              const admitted = await read();
+              expect(admitted.lanes.find(lane => lane.host === host)?.cases[0]).toEqual(expectedFirst);
+            }
+          },
+          onCase: async () => { caseInFlight = false; await persist(); },
+        });
+        try {
+          await inSecond;
+          for (const inFlightRequests of [1, 0]) {
+            if (inFlightRequests === 0) { finishRequest(); await requestSettled; }
+            const checkpoint = await read();
+            expect(checkpoint).toMatchObject({ caseInFlight: true, budget: { inFlightRequests, stoppedReason: null } });
+            expect(checkpoint.lanes.find(lane => lane.host === host)).toMatchObject({ status: 'interrupted', gatePassed: false, total: 20, cases: [expectedFirst] });
+            if (completedBrowser) expect(checkpoint.lanes[0]).toEqual(completedBrowser);
+          }
+        } finally { finishRequest(); release(); await running; }
+        const result = await running;
+        await persist();
+        expect(result).toMatchObject({ status: 'completed', passed: 19, total: 20 });
+        expect(lanes.filter(lane => lane.host === host)).toHaveLength(1);
+      }
+      expect(seen).toEqual(['browser', 'mcp'].flatMap(host => EVAL_CASES.map(spec => `${host}:${spec.id}`)));
+      expect((await read()).lanes.map(lane => lane.cases.length)).toEqual([20, 20]);
+    } finally { await rm(directory, { recursive: true }); }
+  });
+
+  it('keeps resumed evidence at the first admission and never retries a failed completed case', async () => {
+    const browser = await runLane(scriptedAdapter('browser', [], true));
+    const failedEvidence: EvalEvidence = { status: 'error', reason: 'preserved original failure', trace: [] };
+    const failed = scoreCase(EVAL_CASES[0]!, failedEvidence);
+    const lanes: LaneResult[] = [browser, { ...browser, host: 'mcp', cases: [failed], status: 'interrupted', passed: 0, passRate: 0, gatePassed: false }];
+    const seen: string[] = [];
+    let admission: LaneResult[] | undefined;
+    const result = await runCheckpointedLane(scriptedAdapter('mcp', seen, true), EVAL_CASES, lanes, {
+      completed: [failed],
+      beforeCase: async () => { admission = JSON.parse(JSON.stringify(lanes)); throw new Error('admission stopped'); },
+    });
+    expect(admission?.[0]).toEqual(JSON.parse(JSON.stringify(browser)));
+    expect(admission?.[1]?.cases).toEqual([JSON.parse(JSON.stringify(failed))]);
+    expect(result).toMatchObject({ status: 'interrupted', reason: 'admission stopped', cases: [failed] });
+    expect(seen).toEqual([]);
+    expect(lanes).toHaveLength(2);
+    expect(lanes[0]).toBe(browser);
+    expect(lanes[1]).toBe(result);
+  });
+
   it('pins every independent probe, catalogue and frame read to the captured Result id', async () => {
     for (const id of ['H1', 'D1']) {
       const spec = EVAL_CASES.find((candidate) => candidate.id === id)!;

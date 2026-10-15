@@ -51,6 +51,27 @@ export async function runLane(adapter: EvalAdapter, specs: readonly EvalCase[] =
   return laneResult(adapter.host, adapter.live, scores);
 }
 
+/** Replace one host's checkpoint without dropping any other host's completed evidence. */
+export function retainLane(lanes: LaneResult[], lane: LaneResult): void {
+  const index = lanes.findIndex(existing => existing.host === lane.host);
+  if (index < 0) lanes.push(lane);
+  else lanes[index] = lane;
+}
+
+/** Keep the completed prefix in shared checkpoint state while the next case is in flight. */
+export async function runCheckpointedLane(adapter: EvalAdapter, specs: readonly EvalCase[], lanes: LaneResult[], options: LaneOptions = {}): Promise<LaneResult> {
+  const lane = await runLane(adapter, specs, {
+    ...options,
+    onCase: async scores => {
+      const partial = laneResult(adapter.host, adapter.live, [...scores]);
+      retainLane(lanes, { ...partial, status: 'interrupted', reason: 'evaluation in progress', total: specs.length, passRate: partial.passed / specs.length, gatePassed: false });
+      await options.onCase?.(scores);
+    },
+  });
+  retainLane(lanes, lane);
+  return lane;
+}
+
 export interface FrozenManifest {
   gitCommit: string;
   dirty: boolean;

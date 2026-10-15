@@ -12,8 +12,7 @@ import { EVAL_CASES } from '../src/cases';
 import { prepareFrozenBuild, hashFrozenArtifacts } from '../src/frozen-build';
 import { preparationPolicy } from '../src/preparation-policy';
 import { markdownReport } from '../src/report';
-import { runLane, serializeArtifact, type EvaluationArtifact, type FrozenManifest, type EvalAdapter } from '../src/runner';
-import { laneResult } from '../src/score';
+import { retainLane, runCheckpointedLane, serializeArtifact, type EvaluationArtifact, type FrozenManifest, type EvalAdapter } from '../src/runner';
 import { assertInFrozenPackage, serveFrozenApp } from '../src/static-app';
 import type { LaneResult } from '../src/types';
 
@@ -78,7 +77,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
       hosts: { browser: { capabilities: 'not-run' }, mcp: { node: process.version, platform: process.platform, arch: process.arch, capabilities: 'not-run' } },
       provider: 'openai', model, configuration, startedAt: runStartedAt, finishedAt: startedAt,
     };
-    const lanes: LaneResult[] = [];
+    const lanes: LaneResult[] = [...(previous?.lanes ?? [])];
     let persistence = Promise.resolve();
     const persist = async () => {
       manifest.finishedAt = new Date().toISOString();
@@ -103,14 +102,12 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
         const reason = unavailable ?? (preparationOnly ? 'preparation only; no generation requested' : undefined);
         const actual: EvalAdapter = reason ? { host: adapter.host, live: true, availability: async () => ({ available: false, reason }), execute: spec => adapter.execute(spec), close: () => adapter.close() } : adapter;
         const prior = previous?.lanes.find(lane => lane.host === actual.host);
-        const lane = await runLane(actual, EVAL_CASES, { completed: prior?.cases, beforeCase, onCase: async scores => {
+        const lane = await runCheckpointedLane(actual, EVAL_CASES, lanes, { completed: prior?.cases, beforeCase, onCase: async () => {
           caseInFlight = false;
-          lanes[lanes.length] = { ...laneResult(actual.host, actual.live, [...scores]), status: 'interrupted', reason: 'evaluation in progress', gatePassed: false };
           await persist();
-          lanes.pop();
         } });
         const stopped = budget.snapshot().stoppedReason;
-        lanes.push(stopped ? { ...lane, status: 'interrupted', reason: stopped, total: 20, passRate: lane.passed / 20, gatePassed: false } : lane);
+        retainLane(lanes, stopped ? { ...lane, status: 'interrupted', reason: stopped, total: 20, passRate: lane.passed / 20, gatePassed: false } : lane);
         await persist();
       }
     } finally { await server?.close(); }

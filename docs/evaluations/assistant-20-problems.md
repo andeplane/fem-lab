@@ -148,7 +148,9 @@ is changed by this runner. Set `FEMLAB_EVAL_MAX_USD`, `FEMLAB_EVAL_MAX_REQUESTS`
 manifest before a run; budget changes require a new run.
 
 Checkpoint JSON is written atomically before generation reservations, after settlement and
-after every case. A case or request still in flight cannot be resumed, and unknown billing
+after every case. Completed case prefixes remain in every later admission and request
+checkpoint, including failed observations; MCP progress retains the completed browser lane.
+A case or request still in flight cannot be resumed, and unknown billing
 requires a new run. At a clean case boundary, `FEMLAB_EVAL_RESUME=/absolute/path/run.json`
 reuses only the exact completed prefix under identical source, provider configuration,
 case specification and app/MCP artifact hashes, including isolated external dependencies and their resolution lock. Earlier failures remain scored; they are
