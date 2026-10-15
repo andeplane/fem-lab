@@ -26,7 +26,8 @@ fn independently_replaced_ancestor_cannot_redirect_prepared_read_or_write() {
     let outside = TempDir::new().unwrap();
     fs::create_dir_all(root.path().join("nested/deep")).unwrap();
     fs::write(root.path().join("nested/deep/file.inp"), b"inside bytes").unwrap();
-    fs::write(outside.path().join("file.inp"), b"OUTSIDE SENTINEL").unwrap();
+    fs::create_dir(outside.path().join("deep")).unwrap();
+    fs::write(outside.path().join("deep/file.inp"), b"OUTSIDE SENTINEL").unwrap();
     let project = Project::open(root.path()).unwrap();
     let prepared_read = project.prepare("nested/deep/file.inp", false).unwrap();
     let prepared_write = project.prepare("nested/deep/file.inp", true).unwrap();
@@ -43,7 +44,7 @@ fn independently_replaced_ancestor_cannot_redirect_prepared_read_or_write() {
     acknowledge.recv().unwrap();
     assert_eq!(prepared_read.read().unwrap(), b"inside bytes");
     prepared_write.write(b"new inside").unwrap();
-    assert_eq!(fs::read(outside.path().join("file.inp")).unwrap(), b"OUTSIDE SENTINEL");
+    assert_eq!(fs::read(outside.path().join("deep/file.inp")).unwrap(), b"OUTSIDE SENTINEL");
     assert_eq!(fs::read(root.path().join("original/deep/file.inp")).unwrap(), b"new inside");
     assert!(project.prepare("nested/file.inp", false).is_err());
     attacker.join().unwrap();
