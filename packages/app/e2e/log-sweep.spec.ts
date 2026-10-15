@@ -40,7 +40,8 @@ for (const [stop, points, every] of [[1e100, 3, 1], [1e100, 9, 4], [1e20, 3, 1],
     expect(sampled.modalAfter).toEqual(sampled.modalBefore);
     expect(sampled.modeAfter).toEqual(sampled.modeBefore);
     expect(sampled.catalogue.records.map(row => row.step).sort()).toEqual(['modes', 'sweep']);
-    const rows = sampled.response.sweep;
+    expect(sampled.response.sweep).toBeDefined();
+    const rows = sampled.response.sweep!;
     const indices = Array.from({ length: points! }, (_, i) => i)
       .filter(i => i === 0 || i % every! === 0 || i === points! - 1);
     expect(rows).toHaveLength(indices.length);
