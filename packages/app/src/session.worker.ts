@@ -7,7 +7,7 @@ import type { SessionRequest } from './session-protocol';
 const runtime = new SessionRuntime(async (options, epoch) => {
   await init({ module_or_path: wasmUrl });
   return SessionEngine.create(options, epoch);
-}, (ticket, options) => PreparedEngine.create(ticket, options));
+}, (ticket, options) => PreparedEngine.create(ticket, options), () => performance.now());
 self.onmessage = (event: MessageEvent<SessionRequest>) => {
   void runtime.accept(event.data, (reply, raw = []) => self.postMessage(reply, raw));
 };

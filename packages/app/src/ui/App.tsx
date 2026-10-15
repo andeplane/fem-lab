@@ -263,6 +263,7 @@ function SolvingCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="mono solving-meta">
         {s.progress?.phase ?? 'starting'} · {percent} % · the viewer stays interactive; cancelling replays the Journal without this solve
       </div>
+      {s.progress?.message ? <div class="mono solving-message">{s.progress.message}</div> : null}
     </div>
   );
 }
