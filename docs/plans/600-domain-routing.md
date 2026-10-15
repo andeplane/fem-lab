@@ -20,10 +20,10 @@ managed certificate for `api.femlab.app`, a MODERN policy with TLS 1.2 minimum, 
 generation; serverless NEG backend timeout rules differ from VM backend timeouts.
 
 The provisioner checks existing NEG/backend/map/proxy/forwarding targets before reusing
-them. It has completed twice against the actual resources. Syntax and diff checks pass.
-The API certificate is still `PROVISIONING`; this is not HTTPS acceptance evidence.
-Firebase Hosting has registered the root domain and a `www` redirect to the root; both
-are waiting for ownership/DNS validation.
+them. It has completed against the final actual resources. The API certificate is
+`ACTIVE`; Firebase reports `OWNERSHIP_ACTIVE`, `HOST_ACTIVE` and `CERT_ACTIVE` for both
+app domains. Normally validated HTTPS succeeds on all three domains; `www` redirects
+to the root and the API returns HTTP 200 from `/ready`.
 
 ## Cloudflare records to apply
 
@@ -40,11 +40,18 @@ already publish separate `_acme-challenge` values. If Firebase still requires it
 challenge after the A/CNAME records propagate, add the current value alongside those
 records. Do not copy an old temporary certificate challenge from a document.
 
-The owner confirmed purchase of `femlab.app` on 2026-10-15. The Mac is still locked and
-the authenticated Cloudflare console is unavailable. A fresh public DNS check found no
-root A/AAAA/TXT records and no `www` or `api` records. No Cloudflare write has been
-performed by this implementation. The Google provisioner has been rerun; the API
-certificate remains `PROVISIONING`, and Hosting ownership remains `OWNERSHIP_MISSING`.
+The owner confirmed purchase of `femlab.app` on 2026-10-15 and unlocked the console.
+The authenticated personal Cloudflare account shows the registration active through
+2027-10-14. All four records above have been saved with DNS-only routing, plus the two
+current Firebase certificate-verification TXT records. The existing Cloudflare-managed
+root certificate TXT values remain present alongside the Firebase challenge.
+
+Public Google DNS independently resolves the app/root and `www` to Firebase and `api`
+to `8.233.57.92`, and returns the ownership and certificate challenges. A second API
+certificate triggered a fresh validation after DNS activation. Both became active;
+the redundant validation certificate was then detached and removed, retaining the
+canonical `femlab-api-certificate`. HTTPS readiness passed before cleanup, and the
+provisioner successfully verified the final single-certificate binding.
 
 ## Activate and verify
 
@@ -74,13 +81,40 @@ checkout, custom-domain Auth/API configuration, wrong-project refusal, and unrea
 refusal. A real production `--build-only` run from source `a02d6f7b` compiled successfully
 and passed the built-artifact secret check. No Firebase release was published by that run.
 
-Before enabling Stripe, configure the backend's canonical return origin to the new app
-domain and verify checkout/portal return handling for locally saved projects. The current
-baseline still uses the Google app URL, and paid billing remains disabled.
+The production browser was released from source `a02d6f7b` with the custom API origin
+and same-origin Auth helper. Its build passed the secret check. Cloud Run revision
+`femlab-api-domain-600` now uses canonical return origin `https://femlab.app`; it was
+deployed at zero traffic and passed candidate readiness before promotion. The prior
+healthy `femlab-api-r65e24b18` revision is retained for rollback. The release script now
+preserves this return origin on future production releases.
 
-The current working app is https://femlab-app.web.app; staging is
+Before enabling Stripe, verify checkout/portal return handling for locally saved
+projects. Paid billing remains disabled.
+
+The current primary app is https://femlab.app; the Google alias is retained. Staging is
 https://femlab-app-staging.web.app. Long real streams have passed directly through Cloud
-Run, while final-domain streaming remains pending DNS/TLS. Paid billing remains disabled.
+Run and through the final domain.
+
+## Final-domain acceptance, 2026-10-15
+
+Chromium on `femlab.app` exchanged an Admin-generated email action link without sending
+an email, received the free 200,000-credit allowance, and displayed a real Mini answer
+from `api.femlab.app`. Signing out cleared the account while preserving the local Model.
+The browser build passed its artifact secret check. Actual inbox delivery is a separate
+gate; Google-provider acceptance is tracked in [#616](616-google-sign-in.md).
+
+The load balancer passed exact-origin CORS and rejected an unrelated origin. A real
+16,000-token Astra stream remained open for **227.451 seconds** after SSE headers, with
+a confirmed immutable receipt for 1,068,400 credits. The response hit its configured
+output limit, so no completed-answer event was claimed. Replaying the same request key
+returned the existing request rather than another generation.
+
+A separate Mini stream was canceled after receiving text. It settled with one confirmed
+receipt for 167,700 subcredits (5,590 credits). These checks used an isolated one-hour
+`qa:600` grant on a disposable account, without creating a Stripe subscription or charging
+a customer. Durable deletion completed and the old identity token returned HTTP 401.
+Earlier disposable fixtures were also deleted after their shorter transport checks.
 
 References: [Google's serverless load-balancer setup](https://docs.cloud.google.com/load-balancing/docs/https/setup-global-ext-https-serverless),
-[Firebase custom-domain API](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/projects.sites.customDomains).
+[Firebase custom-domain API](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/projects.sites.customDomains),
+[Google certificate troubleshooting](https://docs.cloud.google.com/load-balancing/docs/ssl-certificates/troubleshooting).
