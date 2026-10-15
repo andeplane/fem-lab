@@ -256,6 +256,14 @@ describe('a remembered project folder', () => {
     expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 5 });
   });
 
+  it('can remember a new explicit selection with the same name as a previously failed restore', async () => {
+    const store = crumbs({ [RESTORING]: 'corbel' });
+    await rememberHandle(dirHandle('corbel'), factory, () => 8, store);
+    expect(store.all).toEqual({});
+    expect(await recallHandle(factory, store)).toMatchObject({ kind: 'directory', name: 'corbel' });
+    expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 8 });
+  });
+
   it('drops a handle an older build left without a descriptor beside it', async () => {
     await tx(factory, HANDLES, 'readwrite', (s) => s.put(dirHandle('orphan'), 'folder'));
     expect(await rememberedFolder(factory)).toBeNull();
@@ -285,15 +293,17 @@ describe('a remembered project folder', () => {
     expect(store.all).toEqual({});
   });
   it('does not report handle persistence when the transaction aborts after request success', async () => {
+    const store = crumbs({ [RESTORING]: 'aborted' });
     const put = IDBObjectStore.prototype.put;
     const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
       const request = put.call(this, value, key);
       if (this.name === HANDLES && key === 'folder:info') request.addEventListener('success', () => this.transaction.abort(), { once: true });
       return request;
     });
-    try { await expect(rememberHandle(dirHandle('aborted'), factory)).rejects.toMatchObject({ name: 'AbortError' }); }
+    try { await expect(rememberHandle(dirHandle('aborted'), factory, () => 8, store)).rejects.toMatchObject({ name: 'AbortError' }); }
     finally { spy.mockRestore(); }
     expect(await handleKeys()).toEqual([]);
+    expect(store.all).toEqual({ [RESTORING]: 'aborted' });
   });
 
   it('does not report forgetting when the final successful delete is rolled back', async () => {

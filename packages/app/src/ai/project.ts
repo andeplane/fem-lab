@@ -271,11 +271,14 @@ async function writeHandleRecords(factory: IDBFactory, change: (store: IDBObject
   } finally { db.close(); }
 }
 
-export async function rememberHandle(handle: DirHandle, factory: IDBFactory = indexedDB, now: () => number = () => Date.now()): Promise<void> {
+export async function rememberHandle(handle: DirHandle, factory: IDBFactory = indexedDB, now: () => number = () => Date.now(), crumbs: Breadcrumbs = localStorage): Promise<void> {
   await writeHandleRecords(factory, store => {
     store.put(handle, KEY);
     store.put({ name: handle.name, at: now() } satisfies RememberedFolder, INFO);
   });
+  // A new explicit selection supersedes the previous failed restore, even with the same name.
+  // Keep the guard until replacement storage has actually committed.
+  crumbs.removeItem(RESTORING);
 }
 
 /**
