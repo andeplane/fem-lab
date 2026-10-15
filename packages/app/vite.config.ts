@@ -55,7 +55,7 @@ export default defineConfig(({ command }) => ({
       if (apiOrigin) html = html.replace("connect-src 'self' https://api.anthropic.com https://api.openai.com", `connect-src 'self' ${new URL(apiOrigin).origin} https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com`);
       if(ctx.filename.endsWith('/signin.html')&&firebaseConfig!=='null'){
         const authDomain=(JSON.parse(firebaseConfig) as {authDomain?:string}).authDomain;
-        if(authDomain){const origin=new URL(`https://${authDomain}`).origin;if(origin!==`https://${authDomain}`)throw new Error('Firebase authDomain must be a hostname.');html=html.replace("frame-src 'self'",`frame-src 'self' ${origin}/__/auth/iframe`);}
+        if(authDomain){const origin=new URL(`https://${authDomain}`).origin;if(origin!==`https://${authDomain}`)throw new Error('Firebase authDomain must be a hostname.');html=html.replace("frame-src 'none'",`frame-src ${origin}/__/auth/iframe`);}
       }
       return ctx.server ? html.replace("connect-src 'self'", "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:*") : html;
     },

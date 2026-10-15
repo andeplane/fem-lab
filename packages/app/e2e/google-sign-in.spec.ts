@@ -18,6 +18,7 @@ for(const controlled of [false,true])test(`@cpu sign-in host preserves shared ta
   const policy=await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
   expect(policy).toContain('https://apis.google.com/js/api.js');expect(policy).toContain('https://apis.google.com/_/scs/abc-static/_/js/');
   expect(policy).not.toMatch(/unsafe-inline|unsafe-eval|\*/);
+  expect(policy).toContain("frame-src 'none'");
   await page.getByRole('link',{name:'Return to FEM Lab'}).click();await page.waitForFunction(()=>Boolean(window.fem)&&crossOriginIsolated,undefined,{timeout:60000});
 });
 
