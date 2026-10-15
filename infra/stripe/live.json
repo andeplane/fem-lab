@@ -88,5 +88,5 @@
   "managedPaymentsAccountEnabled": true,
   "managedPaymentsEligibilityConfirmed": true,
   "managedPaymentsTermsAccepted": false,
-  "managedPaymentsCheckoutVerified": false
+  "managedPaymentsCheckoutVerified": true
 }
