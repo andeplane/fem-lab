@@ -7,7 +7,8 @@ Implementation and evidence: [#652](https://github.com/andeplane/fem-lab/issues/
 [#654](https://github.com/andeplane/fem-lab/issues/654),
 [#655](https://github.com/andeplane/fem-lab/issues/655),
 [#656](https://github.com/andeplane/fem-lab/issues/656),
-[#657](https://github.com/andeplane/fem-lab/issues/657).
+[#657](https://github.com/andeplane/fem-lab/issues/657),
+[#673](https://github.com/andeplane/fem-lab/issues/673).
 
 **Status, 2026-10-15: in progress.** This is an acceptance plan, not a statement that
 these capabilities have shipped. The children are in progress; their separate PRs and the
@@ -55,6 +56,7 @@ is compiled. This plan does not invent a second wire schema.
 | [#653](https://github.com/andeplane/fem-lab/issues/653) | Quote-aware assembly normalizer over the #652 source contract; engine consumes only supplied include contents | Unchanged independent export, reused/transformed instances, duplicate local labels, exact sets/surfaces and source-located failure cases |
 | [#654](https://github.com/andeplane/fem-lab/issues/654) | Typed analysis translation over #652/#653; density/time/report contract consumed by #657 | Pressure, multiple materials and multiple linear-static cases with independent numerical/refinement answers and active-state semantics |
 | [#655](https://github.com/andeplane/fem-lab/issues/655) | Tet10/Hex20 source kinds over #652; connectivity records coordinated with #653 and face loads with #654 | Original curved geometry, shared curved faces, sound admission, source order/labels and independent C3D10/C3D20 comparisons |
+| [#673](https://github.com/andeplane/fem-lab/issues/673) | Explicit small-strain Hex8 mean-dilatation (B-bar) for Abaqus C3D8, discovered by the unchanged independently published CAE case | Preserve existing Full Journals; volume-weighted distorted-cell patch and energy/refinement oracles; all 825 authored displacement components at the predeclared corpus tolerance; CPU thread determinism and software-adapter GPU correctness |
 | [#656](https://github.com/andeplane/fem-lab/issues/656) | Independent corpus and reference ledger, assembled alongside implementation | Exact source/license/digest/solver receipts; executable acceptance only on completed paths; remaining gaps visible |
 | [#657](https://github.com/andeplane/fem-lab/issues/657) | Browser/CLI/MCP acquisition and reports over #653 supplied-bundle and #654 unit/report contracts | Real file/folder flow through inspection, solve, comparison and portable reopen; path/cancellation/admission atomicity |
 
@@ -219,3 +221,23 @@ The boundaries remain the existing [registry/Journal](../adr/0003-everything-is-
 [Rust/host split](../adr/0012-engine-in-rust-hosts-in-typescript.md),
 [SI Quantities](../adr/0008-si-inside-units-at-the-boundary.md) and
 [independent-oracle rules](../adr/0007-three-test-tiers-and-gpu-in-ci.md).
+
+## C3D8 formulation finding — issue #673
+
+The unchanged independently published Abaqus/CAE Job-11 case admitted all original
+coordinates and identities and conserved its 4 MN load, but the original Full Hex8
+operator differed from the authored displacement report by up to `1.500332e-5 m`.
+Abaqus C3D8 uses mean-dilatation B-bar, rather than pointwise full integration. The
+explicit new formulation reduces the actual native CLI error to `4.980294e-10 m`,
+within the independent corpus tolerance declared before the diagnostic (`7.16712e-10 m`).
+All 825 displacement components are compared. The original `full` and omitted
+imported-source Journal meanings remain unchanged; new C3D8 conversions explicitly
+select `mean-dilatation`. Other supported source kinds retain their full integration.
+
+A separate stricter per-token diagnostic retains four near-quantum discrepancies.
+Their agreement after binary32 rounding is evidence consistent with stored single
+precision, whose actual use in the author's result is unknown. Neither reference
+values nor either original tolerance is relaxed. The source and report remain
+separately LGPLv3-licensed originals. See [ADR 0034](../adr/0034-explicit-mean-dilatation-hex8.md).
+This finding adds implementation work; it does not close parent #650 or replace
+the composed browser/CLI/portable-file acceptance matrix.

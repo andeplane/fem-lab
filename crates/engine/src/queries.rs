@@ -111,15 +111,43 @@ impl Engine {
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
-            Query::ConvertAbaqus { text, name, body, mode, unit_length, unit_force, sha256 } => match mode {
+            Query::AbaqusDependencies { text, source_name, source_files } => {
+                crate::io::abaqus_deck::source_dependencies(&text, source_name.as_deref(), &source_files)
+                    .map(|missing_files| QueryResult::AbaqusDependencies(AbaqusDependencies { missing_files }))
+            }
+            Query::ConvertAbaqus {
+                text,
+                name,
+                body,
+                mode,
+                unit_length,
+                unit_force,
+                unit_time,
+                source_name,
+                source_files,
+                sha256,
+            } => match mode {
                 AbaqusImportMode::Mesh => {
                     if unit_force.is_some() {
                         return Err(Error::schema("unitForce is supported only in static mode")
                             .at("unitForce")
                             .suggest("query.convertAbaqus with mode static"));
                     }
-                    crate::io::abaqus::convert_mesh(&text, &name, &body, &unit_length, &sha256)
-                        .map(QueryResult::AbaqusConversion)
+                    if unit_time.is_some() {
+                        return Err(Error::schema("unitTime is supported only in static mode")
+                            .at("unitTime")
+                            .suggest("query.convertAbaqus with mode static"));
+                    }
+                    crate::io::abaqus::convert_mesh_sources(
+                        &text,
+                        &name,
+                        &body,
+                        &unit_length,
+                        source_name.as_deref(),
+                        &source_files,
+                        &sha256,
+                    )
+                    .map(QueryResult::AbaqusConversion)
                 }
                 AbaqusImportMode::Static => {
                     let force = unit_force.ok_or_else(|| {
@@ -127,8 +155,18 @@ impl Engine {
                             .at("unitForce")
                             .suggest("query.convertAbaqus with mode static and unitForce, for example 1 N")
                     })?;
-                    crate::io::abaqus_static::convert_static(&text, &name, &body, &unit_length, &force, &sha256)
-                        .map(QueryResult::AbaqusConversion)
+                    crate::io::abaqus_static::convert_static(
+                        &text,
+                        &name,
+                        &body,
+                        &unit_length,
+                        &force,
+                        unit_time.as_ref(),
+                        source_name.as_deref(),
+                        &source_files,
+                        &sha256,
+                    )
+                    .map(QueryResult::AbaqusConversion)
                 }
             },
             Query::MaterialLibrary { name } => {

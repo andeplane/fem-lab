@@ -279,34 +279,38 @@ pub enum Query {
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
 
-    /// Check a bounded Abaqus text deck using an explicit positive length Quantity per
-    /// source coordinate. Requires its lowercase SHA-256 and returns a report plus ordinary
-    /// portable Commands for a new Model. Supports HEADING, NODE (global SYSTEM=R), ELEMENT
-    /// (standard C3D4/C3D8), NSET/ELSET lists/GENERATE/prior Set references, explicit
-    /// SURFACE TYPE=ELEMENT and PREPRINT flags. Requires one homogeneous connected conforming
-    /// Body. Set names are unquoted [A-Za-z][A-Za-z0-9_-]*, at most 80 characters, normalized
-    /// uppercase; labels are 1..999999999. Accepts E/D numbers, LF/CRLF, full case-insensitive
-    /// keyword spellings, 256-character physical lines and comma keyword continuation.
-    /// Rejects abbreviations, quoted labels, repeated SURFACE names and every unsupported
-    /// keyword/parameter. Mesh mode rejects all analysis/material intent and unitForce.
-    /// Static mode additionally requires a positive force Quantity per source force and
-    /// supports one MATERIAL with a single constant isotropic ELASTIC E/nu record, one
-    /// SOLID SECTION covering every element, one NLGEOM=NO STEP/STATIC/END STEP, direct
-    /// displacement BOUNDARY DOFs 1..3 and Step CLOAD DOFs 1..3. Coordinates/displacements
-    /// scale by L, forces by F and modulus by F/L²; no units are inferred. Model-data
-    /// BOUNDARY must be zero. NSET CLOAD is per member node, converted to Set total;
-    /// numeric targets get explicit singleton Sets. Conflicting prescribed values and
-    /// overlapping CLOAD updates fail. Static accepts absent/default increment fields
-    /// only (zero also denotes the default in its first three fields), imports final
-    /// linear equilibrium without increment history, and never solves.
-    /// Density/thermal/plastic tables, multiple materials/sections/Steps, DLOAD and OUTPUT
-    /// requests remain unsupported. Bounds: 250000 nodes,
-    /// 250000 elements and 1000000 expanded membership declarations before deduplication.
-    /// No paths, includes, file I/O or active Model mutation. Input and serialized response
-    /// are each bounded to 16 MiB; name is nonblank and at most 1024 UTF-8 bytes. This is
-    /// checked conversion, not publication approval:
-    /// hosts must prepare the Commands through Candidate, enforce the exact serialized
-    /// Model-file limit and publish atomically before replacing the active document.
+    /// Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.
+    /// Uses the same bounded lexer and safe relative-path graph as conversion. This read
+    /// performs no model/physics conversion or file/network I/O; hosts can acquire listed
+    /// files through their captured scoped I/O and repeat until the bundle is complete.
+    /// The actual conversion still rejects missing files and never publishes partial data.
+    #[serde(rename = "query.abaqusDependencies", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "AbaqusDependencies"))]
+    AbaqusDependencies {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_name: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        source_files: BTreeMap<String, String>,
+    },
+
+    /// Convert a bounded Abaqus text deck to checked portable Commands without mutating
+    /// the active Model or solving. Explicit positive unitLength and static-mode unitForce
+    /// define source units; coordinates/displacements scale by L, forces by F and stress
+    /// by F/L². Structural instances, labels, exact Sets and surfaces are normalized by
+    /// the typed deck reader. The report records all translated analysis Steps and notes
+    /// recognized requests whose output/increment execution differs from FEM Lab.
+    /// Static mode imports constant isotropic materials and exact nonoverlapping solid
+    /// section regions covering every element, direct or solid symbolic BOUNDARY,
+    /// CLOAD and uniform DLOAD Pn / DSLOAD P pressure. Multiple small-displacement static
+    /// Steps retain effective inherited loads/supports; OP=NEW resets that family's state,
+    /// OP=MOD updates it. Conflicting repeated definitions within one Step fail explicitly.
+    /// Each Step configures its final linear equilibrium, without source increment history.
+    /// Unsupported physics/formulations/parameters fail rather than being discarded.
+    /// Mesh mode configures no analysis. Neither mode infers missing physical units.
+    /// Input and serialized response are bounded to 16 MiB; hosts must privately prepare
+    /// all returned Commands through Candidate and publish one validated replacement.
     #[serde(rename = "query.convertAbaqus", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "AbaqusConversion"))]
@@ -319,6 +323,18 @@ pub enum Query {
         /// Mandatory in static mode; absent in mesh mode. Positive force per source force.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unit_force: Option<Q<Force>>,
+        /// Positive seconds per source time. Required when a DENSITY is translated:
+        /// source density scales by F T²/L⁴. No time or mass unit is inferred.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit_time: Option<Q<Time>>,
+        /// Logical root filename for resolving an explicitly supplied include bundle.
+        /// Paths identify bundle entries only; the engine never reads a file system.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_name: Option<String>,
+        /// Explicit relative source filenames and UTF-8 contents for INCLUDE resolution.
+        /// Missing/cyclic/escaping references fail; the engine never fetches a file.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        source_files: BTreeMap<String, String>,
         sha256: String,
     },
 
@@ -1138,13 +1154,55 @@ pub struct AbaqusSetMapping {
     pub count: u32,
 }
 
-/// Retained homogeneous static objects. Only the final linear equilibrium is configured;
+/// One source section's exact material-to-Body assignment. Shared labelled nodes retain
+/// their identity across section regions; no interface is welded or disconnected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusSectionMapping {
+    pub section_elset: String,
+    /// Exact source material label, including its quoted case and punctuation.
+    pub source_material: String,
+    /// Callable material identifier; differs only when the source label cannot be used
+    /// as an ordinary FEM Lab object name.
+    pub material: String,
+    pub body: String,
+    pub elements: u32,
+}
+
+/// A recognized source request or solver setting with an explicit import consequence.
+/// Notes never stand in for silently discarded physical definitions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AbaqusImportNote {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    pub line: usize,
+    pub keyword: String,
+    pub cause: String,
+}
+
+/// Missing relative source filenames, discovered without any host I/O or Model mutation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AbaqusDependencies {
+    pub missing_files: Vec<String>,
+}
+
+/// Retained static load case. Only the final linear equilibrium is configured;
 /// there is no Abaqus increment history and conversion never produces a solved Result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AbaqusStaticAnalysis {
+    /// First material, retained for compatibility; `materials` lists the complete case.
     pub material: String,
+    /// First section, retained for compatibility; `sections` gives every exact assignment.
     pub section_elset: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<AbaqusSectionMapping>,
+    /// Exact source Step label; `step` is its callable FEM Lab identifier.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_step: String,
     pub step: String,
     pub constraints: Vec<String>,
     pub loads: Vec<String>,
@@ -1159,6 +1217,7 @@ pub struct AbaqusConversionReport {
     pub mode: AbaqusImportMode,
     pub sha256: String,
     pub conversion_version: String,
+    /// Root plus all explicitly supplied source-file UTF-8 bytes; repeated INCLUDE expansion is bounded separately.
     pub input_bytes: u32,
     pub body: String,
     /// Metres per source coordinate, as an explicit SI Quantity.
@@ -1166,14 +1225,28 @@ pub struct AbaqusConversionReport {
     /// Newtons per source force, present only for static analysis conversion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unit_force: Option<Q<Force>>,
+    /// Explicit seconds per source time; present when supplied for material density.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit_time: Option<Q<Time>>,
     pub source_nodes: u32,
     pub active_nodes: u32,
     pub source_elements: u32,
     pub element_kind: crate::command::ImportedElementKind,
+    /// Every authored kind in first-source-occurrence order; `elementKind` remains the
+    /// first kind for compatibility and must not be read as a homogeneous-mesh claim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub element_kinds: Vec<crate::command::ImportedElementKind>,
     /// Mesh mode supplies no materials or Steps; the host must configure analysis explicitly.
     pub analysis_configured: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analysis: Option<AbaqusStaticAnalysis>,
+    /// All imported analysis Steps in source order; `analysis` is its first entry for
+    /// compatibility. Every case contains its effective inherited supports and loads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub analyses: Vec<AbaqusStaticAnalysis>,
+    /// Recognized output/solver requests whose execution differs in FEM Lab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<AbaqusImportNote>,
     /// Physical participating-node bounds: xmin/ymin/zmin/xmax/ymax/zmax in metres.
     pub bbox: [Q<Length>; 6],
     pub source_labels: crate::imported::SourceLabels,
@@ -1253,6 +1326,7 @@ pub enum QueryResult {
     Script(ScriptText),
     Converted(Converted),
     AbaqusConversion(AbaqusConversion),
+    AbaqusDependencies(AbaqusDependencies),
     MaterialLibrary(MaterialLibrary),
     Objects(ObjectList),
     Capabilities(Capabilities),

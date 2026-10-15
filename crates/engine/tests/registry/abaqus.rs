@@ -63,7 +63,7 @@ fn abaqus_sparse_labels_sets_faces_and_si_replay_have_independent_oracles() {
     assert_eq!(source["mesher"]["nodeSets"]["FROM_ELEMENTS"], json!([10, 20, 40, 70]));
     assert_eq!(source["mesher"]["elementSets"]["SAME"], json!([900]));
     assert_eq!(source["mesher"]["provenance"]["sha256"], sha256_hex(TET.as_bytes()));
-    assert_eq!(source["mesher"]["provenance"]["conversionVersion"], "abaqus-mesh/1");
+    assert_eq!(source["mesher"]["provenance"]["conversionVersion"], "abaqus-mesh/2");
     install(&mut e, &conversion);
     let model = read(&mut e, json!({"query":"query.model"}));
     assert_eq!(model["bodies"][0]["name"], "part");
@@ -202,10 +202,6 @@ fn abaqus_conversion_is_a_read_even_on_an_existing_solved_model() {
 fn abaqus_rejects_unsupported_intent_instead_of_silently_dropping_it() {
     let mut e = engine();
     for keyword in [
-        "INCLUDE,INPUT=other.inp",
-        "PART,NAME=P",
-        "ASSEMBLY,NAME=A",
-        "INSTANCE,NAME=I,PART=P",
         "SYSTEM",
         "TRANSFORM,NSET=N",
         "STEP",
@@ -225,6 +221,11 @@ fn abaqus_rejects_unsupported_intent_instead_of_silently_dropping_it() {
         assert_eq!(rejected.code, ErrorCode::Unsupported, "{keyword}: {rejected:?}");
         assert!(rejected.where_.as_deref().unwrap().starts_with("line 1 *"));
         assert!(rejected.suggestion.is_some());
+    }
+    // Structural keywords are supported; incomplete definitions and missing bundles are malformed.
+    for keyword in ["INCLUDE,INPUT=other.inp", "PART,NAME=P", "ASSEMBLY,NAME=A", "INSTANCE,NAME=I,PART=P"] {
+        let text = format!("*{keyword}\n");
+        assert_eq!(e.query(request(&text, "1 m")).unwrap_err().code, ErrorCode::Schema);
     }
     for keyword in [
         "NODE,SYSTEM=C",
@@ -308,7 +309,6 @@ fn abaqus_malformed_labels_memberships_connectivity_and_source_geometry_locate_o
         TET.replace("40, 0\n", "1000000000, 0\n"),
         TET.replace("10, 1D0,", "10, 1D999,"),
         TET.replace("10, 1D0,", "10,,"),
-        TET.replace("NSET=SAME", "NSET=\"SAME\""),
         TET.replace("NSET=SAME", "NSET=part.SAME"),
         TET.replace("SAME\n*NSET", "UNDEFINED\n*NSET"),
         TET.replace("900, S4", "900, S5"),
@@ -492,9 +492,11 @@ fn abaqus_uppercase_raw_mesh_writer_roundtrip_is_supplementary_to_independent_fi
         assert_eq!(&e.mesh().unwrap().mesh.elem_sets[&format!("part.elset_{name}")], expected);
     }
     assert_eq!(e.mesh().unwrap().mesh.face_sets["part.surface_FACE1"], original.face_sets["FACE1"]);
-    // Ordinary FEM Lab exports contain qualified quoted labels. That boundary remains explicit.
+    // Quoted labels round-trip as exact source identities, including embedded periods.
     let qualified = text.replace("NSET=BASE", "NSET=\"part.nset_BASE\"");
-    assert!(e.query(request(&qualified, "1 m")).is_err());
+    let quoted = converted(&mut e, &qualified, "1 m");
+    let command = serde_json::to_value(&quoted.commands[2]).unwrap();
+    assert_eq!(command["mesher"]["nodeSets"]["part.nset_BASE"], json!([1, 2, 3, 4]));
 }
 
 proptest! {
@@ -532,5 +534,74 @@ proptest! {
         let expected = x * y * z * scale * scale * scale / 6.0;
         let actual = model["bodies"][0]["measure"]["value"].as_f64().unwrap();
         prop_assert!((actual - expected).abs() < expected * 1e-12);
+    }
+}
+
+#[test]
+fn abaqus_c3d8_selects_explicit_mean_dilatation_but_existing_full_journals_survive() {
+    let mut e = engine();
+    let conversion = converted(&mut e, HEX, "1 mm");
+    let wire = serde_json::to_value(&conversion.commands[2]).unwrap();
+    assert_eq!(wire["formulation"], "mean-dilatation");
+    install(&mut e, &conversion);
+    assert_eq!(e.model().mesh.as_ref().unwrap().formulation, femlab_engine::command::Formulation::MeanDilatation);
+    let new_file = e.export_file();
+    let mut replay = engine();
+    pollster::block_on(replay.replay(&new_file.journal.entries, true, true)).unwrap();
+    assert_eq!(replay.model_hash(), e.model_hash());
+    assert_eq!(replay.export_file(), new_file);
+    for explicit in [false, true] {
+        let mut legacy = wire.clone();
+        if explicit {
+            legacy["formulation"] = json!("full");
+        } else {
+            legacy.as_object_mut().unwrap().remove("formulation");
+        }
+        let mut old = engine();
+        run(&mut old, &legacy.to_string()).unwrap();
+        assert_eq!(old.model().mesh.as_ref().unwrap().formulation, femlab_engine::command::Formulation::Full);
+        let file = old.export_file();
+        let mut opened = engine();
+        pollster::block_on(opened.replay(&file.journal.entries, true, true)).unwrap();
+        assert_eq!(opened.export_file(), file);
+        assert_eq!(opened.mesh().unwrap().mesh, e.mesh().unwrap().mesh);
+    }
+}
+
+#[test]
+fn abaqus_converted_hex8_root_and_region_definitions_preserve_formulation_and_model_hash() {
+    for formulation in ["mean-dilatation", "full"] {
+        let mut e = engine();
+        let conversion = converted(&mut e, HEX, "1 mm");
+        for command in conversion.commands.iter().take(2) {
+            run(&mut e, &serde_json::to_string(command).unwrap()).unwrap();
+        }
+        let mut source = serde_json::to_value(&conversion.commands[2]).unwrap();
+        source["mesher"]["regions"] = json!({"region":[100]});
+        source["formulation"] = json!(formulation);
+        run(&mut e, &source.to_string()).unwrap();
+        for command in [
+            r#"{"cmd":"material.add","name":"default","E":"200 GPa","nu":0.25}"#,
+            r#"{"cmd":"material.add","name":"override","E":"100 GPa","nu":0.25}"#,
+            r#"{"cmd":"material.assign","material":"default","bodies":["part"]}"#,
+            r#"{"cmd":"material.assign","material":"override","bodies":["region"]}"#,
+        ] {
+            run(&mut e, command).unwrap();
+        }
+        let before = e.export_file().model;
+        let hash = e.model_hash();
+        let built = e.mesh().unwrap().clone();
+        for name in ["part", "region"] {
+            let definition = read(&mut e, json!({"query":"query.definition","kind":"body","name":name}));
+            assert_eq!(definition["command"]["formulation"], formulation);
+            run(&mut e, &definition["command"].to_string()).unwrap();
+            assert_eq!(e.model_hash(), hash, "{name}: {formulation}");
+            assert_eq!(e.export_file().model, before);
+            assert_eq!(e.mesh().unwrap(), &built);
+        }
+        let file = e.export_file();
+        let mut replay = engine();
+        pollster::block_on(replay.replay(&file.journal.entries, true, true)).unwrap();
+        assert_eq!(replay.export_file().model, before);
     }
 }
