@@ -96,9 +96,10 @@ it('saves and exports the checked SI document under unreadable display units and
     assert('text' in script);
     for (const format of ['journal', 'script'] as const) {
       vi.mocked(host.folder.writeText).mockClear();
-      await expect(registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' })).resolves.toEqual({ name: `${before.file.model.name}.${format === 'journal' ? 'femlab.json' : 'ts'}`, to: 'folder' });
+      const delivery = await registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' });
       expect(host.folder.writeText).toHaveBeenCalledOnce();
       const exported = vi.mocked(host.folder.writeText).mock.calls[0]![1];
+      expect(delivery).toEqual({ name: `${before.file.model.name}.${format === 'journal' ? 'femlab.json' : 'ts'}`, to: 'folder', bytes: new TextEncoder().encode(exported).byteLength, mime: format === 'journal' ? 'application/json' : 'text/typescript', unavailable: 'unsupported' });
       if (format === 'journal') expect(JSON.parse(exported)).toEqual(before.file);
       else expect(exported).toBe(script.text);
       expect(await transport.query({ query: 'query.document' })).toEqual(before);

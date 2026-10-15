@@ -11,7 +11,9 @@ import schema from '../../registry/src/generated/runtime-schema';
 import { prepareKeyStorage } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 import { capabilityNotes, readHostCaps } from './capabilities';
-import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, autosaveHistory, type ViewerRef } from './host';
+import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, autosaveHistory, browserDownload, type ViewerRef } from './host';
+import { createCompletedFiles } from './completed-files';
+import type { CompletedFilesHost } from '@femlab/registry';
 import { benchmarkProvenance } from './benchmark';
 import { ProjectRepository, indexedDbAtomicProjects, memoryAtomicProjects, type ProjectBinding, type SaveJob } from './project-repository';
 import type { Projects } from './projects';
@@ -41,6 +43,10 @@ const engineOptions = { gpu: false, threads: host.threads };
 const repository = new ProjectRepository(typeof indexedDB === 'undefined' ? memoryAtomicProjects() : indexedDbAtomicProjects(indexedDB), () => crypto.randomUUID());
 
 const bundles = new WeakMap<object, Bundle>();
+// Private host identity distinguishes same-document Worker recovery from an explicit open/new.
+// No cache or capability is serialized to the engine, a Model file or browser storage.
+const recoveredFiles = new WeakMap<ReplacementSource, CompletedFilesHost>();
+const completedFileStores = new WeakMap<CompletedFilesHost, Store>();
 const scriptJobs = new Set<{ runner: ScriptHost; producer: Producer }>();
 const nextMeta = (name: string): ProjectMeta => ({ id: crypto.randomUUID(), name, at: Date.now(), createdAt: Date.now(), commands: 0, hash: null, thumbnail: null });
 const expired = (): FemError => new FemError('session.expired', 'this action belongs to an inactive project');
@@ -75,8 +81,14 @@ class Bundle {
   private fitAfterOpen = false;
   private initialCamera: CameraState | undefined;
   private detachAccount = () => {};
+  private detachFiles = () => {};
+  private ownsFiles: boolean;
+  readonly completedFiles: CompletedFilesHost;
   disposed = false;
-  constructor(readonly transport: SessionTransport) {
+  constructor(readonly transport: SessionTransport, recovered?: CompletedFilesHost) {
+    this.ownsFiles = !recovered;
+    this.completedFiles = recovered ?? createCompletedFiles({ download: browserDownload, nextId: () => crypto.randomUUID(),
+      changed: () => { const store = completedFileStores.get(this.completedFiles); if (store) store.set({ completedFilesVersion: store.state.completedFilesVersion + 1 }); } });
     this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
     const playbackClock = { now: () => performance.now(), schedule: (cb: () => void, ms: number) => setTimeout(cb, ms), cancel: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
@@ -177,11 +189,24 @@ class Bundle {
     return this.savedMeta?.id ?? null;
   }
   async recoverySource(source: ReplacementSource): Promise<ReplacementSource> {
-    if (this.projectDeleted || !this.binding) return source;
+    if (this.projectDeleted || !this.binding) { recoveredFiles.set(source, this.completedFiles); return source; }
     if (this.autosave) await this.save();
     await this.saving;
     const expected = await repository.read(this.binding.meta.id);
-    return { ...source, project: { meta: expected.meta!, expected } };
+    const recovery = { ...source, project: { meta: expected.meta!, expected } };
+    recoveredFiles.set(recovery, this.completedFiles);
+    return recovery;
+  }
+  activateFiles(previous?: Bundle): void {
+    if (previous?.completedFiles === this.completedFiles) previous.ownsFiles = false;
+    this.ownsFiles = true;
+    completedFileStores.set(this.completedFiles, this.store);
+    let folder = this.store.state.folder;
+    this.detachFiles = this.store.subscribe(() => {
+      if (!this.ownsFiles || folder === this.store.state.folder) return;
+      folder = this.store.state.folder;
+      this.completedFiles.clear();
+    });
   }
   recoveryFailed(error: unknown): void { this.store.set({ ready: false }); this.fail(error); }
   async primeProjects(): Promise<ProjectMeta[]> {
@@ -241,6 +266,8 @@ class Bundle {
     retireProjectHost(this.store);
     this.stepImport.dispose();
     this.detachAccount();
+    this.detachFiles();
+    if (this.ownsFiles) { completedFileStores.delete(this.completedFiles); this.completedFiles.dispose(); }
     this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.results.invalidateTransient();
@@ -291,6 +318,7 @@ class Producer {
     const bundle = this.bundle; const transport = this.transport;
     const ctx = makeHostContext(bundle.store, transport, bundle.viewer, host, bundle.validation, bundle.results, undefined, undefined, undefined, () => bundle.refresh(), {
       projects: bundle.projectApi(transport), active: () => transport.assertActive(),
+      completedFiles: bundle.completedFiles,
       replay: async (commands, benchmark) => { await transport.replaceWith({ kind: 'commands', commands: commands as Command[], ...(benchmark ? { benchmark } : {}) }); },
       captureImport: () => {
         const admitted = transport.stamp;
@@ -346,6 +374,9 @@ class Producer {
     const before = this.bundle; const native = this.native; const transport = this.transport;
     const definition = native.describe(command.cmd);
     if (before.disposed) throw expired();
+    // Expired retained output is a local delivery status, never an engineering failure or a
+    // reason to erase a currently displayed solve error. The private cache owns its authority.
+    if (command.cmd === 'file.download') return native.dispatch(command);
     if (definition.provider === 'host' && !['control', 'sessionView'].includes(definition.execution)) await transport.assertActive();
     before.store.set({ lastError: null });
     const long = command.cmd === 'solve.run' || command.cmd === 'study.converge';
@@ -390,7 +421,7 @@ accountLeaveHook(prepareAccountNavigation);
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,
-  build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork()); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
+  build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork(), source ? recoveredFiles.get(source) : undefined); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
   publish: ({ resources: bundle }) => {
     // A folder is a workspace capability; replacing the engine keeps the current selection.
     if (displayed) bundle.store.setFolder(displayed.store.state.folder);
@@ -398,6 +429,7 @@ const workspace = new SessionWorkspace<Bundle>({
     if (displayed) for (const [panel, open] of Object.entries(displayed.store.state.panels)) {
       if (panel === 'assistant' || panel.startsWith('assistant.') || panel === 'tutorial' || panel.startsWith('skill:')) bundle.store.togglePanel(panel, open);
     }
+    bundle.activateFiles(displayed);
     displayed = bundle;
     const ui = new Producer(bundle, bundle.uiTransport);
     const dispatch: Registry['dispatch'] = async command => {

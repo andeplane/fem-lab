@@ -152,6 +152,8 @@ export interface UiState {
   console: ConsoleLine[];
   lastError: LastError | null;
   progress: { phase: string; fraction: number } | null;
+  /** Availability changed in the private completed-file cache; contains no file bytes. */
+  completedFilesVersion: number;
   theme: 'dark' | 'light';
   /** `query.result` for the last solved Step; `stale` on it is the engine's own hash check. */
   result: ResultSummary | null;
@@ -297,6 +299,7 @@ export const initialState: UiState = {
   console: [],
   lastError: null,
   progress: null,
+  completedFilesVersion: 0,
   theme: 'dark',
   result: null,
   benchmark: null,
