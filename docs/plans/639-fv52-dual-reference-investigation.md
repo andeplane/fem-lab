@@ -55,6 +55,7 @@ The separate Abaqus computed C3D20 row (44.796, 110.54, 110.54, 169.10, 193.92,
 2. Require finite sorted frequencies, ten owned mode fields with the public nodal layout,
    current Result identity, and actual maximum measured backward residual ≤1e−10. Preserve
    every arithmetic-unresolved warning; a displayed zero frequency does not certify λ=0.
+   Pair residuals do not certify completeness of the lowest ten or every degenerate subspace.
 3. Report the low-three/first-deformational separation, individual rigid fits and normalized
    Tx/Ty/Rz coefficient matrix/determinant/rank diagnostics (rank threshold1e−8), without
    declaring the warning itself a physical rigid-mode classifier. Preserve repeated-mode

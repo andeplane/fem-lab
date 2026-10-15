@@ -70,8 +70,11 @@ cannot be treated as the same published repeated pair. An independent component 
 index 9 is mostly in-plane (0.000312); the mostly-in-plane mode was index 8 on the coarser
 grids. This is evidence of changing indexed mode content, not a complete branch identification.
 The Abaqus manual explicitly notes formulation-dependent reordering among modes 8–12. Only
-ten modes were retained here; no claim is made about missing higher branches, matching
-across formulations, or a convergence rate for any rematched mode.
+ten modes were retained here. Small residuals certify only the returned eigenpairs: they do
+not certify that every member of the lowest ten, including an exact degeneracy, was captured.
+No claim is made about spectral completeness, missing higher branches, matching across
+formulations, or a convergence rate for any rematched mode. A future #7 investigation needs
+a fixed enlarged spectrum and explicit symmetry/subspace accounting after #640 is resolved.
 
 ## Measured algebraic accuracy and resources
 
