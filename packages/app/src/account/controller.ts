@@ -15,7 +15,7 @@ export class AccountController {
   readonly services:AccountServices;
   constructor(private env:AccountEnvironment|null) {
     this.value={...EMPTY_ACCOUNT,configured:env!==null,status:env?'loading':'anonymous',googleEnabled:env?.googleEnabled??false};
-    this.services={state:()=>this.state,signIn:(m,e)=>this.signIn(m,e),signOut:()=>this.signOut(),refresh:()=>this.refresh(),checkout:p=>this.redirect('/v1/billing/checkout',{plan:p}),portal:()=>this.redirect('/v1/billing/portal',{}),changePlan:p=>this.changePlan(p),exportData:()=>this.exportData(),deleteAccount:c=>this.deleteAccount(c),acceptDisclosure:()=>this.set({disclosureAccepted:true})};
+    this.services={state:()=>this.state,signIn:(m,e)=>this.signIn(m,e),signOut:()=>this.signOut(),refresh:()=>this.refresh(),checkout:(p,purchaseUse)=>this.redirect('/v1/billing/checkout',{plan:p,...(purchaseUse===undefined?{}:{purchaseUse})}),portal:()=>this.redirect('/v1/billing/portal',{}),changePlan:p=>this.changePlan(p),exportData:()=>this.exportData(),deleteAccount:c=>this.deleteAccount(c),acceptDisclosure:()=>this.set({disclosureAccepted:true})};
   }
   get version():number{return this.epoch}
   get state():AccountState{return this.value}
