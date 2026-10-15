@@ -115,11 +115,11 @@ export const DERIVED_CHOICES: FieldChoice[] = [
   { key: 'utilisation', label: 'σ/f_y', field: 'vonMises', component: 0, derived: 'utilisation' },
 ];
 
-type ModeSpectrum = Pick<ResultSummary, 'frequencies' | 'bucklingFactors'>;
+type ModeSpectrum = Pick<ResultSummary, 'modeCount' | 'frequencies' | 'bucklingFactors'>;
 
-/** Modal frequencies and buckling factors each identify one displacement mode shape. */
+/** Only shapes owned by this retained Result are fields; basis frequencies are metadata. */
 export function modeCount(result: ModeSpectrum | null | undefined): number {
-  return result?.frequencies?.length || result?.bucklingFactors?.length || 0;
+  return result?.modeCount ?? 0;
 }
 
 /** Contours move only when this retained solve has displacement or the selected mode shape. */

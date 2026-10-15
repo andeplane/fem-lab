@@ -72,6 +72,7 @@ const journal = (...commands: Record<string, unknown>[]): JournalDump =>
 
 const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
   ({
+    modeCount: 0,
     resultId: `r${producingSeq}`,
     step,
     revision: producingSeq + 1,
@@ -188,7 +189,7 @@ describe('the shell', () => {
     current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
     current.connections = [{ name: 'tie', kind: 'bonded', master: 'beam.xmin', slave: 'beam.xmax', summary: 'bonded' }];
     current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
-    const solved = { ...result('static', false, 1), frequencies: [{ value: 83, unit: 'Hz' }] };
+    const solved = { ...result('static', false, 1), modeCount: 1, frequencies: [{ value: 83, unit: 'Hz' }] };
     const targets = new Map([
       ['beam', 'body:beam'], ['tip', 'set:tip'], ['steel', 'material:steel'],
       ['mesh', 'mesh:mesh'], ['fix', 'constraint:fix'], ['tie', 'constraint:tie'], ['p', 'load:p'],

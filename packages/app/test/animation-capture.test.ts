@@ -36,6 +36,19 @@ function controlled() {
 }
 
 describe('animation capture', () => {
+  it('rejects response basis metadata before changing viewer or capture state', async () => {
+    const c = controlled();
+    const store = new Store();
+    store.set({ fieldKey: 'mode:1', result: { step: 'sweep', modeCount: 0, frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: false, phase: 0.5 });
+    const viewer = { animationState: vi.fn(), atCaptureSize: vi.fn() } as unknown as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
+    const before = store.state;
+    await expect(ctx.view.captureAnimation({ width: 320, height: 240, fps: 24, duration: 1 })).rejects.toMatchObject({ code: 'export.unavailable', where: 'file.export' });
+    expect(viewer.animationState).not.toHaveBeenCalled();
+    expect(viewer.atCaptureSize).not.toHaveBeenCalled();
+    expect(store.state).toBe(before);
+  });
+
   it('draws one complete phase sweep and returns the recorder bytes', async () => {
     const c = controlled();
     const capture = new AnimationCapture(c.env);
@@ -118,7 +131,7 @@ describe('animation capture', () => {
   it('restores the exact viewer and UI animation state after capture', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:2', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }], history: [] } as never, playing: true, phase: 0.42 });
+    store.set({ fieldKey: 'mode:2', result: { step: 'modes', modeCount: 2, frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }], history: [] } as never, playing: true, phase: 0.42 });
     const restored: unknown[] = [];
     const phases: number[] = [];
     const sizes: number[][] = [];
@@ -171,7 +184,7 @@ describe('animation capture', () => {
   it('accepts a selected buckling mode for capture', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:1', result: { step: 'buckle', bucklingFactors: [17.3996], history: [] } as never, playing: false, phase: 0.25 });
+    store.set({ fieldKey: 'mode:1', result: { step: 'buckle', modeCount: 1, bucklingFactors: [17.3996], history: [] } as never, playing: false, phase: 0.25 });
     const viewer = {
       animationState: () => ({ playing: false, phase: 0.25, speed: 1 }),
       setPhase: () => undefined,
@@ -187,7 +200,7 @@ describe('animation capture', () => {
   it('restores a paused view after recorder failure and cancellation', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:1', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: false, phase: 0.62 });
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes', modeCount: 1, frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: false, phase: 0.62 });
     const restored: unknown[] = [];
     const viewer = {
       animationState: () => ({ playing: false, phase: 0.62, speed: 1 }),
@@ -214,7 +227,7 @@ describe('animation capture', () => {
 
   it('restores the viewer and releases the active slot when recorder cancellation throws', async () => {
     const store = new Store();
-    store.set({ fieldKey: 'mode:1', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: true, phase: 0.2 });
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes', modeCount: 1, frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: true, phase: 0.2 });
     const restored: unknown[] = [];
     const env: AnimationCaptureEnvironment = {
       now: () => 0,
@@ -245,7 +258,7 @@ describe('animation capture', () => {
   it('rejects an overlapping host capture before it changes dimensions, phase, or UI state', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:1', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: true, phase: 0.33 });
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes', modeCount: 1, frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: true, phase: 0.33 });
     const phases: number[] = [];
     const sizes: number[][] = [];
     const viewer = {

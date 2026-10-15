@@ -11602,8 +11602,15 @@ export interface ResultSummary {
    */
   assumptions?: ResultAssumption[];
   /**
-   * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
-   * shape is the Result field named `mode:k`.
+   * Number of displacement mode shapes owned by this retained Result. Fields `mode:k`
+   * are available for `1 <= k <= modeCount`; frequency metadata alone does not identify
+   * available fields. Modal and buckling Results own shapes; harmonic and random-vibration
+   * Results own response fields instead, even when they retain modal-basis metadata.
+   */
+  modeCount: number;
+  /**
+   * Natural frequencies in ascending order for a modal Result, or its modal basis for a
+   * harmonic response. Use `modeCount`, not the frequency count, to discover mode fields.
    */
   frequencies?: Valued[];
   /**

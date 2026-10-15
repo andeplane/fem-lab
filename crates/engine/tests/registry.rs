@@ -4309,6 +4309,7 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
     let summary = result_of(&mut e, Some("modes"));
+    assert_eq!(summary.mode_count, 2);
     assert_eq!(summary.frequencies.len(), 2);
     assert_eq!(summary.frequencies[0].unit, "Hz");
     // A square section: the first two modes are the same bending frequency in two planes.
@@ -4433,6 +4434,7 @@ fn a_buckling_step_reports_load_factors_and_keeps_its_static_state() {
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"buckle","tolerance":1e-9}"#);
     let summary = result_of(&mut e, Some("buckle"));
+    assert_eq!(summary.mode_count, 1);
     assert!(summary.static_equilibrium.is_none(), "an eigen Result must omit the static-only wrench ledger");
     // nModes defaulted to one, and a buckling Step reports factors rather than frequencies.
     assert_eq!(summary.buckling_factors.len(), 1);
@@ -7453,8 +7455,22 @@ fn a_harmonic_step_superposes_the_modes_of_the_step_it_continues() {
     let mut e = engine();
     harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":9,"dampingRatio":0.05"#);
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let modal = summary(&mut e, "modes");
+    let modal_field =
+        e.query(Query::Field { step: None, result_id: Some(modal.result_id.clone()), field: "mode:4".into() }).unwrap();
     ok(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
     let s = summary(&mut e, "sweep");
+    assert_eq!(s.mode_count, 0, "basis frequencies do not imply owned mode fields");
+    assert_eq!(summary(&mut e, "modes").mode_count, 4);
+    assert_eq!(e.field_named(Some("sweep"), "mode:1").unwrap_err().code, ErrorCode::NotFound);
+    assert!(e.field_named(Some("modes"), "mode:4").is_ok());
+    let retained = e.query(Query::Result { result_id: Some(modal.result_id.clone()), step: None }).unwrap();
+    assert_eq!(retained, QueryResult::Result(modal.clone()));
+    assert_eq!(
+        e.query(Query::Field { step: None, result_id: Some(modal.result_id), field: "mode:4".into() }).unwrap(),
+        modal_field
+    );
+    assert_eq!(s.frequencies, modal.frequencies);
     assert_eq!(s.sweep.len(), 9, "nine points, kept every one");
     assert_eq!((s.sweep[0].frequency.value, s.sweep[0].frequency.unit.as_str()), (800.0, "Hz"));
     assert_eq!((s.sweep[8].frequency.value, s.sweep[8].frequency.unit.as_str()), (2400.0, "Hz"));
@@ -7478,6 +7494,7 @@ fn a_harmonic_step_superposes_the_modes_of_the_step_it_continues() {
     assert!(e.field_named(Some("sweep"), "displacement").is_ok());
     // The sweep crosses to a host as JSON like every other summary member.
     let json = serde_json::to_value(&s).expect("a summary serialises");
+    assert_eq!(json["modeCount"], 0);
     assert_eq!(json["sweep"][0]["phase"]["unit"], "rad");
     let back: femlab_engine::query::ResultSummary = serde_json::from_value(json).expect("and round-trips");
     assert_eq!(back.sweep, s.sweep);
@@ -13027,6 +13044,12 @@ fn random_vibration_registry_replays_psd_and_rejects_invalid_inputs() {
     assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"random"}"#).code, ErrorCode::NotFound);
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
     ok(&mut e, r#"{"cmd":"solve.run","step":"random"}"#);
+    let random = result_of(&mut e, Some("random"));
+    assert_eq!(random.mode_count, 0);
+    assert!(random.frequencies.is_empty());
+    assert_eq!(result_of(&mut e, Some("modes")).mode_count, 4);
+    assert_eq!(e.field_named(Some("random"), "mode:1").unwrap_err().code, ErrorCode::NotFound);
+    assert!(e.field_named(Some("modes"), "mode:4").is_ok());
     let displacement = e.field(Some("random"), Field::Displacement).unwrap().clone();
     assert!(displacement.data.iter().any(|v| *v > 0.0));
     assert!(e.field(Some("random"), Field::Stress).is_ok());

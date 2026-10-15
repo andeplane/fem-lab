@@ -825,6 +825,7 @@ mod tests {
             reactions: vec![],
             applied_total: [zero.clone(), zero.clone(), zero],
             assumptions: vec![],
+            mode_count: 0,
             frequencies: vec![],
             prestress_from: None,
             buckling_factors: vec![],

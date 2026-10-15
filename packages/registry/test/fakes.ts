@@ -36,6 +36,7 @@ const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
+  modeCount: 0,
   resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',

@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
+import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, hasDeformation, modeChoice, modeCount, showFieldArgs, siUnitOf } from '../src/fields';
 import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
@@ -17,6 +17,7 @@ import { resultItems } from '../src/ui/Tree';
 const v = (value: number, unit: string) => ({ value, unit });
 
 const RESULT = {
+  modeCount: 0,
   resultId: 'result-2',
   step: 'modal',
   revision: 9,
@@ -31,8 +32,8 @@ const RESULT = {
   balance: 0,
 } as unknown as ResultSummary;
 
-const modal = { ...RESULT, frequencies: [v(41.2, 'Hz'), v(258.1, 'Hz'), v(0, 'Hz')] } as ResultSummary;
-const buckling = { ...RESULT, step: 'buckle', bucklingFactors: [17.3996, 17.3996] } as ResultSummary;
+const modal = { ...RESULT, modeCount: 3, frequencies: [v(41.2, 'Hz'), v(258.1, 'Hz'), v(0, 'Hz')] } as ResultSummary;
+const buckling = { ...RESULT, step: 'buckle', modeCount: 2, bucklingFactors: [17.3996, 17.3996] } as ResultSummary;
 const transient = {
   ...RESULT,
   step: 'heat',
@@ -47,6 +48,7 @@ const transient = {
 const harmonic = {
   ...RESULT,
   step: 'sweep',
+  frequencies: modal.frequencies,
   sweep: [
     { frequency: v(10, 'Hz'), amplitude: v(0.2, 'mm'), phase: v(0.01, 'rad') },
     { frequency: v(20, 'Hz'), amplitude: v(1.8, 'mm'), phase: v(1.5, 'rad') },
@@ -113,6 +115,18 @@ describe('the field table, once a Result has modes and a yield', () => {
     expect(fieldKeyOf('utilisation', null)).toBe('utilisation');
     expect(fieldKeyOf('displacement', 2)).toBe('uz');
     expect(fieldKeyOf('displacement', null)).toBe('umag');
+  });
+
+  it('does not offer inherited frequencies as response mode fields', () => {
+    expect(modeCount(null)).toBe(0);
+    expect(modeCount(modal)).toBe(3);
+    expect(modeCount(buckling)).toBe(2);
+    expect(modeCount(harmonic)).toBe(0);
+    expect(fieldChoices(['displacement'], harmonic).map(c => c.key)).toEqual(['umag', 'ux', 'uy', 'uz']);
+    const response = { ...harmonic, extremes: [{ field: 'displacement', component: 0, min: v(0, 'm'), max: v(1, 'm'), minAt: [], maxAt: [] }] } as unknown as ResultSummary;
+    expect(available('mode:1', response, false)).toBe('umag');
+    expect(hasDeformation(response, 'umag')).toBe(true);
+    expect(hasDeformation({ ...harmonic, extremes: [] }, 'mode:1')).toBe(false);
   });
 });
 
@@ -237,6 +251,16 @@ describe('the history and the frequencies', () => {
     expect(root.querySelector('tr.peak')!.textContent).toContain('λ 17.4');
     root.querySelector<HTMLButtonElement>('tbody [data-cmd="view.showField"]')!.click();
     expect(dispatch).toHaveBeenCalledWith({ cmd: 'view.showField', field: 'mode:1' });
+  });
+
+  it('retains harmonic basis frequencies without offering nonexistent shapes', () => {
+    const root = document.createElement('div');
+    render(<Frequencies s={state({ result: harmonic, fieldKey: 'umag' })} dispatch={vi.fn()} />, root);
+    expect(root.textContent).toContain('Modal basis frequencies');
+    expect(root.textContent).toContain('41.2 Hz');
+    expect(root.querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(root.querySelectorAll('[data-cmd]')).toHaveLength(0);
+    expect(root.textContent).toContain('this Result contains response fields');
   });
 
   it('shows nothing for a Step that found no frequencies', () => {

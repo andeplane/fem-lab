@@ -5252,7 +5252,7 @@
         "x-returns": "ResultSurface"
       },
       {
-        "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+        "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal/buckling shapes owned by the Result\n(`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
         "type": "object",
         "properties": {
           "step": {
@@ -17930,8 +17930,14 @@
               "$ref": "#/$defs/ResultAssumption"
             }
           },
+          "modeCount": {
+            "description": "Number of displacement mode shapes owned by this retained Result. Fields `mode:k`\nare available for `1 <= k <= modeCount`; frequency metadata alone does not identify\navailable fields. Modal and buckling Results own shapes; harmonic and random-vibration\nResults own response fields instead, even when they retain modal-basis metadata.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "frequencies": {
-            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "description": "Natural frequencies in ascending order for a modal Result, or its modal basis for a\nharmonic response. Use `modeCount`, not the frequency count, to discover mode fields.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -17999,6 +18005,7 @@
           "reactionQuantity",
           "reactions",
           "appliedTotal",
+          "modeCount",
           "balance"
         ]
       },
@@ -20177,8 +20184,14 @@
               "$ref": "#/$defs/ResultAssumption"
             }
           },
+          "modeCount": {
+            "description": "Number of displacement mode shapes owned by this retained Result. Fields `mode:k`\nare available for `1 <= k <= modeCount`; frequency metadata alone does not identify\navailable fields. Modal and buckling Results own shapes; harmonic and random-vibration\nResults own response fields instead, even when they retain modal-basis metadata.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "frequencies": {
-            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "description": "Natural frequencies in ascending order for a modal Result, or its modal basis for a\nharmonic response. Use `modeCount`, not the frequency count, to discover mode fields.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -20246,6 +20259,7 @@
           "reactionQuantity",
           "reactions",
           "appliedTotal",
+          "modeCount",
           "balance"
         ]
       },
@@ -34440,7 +34454,7 @@
             "x-returns": "ResultSurface"
           },
           {
-            "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+            "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal/buckling shapes owned by the Result\n(`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
             "type": "object",
             "properties": {
               "step": {
@@ -40717,8 +40731,14 @@
               "$ref": "#/$defs/ResultAssumption"
             }
           },
+          "modeCount": {
+            "description": "Number of displacement mode shapes owned by this retained Result. Fields `mode:k`\nare available for `1 <= k <= modeCount`; frequency metadata alone does not identify\navailable fields. Modal and buckling Results own shapes; harmonic and random-vibration\nResults own response fields instead, even when they retain modal-basis metadata.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "frequencies": {
-            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "description": "Natural frequencies in ascending order for a modal Result, or its modal basis for a\nharmonic response. Use `modeCount`, not the frequency count, to discover mode fields.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -40786,6 +40806,7 @@
           "reactionQuantity",
           "reactions",
           "appliedTotal",
+          "modeCount",
           "balance"
         ]
       },
@@ -48291,8 +48312,14 @@
               "$ref": "#/$defs/ResultAssumption"
             }
           },
+          "modeCount": {
+            "description": "Number of displacement mode shapes owned by this retained Result. Fields `mode:k`\nare available for `1 <= k <= modeCount`; frequency metadata alone does not identify\navailable fields. Modal and buckling Results own shapes; harmonic and random-vibration\nResults own response fields instead, even when they retain modal-basis metadata.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
           "frequencies": {
-            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "description": "Natural frequencies in ascending order for a modal Result, or its modal basis for a\nharmonic response. Use `modeCount`, not the frequency count, to discover mode fields.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -48360,6 +48387,7 @@
           "reactionQuantity",
           "reactions",
           "appliedTotal",
+          "modeCount",
           "balance"
         ]
       },

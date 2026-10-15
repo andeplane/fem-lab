@@ -1035,6 +1035,14 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
 | F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
 
+The #608 registry and Chromium regressions distinguish retained mode shapes from response
+metadata around these existing dynamic Benchmarks. `query.result.modeCount` is the number
+of owned `mode:k` fields: modal and buckling Results expose their shapes, while harmonic
+and random-vibration Results expose response fields. Harmonic basis frequencies remain
+unchanged, and selecting either response must not fetch a nonexistent mode. The earlier
+modal Result's summary and mode field remain identical when queried by its retained ID.
+This is a field-ownership and host integration check; it adds no numerical approximation.
+
 The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
 10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
 for hex8 and hex20, each cut's `ymin`/`ymax` Set must cover the full rectangle:

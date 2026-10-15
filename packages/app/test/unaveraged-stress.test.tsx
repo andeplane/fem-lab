@@ -8,6 +8,7 @@ import { Results, extremeLabel } from '../src/ui/Results';
 
 const point: [Valued, Valued, Valued] = [0, 0, 0].map(value => ({ value, unit: 'm' })) as [Valued, Valued, Valued];
 const result: ResultSummary = {
+  modeCount: 0,
   resultId: 'unaveraged-result', step: 'static', reactionQuantity: 'force', revision: 1,
   stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1,
   extremes: ['xx', 'yy', 'zz', 'xy', 'xz', 'yz'].map((_, component) => ({
