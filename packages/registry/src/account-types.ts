@@ -5,7 +5,10 @@ export type PurchaseUse='personal'|'business';
 export interface AccountInfo {
   id:string;email:string;createdAt:string;status:'active';billingAvailable?:boolean;
   usage?:{plan:AccountPlan;totalCredits:number;availableCredits:number;reservedCredits:number;periodEndsAt:string;models:string[];maxOutput:number;contextLimit:number;tariffVersion:string};
-  billing?:{available:boolean;merchantMode?:'pending'|'direct'|'managed';status:unknown;cancelAtPeriodEnd:boolean;periodEndsAt:string|null;reviewRequired:boolean;scheduledPlan:{plan:unknown;effectiveAt:string;processing:boolean}|null};
+  billing?:{available:boolean;
+    /** Owned customer management is independent of new sales and financial-review freezes. Absent on older hosts. */
+    canManage?:boolean;
+    merchantMode?:'pending'|'direct'|'managed';status:unknown;cancelAtPeriodEnd:boolean;periodEndsAt:string|null;reviewRequired:boolean;scheduledPlan:{plan:unknown;effectiveAt:string;processing:boolean}|null};
 }
 export interface AccountState {
   configured:boolean;status:'loading'|'anonymous'|'active'|'error';uid:string|null;email:string|null;
