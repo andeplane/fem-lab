@@ -3,7 +3,7 @@ import { expect, test } from './fixtures';
 // Hold the real SDK's SSE response open so assertions cannot pass by buffering the whole turn.
 test('@cpu streams bounded tool cards and queues/interrupts with Enter', async ({ page }) => {
   await page.addInitScript(() => {
-    sessionStorage.setItem('femlab.ai.key.openai', 'test-only');
+    localStorage.setItem('femlab.ai.key.openai', 'test-only');
     localStorage.setItem('femlab.ai.model', 'gpt-5.4-mini');
     const original = window.fetch.bind(window);
     let requests = 0;

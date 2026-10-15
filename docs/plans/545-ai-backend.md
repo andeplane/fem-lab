@@ -307,6 +307,11 @@ $0.0165 at the quoted standard rates. For Astra, the same uncached input/output
 mix uses 800,000/3 credits (rounded up) and costs $0.20. This is why a premium
 model must consume the allowance faster instead of receiving equal raw-token quotas.
 
+The table below records the original proposal. [#709](709-monthly-ai-allowance.md)
+raises the implemented Plus allowance to 10,000,000 credits ($7.50 supplier
+baseline); [#645](645-free-ai-admission.md) replaces automatic free issuance
+with one-time operator invitations.
+
 | Proposed tier | Monthly price | Credits per period | Models | Example LLM cost at full allowance | Revenue left after LLM only |
 | --- | ---: | ---: | --- | ---: | ---: |
 | Free | $0 | 200,000 | Mini | $0.15 | Subsidized |

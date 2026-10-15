@@ -418,7 +418,7 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         </Cmd>
         <Cmd dispatch={dispatch} cmd="form.open" class="card" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp">
           <b>Import Abaqus .inp</b>
-          <span>Flat C3D4/C3D8 mesh or supported linear static model. Choose source Length and Force units explicitly.</span>
+          <span>Solid meshes and linear static models with C3D4, C3D8, C3D10 or C3D20 elements, including assemblies. Choose source Length and Force units explicitly.</span>
           <i class="mono cue-cyan">file.importAbaqus</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="form.open" class="card" args={{ command: 'geometry.importStep', args: { name: 'body', linearDeflection: '0.1 mm', angularDeflection: '15 deg' } }} title="Import STEP geometry">

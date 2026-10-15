@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { calendarPeriod, maximumCharge, PLANS, supplierMicros, usageCharge } from '../src/credits';
+import { calendarPeriod, CREDIT_SCALE, maximumCharge, PLANS, supplierMicros, usageCharge } from '../src/credits';
 
 describe('integer token tariffs', () => {
+  it('includes the reviewed supplier-dollar allowance in each paid period', () => {
+    // Independent USD budgets: Plus $7.50, Pro $12, Studio $37.50.
+    for (const [plan, micros] of [['plus', 7_500_000n], ['pro', 12_000_000n], ['studio', 37_500_000n]] as const) {
+      expect(supplierMicros(BigInt(PLANS[plan].credits) * CREDIT_SCALE)).toBe(micros);
+    }
+  });
   it('matches an independently priced ordinary/cached/output example', () => {
     // 6k input ($.0045), 4k cached ($.0003), 1k output including reasoning ($.0045).
     const amount = usageCharge('gpt-5.4-mini', { input: 6000, cacheRead: 4000, output: 1000 });

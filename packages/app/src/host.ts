@@ -432,7 +432,10 @@ export function makeHostContext(
     } },
     ai: {
       setKey: (key, provider: AiProvider) => {
-        storeKey(provider, key);
+        if (!storeKey(provider, key)) throw new FemError('unsupported', key
+          ? 'browser storage could not complete saving the key'
+          : 'browser storage refused to forget the key completely',
+        'ai.setKey', 'Allow browser storage and retry ai.setKey; to remove inaccessible saved keys, clear this site’s storage in browser settings.');
       },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);

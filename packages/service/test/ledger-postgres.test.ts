@@ -56,7 +56,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
     const input = { accountId: account.id, source: 'stripe:invoice:one', plan: 'plus' as const, startsAt: new Date('2026-11-01T00:00:00Z'), expiresAt: new Date('2026-12-01T00:00:00Z') };
     await Promise.all(Array.from({ length: 16 }, () => ledger.grant(input)));
     await grantFreeFixture(ledger, account.id, clock);
-    expect(await ledger.balance(account.id)).toMatchObject({ plan: 'plus', availableCredits: 4000000, periodEndsAt: '2026-12-01T00:00:00.000Z' });
+    expect(await ledger.balance(account.id)).toMatchObject({ plan: 'plus', availableCredits: 10000000, periodEndsAt: '2026-12-01T00:00:00.000Z' });
     expect((await ledger.balance(other.id)).availableCredits).toBe(0);
     for (const change of [{ accountId: other.id }, { plan: 'pro' as const }, { expiresAt: new Date('2026-12-02T00:00:00Z') }]) {
       await expect(ledger.grant({ ...input, ...change })).rejects.toThrow('Conflicting immutable grant');
