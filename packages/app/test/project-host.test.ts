@@ -62,7 +62,7 @@ describe('the production project host', () => {
     host.files.download = vi.fn();
     host.view.screenshot = vi.fn(async () => ({ png: 'data:image/png;base64,AAECAw==' }));
     await registry.dispatch({ cmd: 'folder.open', picker: true });
-    expect(await registry.dispatch({ cmd: 'file.save', name: 'models/beam.femlab.json' })).toEqual({ name: 'models/beam.femlab.json', to: 'folder' });
+    expect(await registry.dispatch({ cmd: 'file.save', name: 'models/beam.femlab.json' })).toEqual({ name: 'models/beam.femlab.json', to: 'folder', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(JSON.parse(files['models/beam.femlab.json']!)).toEqual(MODEL_FILE);
     await registry.dispatch({ cmd: 'file.open', path: 'models/beam.femlab.json' });
     expect(transport.importFile).toHaveBeenCalledWith(MODEL_FILE);
@@ -72,7 +72,7 @@ describe('the production project host', () => {
     expect([...files['images/beam.png']!].map((c) => c.charCodeAt(0))).toEqual([0, 1, 2, 3]);
     expect(host.files.download).not.toHaveBeenCalled();
     await registry.dispatch({ cmd: 'folder.close' });
-    expect(await registry.dispatch({ cmd: 'file.save', name: 'download.femlab.json' })).toEqual({ name: 'download.femlab.json', to: 'download' });
+    expect(await registry.dispatch({ cmd: 'file.save', name: 'download.femlab.json' })).toEqual({ name: 'download.femlab.json', to: 'download', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(host.files.download).toHaveBeenCalledOnce();
     await expect(host.folder.writeText('x', 'x')).rejects.toMatchObject({ code: 'file.not-found' });
     await expect(host.folder.writeBytes('x', new Uint8Array())).rejects.toMatchObject({ code: 'file.not-found' });
@@ -155,9 +155,9 @@ describe('the production project host', () => {
     const complete = vi.fn();
     vi.spyOn(host.files, 'beginSave').mockReturnValue(complete);
     const entries = vi.spyOn(handle, 'entries').mockImplementation(async function* () { throw new DOMException('catalog access revoked', 'NotAllowedError'); });
-    await expect(registry.dispatch({ cmd: 'file.write', path: 'note.txt', text: 'committed' })).resolves.toEqual({ name: 'note.txt', to: 'folder' });
+    await expect(registry.dispatch({ cmd: 'file.write', path: 'note.txt', text: 'committed' })).resolves.toEqual({ name: 'note.txt', to: 'folder', bytes: 9, mime: 'text/plain;charset=utf-8', unavailable: 'unsupported' });
     expect(files['note.txt']).toBe('committed');
-    await expect(registry.dispatch({ cmd: 'file.save', name: 'saved.femlab.json' })).resolves.toEqual({ name: 'saved.femlab.json', to: 'folder' });
+    await expect(registry.dispatch({ cmd: 'file.save', name: 'saved.femlab.json' })).resolves.toEqual({ name: 'saved.femlab.json', to: 'folder', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(JSON.parse(files['saved.femlab.json']!)).toEqual(MODEL_FILE);
     expect(complete).toHaveBeenCalledWith(MODEL_FILE.journal);
     await host.folder.writeBytes('bytes.bin', new Uint8Array([0, 1, 2]));

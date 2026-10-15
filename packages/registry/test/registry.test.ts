@@ -5,6 +5,7 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
+import { unretainedFile } from '../src/file-delivery';
 import { ACK, AUTOSAVES, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, TETRA_STL, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
@@ -61,6 +62,8 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'geometry.cancelStep': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
+  'file.download': { id: 'sample' },
+  'query.fileDelivery': { id: 'sample' },
   'file.cancelAnimationCapture': {},
   'file.shareLink': {},
   'file.autosave': { on: true },
@@ -184,7 +187,8 @@ describe('Registry', () => {
   });
 
   it('dispatches every host Command to the HostContext and none to the transport', async () => {
-    const { registry, transport } = make();
+    const { registry, transport, host } = make();
+    host.files.completed = { capture: () => unretainedFile, info: () => null, download: () => ({ name: 'sample', to: 'download', bytes: 0, mime: 'text/plain' }), clear: () => undefined, dispose: () => undefined };
     for (const h of HOST_COMMANDS) {
       expect(SAMPLES, `missing sample for ${h.name}`).toHaveProperty(h.name);
       await registry.dispatch({ cmd: h.name, ...SAMPLES[h.name] });
@@ -314,15 +318,15 @@ describe('Registry', () => {
 
   it('file.save and file.export deliver to the open folder when there is one, else download', async () => {
     const closed = make(false);
-    await expect(closed.registry.dispatch({ cmd: 'file.save' })).resolves.toEqual({ name: 'beam.femlab.json', to: 'download' });
+    await expect(closed.registry.dispatch({ cmd: 'file.save' })).resolves.toEqual({ name: 'beam.femlab.json', to: 'download', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(closed.host.files.download).toHaveBeenCalledWith('beam.femlab.json', 'application/json', expect.stringContaining('"femlab/1"'));
-    await expect(closed.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } })).resolves.toEqual({ name: 'beam.vtu', to: 'download' });
+    await expect(closed.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } })).resolves.toEqual({ name: 'beam.vtu', to: 'download', bytes: 2, mime: 'application/xml', unavailable: 'unsupported' });
     expect(closed.host.files.download).toHaveBeenCalledWith('beam.vtu', 'application/xml', new Uint8Array([1, 2]));
 
     const open = make(true);
-    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'folder' });
+    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'folder', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(open.host.folder.writeText).toHaveBeenCalledWith('v2.json', expect.any(String));
-    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'reports\\v3.json' })).resolves.toEqual({ name: 'reports/v3.json', to: 'folder' });
+    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'reports\\v3.json' })).resolves.toEqual({ name: 'reports/v3.json', to: 'folder', bytes: 125, mime: 'application/json', unavailable: 'unsupported' });
     expect(open.host.folder.writeText).toHaveBeenCalledWith('reports/v3.json', expect.any(String));
     await open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } });
     expect(open.host.folder.writeBytes).toHaveBeenCalledWith('beam.vtu', new Uint8Array([1, 2]));
@@ -383,7 +387,7 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });
     await expect(registry.dispatch({ cmd: 'file.read', path: 'big.txt' })).rejects.toMatchObject({ code: 'unsupported' });
     await expect(registry.dispatch({ cmd: 'file.read', path: '/etc/passwd' })).rejects.toMatchObject({ code: 'file.scope' });
-    await expect(registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' })).resolves.toEqual({ name: 'a/b.md', to: 'folder' });
+    await expect(registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' })).resolves.toEqual({ name: 'a/b.md', to: 'folder', bytes: 1, mime: 'text/plain;charset=utf-8', unavailable: 'unsupported' });
     expect(host.folder.writeText).toHaveBeenCalledWith('a/b.md', 'x');
     await expect(registry.dispatch({ cmd: 'file.write', path: '../b.md', text: 'x' })).rejects.toMatchObject({ code: 'file.scope' });
   });
@@ -434,7 +438,7 @@ describe('Registry', () => {
       return query(q);
     });
 
-    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download' });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download', bytes: 31, mime: 'text/typescript', unavailable: 'unsupported' });
     expect(wrote()).toEqual(['beam.ts', 'text/typescript', 'fem.model.new({ name: "beam" })']);
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'journal' } });
