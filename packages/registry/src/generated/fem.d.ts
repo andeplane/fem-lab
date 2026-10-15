@@ -725,6 +725,9 @@ export interface Fem {
     /**
      * Convert a quantity to another unit of the same dimension ("2 MPa" to "psi"); an error
      * names the dimensions when they differ. Handy for checking inputs before using them.
+     * Rejects nonfinite values and nonzero scaling that rounds to zero, including input
+     * scaling before adding a temperature offset. Surviving subnormals, ordinary f64
+     * rounding and affine zeros (273.15 K to 0 degC) remain valid.
      */
     convert(args: Omit<Extract<Query, { query: 'query.convert' }>, 'query'>): Promise<Converted>;
     /**

@@ -5,6 +5,9 @@
 //! schema; [`Q::si`] parses, checks the dimension and converts to SI. Nothing past this module
 //! ever sees a unit string.
 //! Numeric inputs and converted outputs must be finite; unit factors must also be nonzero.
+//! Multiplicative scaling must not turn a nonzero value into zero. Surviving subnormals and
+//! ordinary f64 rounding are accepted. Input scaling is checked before adding an affine
+//! offset; cancellation at a temperature origin is a valid zero, not a scaling underflow.
 //! Dimension operations are checked against their i8 range and reject overflow before use.
 
 use std::marker::PhantomData;
@@ -183,7 +186,8 @@ impl<D: Dim> Q<D> {
     pub fn quantity(&self) -> &Quantity {
         &self.q
     }
-    /// Parse, check the dimension and convert to finite SI, rejecting numeric overflow.
+    /// Parse, check the dimension and convert to finite SI, rejecting overflow and nonzero
+    /// scaling underflow to zero.
     pub fn si(&self) -> Result<f64, Error> {
         to_si(&self.q, D::DIM).map_err(|e| e.suggest(format!("e.g. \"{}\"", D::EXAMPLE)))
     }
@@ -540,7 +544,19 @@ fn finite_value(value: f64) -> Result<f64, Error> {
     }
 }
 
+fn checked_scale(value: f64, scaled: f64) -> Result<f64, Error> {
+    if value != 0.0 && scaled == 0.0 {
+        Err(Error::new(ErrorCode::Schema, "nonzero quantity underflows to zero during unit scaling")
+            .at("value")
+            .suggest("query.convert with units in which the nonzero value fits in the numeric range"))
+    } else {
+        finite_value(scaled)
+    }
+}
+
 /// Convert a Quantity to SI, checking its dimension.
+/// Reject nonzero scaling to zero before adding the affine offset. This does not require
+/// exact arithmetic: representable subnormals, ordinary rounding and affine zeros are valid.
 pub fn to_si(q: &Quantity, expect: Dimension) -> Result<f64, Error> {
     let (value, unit) = q.split()?;
     if unit.trim().is_empty() && expect == Dimension::NONE {
@@ -558,10 +574,12 @@ pub fn to_si(q: &Quantity, expect: Dimension) -> Result<f64, Error> {
         )
         .at("value"));
     }
-    finite_value(value * p.factor + p.offset)
+    let scaled = checked_scale(value, value * p.factor)?;
+    finite_value(scaled + p.offset)
 }
 
 /// Convert an SI value to `to`, checking the dimension when `expect` is given.
+/// A nonzero offset-adjusted numerator must not scale to zero; an affine zero is valid.
 pub fn convert(value_si: f64, to: &str, expect: Option<Dimension>) -> Result<f64, Error> {
     let value_si = finite_value(value_si)?;
     let p = parse_unit(to)?;
@@ -574,7 +592,8 @@ pub fn convert(value_si: f64, to: &str, expect: Option<Dimension>) -> Result<f64
             .at("unit"));
         }
     }
-    finite_value((value_si - p.offset) / p.factor)
+    let numerator = value_si - p.offset;
+    checked_scale(numerator, numerator / p.factor)
 }
 
 /// Format an SI value in `unit` with `sig` significant digits: `"2.5 MPa"`.
@@ -811,6 +830,76 @@ mod tests {
         assert_eq!(Q::<Dimensionless>::new(f64::INFINITY, "").si().unwrap_err().code, ErrorCode::Schema);
         assert_eq!(convert(f64::MAX, "mN", Some(Force::DIM)).unwrap_err().code, ErrorCode::Schema);
         assert_eq!(to_si(&Quantity::Parts { value: f64::MAX, unit: "N".into() }, Force::DIM).unwrap(), f64::MAX);
+    }
+
+    #[test]
+    fn nonzero_scaling_to_zero_is_rejected_without_rejecting_subnormal_rounding() {
+        // Subnormal doubles are integer multiples of the tick lambda = 2^-1074.
+        // kN's exact factor 1000 gives an independent integer-tick conversion oracle.
+        for sign in [-1.0, 1.0] {
+            let tick = sign * f64::from_bits(1);
+            let error = Q::<Force>::new(tick, "mN").si().unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("value"));
+            assert!(error.cause.contains("underflows to zero"));
+            assert!(error.suggestion.is_some());
+            let error = convert(sign * 1e-320, "GN", Some(Force::DIM)).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("value"));
+            assert!(error.cause.contains("underflows to zero"));
+            assert!(error.suggestion.as_deref().unwrap().contains("query.convert"));
+            assert_eq!(Q::<Force>::new(tick, "kN").si().unwrap().to_bits(), (sign * f64::from_bits(1000)).to_bits());
+            for (ticks, expected) in [(501, 1), (1000, 1), (1500, 2)] {
+                let scaled = convert(sign * f64::from_bits(ticks), "kN", Some(Force::DIM)).unwrap();
+                assert_eq!(scaled.to_bits(), (sign * f64::from_bits(expected)).to_bits());
+            }
+            assert!(convert(sign * f64::from_bits(499), "kN", Some(Force::DIM)).is_err());
+            assert_eq!(Q::<Force>::new(sign * f64::from_bits(501), "mN").si().unwrap().to_bits(), tick.to_bits());
+        }
+        assert!(to_si(&Quantity::text("1e-320 uN"), Force::DIM).unwrap_err().cause.contains("underflows"));
+        for zero in [0.0, -0.0] {
+            assert_eq!(Q::<Force>::new(zero, "mN").si().unwrap(), 0.0);
+            assert_eq!(convert(zero, "GN", Some(Force::DIM)).unwrap(), 0.0);
+        }
+        // Offset cancellation represents real temperature origins; it is not scaling loss.
+        assert_eq!(si("-273.15 degC", Temperature::DIM), 0.0);
+        assert_eq!(si("0 degC", Temperature::DIM), 273.15);
+        assert_eq!(convert(273.15, "degC", Some(Temperature::DIM)).unwrap(), 0.0);
+        assert_eq!(convert(0.0, "degC", Some(Temperature::DIM)).unwrap(), -273.15);
+    }
+
+    #[test]
+    fn actual_subnormal_formatting_and_decimal_parsing_have_exact_bit_oracles() {
+        for (bits, decimal) in [
+            (1, "4.9406564584124654e-324"),
+            ((1u64 << 52) - 1, "2.2250738585072009e-308"),
+            (1u64 << 52, "2.2250738585072014e-308"),
+        ] {
+            for sign in [-1.0, 1.0] {
+                let value = sign * f64::from_bits(bits);
+                let expected = if sign < 0.0 { format!("-{decimal}") } else { decimal.into() };
+                assert_eq!(fmt_sig(value, 17), expected);
+                assert_eq!(Q::<Force>::text(&format!("{expected} N")).si().unwrap().to_bits(), value.to_bits());
+                let serialized = serde_json::to_string(&Q::<Force>::new(value, "N")).unwrap();
+                let parsed: Q<Force> = serde_json::from_str(&serialized).unwrap();
+                assert_eq!(parsed.si().unwrap().to_bits(), value.to_bits());
+            }
+        }
+    }
+
+    #[test]
+    fn checked_formatters_propagate_nonzero_scaling_underflow() {
+        let units = UnitSet { force: Some("GN".into()), ..Default::default() }.resolve();
+        for value in [-1e-320, 1e-320] {
+            let error = format(value, "GN", 17).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("value"));
+            assert!(error.cause.contains("underflows to zero"));
+            assert_eq!(units.fmt(value, Force::DIM).unwrap_err(), error);
+        }
+        assert_eq!(format(0.0, "GN", 17).unwrap(), "0 GN");
+        assert_eq!(format(273.15, "degC", 17).unwrap(), "0 degC");
+        assert_eq!(units.fmt(0.0, Force::DIM).unwrap(), (0.0, "GN".into()));
     }
 
     #[test]
@@ -1070,6 +1159,29 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn actual_subnormal_parse_format_identity(bits in 1u64..(1u64 << 52), negative in any::<bool>()) {
+            let value = f64::from_bits(bits | ((negative as u64) << 63));
+            let text = super::format(value, "N", 17).unwrap();
+            prop_assert_eq!(to_si(&Quantity::text(text), Force::DIM).unwrap().to_bits(), value.to_bits());
+            let encoded = serde_json::to_string(&Quantity::Parts { value, unit: "N".into() }).unwrap();
+            let decoded: Quantity = serde_json::from_str(&encoded).unwrap();
+            prop_assert_eq!(to_si(&decoded, Force::DIM).unwrap().to_bits(), value.to_bits());
+        }
+
+        #[test]
+        fn exact_subnormal_integer_tick_conversion_identity(
+            ticks in 1u64..=((1u64 << 52) - 1) / 1000,
+            negative in any::<bool>(),
+        ) {
+            let sign = (negative as u64) << 63;
+            let value = f64::from_bits(ticks | sign);
+            let expected_si = f64::from_bits((ticks * 1000) | sign);
+            let actual_si = Q::<Force>::new(value, "kN").si().unwrap();
+            prop_assert_eq!(actual_si.to_bits(), expected_si.to_bits());
+            prop_assert_eq!(convert(actual_si, "kN", Some(Force::DIM)).unwrap().to_bits(), value.to_bits());
+        }
+
         #[test]
         fn parse_format_identity(magnitude in 1e-6f64..1e6, negative in any::<bool>(), idx in 0usize..24) {
             let v = if negative { -magnitude } else { magnitude };

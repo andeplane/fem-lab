@@ -1168,29 +1168,61 @@ fn material_library_aliases_are_stable_and_ambiguity_is_explicit() {
 }
 
 /// Shared with the Node wasm regression: rejected inputs cannot change the saved Model or
-/// Journal. The expected errors cover numeric, factor and dimension overflow independently.
+/// Journal or retained Result. The expected errors cover overflow and scaling underflow
+/// independently, and conversion oracles include exact signed subnormal ticks and affine zeros.
 #[test]
 fn invalid_quantities_preserve_the_model_and_journal() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/invalid-quantities.json")).unwrap();
     let mut e = engine();
-    ok(&mut e, r#"{"cmd":"model.new","name":"quantity validation"}"#);
-    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
     let before = serde_json::to_value(e.export_file()).unwrap();
     let hash = e.model_hash();
+    let result = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap();
+    let displacement = e.field(Some("static"), Field::Displacement).unwrap().clone();
     for case in fixture["commands"].as_array().unwrap() {
         let error = run(&mut e, &case["input"].to_string()).unwrap_err();
         assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
         assert!(error.where_.is_some());
+        if let Some(cause) = case["cause"].as_str() {
+            assert!(error.cause.contains(cause), "{error:?}");
+            assert!(error.suggestion.is_some());
+        }
         assert_eq!(e.model_hash(), hash);
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+        assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &displacement);
     }
     for case in fixture["queries"].as_array().unwrap() {
         let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
         let error = e.query(query).unwrap_err();
         assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
         assert!(error.where_.is_some());
+        if let Some(cause) = case["cause"].as_str() {
+            assert!(error.cause.contains(cause), "{error:?}");
+            assert!(error.suggestion.is_some());
+            assert_eq!(error.where_.as_deref(), Some("value"));
+        }
         assert_eq!(e.model_hash(), hash);
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+        assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &displacement);
+    }
+    for case in fixture["conversions"].as_array().unwrap() {
+        let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
+        let converted = serde_json::to_value(e.query(query).unwrap()).unwrap();
+        let value = converted["value"].as_f64().unwrap();
+        if let Some(bits) = case["bits"].as_str() {
+            assert_eq!(value.to_bits(), u64::from_str_radix(bits, 16).unwrap(), "{case}");
+        } else {
+            assert_eq!(value, case["value"].as_f64().unwrap(), "{case}");
+        }
+        assert_eq!(converted["unit"], case["input"]["to"]);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+        assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &displacement);
     }
 }
 
@@ -14401,4 +14433,30 @@ fn failed_candidate_summary_preserves_readable_result_and_consumes_no_result_ide
         .find(|row| row["field"] == "stress" && row["component"] == 0)
         .unwrap();
     assert!((stress["max"]["value"].as_f64().unwrap() - 1000.0 / area).abs() < 1e-6);
+}
+
+#[test]
+fn display_unit_underflow_rejects_public_reads_without_changing_saved_state() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"subnormal modulus"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"small","E":"1e-320 Pa","nu":0}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"GPa"}}"#);
+    let file = e.export_file();
+    let hash = e.model_hash();
+    let revision = e.revision();
+    for query in [Query::Model {}, Query::Report { step: None, include: None }] {
+        let error = e.query(query).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert_eq!(error.where_.as_deref(), Some("displayUnits"));
+        assert!(error.cause.contains("GPa") && error.cause.contains("underflows to zero"));
+        assert!(error.suggestion.as_deref().unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+    }
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"Pa"}}"#);
+    let model = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    // Decimal 1e-320 rounds to 2024 ticks of 2^-1074; zero cannot satisfy this oracle.
+    assert_eq!(model["materials"][0]["E"]["value"].as_f64().unwrap().to_bits(), 2024);
+    assert_eq!(model["materials"][0]["E"]["unit"], "Pa");
 }

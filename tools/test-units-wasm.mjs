@@ -11,23 +11,51 @@ const fixture = JSON.parse(readFileSync(new URL("../crates/engine/tests/fixtures
 const committedSchema = JSON.parse(readFileSync(new URL("../packages/registry/src/generated/engine.schema.json", import.meta.url), "utf8"));
 assert.deepEqual(JSON.parse(schema()), committedSchema);
 const engine = new Engine(1);
-await engine.dispatch(JSON.stringify({ cmd: "model.new", name: "quantity validation" }));
-await engine.dispatch(JSON.stringify({ cmd: "geometry.addBox", name: "beam", size: ["1 m", "1 m", "1 m"] }));
+for (const command of [
+  { cmd: "model.new", name: "quantity validation" },
+  { cmd: "geometry.addBox", name: "beam", size: ["1 m", "100 mm", "100 mm"] },
+  { cmd: "material.add", name: "steel", E: "210 GPa", nu: 0.3, rho: "7850 kg/m^3" },
+  { cmd: "material.assign", material: "steel", bodies: ["beam"] },
+  { cmd: "mesh.set", mesher: { kind: "lattice", size: { nx: 2, ny: 1, nz: 1 } }, order: 1 },
+  { cmd: "constraint.fix", name: "root", on: "beam.xmin" },
+  { cmd: "load.traction", name: "tip", on: "beam.xmax", total: ["0 N", "0 N", "-1 kN"] },
+  { cmd: "step.add", name: "static", procedure: "static", constraints: ["root"], loads: ["tip"] },
+  { cmd: "solve.run", step: "static" },
+]) await engine.dispatch(JSON.stringify(command));
 const before = engine.export_file();
 const hash = engine.model_hash();
+const retained = engine.query(JSON.stringify({ query: "query.result", step: "static" }));
+const displacement = engine.query(JSON.stringify({ query: "query.field", step: "static", field: "displacement" }));
 const unchanged = () => {
   assert.equal(engine.model_hash(), hash);
   assert.equal(engine.export_file(), before);
+  assert.equal(engine.query(JSON.stringify({ query: "query.result", step: "static" })), retained);
+  assert.equal(engine.query(JSON.stringify({ query: "query.field", step: "static", field: "displacement" })), displacement);
 };
-for (const { input, code } of fixture.commands) {
-  await assert.rejects(engine.dispatch(JSON.stringify(input)), (error) => error.code === code && typeof error.where === "string");
+const rejectsCase = ({ code, cause }) => error => error.code === code && typeof error.where === "string"
+  && (cause === undefined || (error.cause.includes(cause) && typeof error.suggestion === "string"));
+for (const test of fixture.commands) {
+  await assert.rejects(engine.dispatch(JSON.stringify(test.input)), rejectsCase(test));
   unchanged();
 }
-for (const { input, code } of fixture.queries) {
-  assert.throws(() => engine.query(JSON.stringify(input)), (error) => error.code === code && typeof error.where === "string");
+for (const test of fixture.queries) {
+  assert.throws(() => engine.query(JSON.stringify(test.input)), rejectsCase(test));
   unchanged();
 }
-console.log(`wasm schema and quantity validation: ${fixture.commands.length} commands and ${fixture.queries.length} queries passed`);
+const numberBits = value => {
+  const bytes = new DataView(new ArrayBuffer(8));
+  bytes.setFloat64(0, value);
+  return bytes.getBigUint64(0).toString(16).padStart(16, "0");
+};
+for (const { input, bits, value } of fixture.conversions) {
+  const converted = JSON.parse(engine.query(JSON.stringify(input)));
+  if (bits !== undefined) assert.equal(numberBits(converted.value), bits, JSON.stringify(input));
+  else assert.equal(converted.value, value, JSON.stringify(input));
+  assert.equal(converted.unit, input.to);
+  unchanged();
+}
+engine.free();
+console.log(`wasm schema and quantity validation: ${fixture.commands.length} rejected commands, ${fixture.queries.length} rejected queries and ${fixture.conversions.length} conversion oracles passed; Model, Journal and Result preserved`);
 
 // #580/#582: checked display formatting uses the same public registry as native tests.
 const displayRead = (owner, input) => JSON.parse(owner.query(JSON.stringify(input)));
@@ -253,3 +281,26 @@ try {
   assert.equal(checkedReport.model_hash(), hash);
 } finally { checkedReport.free(); }
 console.log('Checked report givens retain authored force and the independent FL/EA reference in shipped WASM.');
+
+// #583: a finite positive modulus must not be silently displayed as zero in GPa.
+const subnormalDisplay = new Engine(1);
+try {
+  for (const command of [
+    { cmd: 'model.new', name: 'subnormal modulus' },
+    { cmd: 'material.add', name: 'small', E: '1e-320 Pa', nu: 0 },
+    { cmd: 'model.setUnits', units: { stress: 'GPa' } },
+  ]) await displayCommand(subnormalDisplay, command);
+  const before = displaySnapshot(subnormalDisplay);
+  const definition = displayRead(subnormalDisplay, { query: 'query.definition', kind: 'material', name: 'small' });
+  for (const query of [{ query: 'query.model' }, { query: 'query.report' }]) {
+    assert.throws(() => displayRead(subnormalDisplay, query), error => displayError(error)
+      && error.cause.includes('underflows to zero') && error.suggestion.includes('model.setUnits'));
+    assertDisplaySnapshot(subnormalDisplay, before);
+    assert.deepEqual(displayRead(subnormalDisplay, { query: 'query.definition', kind: 'material', name: 'small' }), definition);
+  }
+  await displayCommand(subnormalDisplay, { cmd: 'model.setUnits', units: { stress: 'Pa' } });
+  const restored = displayRead(subnormalDisplay, { query: 'query.model' }).materials[0].E;
+  assert.equal(numberBits(restored.value), '00000000000007e8');
+  assert.equal(restored.unit, 'Pa');
+} finally { subnormalDisplay.free(); }
+console.log('Subnormal display rejection and exact SI recovery passed in shipped WASM.');

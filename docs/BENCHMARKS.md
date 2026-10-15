@@ -239,6 +239,30 @@ and `Gm^-35 = 1e-315 m^-35` remain valid. A shared native/wasm fixture verifies 
 temperature, geometry and display-unit Commands preserve the complete saved Model and Journal,
 and conversion Queries never serialize nonfinite numbers as JSON `null`.
 
+Unit scaling also rejects a nonzero multiplicative input that rounds to zero in f64, in
+both input-to-SI and SI-to-display conversion. Input multiplication is checked before
+adding an affine offset; output division is checked after subtracting it. True zeros,
+temperature-origin cancellation and surviving subnormals are valid. This is a bounded
+scaling-loss policy, not an exact-arithmetic requirement: ordinary f64 parsing and rounding
+remain unchanged. Subnormal tests use the independent binary tick `λ = 2^-1074`:
+
+| Boundary case | Independent expected result |
+| --- | --- |
+| `±1e-320 N` to `GN`; `±1e-320 uN` to SI | Structured `schema` error, no Model/Journal/Result mutation |
+| `±λ kN` to N, then back to kN | Exactly `±1000λ N`, then `±λ kN` (bit equality) |
+| `±499λ N` / `±501λ N` / `±1500λ N` to kN | Reject / `±λ` / `±2λ`; nearest-even rounding is accepted |
+| Smallest and largest signed subnormal; smallest normal | Known 17-digit `fmt_sig` text and JSON parsing preserve all bits |
+| Generated signed subnormals, checked `format(value,"N",17)` | Actual formatter/Quantity parsing preserves all bits |
+| `±1e-320 N` formatted in GN; a material's `1e-320 Pa` displayed in GPa | Checked formatters and public Model/report reads propagate errors; SI display restores the exact value |
+| `273.15 K` to degC; `-273.15 degC` to K | Valid zero |
+| `0 degC` to K; `0 K` to degC | `273.15 K`; `-273.15 degC` |
+
+Generated signed subnormal values exercise the actual formatter and text/JSON Quantity
+parsers, with bit comparisons so an accidentally returned zero cannot pass an absolute
+tolerance. Integer-tick kN conversions exercise a separate exact scaling identity. The
+native registry and shipped WASM run the same rejection and conversion fixtures against
+a solved small cantilever and check that its retained Result remains unchanged.
+
 A10 (`every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms`) checks
 all entries, component blocks and Cholesky pivots on scaled affine simplices and curved
 quadratic maps. Plane stress includes thickness, plane strain unit depth, axisymmetry the

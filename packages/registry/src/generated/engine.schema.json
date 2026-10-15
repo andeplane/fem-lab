@@ -5605,7 +5605,7 @@
         "x-returns": "ScriptText"
       },
       {
-        "description": "Convert a quantity to another unit of the same dimension (\"2 MPa\" to \"psi\"); an error\nnames the dimensions when they differ. Handy for checking inputs before using them.",
+        "description": "Convert a quantity to another unit of the same dimension (\"2 MPa\" to \"psi\"); an error\nnames the dimensions when they differ. Handy for checking inputs before using them.\nRejects nonfinite values and nonzero scaling that rounds to zero, including input\nscaling before adding a temperature offset. Surviving subnormals, ordinary f64\nrounding and affine zeros (273.15 K to 0 degC) remain valid.",
         "type": "object",
         "properties": {
           "quantity": {
@@ -34793,7 +34793,7 @@
             "x-returns": "ScriptText"
           },
           {
-            "description": "Convert a quantity to another unit of the same dimension (\"2 MPa\" to \"psi\"); an error\nnames the dimensions when they differ. Handy for checking inputs before using them.",
+            "description": "Convert a quantity to another unit of the same dimension (\"2 MPa\" to \"psi\"); an error\nnames the dimensions when they differ. Handy for checking inputs before using them.\nRejects nonfinite values and nonzero scaling that rounds to zero, including input\nscaling before adding a temperature offset. Surviving subnormals, ordinary f64\nrounding and affine zeros (273.15 K to 0 degC) remain valid.",
             "type": "object",
             "properties": {
               "quantity": {
