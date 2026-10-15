@@ -3,7 +3,7 @@ import {act} from 'preact/test-utils';
 import {expect,it,vi} from 'vitest';
 import {AccountPanel} from '../src/ui/Account';
 import {initialState} from '../src/store';
-import {EMPTY_ACCOUNT,type AccountPlan} from '@femlab/registry';
+import {EMPTY_ACCOUNT,type AccountInfo,type AccountPlan} from '@femlab/registry';
 it('offers optional email login while local model state stays untouched',()=>{
   const s={...structuredClone(initialState),panels:{account:true,'account.data':true},account:{...EMPTY_ACCOUNT,configured:true}};
   const container=document.createElement('div');document.body.append(container);
@@ -16,10 +16,11 @@ it('renders server balance and disables purchases when billing is unavailable',(
   act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
   expect(container.textContent).toContain('199,946');for(const button of container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]'))expect(button.disabled).toBe(true);expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.delete"]')?.disabled).toBe(true);act(()=>render(null,container));container.remove();
 });
-function signedIn(plan:AccountPlan='free'){
-  return {...structuredClone(initialState),panels:{account:true},account:{...EMPTY_ACCOUNT,configured:true,status:'active' as const,uid:'a',email:'a@example.com',profile:{id:'a',email:'a@example.com',createdAt:'2026-10-14T00:00:00Z',status:'active' as const,usage:{plan,totalCredits:200000,availableCredits:199946,reservedCredits:0,periodEndsAt:'2026-11-01T00:00:00Z',models:['gpt-5.4-mini'],maxOutput:4096,contextLimit:64000,tariffVersion:'v1'},billing:{available:true,status:'active',cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null}}}};
+function signedIn(plan:AccountPlan='free',merchantMode:NonNullable<AccountInfo['billing']>['merchantMode']='managed'){
+  const billing:NonNullable<AccountInfo['billing']>={available:true,merchantMode,status:'active',cancelAtPeriodEnd:false,periodEndsAt:null,reviewRequired:false,scheduledPlan:null};
+  return {...structuredClone(initialState),panels:{account:true},account:{...EMPTY_ACCOUNT,configured:true,status:'active' as const,uid:'a',email:'a@example.com',profile:{id:'a',email:'a@example.com',createdAt:'2026-10-14T00:00:00Z',status:'active' as const,usage:{plan,totalCredits:200000,availableCredits:199946,reservedCredits:0,periodEndsAt:'2026-11-01T00:00:00Z',models:['gpt-5.4-mini'],maxOutput:4096,contextLimit:64000,tariffVersion:'v1'},billing}}};
 }
-it('requires a personal or business choice before a new purchase and passes the chosen use',()=>{
+it('requires a personal or business choice before a new managed purchase and passes the chosen use',()=>{
   const s=signedIn(),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
   act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
   const select=container.querySelector<HTMLSelectElement>('select')!;
@@ -38,11 +39,37 @@ it('requires a personal or business choice before a new purchase and passes the 
   expect(select.value).toBe('');for(const button of buttons())expect(button.disabled).toBe(true);
   act(()=>render(null,container));container.remove();
 });
+it('keeps legacy direct checkout available without presenting or sending purchase use',()=>{
+  const s=signedIn('free','direct'),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  expect(container.querySelector('select')).toBeNull();
+  const buttons=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]');expect(buttons).toHaveLength(3);
+  for(const [index,plan] of ['plus','pro','studio'].entries()){
+    expect(buttons[index]!.disabled).toBe(false);act(()=>buttons[index]!.click());
+    expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.checkout',plan});
+  }
+  act(()=>render(null,container));container.remove();
+});
+it('blocks new checkout with stale availability while the merchant mode is missing, pending or unknown',()=>{
+  for(const merchantMode of [undefined,'pending','future-mode'] as const){
+    const s=signedIn(),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+    Object.assign(s.account.profile.billing,{merchantMode,available:true});
+    act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+    expect(container.querySelector('select')).toBeNull();
+    const buttons=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"]');expect(buttons).toHaveLength(3);
+    for(const button of buttons){expect(button.disabled).toBe(true);act(()=>button.click())}expect(dispatch).not.toHaveBeenCalled();
+    act(()=>render(null,container));container.remove();
+  }
+});
 it('keeps paid plan changes available without presenting or accepting a use override',()=>{
   const dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
-  act(()=>render(<AccountPanel s={signedIn('plus')} dispatch={dispatch}/>,container));
-  expect(container.querySelector('select')).toBeNull();expect(container.querySelector('[data-cmd="account.checkout"]')).toBeNull();
-  const buttons=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.changePlan"]');expect(buttons[0]?.disabled).toBe(true);expect(buttons[1]?.disabled).toBe(false);
-  act(()=>buttons[1]!.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.changePlan',plan:'pro'});
+  for(const merchantMode of ['managed','direct','pending',undefined,'future-mode'] as const){
+    const s=signedIn('plus');Object.assign(s.account.profile.billing,{merchantMode});
+    act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+    expect(container.querySelector('select')).toBeNull();expect(container.querySelector('[data-cmd="account.checkout"]')).toBeNull();
+    const buttons=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.changePlan"]');expect(buttons[0]?.disabled).toBe(true);expect(buttons[1]?.disabled).toBe(false);
+    act(()=>buttons[1]!.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.changePlan',plan:'pro'});
+    expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.portal"]')?.disabled).toBe(false);
+  }
   act(()=>render(null,container));container.remove();
 });

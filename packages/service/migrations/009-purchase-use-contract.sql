@@ -12,6 +12,10 @@ ALTER TABLE checkout_intents
 ALTER TABLE plan_changes
   ADD COLUMN request_version integer CHECK (request_version > 0),
   ADD COLUMN price_id text,
-  ADD COLUMN purchase_use text CHECK (purchase_use IN ('personal','business'));
+  ADD COLUMN purchase_use text CHECK (purchase_use IN ('personal','business')),
+  ADD COLUMN source_subscription_id text,
+  ADD COLUMN source_price_id text,
+  ADD COLUMN source_period_start timestamptz,
+  ADD COLUMN source_schedule_id text;
 ALTER TABLE paid_periods
   ADD COLUMN purchase_use text CHECK (purchase_use IN ('personal','business'));

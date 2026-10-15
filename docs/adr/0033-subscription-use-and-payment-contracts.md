@@ -10,7 +10,8 @@ businesses without inferring their use from a tax ID. A new managed purchase has
 explicit personal/business argument on the registered `account.checkout` Command.
 The account form holds an unsubmitted draft, has no default choice, and submits one
 Command with the final values. It does not create a separate persisted account or
-Journal setting.
+Journal setting. Exact direct mode retains a plan-only legacy Checkout; unknown or
+pending merchant modes cannot start new purchases from a stale available profile.
 
 The server owns every price identity. Personal and business aliases map to the
 same tier allowance, with legacy direct prices retained for existing billing
@@ -29,7 +30,11 @@ call. A retry must match them all. New code never reconstructs an old ambiguous
 attempt from today's configuration: historical unversioned attempts wait until
 their stored expiry. Version markers must change when fixed provider request
 parameters change, including the integration identifier. Plan-change intents also
-freeze their target price/use and request version before scheduling.
+freeze target price/use, source subscription/price/period/schedule and request
+version before scheduling. Replacing any known source or schedule requires review.
+The provider's resolved schedule ID is durably recorded before its first update.
+If a schedule creation response was lost, the original creation key reconciles
+that operation's schedule; a later attached schedule is never silently adopted.
 
 The trade-off is a bounded wait after choosing the wrong use or backing out of an
 open Checkout. We retain the original intent rather than creating another payable
