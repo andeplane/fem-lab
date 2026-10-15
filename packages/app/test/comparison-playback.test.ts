@@ -125,6 +125,35 @@ describe('independently retained comparison clocks', () => {
     s.playback.pause(); expect(s.scheduled.size).toBe(0);
   });
 
+  it('holds unequal schedules for same-clock pause/resume/speed without applying an exact seek to the physical playhead', async () => {
+    const s = setup();
+    const same = { mode: 'synchronized' as const, leftResultId: 'left', rightResultId: 'right', sampling: 'exact' as const };
+    await s.playback.select({ ...same, playing: true, time: '0 s' });
+    await s.advance(450);
+    expect(s.state()?.playheadSi).toBeCloseTo(0.45);
+    expect(s.displayed.left?.sample.frame.timeSi).toBe(0.2); expect(s.displayed.right?.sample.frame.timeSi).toBe(0.3);
+    s.query.mockClear();
+    await s.playback.select({ ...same, playing: false });
+    expect(s.state()).toMatchObject({ sampling: 'exact', left: { playing: false }, right: { playing: false } });
+    expect(s.state()?.playheadSi).toBeCloseTo(0.45);
+    expect(s.displayed.left?.sample.frame.timeSi).toBe(0.2); expect(s.displayed.right?.sample.frame.timeSi).toBe(0.3);
+    expect(s.query.mock.calls.some(([q]) => q.query === 'query.frame' && q.sample?.kind === 'time')).toBe(false);
+    const paused = structuredClone(s.state());
+    await expect(s.playback.select({ ...same, playing: false, time: '450 ms' })).rejects.toMatchObject({ code: 'not-found' });
+    expect(s.state()).toEqual(paused);
+    await s.advance(200); expect(s.state()).toEqual(paused);
+    await s.playback.select({ ...same, playing: true, speed: 2 });
+    await s.advance(100);
+    expect(s.state()?.playheadSi).toBeCloseTo(0.65);
+    expect(s.displayed.left?.sample.frame.timeSi).toBe(0.2); expect(s.displayed.right?.sample.frame.timeSi).toBe(0.6);
+    await s.playback.select({ ...same, playing: true, speed: 0.5 });
+    await s.advance(110);
+    expect(s.state()?.playheadSi).toBeCloseTo(0.705);
+    expect(s.displayed.left?.sample.frame.timeSi).toBe(0.7); expect(s.displayed.right?.sample.frame.timeSi).toBe(0.6);
+    await s.playback.select({ ...same, playing: false });
+    expect(s.scheduled.size).toBe(0);
+  });
+
   it('fences older frame reads and errors without blocking an independent selection in the other pane', async () => {
     const s = setup(), pending = deferred<FrameResult>();
     s.query.mockImplementation(input => input.query === 'query.frame' && input.resultId === 'left' && input.sample?.kind === 'frame' && input.sample.index === 0 ? pending.promise : s.answer(input));

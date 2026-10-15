@@ -164,11 +164,16 @@ export class ComparisonPlayback {
       const speed = this.speed(input.speed ?? (this.mode === 'synchronized' ? this.common.speed : 1));
       const same = this.mode === 'synchronized' && this.runs.left?.catalogue.resultId === input.leftResultId && this.runs.right?.catalogue.resultId === input.rightResultId;
       let time = same ? Math.min(endSi, this.commonTime()) : startSi;
-      if (same && input.playing && time >= endSi) time = startSi;
+      const restarting = same && input.playing && time >= endSi;
+      if (restarting) time = startSi;
       if (input.time !== undefined) time = (await this.transport.query({ query: 'query.convert', quantity: input.time, to: 's' }) as Valued).value;
       if (time < startSi || time > endSi) throw new FemError('not-found', 'playhead is outside the shared retained interval', 'time');
       const sample: FrameSample = { kind: 'time', time: { value: time, unit: 's' }, sampling: input.sampling };
-      const [lf, rf] = await Promise.all([this.seek(left, sample), this.seek(right, sample)]);
+      // Pause/resume/speed controls hold the existing physical clock. Its playhead
+      // need not be retained by either schedule; exact/nearest applies to seeks/starts.
+      const hold = same && input.time === undefined && !restarting;
+      const [lf, rf] = await Promise.all([this.seek(left, hold ? { kind: 'frame', index: this.held(left, time) } : sample),
+        this.seek(right, hold ? { kind: 'frame', index: this.held(right, time) } : sample)]);
       if (!current() || !await this.presentation.commit({ left: lf, right: rf }, { left, right }, current) || !current()) return;
       const wall = this.clock?.now() ?? 0;
       this.mode = 'synchronized'; this.interval = { startSi, endSi }; this.common = { wall, anchor: time, playhead: time, speed, playing: input.playing, sampling: input.sampling };

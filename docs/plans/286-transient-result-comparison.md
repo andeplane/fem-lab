@@ -275,5 +275,13 @@ finished its short0.5s/s interval before Playwright located Pause; its actual cl
 preserved. Using the supported0.1s/s makes the pause window observable and asserts pause occurs
 before the unchanged0.9s endpoint; the10s/s endpoint and all physical assertions remain intact.
 
+A subsequent public-select fake-clock regression exposed exact-policy pause/resume/speed controls
+trying to seek an unretained0.45s playhead between left0.2s/right0.3s frames. Existing same-clock
+controls without an explicit time now use the ordinary held indices, preserving elapsed time and
+actual displayed timestamps. Explicit seeks and new/restarted clocks keep exact/nearest selection;
+an explicit450ms exact request still fails atomically. The original failure and52-case focused
+green/types receipts are retained. The production receipt above predates this narrow clock fix;
+the final coherent composition will rerun the actual browser gates.
+
 The next coherent parent composition and final full host/strict coverage remain open. These
 scoped runtime results are not a current-main claim. #286 is incomplete until those gates pass.
