@@ -68,9 +68,9 @@ impl Engine {
             }
             Query::Script {} => Ok(QueryResult::Script(ScriptText { text: self.journal.as_script(crate::version()) })),
             Query::Convert { quantity, to } => {
-                let (value, unit) = quantity.split()?;
+                let (_, unit) = quantity.split()?;
                 let from = units::parse_unit(unit)?;
-                let si = value * from.factor + from.offset;
+                let si = units::to_si(&quantity, from.dim)?;
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
