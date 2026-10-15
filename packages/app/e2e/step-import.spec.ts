@@ -147,3 +147,56 @@ test('@cpu malformed and stale STEP conversions cannot publish over an edited or
   await page.evaluate(async () => { await (window as unknown as { releaseStepRead(): Promise<void> }).releaseStepRead(); await Promise.resolve(); });
   expect(await checkedState(page)).toEqual(replacement);
 });
+
+test('@cpu STEP receipt and solved long-name header fit with native keyboard access', async ({ page }, info) => {
+  test.setTimeout(120_000);
+  await start(page);
+  await choose(page, fixture('analytic-box-m.step'));
+  const receipt = page.getByRole('dialog', { name: 'STEP import report', exact: true });
+  await expect(receipt).toBeVisible();
+  await receipt.getByTitle('Close STEP report', { exact: true }).click();
+  const longName = 'Very_long_structural_model_revision_2026_final';
+  await page.evaluate(async name => {
+    await window.fem.dispatch({ cmd: 'model.setName', name });
+    await window.fem.dispatch({ cmd: 'material.add', name: 'solid', E: '1 MPa', nu: 0.25 });
+    await window.fem.dispatch({ cmd: 'material.assign', material: 'solid', bodies: ['cad'] });
+    for (const [name, offset] of [['base', '0 m'], ['top', '3 m']]) await window.fem.dispatch({ cmd: 'geometry.nameFace', name, of: 'cad', where: { kind: 'plane', normal: [0, 0, 1], offset, tol: '0.0000001 m' } });
+    await window.fem.dispatch({ cmd: 'mesh.set', mesher: { kind: 'lattice', size: '0.5 m' } });
+    await window.fem.dispatch({ cmd: 'constraint.fix', name: 'root', on: 'base' });
+    await window.fem.dispatch({ cmd: 'load.traction', name: 'push', on: 'top', total: ['0 N', '0 N', '-1 N'] });
+    await window.fem.dispatch({ cmd: 'step.add', name: 'static', procedure: 'static', constraints: ['root'], loads: ['push'] });
+    await window.fem.dispatch({ cmd: 'solve.run', step: 'static', solver: 'cpu-direct' });
+    await window.fem.dispatch({ cmd: 'file.autosave', on: true });
+    await window.fem.dispatch({ cmd: 'project.save' });
+  }, longName);
+  await expect(page.locator('.model-name')).toHaveValue(longName);
+  await expect(page.locator('.topbar .solve')).toHaveText(/Solved/);
+  await expect(page.locator('.saved-chip')).toContainText('saved');
+  await expect(page.getByRole('button', { name: 'STEP receipt', exact: true })).toBeVisible();
+  const layouts = [];
+  for (const width of [1180, 1199, 1200, 1280, 1399, 1400, 1599, 1699, 1700, 1800, 1899, 1900, 2000, 2099, 2100]) {
+    await page.setViewportSize({ width, height: 1100 });
+    const layout = await page.locator('.topbar').evaluate(header => ({
+      client: header.clientWidth, scroll: header.scrollWidth,
+      items: [...header.children].map(element => ({ text: element.textContent?.trim(), rect: element.getBoundingClientRect().toJSON() })).filter(item => item.rect.width > 0),
+    }));
+    expect(layout.scroll, `STEP receipt header overflows at ${width}px`).toBe(layout.client);
+    for (const item of layout.items) {
+      expect(item.rect.left).toBeGreaterThanOrEqual(0);
+      expect(item.rect.right).toBeLessThanOrEqual(width);
+    }
+    for (let i = 1; i < layout.items.length; i++) expect(layout.items[i - 1]!.rect.right).toBeLessThanOrEqual(layout.items[i]!.rect.left);
+    layouts.push({ width, ...layout });
+  }
+  await page.setViewportSize({ width: 1180, height: 1100 });
+  await page.screenshot({ path: info.outputPath('step-receipt-solved-header-1180.png') });
+  for (const name of ['STEP receipt', 'Import Abaqus .inp', 'Import STEP geometry']) {
+    await page.getByRole('button', { name, exact: true }).focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    const title = name === 'STEP receipt' ? 'Close STEP report' : name === 'Import Abaqus .inp' ? 'Close Abaqus import' : 'Close STEP import';
+    await dialog.getByTitle(title, { exact: true }).click();
+  }
+  await info.attach('STEP-receipt-layout', { body: JSON.stringify(layouts, null, 2), contentType: 'application/json' });
+});
