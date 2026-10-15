@@ -23,7 +23,7 @@ python3 tools/abaqus-interoperability/corpus.py compare \
 ```
 
 `compare --case calculix-beam20p` selects one named case; the default requires **both**
-official cases and the authored assembly. An unsupported keyword, import/solve failure,
+official cases, the unchanged FreeCAD export and the authored assembly. An unsupported keyword, import/solve failure,
 changed source hash, omitted reference node, altered load, wrong units, nonfinite field or
 thread disagreement fails the command. It never repairs the source, strips physics,
 overrides a formulation or treats an unsupported case as a numerical pass. Fresh comparison
@@ -75,11 +75,32 @@ The 10 mm cube has 26 nodes and five C3D10 elements. It combines nested named el
 named displacement constraints, a -1 N y-force at source node 2, and 1 MPa pressure on faces
 25/P3 and 29/P2. Those two triangles span the entire 100 mm² top face: pressure supplies
 -100 N in z, so the total reaction must be `(0,1,100)` N. Output/file/print requests remain in
-the untouched input. Current source acquisition/inventory checks are **not** numerical
-acceptance: every displacement still needs comparison against an independently executed,
-attested solver run, and the original input must pass the complete import path unchanged.
-This pending row is kept outside the harness's completed-oracle comparison list until that
-independent numerical reference is available. No source admission or solve pass is inferred.
+the untouched input.
+
+An independently built and executed **CalculiX 2.23** now completed this unchanged original
+with exit 0 and printed all 26 displacement vectors. The observed
+[reference JSON](freecad-testcube-ccx-2.23.json) records those exact values in original mm units,
+input/DAT/binary/source archive hashes, actual command/environment, compiler/dependency
+versions and the independently retained evidence package identity. All 1,180 solver C/Fortran/header
+files were byte-identical to the official source archive; only build configuration and the
+official SPOOLES corrections were applied. The successful build enabled ARPACK-NG 3.9.1;
+initial unsuccessful build configurations and their failures remain in the external evidence.
+This observed result is independently executed reference data, not a vendor-published table
+or output from FEM Lab. The raw DAT, FRD, STA, logs, binary and source/build provenance remain
+in the external 66-payload reference package, whose manifest hash is pinned in the JSON.
+
+The same independent solver also executed both untouched official beam decks: all 270 printed
+beam10p displacement components matched the distribution reference exactly; beam20p's largest
+difference was `1.908667e-14` in original mm units on a near-zero x-component. Those runs
+corroborate the independent reference setup; the harness still compares against the original
+distribution `.dat.ref` files rather than replacing them with locally generated answers.
+
+The FreeCAD case is now included in the strict harness comparison list. The input's output
+requests do **not** include RF, so no CalculiX reaction output is claimed: the reaction gate
+uses the independent analytical applied-force sum above. Integration-point stresses are
+retained but unclaimed pending an independently established ordering correspondence.
+Reference execution/source inventory is **not** FEM Lab numerical acceptance: the untouched
+input must still pass complete conversion and explicit solve against the composed importer.
 
 ## Authored assembly: two materials and two transformed instances
 

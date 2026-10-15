@@ -154,6 +154,52 @@
         "END STEP"
       ],
       "oracle": "Every nodal displacement in the original distribution .dat.ref, plus total reaction equilibrium; despite the source comment, actual loading is CLOAD, not DLOAD pressure"
+    },
+    {
+      "id": "freecad-testcube",
+      "deck": "freecad-testcube.inp",
+      "reference": "crates/engine/tests/fixtures/abaqus-interoperability/freecad-testcube-ccx-2.23.json",
+      "referenceFormat": "executed-json",
+      "referenceIdentity": {
+        "bytes": 5696,
+        "sha256": "cfc4b6e1e21ead5fe807c90a7aa24f4b8251b90368cae7f82fb8506c9b411215"
+      },
+      "element": "C3D10",
+      "nodes": 26,
+      "elements": 5,
+      "unitLength": "1 mm",
+      "unitForce": "1 N",
+      "step": "STATIC",
+      "referenceSet": "NALL",
+      "referenceTime": 1.0,
+      "referenceDisplacementScaleToMetres": 0.001,
+      "displacementRelativeTolerance": 2e-06,
+      "displacementAbsoluteToleranceMetres": 1e-13,
+      "totalAppliedForceNewtons": [
+        0,
+        -1,
+        -100
+      ],
+      "keywords": [
+        "NODE",
+        "ELEMENT",
+        "ELSET",
+        "NSET",
+        "MATERIAL",
+        "ELASTIC",
+        "SOLID SECTION",
+        "STEP",
+        "STATIC",
+        "BOUNDARY",
+        "CLOAD",
+        "DLOAD",
+        "NODE FILE",
+        "EL FILE",
+        "NODE PRINT",
+        "EL PRINT",
+        "END STEP"
+      ],
+      "oracle": "Every displacement vector printed by the independently built and executed CalculiX 2.23 on the unchanged FreeCAD export. Reaction is checked against analytical applied-force sum, not a CalculiX RF result; integration-point stress comparison remains unclaimed."
     }
   ],
   "externalCandidates": [
@@ -249,8 +295,8 @@
         -1,
         -100
       ],
-      "oracle": "Definition checked by primary project's existing regression. Numerical displacement reference pending an independently executed and attested CalculiX run; not a numerical pass.",
-      "status": "source acquisition and inventory only; actual source admission, deck import and numerical comparison have separate receipts"
+      "oracle": "Independently executed unchanged input in official-source CalculiX 2.23; all 26 original DAT displacement vectors retained in a pinned observed reference JSON. FEM Lab numerical comparison pending composed importer/runtime.",
+      "status": "independent reference execution completed; actual FEM Lab source admission, deck import and numerical comparison have separate receipts"
     }
   ]
 }

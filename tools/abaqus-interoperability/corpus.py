@@ -164,6 +164,29 @@ def flat_source_inventory(text, element):
     return nodes, elements
 
 
+def executed_reference(data, expected, deck_hash):
+    """Check a pinned observed reference, including which unchanged input was executed."""
+    checked(data, expected)
+    reference = json.loads(data)
+    if (reference["format"] != "femlab-cross-solver-reference/1" or reference["input"]["sha256"] != deck_hash
+            or not reference["input"]["unchangedBeforeAndAfterRun"] or reference["solver"]["exitCode"] != 0
+            or reference["solver"]["name"] != "CalculiX" or reference["solver"]["version"] != "2.23"
+            or reference["rawOutput"]["displacementUnit"] != "mm"):
+        raise ValueError("executed reference provenance/input/units differ")
+    rows = {int(label): values for label, values in reference["displacements"].items()}
+    if not rows or any(len(values) != 3 or not all(math.isfinite(v) for v in values) for values in rows.values()):
+        raise ValueError("executed reference has invalid displacement vectors")
+    return rows
+
+
+def case_reference(case, source):
+    if case.get("referenceFormat") == "executed-json":
+        return executed_reference((ROOT / case["reference"]).read_bytes(), case["referenceIdentity"],
+                                  digest((source / case["deck"]).read_bytes()))
+    return reference_displacements((source / case["reference"]).read_text(),
+                                   case["referenceSet"], case["referenceTime"])
+
+
 def check_sources(manifest, source):
     source = external(source)
     for artifact in manifest["artifacts"]:
@@ -179,7 +202,7 @@ def check_sources(manifest, source):
                 or keywords(text) != case["keywords"] or not all(marker in text for marker in case["metadataMarkers"])):
             raise ValueError(f"exported source inventory/provenance differs: {case['id']}")
         result.append({"id": case["id"], "nodes": len(nodes), "elements": len(elements),
-                       "scope": "source identity/inventory only; numerical comparison pending"})
+                       "scope": "source identity/inventory only; no FEM Lab solve acceptance implied"})
     for case in manifest["comparisons"]:
         text = (source / case["deck"]).read_text()
         if keywords(text) != case["keywords"]:
@@ -187,8 +210,7 @@ def check_sources(manifest, source):
         nodes, elements = flat_source_inventory(text, case["element"])
         if len(nodes) != case["nodes"] or len(elements) != case["elements"]:
             raise ValueError(f"source mesh counts differ from manifest: {case['id']}")
-        rows = reference_displacements((source / case["reference"]).read_text(),
-                                       case["referenceSet"], case["referenceTime"])
+        rows = case_reference(case, source)
         if set(rows) != nodes:
             raise ValueError(f"incomplete independent reference: {case['id']}")
         result.append({"id": case["id"], "referenceNodes": len(rows), "elements": len(elements),
@@ -329,8 +351,7 @@ def compare(manifest, source, native, destination, selected):
                 if stress["unit"] != "Pa" or stress["components"] != 6:
                     raise ValueError("stress field has unexpected dimensions/units")
                 if "reference" in case:
-                    reference = reference_displacements((source / case["reference"]).read_text(),
-                                                       case["referenceSet"], case["referenceTime"])
+                    reference = case_reference(case, source)
                     comparison = compare_displacements(mesh["sourceLabels"]["nodes"], displacement["values"], reference,
                                                        case["referenceDisplacementScaleToMetres"],
                                                        case["displacementRelativeTolerance"],

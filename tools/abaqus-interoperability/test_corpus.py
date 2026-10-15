@@ -2,6 +2,7 @@
 
 import copy
 import io
+import json
 import math
 from pathlib import Path
 import tarfile
@@ -27,6 +28,28 @@ PRINTED = """
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_observed_freecad_reference_is_pinned_to_the_executed_original(self):
+        manifest = json.loads(corpus.MANIFEST.read_text())
+        case = next(case for case in manifest["comparisons"] if case["id"] == "freecad-testcube")
+        data = (corpus.ROOT / case["reference"]).read_bytes()
+        original_hash = "76d7a103106122f6d7872d4c1124223bfcd1e10eb968ce27e8213e4647048eb5"
+        rows = corpus.executed_reference(data, case["referenceIdentity"], original_hash)
+        self.assertEqual(len(rows), 26)
+        # These exact values were independently read from the retained CalculiX DAT.
+        self.assertEqual(rows[2], [3.094636e-5, -5.444519e-6, -1.269312e-4])
+        self.assertEqual(rows[1], [0, 0, 0])
+        for field, value in [("unchangedBeforeAndAfterRun", False), ("sha256", "0" * 64)]:
+            changed = json.loads(data)
+            changed["input"][field] = value
+            payload = json.dumps(changed).encode()
+            with self.assertRaisesRegex(ValueError, "provenance"):
+                corpus.executed_reference(payload, {"bytes": len(payload), "sha256": corpus.digest(payload)}, original_hash)
+        changed = json.loads(data)
+        changed["rawOutput"]["displacementUnit"] = "m"
+        payload = json.dumps(changed).encode()
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            corpus.executed_reference(payload, {"bytes": len(payload), "sha256": corpus.digest(payload)}, original_hash)
+
     def test_labels_units_and_block_identity_are_independent_of_dense_order(self):
         reference = corpus.reference_displacements(PRINTED, "NALL", 1)
         proof = corpus.compare_displacements([205, 101], [3e-5, 0, 0, 0, -2e-5, 0], reference, .001, 2e-6, 1e-13)
