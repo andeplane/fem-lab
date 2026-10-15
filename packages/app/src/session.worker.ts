@@ -16,6 +16,7 @@ const engine = new BrowserEngine({
   },
 });
 const runtime = new SessionRuntime((options, epoch) => engine.create(options, epoch),
-  (ticket, options) => engine.candidate(ticket, options), () => performance.now());self.onmessage = (event: MessageEvent<SessionRequest>) => {
+  (ticket, options) => engine.candidate(ticket, options), () => performance.now());
+self.onmessage = (event: MessageEvent<SessionRequest>) => {
   void runtime.accept(event.data, (reply, raw = []) => self.postMessage(reply, raw));
 };

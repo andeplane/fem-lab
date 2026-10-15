@@ -153,7 +153,8 @@ export interface UiState {
   lastError: LastError | null;
   progress: (Progress & { fraction: number }) | null;
   /** Availability changed in the private completed-file cache; contains no file bytes. */
-  completedFilesVersion: number;  theme: 'dark' | 'light';
+  completedFilesVersion: number;
+  theme: 'dark' | 'light';
   /** `query.result` for the last solved Step; `stale` on it is the engine's own hash check. */
   result: ResultSummary | null;
   /** Metadata for the bundled example that produced this Model, retained while edits stale it. */
