@@ -93,7 +93,27 @@ projects. Paid billing remains disabled.
 
 The current primary app is https://femlab.app; the Google alias is retained. Staging is
 https://femlab-app-staging.web.app. Long real streams have passed directly through Cloud
-Run; final-domain browser and streaming acceptance is being verified separately.
+Run and through the final domain.
+
+## Final-domain acceptance, 2026-10-15
+
+Chromium on `femlab.app` exchanged an Admin-generated email action link without sending
+an email, received the free 200,000-credit allowance, and displayed a real Mini answer
+from `api.femlab.app`. Signing out cleared the account while preserving the local Model.
+The browser build passed its artifact secret check. Actual inbox delivery is a separate
+gate; Google-provider acceptance is tracked in [#616](616-google-sign-in.md).
+
+The load balancer passed exact-origin CORS and rejected an unrelated origin. A real
+16,000-token Astra stream remained open for **227.451 seconds** after SSE headers, with
+a confirmed immutable receipt for 1,068,400 credits. The response hit its configured
+output limit, so no completed-answer event was claimed. Replaying the same request key
+returned the existing request rather than another generation.
+
+A separate Mini stream was canceled after receiving text. It settled with one confirmed
+receipt for 167,700 subcredits (5,590 credits). These checks used an isolated one-hour
+`qa:600` grant on a disposable account, without creating a Stripe subscription or charging
+a customer. Durable deletion completed and the old identity token returned HTTP 401.
+Earlier disposable fixtures were also deleted after their shorter transport checks.
 
 References: [Google's serverless load-balancer setup](https://docs.cloud.google.com/load-balancing/docs/https/setup-global-ext-https-serverless),
 [Firebase custom-domain API](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/projects.sites.customDomains),
