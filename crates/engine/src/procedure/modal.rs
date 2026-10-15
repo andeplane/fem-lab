@@ -298,8 +298,12 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>, opts: &SolveOptions)
     let mut y = vec![0.0; n];
     let mut bar: Vec<Vec<f64>> = vec![vec![0.0; n]; q];
     let mut prev = vec![f64::INFINITY; p];
-    let mut residual = f64::INFINITY;
-    for sweep in 1..=opts.max_iterations {
+    // No candidate exists before the first sweep. A finite sentinel permits that sweep;
+    // thereafter budget exhaustion and a nonfinite measured candidate share one error exit.
+    let mut residual = f64::MAX;
+    let mut sweep = 0;
+    while sweep < opts.max_iterations && residual.is_finite() {
+        sweep += 1;
         for c in 0..q {
             m.spmv(&x[c], &mut y);
             // A factorization may still produce an unacceptable residual.
@@ -337,11 +341,8 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>, opts: &SolveOptions)
         if residual <= opts.rel_tol && stable {
             return Ok((lambda[..p].to_vec(), x[..p].to_vec(), sweep, residual, unresolved));
         }
-        if !residual.is_finite() {
-            return Err(not_converged(sweep, residual, opts.rel_tol));
-        }
     }
-    Err(not_converged(opts.max_iterations, residual, opts.rel_tol))
+    Err(not_converged(sweep, residual, opts.rel_tol))
 }
 
 fn not_converged(sweeps: usize, residual: f64, tolerance: f64) -> Error {
