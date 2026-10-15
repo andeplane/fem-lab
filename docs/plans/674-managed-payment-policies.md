@@ -35,7 +35,7 @@ purchase actions independently of the copy.
 
 Primary sources read on 15 October 2026:
 
-- [How Managed Payments works](https://docs.stripe.com/payments/managed-payments/how-it-works): identifies the merchant-of-record route and customer-facing Onelink branding, including “Sold through Onelink”; describes payment support, receipts and separate order management. Naming is documented here, but app copy does not claim that an actual FEM Lab managed checkout has been verified.
+- [How Managed Payments works](https://docs.stripe.com/payments/managed-payments/how-it-works): identifies the merchant-of-record route and customer-facing Link branding, including “Sold through Link”; describes payment support, receipts and separate order management. It also supports offering subscription management through the Customer Portal from FEM Lab. Merchant branding is not hardcoded in the app or policies: the actual seller and payment terms are shown at checkout and on the receipt.
 - [Tax compliance](https://docs.stripe.com/payments/managed-payments/tax-compliance): tax handling depends on supported transactions and locations. Do not claim universal tax coverage or infer an owner tax registration.
 - [Eligibility](https://docs.stripe.com/payments/managed-payments/eligibility): supported products and integrations must be checked before activation.
 - [Stripe privacy policy](https://stripe.com/en-no/privacy): describes order and transaction information processed when Stripe acts as merchant of record, separate end-user services and privacy rights.
