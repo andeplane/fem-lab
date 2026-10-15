@@ -27,7 +27,8 @@ if previous:
 common=f'PGHOST=/cloudsql/{connection}|PGDATABASE=femlab|FIREBASE_PROJECT_ID={project}|EXPORT_BUCKET={project}-exports|BILLING_ENABLED=false'
 origins=f'https://{project}.web.app,https://{project}.firebaseapp.com'
 if a.environment=='production':origins+=',https://femlab.app,https://www.femlab.app'
-api_env='^|^'+common+f'|PGUSER=femlab_api|APP_ORIGINS={origins}|APP_RETURN_ORIGIN=https://{project}.web.app'
+return_origin='https://femlab.app' if a.environment=='production' else f'https://{project}.web.app'
+api_env='^|^'+common+f'|PGUSER=femlab_api|APP_ORIGINS={origins}|APP_RETURN_ORIGIN={return_origin}'
 print(project+': releasing API '+manifest['revision'],flush=True)
 revision='femlab-api-r'+manifest['buildId'].split('-')[0]
 run('run','deploy','femlab-api',f'--image={image}',f'--region={region}',f'--revision-suffix=r{manifest["buildId"].split("-")[0]}','--no-traffic','--tag=release-candidate',f'--service-account=femlab-api@{project}.iam.gserviceaccount.com','--execution-environment=gen2','--cpu=1','--memory=512Mi','--concurrency=8','--min-instances=0','--max-instances=2','--timeout=900s','--allow-unauthenticated',f'--set-cloudsql-instances={connection}',f'--set-env-vars={api_env}',f'--set-secrets=PGPASSWORD=database-api-password:{version("database-api-password")},OPENAI_API_KEY=openai-api-key:{version("openai-api-key")}','--startup-probe=httpGet.path=/ready,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=12')
