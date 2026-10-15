@@ -43,4 +43,5 @@ try:
     if not a.build_only:subprocess.run(['firebase','deploy','--only','hosting',f'--config={config}',f'--project={project}',f'--account={a.account}','--non-interactive'],cwd=infra.parent.parent,check=True)
 finally:config.unlink(missing_ok=True)
 
-print(json.dumps({'project':project,'source':subprocess.check_output(['git','rev-parse','HEAD'],cwd=a.source,text=True).strip(),'url':site,'apiOrigin':api,'authDomain':public['authDomain'],'published':not a.build_only,'googleLogin':'enabled' if a.google_sign_in else 'disabled','billing':'disabled'}))
+# The browser reads purchase availability from /v1/account; Hosting does not configure it.
+print(json.dumps({'project':project,'source':subprocess.check_output(['git','rev-parse','HEAD'],cwd=a.source,text=True).strip(),'url':site,'apiOrigin':api,'authDomain':public['authDomain'],'published':not a.build_only,'googleLogin':'enabled' if a.google_sign_in else 'disabled','billing':'runtime-controlled'}))
