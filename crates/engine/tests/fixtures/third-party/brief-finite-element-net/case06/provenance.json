@@ -1,0 +1,50 @@
+{
+  "upstream": "https://github.com/BriefFiniteElementNet/BriefFiniteElement.Net",
+  "revision": "8e627e941aec0ad86de69e78a483a132aef8ceb5",
+  "license": "LGPLv3; these third-party data and notices are not relicensed by FEM Lab root MIT license",
+  "originalDeckSha256": "4c68bd4b4fa0f27423a65854c49f0f2109f26e187222db302b077340433225af",
+  "originalProbeSha256": "6806e99c3d4225e7de9dba98aa752e064e2fb5090e1b878f51f79b86ed762f55",
+  "authorEvidenceManifestSha256": "2a8b87c214690d506295cd45ce0f12fa4563abe416a78b96074e4fd59ca3a943",
+  "declaredUnitLength": "1 m",
+  "declaredUnitForce": "1 N",
+  "abaqusVersion": "unknown",
+  "caeGenerationWorkflow": "unknown",
+  "freshLocalAbaqusExecution": false,
+  "files": [
+    {
+      "file": "Job-11.inp",
+      "bytes": 22270,
+      "sha256": "4c68bd4b4fa0f27423a65854c49f0f2109f26e187222db302b077340433225af",
+      "source": "Validation/Validation/Case_06/Job-11.inp",
+      "role": "unchanged original upstream file"
+    },
+    {
+      "file": "Displacements",
+      "bytes": 147821,
+      "sha256": "6806e99c3d4225e7de9dba98aa752e064e2fb5090e1b878f51f79b86ed762f55",
+      "source": "Validation/Validation/Case_06/Displacements",
+      "role": "unchanged original upstream file"
+    },
+    {
+      "file": "COPYING.LGPL-3",
+      "bytes": 7651,
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "source": "LICENSE",
+      "role": "unchanged original upstream file"
+    },
+    {
+      "file": "author-abaqus-probes-checked.json",
+      "bytes": 78169,
+      "sha256": "5468f4b1e4c2e04281554dbc225c073c51f60983dcc1fe731af0adf9ed5bc816",
+      "source": "author-abaqus-probes-checked.json",
+      "role": "derived transcription of original author report"
+    },
+    {
+      "file": "COPYING.GPL-3",
+      "bytes": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source": "https://www.gnu.org/licenses/gpl-3.0.txt",
+      "role": "primary GNU GPLv3 terms incorporated by LGPLv3"
+    }
+  ]
+}
