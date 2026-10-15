@@ -1274,3 +1274,23 @@ fn abaqus_static_generated_target_memberships_are_rechecked_after_mesh_admission
     assert!(error.cause.contains("1000000 memberships"), "{error:?}");
     assert_eq!(e.export_file(), before);
 }
+
+#[test]
+fn abaqus_static_nodal_target_errors_preserve_precise_component_locations() {
+    let mut e = engine();
+    let before = e.export_file();
+    for (from, to, keyword, field) in [
+        ("ROOT,1,3", "0,1,3", "BOUNDARY", "source label"),
+        ("ROOT,1,3", "\"bad\"\"name\",1,3", "BOUNDARY", "reference"),
+        ("TIP,1,250", "0,1,250", "CLOAD", "source label"),
+        ("TIP,1,250", "\"bad\"\"name\",1,250", "CLOAD", "reference"),
+        ("ROOT,1,3", "MISSING,1,3", "BOUNDARY", "target"),
+        ("TIP,1,250", "MISSING,1,250", "CLOAD", "target"),
+    ] {
+        let text = HEX.replace(from, to);
+        let line = text.lines().position(|line| line == to).unwrap() + 1;
+        let error = convert(&mut e, &text, "1 mm", "1 N").unwrap_err();
+        assert_eq!(error.where_.as_deref(), Some(format!("line {line} *{keyword} {field}").as_str()));
+        assert_eq!(e.export_file(), before);
+    }
+}

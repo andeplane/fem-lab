@@ -139,7 +139,7 @@ impl NormalizedDeck {
             .get(&reference)
             .cloned()
             .map(Some)
-            .ok_or_else(|| malformed(line, keyword, "NSET", format!("node set {text} is not defined in this scope")))
+            .ok_or_else(|| malformed(line, keyword, "target", format!("node set {text} is not defined in this scope")))
     }
 
     pub(crate) fn node_target(

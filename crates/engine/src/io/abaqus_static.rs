@@ -143,9 +143,7 @@ impl Analysis {
     ) -> Result<(Vec<u32>, bool), Error> {
         // Resolve a named Set once. The normalized mapping points at checked source
         // memberships; numeric references still need label/instance validation.
-        let set = deck
-            .node_set_target(&block.scope, text, line, &block.keyword.name)
-            .map_err(|error| error.at(format!("line {line} *{} target", block.keyword.name)))?;
+        let set = deck.node_set_target(&block.scope, text, line, &block.keyword.name)?;
         let numeric = set.is_none();
         let nodes = match set {
             Some(name) => deck.mesh.source.node_sets[&name].clone(),
