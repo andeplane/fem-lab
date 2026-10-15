@@ -29,13 +29,6 @@ fn nop(_p: Progress) -> bool {
     true
 }
 
-/// The engine has no clock of its own (its `Instant` is a disallowed type, ADR 0011), but a
-/// Benchmark that prints a wall time needs one — and only prints it, never asserts on it.
-#[allow(clippy::disallowed_types)]
-fn started() -> std::time::Instant {
-    std::time::Instant::now()
-}
-
 /// The reduced stiffness and load of the `[nx, ny, nz]` steel cantilever under a tip shear —
 /// Benchmark B1's system, which is what every solver here is measured on.
 fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
@@ -709,13 +702,13 @@ fn production_gpu_aggregation_cantilever_matches_b1_and_thread_counts() {
 }
 
 /// D5's CI sibling: 66k degrees of freedom solved on the GPU inside the f64 refinement loop,
-/// against the direct factorisation of the same matrix. The wall time is printed, never
-/// asserted — software adapters are for correctness, not for timing (AGENTS.md).
+/// against the direct factorisation of the same matrix. Software adapters establish
+/// correctness only; this harness does not measure or compare elapsed times.
 ///
 /// Ignored by default and run in release by the `gpu` CI job
 /// (`cargo test --release --features gpu-tests --test gpu_kernels -- --ignored sixty_six`):
-/// instrumented debug code on a software adapter takes ten minutes here, and coverage measured
-/// in release attributes inlined functions wrongly, so the coverage run stays in debug and
+/// instrumentation increases the large case's working set, and coverage measured in release
+/// attributes inlined functions wrongly, so the coverage run stays in debug and
 /// this test stays out of it. The kernels it exercises are covered by the smaller tests above.
 #[test]
 #[ignore]
@@ -725,20 +718,19 @@ fn the_sixty_six_thousand_dof_cantilever_matches_the_direct_solver() {
     let red = cantilever_reduced([50, 20, 20]);
     let pool = Pool::new(4);
     let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
-    let t0 = started();
     let (want, _) = pollster::block_on(solve(&red.k_ff, &red.f_f, &direct, &pool, None, &mut nop)).expect("direct");
-    let cpu_ms = t0.elapsed().as_secs_f64() * 1e3;
     let mut e = Engine::new(Some(g), Box::new(NoClock), 1);
-    let t1 = started();
     let result = solve_cantilever_model(&mut e, [50, 20, 20]);
     check_cantilever_reference(&mut e, &result);
     let full = cantilever_displacement(&mut e);
     let got: Vec<f64> = red.free.iter().map(|&row| full[row as usize]).collect();
-    let gpu_ms = t1.elapsed().as_secs_f64() * 1e3;
     let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
     let diff: Vec<f64> = got.iter().zip(&want).map(|(a, b)| a - b).collect();
     assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
-    println!("D5 CI sibling: {} equations, {} refinement steps, residual {:e}; public-model total {gpu_ms:.0} ms, reduced direct-solve only {cpu_ms:.0} ms on {adapter}", red.k_ff.n,result.iterations,result.residual);
+    println!(
+        "D5 CI sibling: {} equations, {} refinement steps, residual {:e} on {adapter}",
+        red.k_ff.n, result.iterations, result.residual
+    );
     // Rebuild via the same public procedure at a second CPU pool size. Setup and
     // same-adapter device arithmetic must retain the complete displacement bits.
     drop(e);
@@ -751,8 +743,8 @@ fn the_sixty_six_thousand_dof_cantilever_matches_the_direct_solver() {
 }
 
 /// Benchmark B1's `[8,2,2]` cantilever through `solve.run { solver: 'gpu-pcg' }`: the whole
-/// scale → upload → f32 CG → f64 refinement path on a solve that finishes in well under a second
-/// on any adapter, so the coverage job sees the converged branch without the 66k-DOF sibling.
+/// scale → upload → f32 CG → f64 refinement path on a bounded model, so the coverage job
+/// sees the converged branch without the 66k-DOF sibling.
 #[test]
 fn the_small_cantilever_solves_on_the_gpu_and_matches_the_direct_solver() {
     let g = gpu();
@@ -778,17 +770,14 @@ fn the_million_dof_cantilever_meets_b1_and_the_f64_residual() {
     let g = gpu();
     let adapter = g.adapter.clone();
     let mut e = Engine::new(Some(g), Box::new(NoClock), 4);
-    let t = started();
     let result = solve_cantilever_model(&mut e, [100, 50, 50]);
     check_cantilever_reference(&mut e, &result);
     let displacement = cantilever_displacement(&mut e);
     assert_eq!(displacement.len(), 101 * 51 * 51 * 3);
     assert_eq!(displacement.len() - 51 * 51 * 3, 780_300);
     println!(
-        "D5: 780300 equations, {} refinement steps, f64 residual {:e}, public-model total {:.1} s on {adapter}",
-        result.iterations,
-        result.residual,
-        t.elapsed().as_secs_f64()
+        "D5: 780300 equations, {} refinement steps, f64 residual {:e} on {adapter}",
+        result.iterations, result.residual
     );
 }
 

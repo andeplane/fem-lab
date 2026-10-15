@@ -2,7 +2,7 @@
 
 Issue: https://github.com/andeplane/fem-lab/issues/3. Browser CPU threading remains separate issue #17.
 
-The current D5 `[100,50,50]` incompatible-mode Hex8 cantilever has 780,300 reduced equations. Its ignored harness prints a stalled GPU solve and asserts no acceptance criterion. The 66k sibling has a numerical gate. This work must turn the large case into an asserted result without changing the existing f64 outer residual tolerance, accepting a CPU fallback as GPU success, or using software adapters for performance claims.
+The D5 `[100,50,50]` incompatible-mode Hex8 cantilever has 780,300 reduced equations. At issue start, its ignored harness printed a stalled GPU solve without an acceptance assertion. This branch now declares the physical/residual assertions; execution remains pending. The 66k sibling keeps its existing numerical gate. Acceptance must preserve the f64 outer residual tolerance, reject a CPU fallback as GPU success, and avoid software-adapter performance claims.
 
 ## Establish the numerical cause
 
@@ -36,13 +36,26 @@ The source now contains a deterministic vector smoothed-aggregation setup, a fix
 forward/reverse degree-four Chebyshev cycle, bounded CᵀC coarse application, and separate
 r·z/ r·r PCG reductions. Static procedures carry original-node groups and reduced physical
 modes through the existing solver boundary; public matrix-only entry points remain wrappers.
-Exact diagonals retain their algebraic identity specialization. ADR0038 records the tradeoff.
+Exact diagonals retain their algebraic identity specialization. ADR0040 records the tradeoff.
 
-The first aggregation producer (`796e58cd`) compiled for WASM and the native Linux CLI;
-its macOS lint stage identified two source-shape warnings now repaired. The follow-up
-admission, device-loss and adverse-case changes remain **uncompiled and unaccepted**
-pending remote compiler and actual GPU checks. No local build/device run is authorized during the shared disk resource window.
+The aggregation producers `796e58cd` and `333af63e` compiled for WASM and the native
+Linux CLI. At `333af63e`, the admission/adverse unit tests, Linux lint and actual device-loss
+tests passed. Aggregation mathematics remains **unaccepted**: its first GPU execution
+stopped at a reserved WGSL entry name. The entry rename and snapshot correction below
+await their own remote checks.
 The bounded independent CPU probes guide selection only. The 66k and asserted 780,300 cases
 remain required; the latter will not be allocated until a real peak/capacity estimate and
 compute lease are agreed. The branch is rebased from the original 1986 candidate onto merged
 import main 5c9 and incorporates the current 607 Checks freshness repair before publication.
+
+
+## First actual aggregation execution
+
+At `333af63e`, the remote Linux all-target lint check and 165 engine unit tests plus 392
+engine integration tests passed. The actual software-adapter device-loss tests passed at
+all three readback boundaries. GPU aggregation execution stopped on a concrete WGSL parser
+error: `smooth` is a reserved identifier. This is not a convergence result. The next
+checkpoint renames that entry and its host reference, updates the exact explanatory
+capacity-note snapshot, moves the proposed ADR to its reserved number0040, and removes
+elapsed-time logging from the correctness harness. Numerical oracles and tolerances remain
+unchanged. Actual GPU numerical/coverage and 66k gates remain open.

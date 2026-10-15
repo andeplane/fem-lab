@@ -372,7 +372,7 @@ Abaqus C3D8 imports select it; other supported source kinds retain full integrat
 Existing `full` Journals keep pointwise full integration. See ADR 0034.
 
 
-**Reduced near space** (ADR0038):
+**Reduced near space** (ADR0040):
 Optional internal GPU-solver metadata carrying explicit original-node groups and physical
 homogeneous displacement candidates restricted to retained free rows. It is not a Journal
 object or a force pullback. Supports, slaves and inactive rotational rows prevent inferring

@@ -337,7 +337,7 @@ impl DevicePlan {
         let vectors = gpu
             .pipelines(&[
                 ("aggregation_vec.wgsl", "clear"),
-                ("aggregation_vec.wgsl", "smooth"),
+                ("aggregation_vec.wgsl", "chebyshev_update"),
                 ("aggregation_vec.wgsl", "restrict_residual"),
                 ("aggregation_vec.wgsl", "add_correction"),
             ])

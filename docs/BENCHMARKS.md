@@ -3101,8 +3101,10 @@ The coupled-system PCG preconditioner is a fixed f64-setup/f32-device V-cycle, w
 Galerkin coarse operators, a stored prolongation and its actual transpose, matched
 four-stage forward/reverse Chebyshev smoothing, and a bounded coarse CᵀC map. Procedures
 supply physical reduced candidates and explicit node grouping; matrix-only calls use
-an algebraic constant. ADR0038 states the admission, arithmetic and reduction contract.
-These source changes are uncompiled and unaccepted until actual CI/device evidence is recorded.
+an algebraic constant. ADR0040 states the admission, arithmetic and reduction contract.
+Producer `333af63e` compiled and passed the setup/admission unit tests and actual device-loss
+checks. Its aggregation GPU tests stopped on a reserved WGSL entry name; the entry rename
+awaits remote checks. GPU numerical and large-case acceptance remain open.
 
 `aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes` uses the exact
 Dirichlet tridiagonal Laplacian at 31, 127 and 1023 rows. Its sine eigenvector and

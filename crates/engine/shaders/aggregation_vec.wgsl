@@ -24,7 +24,7 @@ fn clear(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wi
 }
 
 @compute @workgroup_size(256)
-fn smooth(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
+fn chebyshev_update(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
     let i = index(lid, wid);
     if (i >= params.n || scalars[6] != 0.0) { return; }
     solution[i] = solution[i] + params.weight * inverse_diagonal[i] * (rhs[i] - ax[i]);
