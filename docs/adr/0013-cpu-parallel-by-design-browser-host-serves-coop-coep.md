@@ -72,3 +72,18 @@ do not silently claim that a requested pool exists.
 
 Upstream build and initialization contract:
 https://github.com/RReverser/wasm-bindgen-rayon/tree/v1.3.0
+
+### faer's synchronization dependency on wasm
+
+The first actual atomics build failed in atomic-wait 1.1.0: faer's Rayon feature
+requires spindle, whose wait library has only native platform backends. Disabling
+faer's Rayon feature would leave direct factorization serial. Upgrading/forking faer
+would change a much larger numerical dependency. Instead, vendor the exact small
+BSD-2-Clause atomic-wait source with its native platform files unchanged, record
+upstream hashes/license, and add the wasm wait32/notify backend. Null/dangling safe
+wake calls are bounds/alignment checked without dereferencing pointers. The pinned
+nightly already required for threaded std also enables Rust's atomic wait intrinsics.
+A raw shared-memory module compiled from that exact source verifies blocking, unequal
+values, wake-one/wake-all and invalid notifications with independent Node workers;
+the actual FEM browser module still requires Chromium numerical/thread acceptance.
+Remove the patch when upstream supplies an equivalent wasm backend.

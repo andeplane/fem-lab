@@ -2,8 +2,9 @@
 // Browser-only atomics sibling of build-wasm.mjs. Never overwrite the portable web/Node pair.
 // Install the pinned toolchain with: rustup toolchain install nightly-2026-09-05 --component rust-src --target wasm32-unknown-unknown
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,10 +27,17 @@ const run = (command, args, options = {}) => {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed with ${result.status}`);
 };
-const flags = [
+const inheritedFlags = process.env.CARGO_ENCODED_RUSTFLAGS !== undefined
+  ? process.env.CARGO_ENCODED_RUSTFLAGS.split('\x1f')
+  : (process.env.RUSTFLAGS ?? '').split(/\s+/).filter(Boolean);
+const sharedFlags = [
+  ...inheritedFlags,
   '-C', 'target-feature=+atomics,+bulk-memory',
   '-C', 'link-arg=--shared-memory', '-C', 'link-arg=--max-memory=4294967296',
   '-C', 'link-arg=--import-memory',
+];
+const flags = [
+  ...sharedFlags,
   ...['__wasm_init_tls', '__tls_size', '__tls_align', '__tls_base'].flatMap(name => ['-C', `link-arg=--export=${name}`]),
 ];
 const target = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target');
@@ -41,6 +49,8 @@ run('rustup', ['run', toolchain, 'cargo', 'build', '--locked', '-p', 'femlab-eng
 });
 const out = path.join(root, 'packages/app/src/generated/wasm-threads');
 mkdirSync(out, { recursive: true });
+const notices = path.join(root, 'packages/app/public/third-party/browser-threads');
+for (const name of readdirSync(notices)) copyFileSync(path.join(notices, name), path.join(out, name));
 run('wasm-bindgen', ['--target', 'web', '--out-dir', out,
   path.join(target, 'wasm32-unknown-unknown', profile === 'dev' ? 'debug' : profile, 'femlab_engine_wasm.wasm')]);
 // wasm-bindgen-rayon's bundler worker imports its package directory. wasm-bindgen (unlike
@@ -53,3 +63,15 @@ if (profile !== 'dev') {
   renameSync(`${binary}.opt`, binary);
 }
 console.log(`built browser shared-memory runtime pinned to ${pinned} (installed as ${toolchain}): ${out}`);
+
+// Prove the exact added synchronization backend independently of FEM arithmetic. This tiny
+// no_std module is a test artifact, not a substitute for the engine's actual browser module.
+const scratch = mkdtempSync(path.join(tmpdir(), 'femlab-wasm-wait-'));
+try {
+  const smoke = path.join(scratch, 'wait.wasm');
+  run('rustup', ['run', toolchain, 'rustc', path.join(root, 'tools/wasm-wait-smoke.rs'),
+    '--edition', '2021', '--crate-type', 'cdylib', '--target', 'wasm32-unknown-unknown',
+    '-C', 'opt-level=1', '-C', 'panic=abort', ...sharedFlags,
+    '-C', 'link-arg=-zstack-size=65536', '-C', 'link-arg=--initial-memory=131072', '-o', smoke]);
+  run(process.execPath, [path.join(root, 'tools/test-wasm-wait.mjs'), smoke]);
+} finally { rmSync(scratch, { recursive: true, force: true }); }

@@ -1,0 +1,28 @@
+{
+  "crate": "atomic-wait",
+  "version": "1.1.0",
+  "license": "BSD-2-Clause",
+  "git": "2be60404d6d4972a09c1d9b05ff9c6a4cc3c3f22",
+  "url": "https://github.com/m-ou-se/atomic-wait",
+  "originalFileSha256": {
+    "Cargo.toml": "9f8d2f358faae3dd149413224f5f5da5699f0b7c1f8edf91bd2a860d3caddf14",
+    "LICENSE": "a7bd8b93bc1ee4c2caa75e5c500133c366f31066e1617db8743188ae0fae182c",
+    "README.md": "28c5a549be869ff037bcb4a5a3da97cb6ce0d85409613188e5c1612bfd208cbe",
+    ".gitignore": "c1e953ee360e77de57f7b02f1b7880bd6a3dc22d1a69e953c2ac2c52cc52d247",
+    ".cargo_vcs_info.json": "894bcac3d03fdf9a885ec353f1f6c47f67ec9570d7b78ed11f7b094bcefcabac",
+    "Cargo.toml.orig": "71ab8bc958c05fe14187aa7a37498a6058e36ce1549cdd8ac5d409ff484d9b08",
+    "tests/test.rs": "5a6f8dc3a9d51913e8be33594c9af7543009d93983d1f2ccb45ec1d16fa52ca6",
+    "src/freebsd.rs": "d3acb88cbd09d9bc0132d7cdedf095da77af4405def37370c83b78a3c22e965e",
+    "src/macos.rs": "c984cb127b29d099dbd4c8304ee40fd87b09a55d5321a37f0c0d3552107d16b4",
+    "src/lib.rs": "54a024579eba6fefc23ba258525ffa828ea498ea91cb060f01f0926307a4f8a1",
+    "src/windows.rs": "4a5a96f192c43e332afb255d9e05264cfe0935a9086ca06df73fb19e41305afd",
+    "src/linux.rs": "991623cbcd6747fb8182dfb9d7a8dc875df059a6190b27e370d4ccea960a72d8",
+    ".github/workflows/rust.yml": "5d198e94e8f4a1340e9a0efa45f297b64fa07de1445f3226a5e720a5c5a10899"
+  },
+  "localChanges": [
+    "src/lib.rs: wasm-only feature gate and platform selection",
+    "src/wasm32.rs: shared-memory wasm backend"
+  ],
+  "nativePlatformFilesUnchanged": true,
+  "crateChecksum": "a55b94919229f2c42292fd71ffa4b75e83193bffdd77b1e858cd55fd2d0b0ea8"
+}
