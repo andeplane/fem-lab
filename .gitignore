@@ -18,3 +18,5 @@ packages/registry/src/generated/script-declarations*.json
 /.firebase/
 /vendor/step-converter/corresponding-source.tar.gz
 /packages/app/public/third-party/step-converter/
+
+/tools/project-io/
