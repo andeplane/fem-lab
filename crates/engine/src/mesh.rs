@@ -105,7 +105,7 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
             {
                 return Err(Error::new(
                     ErrorCode::Unsupported,
-                    "imported sources require an unchanged first-order, full-integration source as the only Body",
+                    "imported sources require unchanged authored interpolation and full integration as the only source",
                 )
                 .at("mesher")
                 .suggest("mesh.set with order 1, formulation full and no split/refinement"));

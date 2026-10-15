@@ -2955,3 +2955,50 @@ three symmetry-plane constraints, the independent free-expansion solution is
 u = α ΔT x in every component, with zero elastic stress. Every participating coordinate
 is checked. This verifies aggregate Body targeting across material blocks using the
 existing thermoelastic procedure; it introduces no new kernel or convergence-rate claim.
+
+### Original imported quadratic solids (#655)
+
+`registry::imported_quadratic` uses directly authored Abaqus-order C3D10/Tet10 and
+C3D20/Hex20 sources. The 1 m × 0.1 m × 0.1 m bars, E=200 GPa, ν=0, carry 1000 N
+end traction: u_tip=FL/(EA)=5e−7 m, σxx=F/A=100000 Pa and total root reaction
+−1000 N. Both formulations are checked at 2/4/8 axial cells and 1/4 Engine threads,
+including all midside identities, surface integration, exact replay and save/open.
+This is an affine patch family, not a claimed nonzero displacement convergence rate.
+
+A determinant-one original-geometry shear G=(x,y,z+x(1−x)/4) gives curved shared
+Tet10 and Hex20 interfaces. Two reference tetrahedra have total volume 1/3 m³;
+two reference cubes have volume 2 m³. Their exact midside bulge is 1/16 m.
+Prescribed physical u=(1e−4 x,0,0) gives σxx=20 MPa for E=200 GPa, ν=0 on that
+retained curved geometry. Geometry tests also cover SI scaling, an affine rotation,
+folded Jacobians, a genuine overlap outside nodal AABBs, and a valid quartic implicit
+interface that must return an inconclusive certificate rather than be straightened.
+
+The independently authored quadratic annulus sectors span radii 1 and 2 m, angle
+π/2 and height 1 m. At n=2/4/8 angular sectors, Green's theorem gives the exact
+original-polynomial volume n sin(δ)(4−cos(δ)), δ=π/(4n). It converges to 3π/4 m³
+with known fourth-order geometry error (observed rate required 3.9–4.1). No geometric
+mesher/exporter supplies this source. This is geometry convergence, separate from
+field approximation and from external-solver comparison corpus #656.
+
+The exact source certificate also checks a genuinely cubic shared interface. For
+`G(u,v,w)=((1+u)(1+v/8),v+v²/8,2+2u+w)`,
+`det DG=(1+v/8)(1+v/4)>0`. Let `U=2x-z,V=z/8`; the cubic
+`q=U²/8+UV-yV²` composes exactly to
+`-w(1+v/8)[(1+u)(1+v/4)/4+w*v/64]`. Its bracket stays positive
+on the paired tetrahedra (`u,v>=0`, `|w|<=1`), so its zero set is precisely their
+unchanged curved common face. The original CalculiX beam10p cells 50/60 provide a
+separate rounded-coordinate regression: no exact quadric exists through their
+whole common Tri6 polynomial, while a cubic identity does.
+
+Two adverse geometric controls retain the conservative proof boundary. The exact
+shear `G=(x,y,z+3x²)` has determinant one everywhere, while its center-normalized
+symmetric Jacobian loses positive definiteness near a reference corner; both
+Tet10 and Hex20 must return inconclusive rather than assert invalidity or admit
+an unproved map. Separately, `G(u,v,w)=(u,-w-(u-1/2)²,v)` has determinant one and
+meets the identity tetrahedron precisely on `x=1/2,y=0,0<=z<=1/2`. Only two
+midside nodes coincide. This segment cuts a face interior and is not a complete
+reference edge; its parabolic separator's nodal zeros must not become a false
+conforming-contact certificate.
+A positive control applies the determinant-one shear to tetrahedra in opposite
+y/z quadrants: their complete shared quadratic edge is
+`y=0,z=x(1-x)/4`, with midside node `(1/2,0,1/16)` retained.

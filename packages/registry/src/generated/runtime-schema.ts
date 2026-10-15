@@ -825,7 +825,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require order 1, solid3d, no simplex split/refinement.\nRemoving or emptying a referenced imported Set fails without mutation.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mesher-defined geometry\nowns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.\nKeeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes. Imported sources retain authored labels/connectivity and exact Sets,\ndefault to full integration, and require solid3d, no simplex split/refinement.\nTheir element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.\nRemoving or emptying a referenced imported Set fails without mutation.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -833,7 +833,7 @@ const commands = {
           "$ref": "#/$defs/MesherSpec"
         },
         "order": {
-          "description": "Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require\n1.",
+          "description": "Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.\nImported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.",
           "type": [
             "integer",
             "null"
@@ -3803,7 +3803,7 @@ const commands = {
           ]
         },
         {
-          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4 and Hex8 use standard\nfull integration. Requires solid3d,\norder 1, formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
+          "description": "An immutable authored finite-element mesh, with positive source labels and exact\nmemberships. Coordinates carry length units; connectivity is in source node labels,\nnever dense indices. Unused authored nodes and exact memberships survive in the Model,\nwith explicit unused-label reporting; only participating nodes have FE DOFs/Results.\nLoads/supports including unused nodes are unsupported. Tet4, Tet10, Hex8 and Hex20 use standard\nfull integration. Requires solid3d,\nunchanged authored interpolation (order 1), formulation full and no simplices/refinement; sweeping and size studies are\nunsupported. Original cell maps and contacts require a conservative exact certificate;\nuncertified geometry returns unsupported, without claiming invalidity or simplifying\nwarped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.\nCoincident labelled nodes remain distinct. Replace the whole checked\nsource with mesh.set; named source Sets belong to the mesher and cannot be edited alone.\nInput is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships\nacross Sets, surfaces and numeric node targets, before canonical deduplication.",
           "type": "object",
           "properties": {
             "body": {
@@ -4318,7 +4318,7 @@ const commands = {
           "$ref": "#/$defs/ImportedElementKind"
         },
         "nodes": {
-          "description": "Source node labels in Abaqus connectivity order, exactly four or eight.",
+          "description": "Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.",
           "type": "array",
           "items": {
             "type": "integer",
@@ -4335,11 +4335,13 @@ const commands = {
       ]
     },
     "ImportedElementKind": {
-      "description": "Only the explicitly supported standard, first-order 3D solids.",
+      "description": "Standard full-integration 3D solids; interpolation and source connectivity are retained.",
       "type": "string",
       "enum": [
         "tet4",
-        "hex8"
+        "hex8",
+        "tet10",
+        "hex20"
       ]
     },
     "ImportedFace": {
@@ -4352,7 +4354,7 @@ const commands = {
           "minimum": 0
         },
         "face": {
-          "description": "Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.",
+          "description": "Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.",
           "type": "integer",
           "format": "uint8",
           "minimum": 0,

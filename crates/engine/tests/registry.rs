@@ -14829,5 +14829,7 @@ mod modal_convergence;
 #[path = "registry/modal_thread_determinism.rs"]
 mod modal_thread_determinism;
 
+#[path = "registry/imported_quadratic.rs"]
+mod imported_quadratic;
 #[path = "registry/imported_regions.rs"]
 mod imported_regions;

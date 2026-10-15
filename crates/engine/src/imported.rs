@@ -435,6 +435,17 @@ pub fn build(source: &ImportedMesh) -> Result<(Mesh, SourceLabels), Error> {
     Ok((mesh, labels))
 }
 
+fn opposite_face_order(a: &[u32], b: &[u32], corners: usize) -> bool {
+    let Some(start) = b[..corners].iter().position(|id| *id == a[0]) else {
+        return false;
+    };
+    let opposite_corners = (0..corners).all(|i| a[i] == b[(start + corners - i) % corners]);
+    // Quadratic faces list corners, then each corner's outgoing edge midpoint.
+    // Reversing an edge changes its starting corner as well as its direction.
+    let opposite_edges = (corners..a.len()).all(|i| a[i] == b[corners + (start + 2 * corners - i - 1) % corners]);
+    opposite_corners && opposite_edges
+}
+
 fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
     use crate::fem::shape::{dshape_of, rule_of};
     let mut faces: BTreeMap<Vec<u32>, Vec<Face>> = BTreeMap::new();
@@ -482,8 +493,8 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
         if elements.len() == 2 {
             let a: Vec<_> = mesh.face_nodes(elements[0]).collect();
             let b: Vec<_> = mesh.face_nodes(elements[1]).collect();
-            let start = b.iter().position(|id| *id == a[0]).expect("matching face membership");
-            if !a.iter().enumerate().all(|(i, id)| *id == b[(start + b.len() - i) % b.len()]) {
+            let corners = mesh.kind_of(elements[0].elem).face_kind().n_corners();
+            if !opposite_face_order(&a, &b, corners) {
                 return Err(invalid(
                     "shared faces need opposite cyclic connectivity; same-side or crossing face ordering is invalid",
                     "mesher.elements",
@@ -509,6 +520,20 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
 #[cfg(test)]
 mod input_policy_tests {
     use super::*;
+
+    #[test]
+    fn opposite_quadratic_faces_preserve_corner_and_mid_edge_incidence() {
+        let quad = [10, 20, 30, 40, 50, 60, 70, 80];
+        for opposite in [[10, 40, 30, 20, 80, 70, 60, 50], [30, 20, 10, 40, 60, 50, 80, 70]] {
+            assert!(opposite_face_order(&quad, &opposite, 4));
+        }
+        assert!(!opposite_face_order(&quad, &quad, 4));
+        assert!(!opposite_face_order(&quad, &[10, 40, 30, 20, 70, 80, 60, 50], 4));
+        assert!(!opposite_face_order(&quad, &[50, 40, 30, 20, 80, 70, 60, 10], 4));
+        assert!(opposite_face_order(&[1, 2, 3, 4, 5, 6], &[1, 3, 2, 6, 5, 4], 3));
+        assert!(opposite_face_order(&[1, 2, 3], &[1, 3, 2], 3));
+        assert!(opposite_face_order(&[1, 2, 3, 4], &[1, 4, 3, 2], 4));
+    }
 
     #[test]
     fn authored_input_limits_accept_the_boundary_and_reject_the_next_entity() {

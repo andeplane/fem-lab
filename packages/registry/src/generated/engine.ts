@@ -1568,8 +1568,8 @@ export type Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -3428,9 +3428,9 @@ export type SurfaceProjectionSpec =
       kind: "cylinder";
     };
 /**
- * Only the explicitly supported standard, first-order 3D solids.
+ * Standard full-integration 3D solids; interpolation and source connectivity are retained.
  */
-export type ImportedElementKind = "tet4" | "hex8";
+export type ImportedElementKind = "tet4" | "hex8" | "tet10" | "hex20";
 /**
  * How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
  */
@@ -6005,8 +6005,8 @@ export type QueryResult_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -8837,8 +8837,8 @@ export type ModelFile_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -11761,8 +11761,8 @@ export type ReadReply_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -14488,8 +14488,8 @@ export type DocumentSnapshot_Command =
             kind: "imported";
           };
       /**
-       * Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require
-       * 1.
+       * Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+       * Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
        */
       order?: number | null;
       /**
@@ -16256,7 +16256,7 @@ export interface ImportedElement {
   label: number;
   kind: ImportedElementKind;
   /**
-   * Source node labels in Abaqus connectivity order, exactly four or eight.
+   * Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.
    */
   nodes: number[];
 }
@@ -16266,7 +16266,7 @@ export interface ImportedFace {
    */
   element: number;
   /**
-   * Abaqus face number: 1..4 for Tet4, 1..6 for Hex8.
+   * Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.
    */
   face: number;
 }
