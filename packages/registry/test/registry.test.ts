@@ -77,7 +77,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'example.open': { name: 'cantilever' },
   'solve.cancel': {},
   'ai.setKey': { key: null },
-  'account.open':{}, 'account.signIn':{method:'email',email:'me@example.com'},'account.signOut':{},'account.refresh':{},'account.checkout':{plan:'plus'},'account.portal':{},'account.changePlan':{plan:'pro'},'account.export':{},'account.delete':{confirm:'DELETE'},'ai.acceptDisclosure':{},
+  'account.open':{}, 'account.signIn':{method:'email',email:'me@example.com'},'account.signOut':{},'account.refresh':{},'account.claimFreeAllowance':{},'account.checkout':{plan:'plus'},'account.portal':{},'account.changePlan':{plan:'pro'},'account.export':{},'account.delete':{confirm:'DELETE'},'ai.acceptDisclosure':{},
   'ai.setModel': { model: 'claude-opus-5' },
 };
 
@@ -606,7 +606,14 @@ it('requires an explicit valid execution policy for every engine and host defini
   }
 });
 
-it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});
+it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.claimFreeAllowance','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});
+it('claims only through the injected account service and refuses identity or approval selectors',async()=>{
+  const {registry,host,transport}=make();
+  await registry.dispatch({cmd:'account.claimFreeAllowance'});
+  expect(host.account!.claimFreeAllowance).toHaveBeenCalledExactlyOnceWith();
+  for(const extra of [{accountId:'other'},{approved:true},{period:'2027-01'}])await expect(registry.dispatch({cmd:'account.claimFreeAllowance',...extra})).rejects.toMatchObject({code:'schema'});
+  expect(host.account!.claimFreeAllowance).toHaveBeenCalledTimes(1);expect(transport.dispatch).not.toHaveBeenCalled();
+});
 
 it('forwards explicit subscription use while preserving legacy direct checkout and fixed plan-change use',async()=>{
   const {registry,host}=make();

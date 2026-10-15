@@ -124,8 +124,16 @@ jobs:
       # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
+      - name: wasm32 STL length regressions with debug overflow checks
+        run: |
+          node tools/build-wasm.mjs --dev
+          node tools/test-stl-wasm.mjs debug
       - run: node tools/build-wasm.mjs
+      - name: wasm32 STL length regressions in the optimized shipping module
+        run: node tools/test-stl-wasm.mjs optimized
       - run: cargo build -p femlab --release
+      - run: cargo test --locked -p femlab-project-io
+      - run: node tools/build-project-io.mjs
       - run: ./target/release/femlab schema --out engine.schema.json
       - uses: actions/upload-artifact@v4
         with:
@@ -133,6 +141,7 @@ jobs:
           path: |
             packages/app/src/generated/wasm
             tools/wasm-node
+            tools/project-io
             engine.schema.json
             target/release/femlab
 
@@ -151,7 +160,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm
-      - run: chmod +x target/release/femlab
+      - run: chmod +x target/release/femlab tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: node tools/test-units-wasm.mjs
       - run: node tools/test-material-library-wasm.mjs
@@ -223,6 +232,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm
+      - run: chmod +x tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: python3 -m unittest discover -s tools -p 'test_release_artifacts.py'
       - run: python3 -B -m unittest discover -s tools/abaqus-interoperability -p 'test_*.py'
@@ -284,7 +294,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: wasm
-      - run: chmod +x target/release/femlab
+      - run: chmod +x target/release/femlab tools/project-io/*/femlab-project-io
       - name: playwright version
         id: pw
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"

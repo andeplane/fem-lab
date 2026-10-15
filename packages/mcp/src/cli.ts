@@ -23,6 +23,7 @@ export async function start(
   load: (here: string) => EngineProvider,
   transport: () => Transport,
 ): Promise<void> {
-  const { server } = createServer({ engine: load(here), project: projectFrom(argv) });
+  const { server, ready } = createServer({ engine: load(here), project: projectFrom(argv) });
+  await ready;
   await server.connect(transport());
 }

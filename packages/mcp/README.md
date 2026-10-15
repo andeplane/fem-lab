@@ -21,7 +21,7 @@ byte for byte.
   `await fem.query.model()`), an optional `timeoutMs` up to 30 s (default 30 s). Its Commands enter the Journal like any other.
 - **`export_file { format, path, step? }`** — writes `vtu`, `msh`, `inp`, `stl`, `report` (the
   Markdown calculation note), `script` or `journal` into the `--project` folder. Paths are
-  relative to that folder; `..`, absolute paths and symlinks out of it are refused.
+  relative to that folder; `..`, absolute paths, absolute symlink targets and symlinks out of it are refused. Relative directory links may resolve within the captured project; final file links are refused. Exports have a 64 MiB host transfer limit.
 - **`file_importAbaqus { name, body, mode, unitLength, unitForce?, text? | path? }`** — converts
   a supported flat C3D4/C3D8 `.inp` deck into a new unsolved Model through checked portable
   Commands. Choose `mesh` or `static`; static requires explicit Force units as well as Length
@@ -52,8 +52,7 @@ loader, filesystem or network APIs. `Function` and `eval` stay inside QuickJS. T
 registry proxy implements the browser and MCP `fem` APIs.
 
 Scripts may invoke the host's `fem.export.file` Command, which uses the same project export
-policy as `export_file`; runtime isolation does not strengthen that host capability's path
-checks. Nested `fem.script.run` calls are refused. The registry remains responsible for
+directory capability as `export_file` (see [ADR 0037](../../docs/adr/0037-mcp-project-directory-capability.md)). Nested `fem.script.run` calls are refused. The registry remains responsible for
 validating all Commands and Queries.
 `await fem.file.importAbaqus({ text, name: 'bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N' })`
 uses the same import Command; solve the returned Step explicitly afterwards. The imported
@@ -84,6 +83,7 @@ package:
 ```
 npm ci
 node tools/build-wasm.mjs          # writes tools/wasm-node (gitignored)
+node tools/build-project-io.mjs    # builds the small host-only filesystem helper
 npm run build -w packages/mcp      # writes packages/mcp/dist/femlab-mcp.js
 node packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 ```
@@ -92,6 +92,13 @@ node packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 `packages/mcp/dist/femlab-mcp.js` next to its own binary or in the checkout it was built in, or
 at `FEMLAB_MCP`, and reports setup instructions if it finds none. Point `FEMLAB_WASM` at a
 folder holding `femlab_engine_wasm.js` if the engine lives somewhere unusual.
+
+Project disk access uses a native helper with a retained directory handle. The installed
+package supplies that helper on Linux x64, Windows x64 and macOS arm64/x64; it needs no Rust
+compiler or runtime download. An unsupported platform or missing helper reports `file.scope`
+and suggests the checkout build command. With `--project`, startup waits for the helper
+to acknowledge the captured directory before connecting MCP. To use inline input and engine
+tools without project disk access, start without `--project`.
 
 ### Build and verify an npm artifact
 
@@ -141,3 +148,7 @@ claude mcp add femlab -- node /path/to/fem-lab/packages/mcp/dist/femlab-mcp.js -
 
 The model, the Journal and the note are all reproducible: `femlab run <journal>` replays it
 natively, `query_report` writes the same Markdown twice, and the Model hash is in its header.
+
+Release npm artifacts include all four helper targets and a SHA-256 manifest. Local packs
+include the current host target. The installed-package smoke checks the helper payload and
+uses actual project-relative file import and nested export outside the checkout.

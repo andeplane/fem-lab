@@ -1,6 +1,10 @@
-import {toToolDefinitions,type Registry,type ToolDefinition} from '@femlab/registry';
+import {PUBLIC_CREDIT_UNIT,toToolDefinitions,type PublicCreditUnit,type Registry,type ToolDefinition} from '@femlab/registry';
 import type {ChatEvent,Provider} from '@femlab/ai';
-export interface HostedReceipt {requestId:string;outcome:string;chargedCredits:number;tariffVersion:string}
+import {normalizeAiCredits} from '../account/credits';
+export interface HostedReceipt {requestId:string;outcome:string;chargedCredits:number;chargedSubcredits?:string;tariffVersion:string;creditUnit?:PublicCreditUnit}
+function normalizedReceipt(receipt:HostedReceipt):HostedReceipt {
+  return {...receipt,chargedCredits:normalizeAiCredits(receipt.chargedCredits,receipt.creditUnit),creditUnit:PUBLIC_CREDIT_UNIT};
+}
 export interface HostedEnvironment {
   origin:string;uid:string;models:string[];turnId:string;fetch:typeof fetch;
   token(force:boolean):Promise<string>;current():boolean;
@@ -13,12 +17,12 @@ export function hostedProvider(env:HostedEnvironment):Provider {
   return {id:'openai',models:env.models,async *chat(req){
     current();const index=round++,key=`${env.turnId}:${index}`;
     const token=await env.token(false);current();
-    const send=(accessToken:string)=>env.fetch(env.origin+'/v1/ai/completions',{method:'POST',signal:req.signal,headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json','Idempotency-Key':key},body:JSON.stringify({protocol:1,turnId:env.turnId,round:index,model:req.model,maxTokens:req.maxTokens,system:req.system,messages:req.messages,tools:req.tools})});
+    const send=(accessToken:string)=>env.fetch(env.origin+'/v1/ai/completions',{method:'POST',signal:req.signal,headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json','Idempotency-Key':key,'X-FEMLab-Credit-Unit':PUBLIC_CREDIT_UNIT},body:JSON.stringify({protocol:1,turnId:env.turnId,round:index,model:req.model,maxTokens:req.maxTokens,system:req.system,messages:req.messages,tools:req.tools})});
     let response=await send(token);current();if(response.status===401){const fresh=await env.token(true);current();response=await send(fresh);current()}
     current();
     if(!response.ok){const error=await response.json() as {cause?:string};current();yield{type:'error',message:error.cause??'AI is unavailable. Refresh your account and try again later.'};return}
     if(!response.headers.get('content-type')?.includes('text/event-stream')){
-      const replay=await response.json() as {id:string;state:string;receipt:HostedReceipt|null};current();env.request(replay.id);if(replay.receipt)env.receipt(replay.receipt);yield{type:'error',message:'This request was already accepted. Its response cannot be replayed; refresh your account before starting a new message.'};return;
+      const replay=await response.json() as {id:string;state:string;receipt:HostedReceipt|null};current();env.request(replay.id);if(replay.receipt)env.receipt(normalizedReceipt(replay.receipt));yield{type:'error',message:'This request was already accepted. Its response cannot be replayed; refresh your account before starting a new message.'};return;
     }
     if(!response.body)throw new Error('The AI response has no stream.');
     const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',confirmed=false,done=false;
@@ -29,7 +33,7 @@ export function hostedProvider(env:HostedEnvironment):Provider {
         while((boundary=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);const data=frame.split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');if(!data)continue;
           const event=JSON.parse(data) as {type:string;request?:{id:string};receipt?:HostedReceipt;event?:ChatEvent};current();
           if(event.type==='request'&&event.request){env.request(event.request.id)}
-          else if(event.type==='receipt'&&event.receipt){if(!Number.isFinite(event.receipt.chargedCredits)||event.receipt.chargedCredits<0)throw new Error('Invalid AI usage receipt.');confirmed=event.receipt.outcome==='confirmed';env.receipt(event.receipt)}
+          else if(event.type==='receipt'&&event.receipt){const receipt=normalizedReceipt(event.receipt);confirmed=receipt.outcome==='confirmed';env.receipt(receipt)}
           else if(event.type==='chat'&&event.event){if((event.event.type==='tool_use'||event.event.type==='done')&&!confirmed)throw new Error('AI usage has not been confirmed. No tools were executed.');if(event.event.type==='done')done=true;yield event.event}
           else throw new Error('Unsupported AI stream event.');
         }

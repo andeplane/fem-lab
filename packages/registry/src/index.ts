@@ -1,7 +1,8 @@
 export type * from './generated/engine';
 export type { Fem } from './generated/fem';
 export { FemError, nearest, type ErrorCode } from './error';
-export {EMPTY_ACCOUNT,type AccountInfo,type AccountState,type AccountPlan,type PurchaseUse,type AccountServices} from './account-types';
+export {EMPTY_ACCOUNT,type AccountInfo,type AccountState,type AccountPlan,type PurchaseUse,type FreeAllowance,type AccountServices} from './account-types';
+export {PUBLIC_CREDIT_UNIT,PUBLIC_PLAN_CREDITS,legacyCreditsToPublic,type PublicCreditUnit} from './credit-units';
 export { ABAQUS_ACCEPT, MAX_ABAQUS_BYTES, readAbaqus, readAbaqusBundle, type AbaqusFile, type AbaqusIo, type AbaqusInput, type AbaqusText, type AbaqusBundle, type AbaqusDependencyQuery } from './abaqus-import';
 export { STEP_ACCEPT, STEP_CONVERTER_VERSION, MAX_STEP_BYTES, MAX_STEP_TRIANGLES, MAX_STEP_GEOMETRY_BYTES, readStep, stepDeflection, stepGeometry, stepCommand, type StepImportInput, type StepIo, type StepReport, type StepImportHost, type StepImportResult, type StepConversionCounts } from './step-import';
 export { Registry, type CommandDef, type QueryDef, type HostDef, type EngineSchema, type JsonSchema, type Provider, type RegistryOptions } from './registry';

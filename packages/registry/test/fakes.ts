@@ -85,7 +85,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
   let open: ProjectMeta | null = PROJECT;
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
   return {
-    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
+    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),claimFreeAllowance:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
     transport,
     step: { import: vi.fn(async () => ({ cancelled: true as const })), cancel: vi.fn(() => true) },
     resultComparison: {

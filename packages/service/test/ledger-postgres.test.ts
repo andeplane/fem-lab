@@ -17,7 +17,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
   const accounts = postgresAccounts(pool, () => clock, randomUUID);
   beforeAll(async () => {
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations = await Promise.all(['001-accounts.sql', '002-credit-ledger.sql', '003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name => ({ name, sql: await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8') })));
+    const migrations = await Promise.all(['001-accounts.sql', '002-credit-ledger.sql', '003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql','010-free-monthly-allowance.sql'].map(async name => ({ name, sql: await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8') })));
     const connection = await pool.connect();
     try { await migrate(connection, migrations); } finally { connection.release(); }
   });
@@ -57,6 +57,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
     await Promise.all(Array.from({ length: 16 }, () => ledger.grant(input)));
     await grantFreeFixture(ledger, account.id, clock);
     expect(await ledger.balance(account.id)).toMatchObject({ plan: 'plus', availableCredits: 10000000, periodEndsAt: '2026-12-01T00:00:00.000Z' });
+    expect(await ledger.balance(account.id,'usd-milli-v1')).toMatchObject({plan:'plus',totalCredits:7500,availableCredits:7500});
     expect((await ledger.balance(other.id)).availableCredits).toBe(0);
     for (const change of [{ accountId: other.id }, { plan: 'pro' as const }, { expiresAt: new Date('2026-12-02T00:00:00Z') }]) {
       await expect(ledger.grant({ ...input, ...change })).rejects.toThrow('Conflicting immutable grant');

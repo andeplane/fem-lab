@@ -18,7 +18,6 @@ import {
   RUN_SCRIPT,
   type ScriptResult,
   Registry,
-  assertInside,
   toToolDefinitions,
   commandNameFor,
   type EngineSchema,
@@ -29,15 +28,13 @@ import {
   type AbaqusDependencies,
   type AbaqusIo,
 } from '@femlab/registry';
-import { constants } from 'node:fs';
-import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import { z } from 'zod';
 import engineSchema from '../../registry/src/generated/engine.schema.json' with { type: 'json' };
 import type { EngineHandle, EngineProvider } from './engine';
 import { runScript, type ScriptDeps } from './script';
 import { nodeScriptValidator } from './script-validation';
 import { nodeAbaqusIo } from './abaqus-files';
+import { nodeProjectFiles, type ProjectFiles } from './project-files';
 
 export const SCHEMA = engineSchema as unknown as EngineSchema;
 export const SERVER_NAME = 'femlab';
@@ -55,6 +52,8 @@ export interface ServerDeps {
   project?: string | undefined;
   /** Optional I/O injection for a scoped host; production binds the configured project folder. */
   abaqusIo?: AbaqusIo;
+  /** Retained project capability, injected independently of the engine. */
+  projectFiles?: ProjectFiles;
 }
 
 /** One MCP tool as the protocol spells it (`inputSchema`, not Anthropic's `input_schema`). */
@@ -69,42 +68,6 @@ export const RESOURCES = [
   { uri: 'femlab://journal', name: 'journal', description: 'query.journal: every applied Command with the Model hash after it.', mimeType: 'application/json' },
   { uri: 'femlab://schema', name: 'schema', description: 'The engine schema document: every Command, Query and response.', mimeType: 'application/json' },
 ];
-
-/** A scoped path; resolve existing parents before creating any missing directories. */
-export async function resolveInProject(root: string | undefined, p: string): Promise<string> {
-  if (root === undefined) {
-    throw new FemError('file.scope', 'this server has no project folder', `path '${p}'`, 'start it with --project <dir>');
-  }
-  const parts = assertInside(p);
-  const realRoot = await realpath(root);
-  let dir = realRoot;
-  for (const part of parts.slice(0, -1)) {
-    const next = path.join(dir, part);
-    const entry = await lstat(next).catch(missingPath);
-    if (entry === undefined) {
-      // Every existing ancestor has already been resolved and checked.
-      await mkdir(next, { recursive: true });
-    }
-    // Another export may have created this directory while we awaited mkdir. Resolve
-    // and check the actual entry in either case, including a concurrently inserted link.
-    dir = await realpath(next);
-    if (dir !== realRoot && !dir.startsWith(realRoot + path.sep)) throw linkError(p);
-  }
-  const full = path.join(dir, parts[parts.length - 1]!);
-  // lstat also detects dangling links; do not follow even an in-project leaf link.
-  const leaf = await lstat(full).catch(missingPath);
-  if (leaf?.isSymbolicLink()) throw linkError(p);
-  return full;
-}
-
-function missingPath(error: NodeJS.ErrnoException): undefined {
-  if (error.code !== 'ENOENT') throw error;
-  return undefined;
-}
-
-function linkError(p: string): FemError {
-  return new FemError('file.scope', 'that path follows a link outside the allowed export target', `path '${p}'`, 'write to a regular file inside the project folder');
-}
 
 /** The text of one export, from the engine or from the Journal. */
 export async function exportText(engine: EngineHandle, format: ExportFormat, step?: string): Promise<string> {
@@ -122,14 +85,12 @@ function exportFileCommand(deps: ScopedDeps): HostDef {
     name: 'export.file',
     execution: 'modelWrite',
     description:
-      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. A model file must fit the 16 MiB UTF-8 limit including pretty formatting and its trailing newline; refusal occurs before any file write. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
+      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. A model file must fit the 16 MiB UTF-8 limit including pretty formatting and its trailing newline; refusal occurs before any file write. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused by a retained directory capability. Absolute symbolic links are refused; relative directory links must remain inside the project. Exports are limited to 64 MiB. Returns the path written and its size.',
     schema: z.object({ format: z.enum(EXPORT_FORMATS), path: z.string(), step: z.string().optional() }),
     tool: true,
     run: async ({ format, path: rel, step }) => {
       const text = await exportText(deps.engine, format, step);
-      const full = await resolveInProject(deps.project, rel);
-      // O_NOFOLLOW also refuses a leaf link substituted after the lstat check.
-      await writeFile(full, text, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW });
+      await deps.projectFiles.write(rel, new TextEncoder().encode(text));
       return { path: rel, bytes: Buffer.byteLength(text) };
     },
   } as HostDef;
@@ -140,14 +101,16 @@ function exportFileCommand(deps: ScopedDeps): HostDef {
  * two host Commands a headless host can honour — `script.run` (the `run_script` tool) and
  * `export.file`. No view, no selection, no panels: this host has no screen to move.
  */
-type ScopedDeps = Omit<ServerDeps, 'engine'> & { engine: EngineHandle };
+type ScopedDeps = Omit<ServerDeps, 'engine' | 'projectFiles'> & { engine: EngineHandle; projectFiles: ProjectFiles };
 
-export function createRegistry(deps: ServerDeps): Registry {
+export function createRegistry(input: ServerDeps): Registry {
+  const deps = { ...input, projectFiles: input.projectFiles ?? nodeProjectFiles(input.project) };
   // The public registry can describe tools without a lease. Every invocation must acquire
   // one, and nested script calls use the private registry bound to that same request.
   const unavailable = (): never => { throw new FemError('session.expired', 'no request lease'); };
   const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, replaceCommands: unavailable, captureImport: unavailable, modelFile: unavailable, release: unavailable } });
   const request = async <T>(run: (scoped: Registry) => Promise<T>): Promise<T> => {
+    await deps.projectFiles.ready();
     const engine = await deps.engine.acquire();
     try { return await run(scopedRegistry({ ...deps, engine })); }
     finally { await engine.release(); }
@@ -163,7 +126,7 @@ function scopedRegistry(deps: ScopedDeps): Registry {
   const abaqus: HostContext['abaqus'] = { capture: () => {
     const engine = deps.engine.captureImport();
     return {
-      io: deps.abaqusIo ?? nodeAbaqusIo(deps.project),
+      io: deps.abaqusIo ?? nodeAbaqusIo(deps.project, deps.projectFiles),
       dependencies: async source => await engine.query({ query: 'query.abaqusDependencies', ...source }) as AbaqusDependencies,
       convert: async query => await engine.query(query) as AbaqusConversion,
       replace: commands => engine.replaceCommands(commands),
@@ -224,12 +187,18 @@ export function errorText(e: unknown): string {
 }
 
 /** The MCP `Server`, with the four handlers this host answers. */
-export function createServer(deps: ServerDeps): { server: Server; registry: Registry } {
-  const registry = createRegistry(deps);
+export function createServer(deps: ServerDeps): { server: Server; registry: Registry; ready: Promise<void> } {
+  const files = deps.projectFiles ?? nodeProjectFiles(deps.project);
+  const registry = createRegistry({ ...deps, projectFiles: files });
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, resources: {} } },
   );
+  const ready = files.ready();
+  const connect = server.connect.bind(server);
+  // A custom embedded host calling server.connect directly gets the same startup barrier.
+  server.connect = async transport => { await ready; await connect(transport); };
+  server.onclose = () => files.close();
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: toolList(registry) }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
@@ -243,5 +212,5 @@ export function createServer(deps: ServerDeps): { server: Server; registry: Regi
   server.setRequestHandler(ReadResourceRequestSchema, async (req) => ({
     contents: [{ uri: req.params.uri, mimeType: 'application/json', text: await readResource(registry, req.params.uri) }],
   }));
-  return { server, registry };
+  return { server, registry, ready };
 }
