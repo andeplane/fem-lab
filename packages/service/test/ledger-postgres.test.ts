@@ -37,7 +37,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('immutable grants on real Postgr
     const account = await accounts.provision({uid:'invited',email:'reviewed@example.com'});
     const results = await Promise.all(Array.from({length:24},()=>approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)));
     expect(results.filter(result=>!result.replay)).toHaveLength(1);
-    expect((await ledger.balance(account.id)).availableCredits).toBe(200000);
+    expect(await ledger.balance(account.id)).toMatchObject({availableCredits:200000,periodEndsAt:'2026-12-01T12:00:00.000Z'});
     await expect(approveTrial(pool,account.id,'another-review',()=>clock,randomUUID)).rejects.toMatchObject({code:'trial-already-approved'});
     clock = new Date('2026-12-02T12:00:00Z');
     expect(await approveTrial(pool,account.id,'review-645',()=>clock,randomUUID)).toMatchObject({replay:true,expiresAt:'2026-12-01T12:00:00.000Z'});
