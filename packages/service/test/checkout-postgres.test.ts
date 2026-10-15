@@ -1,3 +1,4 @@
+import { grantFreeFixture } from './free-fixture';
 import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import pg from 'pg';
@@ -62,7 +63,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     expect(()=>checkoutService(db,payments,{...config,appOrigin:'https://femlab.app/unsafe?return=evil'},owner,now,randomUUID)).toThrow('configured HTTPS origin');
   });
   it('schedules a next-period change without replacing or minting the current allowance',async()=>{
-    const account=await owner('Bearer owner');await ledger.ensureFree(account.id);
+    const account=await owner('Bearer owner');await grantFreeFixture(ledger, account.id, now());
     await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[account.id,'cus_owner',now()]);
     const end=new Date('2026-11-14T12:00:00Z');
     await ledger.grant({accountId:account.id,source:'paid-existing',plan:'plus',startsAt:now(),expiresAt:end});

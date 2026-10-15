@@ -1,3 +1,4 @@
+import { grantFreeFixture } from './free-fixture';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
@@ -27,7 +28,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
     await db.query('UPDATE ai_limits SET enabled=true,daily_micros=100000000,monthly_micros=1000000000,free_daily_micros=20000000,uncertain_micros=10000000,concurrent=16');
   });
   afterAll(async()=>{ await db.end(); await otherProcess.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
-  async function owner(uid='owner') { const account=await accounts.provision({uid,email:`${uid}@example.com`}); await ledger.ensureFree(account.id); return account.id; }
+  async function owner(uid='owner') { const account=await accounts.provision({uid,email:`${uid}@example.com`}); await grantFreeFixture(ledger, account.id, clock); return account.id; }
   async function prepare(accountId:string,key:string=randomUUID(), model='gpt-5.4-mini',maxOutput=1000) {
     return a.prepare({accountId,key,digest,turnId:'turn-1',round:0,model,maxOutput});
   }
@@ -116,7 +117,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
   it('settlement stays pinned to the original grant across UTC month rollover',async()=>{
     clock=new Date('2026-10-31T23:59:00Z');
     const accountId=await owner(),id=await admit(accountId); await a.dispatch(accountId,id);
-    clock=new Date('2026-11-01T00:01:00Z'); await ledger.ensureFree(accountId);
+    clock=new Date('2026-11-01T00:01:00Z'); await grantFreeFixture(ledger, accountId, clock);
     await a.settle(accountId,id,{input:1000,cacheRead:0,output:100});
     expect(await ledger.balance(accountId)).toMatchObject({availableCredits:200000,reservedCredits:0});
     const debit=(await db.query('SELECT g.starts_at,e.amount FROM credit_entries e JOIN credit_grants g ON g.id=e.grant_id WHERE e.account_id=$1',[accountId])).rows[0];
