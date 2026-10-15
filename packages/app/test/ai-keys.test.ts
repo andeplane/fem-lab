@@ -152,6 +152,27 @@ describe('persistent key storage (#485)', () => {
     expect(resolveKey('openai', storage, null, second).key).toBe('new-openai');
   });
 
+  it('stops resolving a forgotten retained key in an already-open tab without reload or readoption', () => {
+    const first = memory(), retained = memory();
+    const refusedWrites = new Proxy(storage, {
+      get(target, property) {
+        if (property === 'setItem') return () => { throw new Error('persistent writes refused'); };
+        return Reflect.get(target, property);
+      },
+    });
+    retained.setItem(KEY_SLOT.openai, 'old-openai');
+    adoptSessionKeys(refusedWrites, retained);
+    expect(resolveKey('openai', refusedWrites, null, retained)).toEqual({ key: 'old-openai', source: 'session' });
+    first.setItem(KEY_SLOT.openai, 'old-openai');
+    adoptSessionKeys(storage, first);
+    expect(storeKey('openai', null, storage, first)).toBe(true);
+    expect(resolveKey('openai', refusedWrites, null, retained)).toEqual({ key: null, source: 'none' });
+    expect(retained.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(resolveKey('openai', refusedWrites, { openai: 'dev-key', anthropic: null }, retained)).toEqual({ key: 'dev-key', source: 'dev' });
+    expect(storeKey('openai', 'new-openai', storage, first)).toBe(true);
+    expect(resolveKey('openai', refusedWrites, null, retained)).toEqual({ key: 'new-openai', source: 'stored' });
+  });
+
   it('reports refusal to forget instead of pretending that an inaccessible saved key was removed', () => {
     const session = memory();
     session.setItem(KEY_SLOT.openai, 'tab-only');

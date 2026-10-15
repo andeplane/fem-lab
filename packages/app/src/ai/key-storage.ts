@@ -22,6 +22,15 @@ function writeStorage(storage: Storage | null, slot: string, value: string | nul
   } catch { return false; }
 }
 
+/** Recheck shared Forget state on every resolution, including in already-open fallback tabs. */
+export function retainedSessionKey(id: ProviderId, persistent: Storage | null, session: Storage | null): string | null {
+  if (readStorage(persistent, forgottenSlot(id)) === '1') {
+    writeStorage(session, KEY_SLOT[id], null);
+    return null;
+  }
+  return readStorage(session, KEY_SLOT[id]);
+}
+
 /** Persist a direct-provider key; refused writes retain the existing key and report failure.
  * Forgetting removes both copies and prevents another legacy tab from adopting the key again.
  */

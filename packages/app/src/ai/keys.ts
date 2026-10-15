@@ -6,7 +6,7 @@ import { devApiKeys } from '../dev-keys';
 import { ANTHROPIC_DEFAULT, ANTHROPIC_MODELS } from './anthropic';
 import { OPENAI_DEFAULT, OPENAI_MODELS } from './openai';
 import type { ProviderId } from './provider';
-import { browserStorage, KEY_SLOT, readStorage } from './key-storage';
+import { browserStorage, KEY_SLOT, readStorage, retainedSessionKey } from './key-storage';
 export { KEY_SLOT, storeKey, adoptSessionKeys } from './key-storage';
 
 export type KeySource = 'stored' | 'session' | 'dev' | 'none';
@@ -24,7 +24,7 @@ export const DEFAULT_MODEL: Record<ProviderId, string> = { anthropic: ANTHROPIC_
 export function resolveKey(id: ProviderId, storage: Storage | null = browserStorage('localStorage'), dev = devApiKeys(), session: Storage | null = browserStorage('sessionStorage')): KeyInfo {
   const stored = readStorage(storage, KEY_SLOT[id]);
   if (stored) return { key: stored, source: 'stored' };
-  const retained = readStorage(session, KEY_SLOT[id]);
+  const retained = retainedSessionKey(id, storage, session);
   if (retained) return { key: retained, source: 'session' };
   const injected = dev?.[id];
   if (injected) return { key: injected, source: 'dev' };
