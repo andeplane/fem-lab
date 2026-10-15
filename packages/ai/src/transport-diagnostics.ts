@@ -2,6 +2,11 @@
 export interface TransportCause {
   kind: string;
   code?: string;
+  /** Absent on legacy/truncated causes; null means a hostile property trap prevented inspection. */
+  codePresent?: boolean | null;
+  /** A finite type tag only. Rejected code values are never copied. */
+  codeType?: 'absent' | 'unreadable' | 'null' | 'undefined' | 'string' | 'number' | 'boolean' | 'bigint' | 'symbol' | 'function' | 'object';
+  codeRecognized?: boolean;
   status?: number;
   requestId?: string;
   cause?: TransportCause;
@@ -18,7 +23,16 @@ export interface ProviderObserver {
   record(diagnostic: ProviderDiagnostic): void;
 }
 const KINDS = new Set(['Error', 'TypeError', 'AggregateError', 'AbortError', 'TimeoutError', 'APIError', 'APIConnectionError', 'APIConnectionTimeoutError', 'APIUserAbortError', 'BadRequestError', 'AuthenticationError', 'PermissionDeniedError', 'NotFoundError', 'ConflictError', 'UnprocessableEntityError', 'RateLimitError', 'InternalServerError']);
-const CODES = /^(?:E[A-Z0-9_]{1,63}|UND_ERR_[A-Z0-9_]{1,55}|ERR_[A-Z0-9_]{1,59})$/;
+// Exact public identifiers only: a private value shaped like E*/ERR_* must not become evidence.
+const CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETRESET', 'ENETUNREACH', 'EHOSTUNREACH',
+  'EAI_AGAIN', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNABORTED', 'ENOTCONN', 'EPROTO',
+  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_ABORTED', 'UND_ERR_DESTROYED', 'UND_ERR_CLOSED',
+  'CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'CERT_REVOKED', 'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
 function field(value: object, key: string): unknown {
   try { return Reflect.get(value, key); } catch { return undefined; }
 }
@@ -29,9 +43,17 @@ function cause(value: unknown, seen: Set<object>, depth: number): TransportCause
   const constructorName = typeof constructor === 'function' ? field(constructor, 'name') : undefined;
   const name = field(value, 'name');
   const kind = typeof constructorName === 'string' && KINDS.has(constructorName) ? constructorName : typeof name === 'string' && KINDS.has(name) ? name : 'UnknownError';
-  const result: TransportCause = { kind };
-  const code = field(value, 'code'), status = field(value, 'status'), requestId = field(value, 'requestID');
-  if (typeof code === 'string' && CODES.test(code)) result.code = code;
+  const result: TransportCause = { kind, codePresent: false, codeType: 'absent', codeRecognized: false };
+  let code: unknown;
+  try {
+    result.codePresent = Reflect.has(value, 'code');
+    if (result.codePresent) {
+      try { code = Reflect.get(value, 'code'); result.codeType = code === null ? 'null' : typeof code; }
+      catch { result.codeType = 'unreadable'; }
+    }
+  } catch { result.codePresent = null; result.codeType = 'unreadable'; }
+  if (typeof code === 'string' && CODES.has(code)) { result.code = code; result.codeRecognized = true; }
+  const status = field(value, 'status'), requestId = field(value, 'requestID');
   if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) result.status = status;
   if (typeof requestId === 'string' && /^req_[A-Za-z0-9_-]{1,128}$/.test(requestId)) result.requestId = requestId;
   const nested = field(value, 'cause'), aggregate = field(value, 'errors');
