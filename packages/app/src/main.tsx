@@ -93,9 +93,17 @@ class Bundle {
       const dispatch = this.store.dispatch;
       if (!this.fitAfterOpen || this.disposed || !this.viewer.current || !dispatch) return;
       this.fitAfterOpen = false;
-      // A person can move the camera while the first surface is loading. Their view wins.
-      if (this.initialCamera && JSON.stringify(this.viewer.current.getCamera()) !== JSON.stringify(this.initialCamera)) return;
-      void dispatch({ cmd: 'view.fit' }).catch(error => this.fail(error));
+      const viewer = this.viewer.current;
+      const revision = this.store.state.revision;
+      const camera = JSON.stringify(this.initialCamera ?? viewer.getCamera());
+      // setSurface precedes Result deformation/legend publication. Let that task and the
+      // shell's queued render finish before measuring the usable canvas. A person's camera
+      // or physical edit during loading still wins; a replaced/disposed session cannot fit.
+      playbackClock.schedule(() => {
+        if (this.disposed || this.viewer.current !== viewer || this.store.state.revision !== revision) return;
+        if (JSON.stringify(viewer.getCamera()) !== camera) return;
+        void dispatch({ cmd: 'view.fit' }).catch(error => this.fail(error));
+      }, 0);
     };
   }
   async initialize(snapshot: DocumentSnapshot, source?: ReplacementSource): Promise<void> {

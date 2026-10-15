@@ -14826,3 +14826,6 @@ fn display_unit_underflow_rejects_public_reads_without_changing_saved_state() {
 
 #[path = "registry/modal_convergence.rs"]
 mod modal_convergence;
+
+#[path = "registry/modal_thread_determinism.rs"]
+mod modal_thread_determinism;

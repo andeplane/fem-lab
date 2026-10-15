@@ -67,7 +67,7 @@ if (process.argv.includes('--migrate')) {
   const provider=process.env.OPENAI_API_KEY?openaiGateway(new OpenAI({apiKey:process.env.OPENAI_API_KEY,baseURL:'https://api.openai.com/v1',maxRetries:0,timeout:900000})):undefined;
   const completions=readAccount&&ledger&&holds&&provider?completionService({account:readAccount,ledger,reservations:holds,provider}):undefined;
   const account = readAccount && ledger ? async (authorization: string | undefined) => {
-    const owner = await readAccount(authorization); await ledger.ensureFree(owner.id);
+    const owner = await readAccount(authorization);
     return { ...owner, usage: await ledger.balance(owner.id), billingAvailable:billingEnabled&&Boolean(payments),billing:await payments?.status(owner.id) };
   } : undefined;
   const server = serviceServer({ now, newId: randomUUID, account,completions,billing,payments,privacy,

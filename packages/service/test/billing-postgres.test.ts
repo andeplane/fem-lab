@@ -1,3 +1,4 @@
+import { grantFreeFixture } from './free-fixture';
 import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import pg from 'pg';
@@ -29,7 +30,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   beforeEach(async()=>{
     await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_inbox CASCADE');await db.query('TRUNCATE billing_leases');
     clock=new Date('2026-10-14T12:00:00Z');fail=false;
-    accountId=(await accounts.provision({uid:'owner',email:'owner@example.com'})).id;await ledger.ensureFree(accountId);
+    accountId=(await accounts.provision({uid:'owner',email:'owner@example.com'})).id;await grantFreeFixture(ledger, accountId, clock);
     await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[accountId,'cus_owner',clock]);
     const start=clock.getTime()/1000,end=new Date('2026-11-14T12:00:00Z').getTime()/1000;
     invoice={id:'in_one',customerId:'cus_owner',subscriptionId:'sub_one',status:'paid',currency:'usd',reason:'subscription_create',amountPaid:4900,lines:[{priceId:'price_plus',quantity:1,proration:false,start,end}]};
@@ -50,7 +51,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
     await deliver(envelope('evt_late_created','customer.subscription.created','sub_one'));
     expect((await db.query('SELECT subscription_status FROM billing_accounts')).rows[0].subscription_status).toBe('canceled');
     expect((await ledger.balance(accountId)).plan).toBe('plus');
-    clock=new Date('2026-11-14T12:00:00Z');await ledger.ensureFree(accountId);expect((await ledger.balance(accountId)).plan).toBe('free');
+    clock=new Date('2026-11-14T12:00:00Z');await grantFreeFixture(ledger, accountId, clock);expect((await ledger.balance(accountId)).plan).toBe('free');
   });
   it('failed renewal and proration invoices cannot mint new allowances',async()=>{
     await deliver();invoice={...invoice,id:'in_failed',status:'open',reason:'subscription_cycle',amountPaid:0};subscription.status='past_due';

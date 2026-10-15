@@ -33,6 +33,7 @@ import type { ViewMode } from '../store';
 import type { AppSurface } from '../surface';
 import { MAPS, type ColormapName, sample } from './colormap';
 import { fitsSurface, nice, niceTick } from './scale';
+import { fitCamera, type FitViewport } from './framing';
 
 export interface CameraState {
   position: [number, number, number];
@@ -151,7 +152,7 @@ export class Viewer {
   private deformation: Float32Array | null = null;
   private deformScale = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement, private readonly onBounds?: () => void) {
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly onBounds?: () => void, private readonly fitViewport?: () => FitViewport | null) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio ?? 1, 2));
     this.renderer.localClippingEnabled = true;
@@ -727,7 +728,13 @@ export class Viewer {
   }
 
   fit(): void {
-    this.preset('iso');
+    const viewport = this.fitViewport?.();
+    if (!viewport) return this.preset('iso');
+    const bounds = this.box.clone();
+    for (const geometry of [this.mesh?.geometry, this.outlines?.geometry]) {
+      if (geometry?.boundingBox) bounds.union(geometry.boundingBox);
+    }
+    this.setCamera(fitCamera(bounds, new Vector3(...DIRECTIONS.iso), this.camera, viewport));
   }
 
   preset(view: ViewPreset, bounds?: { min: [number, number, number]; max: [number, number, number] }, fitAspect?: number): void {
