@@ -11,7 +11,9 @@ The public manifest adds `merchantMode: pending | direct | managed`, bound as
 `BILLING_MERCHANT_MODE` to API and recovery Jobs. The host rejects enabled billing
 with a missing/pending merchant decision or managed mode without
 `taxMode: automatic`. Disabled configuration can prepare signed webhooks and
-recovery without permitting a new purchase. Account profiles add optional
+invoice recovery bindings without permitting a new purchase. The current service
+gate also pauses interactive Portal access and pending plan-change recovery; those
+guards are a separate follow-up. Account profiles add optional
 `billing.merchantMode` with the same enum; clients treat an absent field as pending.
 
 Common activation evidence remains `taxCollectionDecisionConfirmed` and
