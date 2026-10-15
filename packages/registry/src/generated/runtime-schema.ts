@@ -693,7 +693,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Material to one or more Bodies. Every Body needs a Material before solving;\na Body without one is reported by query.model and blocks solve.run.",
+      "description": "Assign a Material to one or more Bodies. Imported element regions are editable Bodies;\nassigning the source owner supplies their default, while region assignments override it.\nEvery element-owning Body needs a Material before solving; a missing assignment is\nreported by query.model and blocks solve.run.",
       "type": "object",
       "properties": {
         "material": {
@@ -766,7 +766,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
+      "description": "Assign a Section to one or more Bodies, including imported element regions. A region\noverrides the source owner Section; an unassigned region inherits that default.\nEvery line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
       "type": "object",
       "properties": {
         "section": {
@@ -3821,6 +3821,18 @@ const commands = {
                 "$ref": "#/$defs/ImportedElement"
               }
             },
+            "regions": {
+              "description": "Disjoint named element regions. Keys are editable Body identities; memberships use\nauthored element labels. Elements outside regions belong to the source Body.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              }
+            },
             "nodeSets": {
               "type": "object",
               "additionalProperties": {
@@ -4362,12 +4374,70 @@ const commands = {
         },
         "conversionVersion": {
           "type": "string"
+        },
+        "sourceFiles": {
+          "description": "Immutable supplied-file manifest; paths are relative names, never host file handles.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "sourceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodeIdentities": {
+          "description": "Original assembly identities keyed by the persistent global source label.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ImportedEntityIdentity"
+            }
+          }
+        },
+        "elementIdentities": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ImportedEntityIdentity"
+            }
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "sha256",
         "conversionVersion"
+      ]
+    },
+    "ImportedEntityIdentity": {
+      "type": "object",
+      "properties": {
+        "sourceLabel": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "instance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "part": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sourceLabel"
       ]
     },
     "Formulation": {
@@ -5966,6 +6036,7 @@ const queries = {
     "ImportedElementKind": commands.$defs["ImportedElementKind"],
     "ImportedFace": commands.$defs["ImportedFace"],
     "ImportedProvenance": commands.$defs["ImportedProvenance"],
+    "ImportedEntityIdentity": commands.$defs["ImportedEntityIdentity"],
     "Formulation": commands.$defs["Formulation"],
     "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
     "SizeBoxSpec": commands.$defs["SizeBoxSpec"],

@@ -172,8 +172,10 @@ export interface Fem {
      */
     add(args: Omit<Extract<Command, { cmd: 'material.add' }>, 'cmd'>): Promise<Ack>;
     /**
-     * Assign a Material to one or more Bodies. Every Body needs a Material before solving;
-     * a Body without one is reported by query.model and blocks solve.run.
+     * Assign a Material to one or more Bodies. Imported element regions are editable Bodies;
+     * assigning the source owner supplies their default, while region assignments override it.
+     * Every element-owning Body needs a Material before solving; a missing assignment is
+     * reported by query.model and blocks solve.run.
      */
     assign(args: Omit<Extract<Command, { cmd: 'material.assign' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -193,7 +195,9 @@ export interface Fem {
      */
     add(args: Omit<Extract<Command, { cmd: 'section.add' }>, 'cmd'>): Promise<Ack>;
     /**
-     * Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;
+     * Assign a Section to one or more Bodies, including imported element regions. A region
+     * overrides the source owner Section; an unassigned region inherits that default.
+     * Every line or shell Body needs a Section before solving;
      * one without it is reported by query.model warnings and blocks solve.run with
      * model.no-section. A shell needs a shell thickness section, a line member needs a
      * cross-section, and a solid gets its section from its geometry. `orientation` names the global

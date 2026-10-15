@@ -28,6 +28,8 @@ pub struct ImportedMesh {
     pub nodes: Vec<ImportedNode>,
     pub elements: Vec<ImportedElement>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub regions: BTreeMap<String, Vec<u32>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub node_sets: BTreeMap<String, Vec<u32>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub element_sets: BTreeMap<String, Vec<u32>>,
@@ -36,7 +38,7 @@ pub struct ImportedMesh {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_targets: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provenance: Option<ImportedProvenance>,
+    pub provenance: Option<Box<ImportedProvenance>>,
 }
 
 /// Dense arrays' source labels, in dense node/element order. No label is inferred from position.
@@ -98,7 +100,8 @@ pub fn source(spec: &ImportedMeshSpec) -> Result<ImportedMesh, Error> {
     bounds(
         spec.nodes.len(),
         spec.elements.len(),
-        memberships(&spec.node_sets, &spec.element_sets, &spec.surfaces, spec.node_targets.len()),
+        memberships(&spec.node_sets, &spec.element_sets, &spec.surfaces, spec.node_targets.len())
+            .saturating_add(spec.regions.values().map(Vec::len).sum()),
     )?;
     let mut nodes = Vec::with_capacity(spec.nodes.len());
     for node in &spec.nodes {
@@ -113,6 +116,7 @@ pub fn source(spec: &ImportedMeshSpec) -> Result<ImportedMesh, Error> {
         body: spec.body.clone(),
         nodes,
         elements: spec.elements.clone(),
+        regions: spec.regions.clone(),
         node_sets: spec.node_sets.clone(),
         element_sets: spec.element_sets.clone(),
         surfaces: spec.surfaces.clone(),
@@ -120,6 +124,7 @@ pub fn source(spec: &ImportedMeshSpec) -> Result<ImportedMesh, Error> {
         provenance: spec.provenance.clone(),
     };
     source.elements.sort_by_key(|e| e.label);
+    canonical_members(&mut source.regions);
     canonical_members(&mut source.node_sets);
     canonical_members(&mut source.element_sets);
     canonical_members(&mut source.surfaces);
@@ -130,6 +135,20 @@ pub fn source(spec: &ImportedMeshSpec) -> Result<ImportedMesh, Error> {
 }
 
 impl ImportedMesh {
+    /// Region ownership lookup, built once per derived Mesh without changing element order.
+    pub fn element_owners(&self) -> BTreeMap<u32, &str> {
+        self.regions.iter().flat_map(|(name, ids)| ids.iter().map(move |&id| (id, name.as_str()))).collect()
+    }
+
+    pub fn body_names(&self) -> Vec<&str> {
+        std::iter::once(self.body.as_str()).chain(self.regions.keys().map(String::as_str)).collect()
+    }
+
+    pub fn element_body_names(&self) -> BTreeSet<&str> {
+        let owners = self.element_owners();
+        self.elements.iter().map(|e| owners.get(&e.label).copied().unwrap_or(self.body.as_str())).collect()
+    }
+
     /// Exact, separate namespaces; qualified names are stable across save/open and replay.
     pub fn participating_labels(&self) -> BTreeSet<u32> {
         self.elements.iter().flat_map(|element| element.nodes.iter().copied()).collect()
@@ -194,6 +213,7 @@ pub fn spec(source: &ImportedMesh) -> ImportedMeshSpec {
             })
             .collect(),
         elements: source.elements.clone(),
+        regions: source.regions.clone(),
         node_sets: source.node_sets.clone(),
         element_sets: source.element_sets.clone(),
         surfaces: source.surfaces.clone(),
@@ -203,12 +223,8 @@ pub fn spec(source: &ImportedMesh) -> ImportedMeshSpec {
 }
 
 fn source_name(name: &str, at: &str) -> Result<(), Error> {
-    if name.is_empty()
-        || name.len() > 80
-        || !name.as_bytes()[0].is_ascii_uppercase()
-        || !name.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
-    {
-        return Err(invalid("source Set names must be uppercase [A-Z][A-Z0-9_-]*, at most 80 characters", at));
+    if name.is_empty() || name.len() > 256 || !name.bytes().all(|c| (b' '..=b'~').contains(&c)) {
+        return Err(invalid("source Set names must contain 1..=256 printable ASCII bytes", at));
     }
     Ok(())
 }
@@ -227,7 +243,8 @@ pub fn build(source: &ImportedMesh) -> Result<(Mesh, SourceLabels), Error> {
     bounds(
         source.nodes.len(),
         source.elements.len(),
-        memberships(&source.node_sets, &source.element_sets, &source.surfaces, source.node_targets.len()),
+        memberships(&source.node_sets, &source.element_sets, &source.surfaces, source.node_targets.len())
+            .saturating_add(source.regions.values().map(Vec::len).sum()),
     )?;
     if let Some(provenance) = &source.provenance {
         if provenance.sha256.len() != 64
@@ -236,6 +253,27 @@ pub fn build(source: &ImportedMesh) -> Result<(Mesh, SourceLabels), Error> {
         {
             return Err(invalid(
                 "provenance needs a lowercase SHA-256 and nonempty conversionVersion",
+                "mesher.provenance",
+            ));
+        }
+    }
+    if let Some(provenance) = &source.provenance {
+        let valid_path = |path: &str| {
+            !path.is_empty()
+                && path.len() <= 1024
+                && !path.contains(['\\', '\0', ':'])
+                && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+        };
+        if provenance.source_files.len() > 128
+            || provenance.source_name.as_ref().is_some_and(|name| !valid_path(name))
+            || provenance.source_files.iter().any(|(name, hash)| {
+                !valid_path(name)
+                    || hash.len() != 64
+                    || !hash.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            })
+        {
+            return Err(invalid(
+                "source manifest needs at most 128 relative file names and lowercase SHA-256 values",
                 "mesher.provenance",
             ));
         }
@@ -255,6 +293,47 @@ pub fn build(source: &ImportedMesh) -> Result<(Mesh, SourceLabels), Error> {
         node_ids.insert(node.label, node_ids.len() as u32);
         coords.extend(node.at);
     }
+    let mut region_elements = BTreeSet::new();
+    for (name, members) in &source.regions {
+        crate::engine::check_name(name).map_err(|e| e.at("mesher.regions"))?;
+        if name == &source.body || members.is_empty() || members.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(invalid(
+                "regions need distinct Body names and nonempty ascending memberships",
+                "mesher.regions",
+            ));
+        }
+        for id in members {
+            if source.elements.binary_search_by_key(id, |e| e.label).is_err() || !region_elements.insert(*id) {
+                return Err(invalid(
+                    "regions must reference existing elements without overlapping ownership",
+                    "mesher.regions",
+                ));
+            }
+        }
+    }
+    if let Some(provenance) = &source.provenance {
+        for (identities, existing) in [
+            (&provenance.node_identities, node_ids.keys().copied().collect::<BTreeSet<_>>()),
+            (&provenance.element_identities, source.elements.iter().map(|e| e.label).collect()),
+        ] {
+            for (id, identity) in identities {
+                label(identity.source_label, "mesher.provenance.sourceLabel")?;
+                if !existing.contains(id)
+                    || [&identity.instance, &identity.part]
+                        .into_iter()
+                        .flatten()
+                        .any(|name| name.trim().is_empty() || name.len() > 256)
+                {
+                    return Err(invalid(
+                        "identity metadata needs existing labels and nonempty names of at most 256 bytes",
+                        "mesher.provenance",
+                    ));
+                }
+            }
+        }
+    }
+    let owners = source.element_owners();
+    let mut previous_body = "";
     let mut element_ids = BTreeMap::new();
     let mut blocks: Vec<ElementBlock> = Vec::new();
     let mut seen = BTreeSet::new();
@@ -275,10 +354,12 @@ pub fn build(source: &ImportedMesh) -> Result<(Mesh, SourceLabels), Error> {
         }
         let id = element_ids.len() as u32;
         element_ids.insert(element.label, id);
-        if blocks.last().is_none_or(|b| b.kind != kind) {
+        let body = owners.get(&element.label).copied().unwrap_or(source.body.as_str());
+        if blocks.last().is_none_or(|b| b.kind != kind) || body != previous_body {
             blocks.push(ElementBlock { kind, conn: Vec::new(), first_elem: id });
         }
         blocks.last_mut().expect("inserted above").conn.extend(conn);
+        previous_body = body;
     }
     let mut mesh = Mesh {
         dim: 3,
@@ -391,7 +472,6 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
         .at(format!("mesher.elements[{}]", source.elements[quality.worst[0].0 as usize].label))
         .suggest("mesh.set with regular, positively oriented elements"));
     }
-    let mut adjacency = vec![Vec::new(); mesh.n_elems()];
     for elements in faces.values() {
         if elements.len() > 2 {
             return Err(invalid(
@@ -409,8 +489,6 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
                     "mesher.elements",
                 ));
             }
-            adjacency[elements[0].elem as usize].push(elements[1].elem);
-            adjacency[elements[1].elem as usize].push(elements[0].elem);
         }
     }
     femlab_geometry::imported_certificate::certify_imported_geometry(mesh).map_err(|error| {
@@ -425,23 +503,6 @@ fn validate_elements(mesh: &Mesh, source: &ImportedMesh) -> Result<(), Error> {
             .at(format!("mesher.elements[{}]", labels[0]))
             .suggest("mesh.set with source geometry whose original cell map and labelled contacts can be certified")
     })?;
-    let mut reached = vec![false; mesh.n_elems()];
-    let mut pending = vec![0];
-    reached[0] = true;
-    while let Some(e) = pending.pop() {
-        for &next in &adjacency[e] {
-            if !reached[next as usize] {
-                reached[next as usize] = true;
-                pending.push(next as usize);
-            }
-        }
-    }
-    if reached.iter().any(|r| !r) {
-        return Err(invalid(
-            "imported source elements must form one face-connected mesh with matching labelled faces",
-            "mesher.elements",
-        ));
-    }
     Ok(())
 }
 
@@ -469,10 +530,11 @@ mod input_policy_tests {
         for value in [0, 1_000_000_000] {
             assert_eq!(label(value, "label").unwrap_err().code, ErrorCode::Schema);
         }
-        for value in ["ROOT", "NODES_1-A", &"A".repeat(80)] {
+        for value in ["ROOT", "NODES_1-A", "1ROOT", "root", "A.B", "A+B", "\"Instance\".\"Set Name\"", &"A".repeat(256)]
+        {
             source_name(value, "name").unwrap();
         }
-        for value in ["", "1ROOT", "root", "A.B", "A+B", "Ä", &"A".repeat(81)] {
+        for value in ["", "A\nB", "A\0B", "Ä", &"A".repeat(257)] {
             assert_eq!(source_name(value, "name").unwrap_err().code, ErrorCode::Schema);
         }
     }

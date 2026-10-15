@@ -118,8 +118,44 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
                     .suggest("model.setIdealisation with solid3d"));
             }
             let faces = part.boundary_faces();
-            let blocks = part.blocks.len();
-            (part, vec![source.body.clone(); blocks], BTreeMap::from([(source.body.clone(), faces)]))
+            let region_owners = source.element_owners();
+            let owners = part
+                .blocks
+                .iter()
+                .map(|b| {
+                    region_owners
+                        .get(&source.elements[b.first_elem as usize].label)
+                        .copied()
+                        .unwrap_or(source.body.as_str())
+                        .to_string()
+                })
+                .collect();
+            let mut body_faces = BTreeMap::from([(source.body.clone(), faces)]);
+            for name in source.regions.keys() {
+                body_faces.insert(name.clone(), Vec::new());
+            }
+            let mut face_owners: BTreeMap<Vec<u32>, Vec<Face>> = BTreeMap::new();
+            for elem in 0..part.n_elems() as u32 {
+                for local in 0..part.kind_of(elem).n_faces() as u8 {
+                    let face = Face { elem, local };
+                    let mut nodes: Vec<_> = part.face_nodes(face).collect();
+                    nodes.sort_unstable();
+                    face_owners.entry(nodes).or_default().push(face);
+                }
+            }
+            let owner_of =
+                |e: u32| region_owners.get(&source.elements[e as usize].label).copied().unwrap_or(source.body.as_str());
+            for faces in face_owners.values() {
+                for face in faces {
+                    let owner = owner_of(face.elem);
+                    if owner != source.body
+                        && !faces.iter().any(|other| other.elem != face.elem && owner_of(other.elem) == owner)
+                    {
+                        body_faces.get_mut(owner).expect("region initialized above").push(*face);
+                    }
+                }
+            }
+            (part, owners, body_faces)
         }
         MesherSettings::Surface { body, patches } => {
             if quadratic || settings.simplices {
@@ -216,7 +252,14 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
                 (face_set(&mesh, resolve_face_set(&mesh, where_, Some(of_body))), where_.reference_point())
             }
             SetSource::Region { where_ } => {
-                let body_of = |e: u32| body_of_block[mesh.block_of(e).0].as_str();
+                let aggregate = matches!(where_, femlab_geometry::RegionPredicate::Body {name} if model.imported_source().is_some_and(|s| &s.body == name));
+                let body_of = |e: u32| {
+                    if aggregate {
+                        model.implicit_body().expect("imported source above")
+                    } else {
+                        body_of_block[mesh.block_of(e).0].as_str()
+                    }
+                };
                 let (nodes, elems) = resolve_region(&mesh, where_, &body_of);
                 // A region that catches no whole element is a node Set: what a nodal load wants.
                 let kind = if elems.is_empty() { SetKind::Node } else { SetKind::Element };
