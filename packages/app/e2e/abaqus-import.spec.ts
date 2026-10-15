@@ -1,7 +1,8 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Command, JournalDump, ModelFile, ModelSummary, OpenProject, ResultSummary } from '@femlab/registry';
+import type { Command, JournalDump, ModelFile, ModelSummary, OpenProject, ResultField, ResultSummary } from '@femlab/registry';
 import { expect, test, type Page } from './fixtures';
 
 const fixture = fileURLToPath(new URL('../../../crates/engine/tests/fixtures/abaqus-static/bar-hex-mm-n.inp', import.meta.url));
@@ -365,11 +366,23 @@ test('@cpu picker acquires a nested include folder, ignores unrelated files and 
   const submission = info.outputPath('submission');
   await mkdir(path.join(submission, 'Parts'), { recursive: true });
   const original = await readFile(fixture, 'utf8');
+  const nodeHeader = '*NODE\n';
+  const elementHeader = '*ELEMENT,TYPE=C3D8,ELSET=SOLID\n';
+  const node = original.indexOf(nodeHeader);
+  const element = original.indexOf(elementHeader);
+  const sets = original.indexOf('*NSET,NSET=ROOT\n');
   const material = original.indexOf('*MATERIAL');
-  expect(material).toBeGreaterThan(0);
-  await writeFile(path.join(submission, 'Root.inp'), '*INCLUDE,INPUT=Parts/Mesh.inc\n');
-  await writeFile(path.join(submission, 'Parts/Mesh.inc'), original.slice(0, material) + '*INCLUDE,INPUT=Material.inp\n');
-  await writeFile(path.join(submission, 'Material.inp'), original.slice(material));
+  expect(node).toBeGreaterThan(0); expect(element).toBeGreaterThan(node); expect(sets).toBeGreaterThan(element); expect(material).toBeGreaterThan(sets);
+  const nodes = original.slice(node + nodeHeader.length, element);
+  const elements = original.slice(element + elementHeader.length, sets);
+  const root = '*INCLUDE,INPUT=Parts/Mesh.inc\n';
+  const mesh = original.slice(0, node) + '*NODE,INPUT=Nodes.inc\n*ELEMENT,TYPE=C3D8,ELSET=SOLID,INPUT=Elements.inc\n' + original.slice(sets, material) + '*INCLUDE,INPUT=Material.inp\n';
+  const physics = original.slice(material);
+  await writeFile(path.join(submission, 'Root.inp'), root);
+  await writeFile(path.join(submission, 'Parts/Mesh.inc'), mesh);
+  await writeFile(path.join(submission, 'Nodes.inc'), nodes);
+  await writeFile(path.join(submission, 'Elements.inc'), elements);
+  await writeFile(path.join(submission, 'Material.inp'), physics);
   await writeFile(path.join(submission, 'private.env'), 'unrelated file must not be read');
   await page.addInitScript(() => {
     const state = window as unknown as { abaqusReads: string[] };
@@ -394,20 +407,40 @@ test('@cpu picker acquires a nested include folder, ignores unrelated files and 
   expect(selected).toContain('private.env');
   const report = page.getByRole('dialog', { name: 'Abaqus import report', exact: true });
   await expect(report).toBeVisible();
-  expect(await page.evaluate(() => (window as unknown as { abaqusReads: string[] }).abaqusReads)).toEqual(['Root.inp', 'Mesh.inc', 'Material.inp']);
+  await expect(report.locator('tr').filter({ hasText: 'Input bytes' }).locator('td').last()).toHaveText(String([root, mesh, nodes, elements, physics].reduce((sum, text) => sum + Buffer.byteLength(text), 0)));
+  const reads = await page.evaluate(() => (window as unknown as { abaqusReads: string[] }).abaqusReads);
+  expect(reads.slice(0, 2)).toEqual(['Root.inp', 'Mesh.inc']);
+  expect(reads.slice(2).sort()).toEqual(['Elements.inc', 'Material.inp', 'Nodes.inc']);
   await report.getByTitle('Close Abaqus import report', { exact: true }).click();
-  await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' }));
-  axial(await q<ResultSummary>(page, 'query.result'));
+  const check = async () => {
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' }));
+    axial(await q<ResultSummary>(page, 'query.result'));
+    const stress = await page.evaluate(() => window.fem.registry.query({ query: 'query.field', step: 'AXIAL', field: 'stress' })) as ResultField;
+    expect(stress.unit).toBe('Pa'); expect(stress.components).toBe(6); expect(stress.values.length).toBeGreaterThan(0); expect(stress.values.length % 6).toBe(0);
+    stress.values.forEach((value, component) => expect(Math.abs(value - (component % 6 === 0 ? 1e5 : 0))).toBeLessThan(1e-5));
+    return stress.values;
+  };
+  const stress = await check();
   const downloading = page.waitForEvent('download');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save', name: 'included-bar.femlab.json', to: 'download' }));
   const saved = info.outputPath('included-bar.femlab.json'); await (await downloading).saveAs(saved);
   const json = await readFile(saved, 'utf8');
   expect(json).not.toContain(submission);
   expect(json).not.toContain('private.env');
+  const portable = JSON.parse(json) as ModelFile;
+  const imported = portable.journal.entries.map(entry => entry.cmd).find(command => command.cmd === 'mesh.set');
+  if (imported?.cmd !== 'mesh.set' || imported.mesher.kind !== 'imported') throw new Error('portable source missing');
+  expect(imported.mesher.provenance?.sha256).toBe(createHash('sha256').update(root).digest('hex'));
+  expect(imported.mesher.provenance?.sourceName).toBe('Root.inp');
+  expect(imported.mesher.provenance?.sourceFiles).toEqual({
+    'Parts/Mesh.inc': createHash('sha256').update(mesh).digest('hex'),
+    'Nodes.inc': createHash('sha256').update(nodes).digest('hex'),
+    'Elements.inc': createHash('sha256').update(elements).digest('hex'),
+    'Material.inp': createHash('sha256').update(physics).digest('hex'),
+  });
   await rm(submission, { recursive: true });
   await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'replacement' }));
   await page.evaluate(json => window.fem.dispatch({ cmd: 'file.open', json }), json);
-  await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' }));
-  axial(await q<ResultSummary>(page, 'query.result'));
-  expect(await page.evaluate(() => (window as unknown as { abaqusReads: string[] }).abaqusReads)).toEqual(['Root.inp', 'Mesh.inc', 'Material.inp']);
+  expect(await check()).toEqual(stress);
+  expect(await page.evaluate(() => (window as unknown as { abaqusReads: string[] }).abaqusReads)).toEqual(reads);
 });

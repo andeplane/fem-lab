@@ -119,25 +119,35 @@ fn abaqus_import_rejects_units_unsupported_decks_and_databases_without_overwriti
 #[test]
 fn abaqus_import_reads_nested_submission_includes_and_reopens_without_source_files() {
     let dir = scratch("abaqus-includes");
-    std::fs::create_dir_all(dir.join("Parts")).unwrap();
+    let submission = dir.join("submission");
+    std::fs::create_dir_all(submission.join("Parts")).unwrap();
     let original = std::fs::read_to_string(engine_dir().join("tests/fixtures/abaqus-static/bar-hex-mm-n.inp")).unwrap();
-    let (mesh, physics) = original.split_once("*MATERIAL").unwrap();
+    // Split this known authored fixture, not arbitrary Abaqus syntax.
+    let (heading, nodes_and_rest) = original.split_once("*NODE\n").unwrap();
+    let (nodes, elements_and_rest) = nodes_and_rest.split_once("*ELEMENT,TYPE=C3D8,ELSET=SOLID\n").unwrap();
+    let (elements, sets_and_rest) = elements_and_rest.split_once("*NSET,NSET=ROOT\n").unwrap();
+    let (sets, physics) = sets_and_rest.split_once("*MATERIAL").unwrap();
     // Abaqus resolves include names against the submission directory, including nested includes.
-    let root = "*INCLUDE,INPUT=Parts/Mesh.inp\n";
-    let mesh_file = format!("{mesh}*INCLUDE,INPUT=Physics.inp\n");
+    let root = "*INCLUDE,INPUT=Parts/Mesh.inc\n";
+    let mesh_file = format!(
+        "{heading}*NODE,INPUT=Nodes.inc\n*ELEMENT,TYPE=C3D8,ELSET=SOLID,INPUT=Elements.inc\n*NSET,NSET=ROOT\n{sets}*INCLUDE,INPUT=Material.inp\n"
+    );
     let physics_file = format!("*MATERIAL{physics}");
-    std::fs::write(dir.join("Root.inp"), root).unwrap();
-    std::fs::write(dir.join("Parts/Mesh.inp"), &mesh_file).unwrap();
-    std::fs::write(dir.join("Physics.inp"), &physics_file).unwrap();
+    std::fs::write(submission.join("Root.inp"), root).unwrap();
+    std::fs::write(submission.join("Parts/Mesh.inc"), &mesh_file).unwrap();
+    std::fs::write(submission.join("Nodes.inc"), nodes).unwrap();
+    std::fs::write(submission.join("Elements.inc"), elements).unwrap();
+    std::fs::write(submission.join("Material.inp"), &physics_file).unwrap();
     let imported = abaqus_import(std::path::Path::new("Root.inp"), std::path::Path::new("saved.json"))
-        .current_dir(&dir)
+        .current_dir(&submission)
         .args(["--unit-force", "1 N", "--unit-time", "1 s"])
         .assert()
         .success();
     let report: serde_json::Value = serde_json::from_slice(&imported.get_output().stdout).unwrap();
     assert_eq!(report["sourceNodes"], 12);
-    assert_eq!(report["inputBytes"], root.len() + mesh_file.len() + physics_file.len());
+    assert_eq!(report["inputBytes"], root.len() + mesh_file.len() + nodes.len() + elements.len() + physics_file.len());
     let saved = dir.join("saved.json");
+    std::fs::rename(submission.join("saved.json"), &saved).unwrap();
     let file: serde_json::Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
     let mesh_command = file["journal"]["entries"]
         .as_array()
@@ -148,12 +158,61 @@ fn abaqus_import_reads_nested_submission_includes_and_reopens_without_source_fil
         .unwrap();
     let provenance = &mesh_command["mesher"]["provenance"];
     assert_eq!(provenance["sourceName"], "Root.inp");
-    assert_eq!(provenance["sourceFiles"]["Parts/Mesh.inp"], femlab_engine::hash::sha256_hex(mesh_file.as_bytes()));
-    assert_eq!(provenance["sourceFiles"]["Physics.inp"], femlab_engine::hash::sha256_hex(physics_file.as_bytes()));
-    std::fs::remove_file(dir.join("Root.inp")).unwrap();
-    std::fs::remove_file(dir.join("Parts/Mesh.inp")).unwrap();
-    std::fs::remove_file(dir.join("Physics.inp")).unwrap();
+    assert_eq!(provenance["sha256"], femlab_engine::hash::sha256_hex(root.as_bytes()));
+    assert_eq!(report["sha256"], provenance["sha256"]);
+    assert_eq!(provenance["sourceFiles"].as_object().unwrap().len(), 4);
+    for (name, text) in [
+        ("Parts/Mesh.inc", mesh_file.as_str()),
+        ("Nodes.inc", nodes),
+        ("Elements.inc", elements),
+        ("Material.inp", physics_file.as_str()),
+    ] {
+        assert_eq!(provenance["sourceFiles"][name], femlab_engine::hash::sha256_hex(text.as_bytes()));
+    }
+    std::fs::remove_dir_all(submission).unwrap();
     femlab().arg("run").arg(&saved).args(["--cpu", "--verify", "--skip-solves"]).assert().success();
+    let mut commands: Vec<serde_json::Value> =
+        file["journal"]["entries"].as_array().unwrap().iter().map(|entry| entry["cmd"].clone()).collect();
+    commands.push(serde_json::json!({"cmd":"solve.run","step":"AXIAL","solver":"cpu-direct"}));
+    let script = dir.join("solve.json");
+    std::fs::write(&script, serde_json::to_vec(&commands).unwrap()).unwrap();
+    let solved = femlab()
+        .arg("run")
+        .arg(&script)
+        .args([
+            "--cpu",
+            "--threads",
+            "1",
+            "--query",
+            r#"{"query":"query.result","step":"AXIAL"}"#,
+            "--query",
+            r#"{"query":"query.field","step":"AXIAL","field":"stress"}"#,
+        ])
+        .assert()
+        .success();
+    let result: Vec<serde_json::Value> = serde_json::from_slice(&solved.get_output().stdout).unwrap();
+    let ux = result[0]["extremes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|value| value["field"] == "displacement" && value["component"] == 0)
+        .unwrap();
+    assert_eq!(ux["max"]["unit"], "m");
+    assert!((ux["max"]["value"].as_f64().unwrap() - 5e-7).abs() < 1e-14);
+    let root_force: f64 =
+        result[0]["reactions"].as_array().unwrap().iter().map(|row| row["total"][0]["value"].as_f64().unwrap()).sum();
+    assert!((root_force + 1000.0).abs() < 1e-7);
+    assert_eq!(result[1]["unit"], "Pa");
+    assert_eq!(result[1]["components"], 6);
+    let stress = result[1]["values"].as_array().unwrap();
+    assert!(!stress.is_empty());
+    assert_eq!(stress.len() % 6, 0);
+    for value in stress.chunks_exact(6) {
+        assert!((value[0].as_f64().unwrap() - 1e5).abs() < 1e-5);
+        for component in &value[1..] {
+            assert!(component.as_f64().unwrap().abs() < 1e-5);
+        }
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

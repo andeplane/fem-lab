@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AbaqusConversionReport, JournalDump, ModelFile, ModelSummary, ResultSummary } from '@femlab/registry';
+import type { AbaqusConversionReport, JournalDump, ModelFile, ModelSummary, ResultField, ResultSummary } from '@femlab/registry';
 import { loadEngine } from '../src/engine';
 import { createRegistry } from '../src/server';
 
@@ -25,25 +25,37 @@ it('imports a scoped nested include deck, solves, exports and replays after the 
   const project = await mkdtemp(path.join(tmpdir(), 'femlab-504-mcp-')); directories.push(project);
   const source = path.join(project, 'submission');
   const deck = await readFile(staticFixture, 'utf8');
+  const nodeHeader = '*NODE\n';
+  const elementHeader = '*ELEMENT,TYPE=C3D8,ELSET=SOLID\n';
+  const node = deck.indexOf(nodeHeader);
+  const element = deck.indexOf(elementHeader);
+  const sets = deck.indexOf('*NSET,NSET=ROOT\n');
   const material = deck.indexOf('*MATERIAL');
-  expect(material).toBeGreaterThan(0);
+  expect(node).toBeGreaterThan(0); expect(element).toBeGreaterThan(node); expect(sets).toBeGreaterThan(element); expect(material).toBeGreaterThan(sets);
+  const nodes = deck.slice(node + nodeHeader.length, element);
+  const elements = deck.slice(element + elementHeader.length, sets);
   const root = '** Independent MCP include smoke\n*INCLUDE,INPUT=Parts/Mesh.inc\n';
-  const mesh = deck.slice(0, material) + '*INCLUDE,INPUT=Material.inp\n';
+  const mesh = deck.slice(0, node) + '*NODE,INPUT=Nodes.inc\n*ELEMENT,TYPE=C3D8,ELSET=SOLID,INPUT=Elements.inc\n' + deck.slice(sets, material) + '*INCLUDE,INPUT=Material.inp\n';
   const physics = deck.slice(material);
   await mkdir(path.join(source, 'Parts'), { recursive: true });
   await writeFile(path.join(source, 'Root.inp'), root);
   await writeFile(path.join(source, 'Parts/Mesh.inc'), mesh);
+  await writeFile(path.join(source, 'Nodes.inc'), nodes);
+  await writeFile(path.join(source, 'Elements.inc'), elements);
   await writeFile(path.join(source, 'Material.inp'), physics);
   const digest = createHash('sha256').update(root).digest('hex');
   const registry = createRegistry({ engine: loadEngine(here), project });
   const imported = await registry.dispatch({ cmd: 'file.importAbaqus', path: 'submission/Root.inp', name: 'MCP imported bar', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s' }) as { report: AbaqusConversionReport };
-  expect(imported.report).toMatchObject({ sha256: digest, inputBytes: Buffer.byteLength(root) + Buffer.byteLength(mesh) + Buffer.byteLength(physics), sourceNodes: 12, activeNodes: 12, sourceElements: 2, analysisConfigured: true, unitLength: { value: 0.001, unit: 'm' }, unitForce: { value: 1, unit: 'N' }, unitTime: { value: 1, unit: 's' }, analysis: { material: 'STEEL', step: 'AXIAL', finalEquilibriumOnly: true } });
+  expect(imported.report).toMatchObject({ sha256: digest, inputBytes: [root, mesh, nodes, elements, physics].reduce((sum, text) => sum + Buffer.byteLength(text), 0), sourceNodes: 12, activeNodes: 12, sourceElements: 2, analysisConfigured: true, unitLength: { value: 0.001, unit: 'm' }, unitForce: { value: 1, unit: 'N' }, unitTime: { value: 1, unit: 's' }, analysis: { material: 'STEEL', step: 'AXIAL', finalEquilibriumOnly: true } });
   const model = await registry.query({ query: 'query.model' }) as ModelSummary;
   expect(model).toMatchObject({ name: 'MCP imported bar', steps: [{ name: 'AXIAL', solved: false }] });
   expect(await registry.query({ query: 'query.mesh' })).toMatchObject({ nodes: 12, elements: 2 });
   await rm(source, { recursive: true });
   await registry.dispatch({ cmd: 'solve.run', step: 'AXIAL', solver: 'cpu-direct' });
   axial(await registry.query({ query: 'query.result', step: 'AXIAL' }) as ResultSummary);
+  const stress = await registry.query({ query: 'query.field', step: 'AXIAL', field: 'stress' }) as ResultField;
+  expect(stress.unit).toBe('Pa'); expect(stress.components).toBe(6); expect(stress.values.length).toBeGreaterThan(0); expect(stress.values.length % 6).toBe(0);
+  stress.values.forEach((value, component) => expect(Math.abs(value - (component % 6 === 0 ? 1e5 : 0))).toBeLessThan(1e-5));
   await registry.dispatch({ cmd: 'export.file', format: 'journal', path: 'bar.femlab.json' });
   const text = await readFile(path.join(project, 'bar.femlab.json'), 'utf8');
   expect(text).not.toContain(source);
@@ -56,14 +68,18 @@ it('imports a scoped nested include deck, solves, exports and replays after the 
     sha256: digest, sourceName: 'Root.inp',
     sourceFiles: {
       'Parts/Mesh.inc': createHash('sha256').update(mesh).digest('hex'),
+      'Nodes.inc': createHash('sha256').update(nodes).digest('hex'),
+      'Elements.inc': createHash('sha256').update(elements).digest('hex'),
       'Material.inp': createHash('sha256').update(physics).digest('hex'),
     },
   });
+  expect(Object.keys(importedMesh.mesher.provenance?.sourceFiles ?? {})).toHaveLength(4);
   const replay = await loadEngine(here).acquire();
   try {
     await replay.replaceCommands(file.journal.entries.map(entry => entry.cmd));
     expect(await replay.query({ query: 'query.model' })).toMatchObject({ hash: model.hash });
     axial(await replay.query({ query: 'query.result', step: 'AXIAL' }) as ResultSummary);
+    expect((await replay.query({ query: 'query.field', step: 'AXIAL', field: 'stress' }) as ResultField).values).toEqual(stress.values);
   } finally { await replay.release(); }
 
   const before = await registry.query({ query: 'query.journal' }) as JournalDump;

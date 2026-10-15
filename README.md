@@ -46,8 +46,9 @@ changed active loads. Ordinary output requests appear in import notes. The repor
 material and Step names to their FEM Lab names. Import does not solve; solve each named Step
 to compare its final equilibrium with the source application.
 
-For INCLUDE decks, choose the submission folder when prompted. Paths are relative to that
-folder, including includes inside other includes; filename case is preserved. The CLI reads
+For INCLUDE decks and NODE/ELEMENT `INPUT=` data files, choose the submission folder when
+prompted. Paths are relative to that folder, including includes inside other includes;
+filename case is preserved. The CLI reads
 from the input file's directory, and MCP reads within its configured project. Inline tools can
 provide `sourceName` and a `sourceFiles` map of relative filenames to exact UTF-8 contents.
 The engine itself performs no file I/O. The deck and includes together, and the saved Model

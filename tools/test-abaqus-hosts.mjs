@@ -33,33 +33,44 @@ const check = (result, field) => {
 };
 
 try {
-  const source = path.join(scratch, 'independent-bar.inp');
+  const submission = path.join(scratch, 'submission');
+  const source = path.join(submission, 'Root.inp');
   const saved = path.join(scratch, 'bar.femlab.json');
   const original = readFileSync(path.join(root, 'crates/engine/tests/fixtures/abaqus-static/bar-hex-mm-n.inp'), 'utf8');
+  const nodeHeader = '*NODE\n';
+  const elementHeader = '*ELEMENT,TYPE=C3D8,ELSET=SOLID\n';
+  const node = original.indexOf(nodeHeader);
+  const element = original.indexOf(elementHeader);
+  const sets = original.indexOf('*NSET,NSET=ROOT\n');
   const material = original.indexOf('*MATERIAL');
-  assert.ok(material > 0);
-  const mesh = original.slice(0, material) + '*INCLUDE,INPUT=Material.inp\n';
+  assert.ok(node > 0 && element > node && sets > element && material > sets);
+  const nodes = original.slice(node + nodeHeader.length, element);
+  const elements = original.slice(element + elementHeader.length, sets);
+  const mesh = original.slice(0, node) + '*NODE,INPUT=Nodes.inc\n*ELEMENT,TYPE=C3D8,ELSET=SOLID,INPUT=Elements.inc\n' + original.slice(sets, material) + '*INCLUDE,INPUT=Material.inp\n';
   const physics = original.slice(material);
   const input = '** Independently authored multi-file bar\n*INCLUDE,INPUT=Parts/Mesh.inc\n';
-  mkdirSync(path.join(scratch, 'Parts'));
+  mkdirSync(path.join(submission, 'Parts'), { recursive: true });
   writeFileSync(source, input);
-  writeFileSync(path.join(scratch, 'Parts/Mesh.inc'), mesh);
-  writeFileSync(path.join(scratch, 'Material.inp'), physics);
+  writeFileSync(path.join(submission, 'Parts/Mesh.inc'), mesh);
+  writeFileSync(path.join(submission, 'Nodes.inc'), nodes);
+  writeFileSync(path.join(submission, 'Elements.inc'), elements);
+  writeFileSync(path.join(submission, 'Material.inp'), physics);
   const digest = createHash('sha256').update(readFileSync(source)).digest('hex');
   const report = run(['import-inp', source, '--out', saved, '--name', 'cross-host import', '--body', 'bar', '--mode', 'static', '--unit-length', '1 mm', '--unit-force', '1 N', '--unit-time', '1 s', '--threads', '1', '--cpu']);
   assert.equal(report.sha256, digest); assert.equal(report.analysis.step, 'AXIAL');
-  assert.equal(report.inputBytes, Buffer.byteLength(input) + Buffer.byteLength(mesh) + Buffer.byteLength(physics));
+  assert.equal(report.inputBytes, [input, mesh, nodes, elements, physics].reduce((sum, text) => sum + Buffer.byteLength(text), 0));
   const bytes = readFileSync(saved, 'utf8');
   assert.ok(Buffer.byteLength(bytes) <= 16 * 1024 * 1024);
   assert.ok(!bytes.includes(source)); assert.ok(!bytes.includes('*NODE'));
   const file = JSON.parse(bytes); assert.equal(file.format, 'femlab/1');
   const sourceCommand = file.journal.entries.find(entry => entry.cmd.cmd === 'mesh.set').cmd;
-  for (const [name, text] of [['Parts/Mesh.inc', mesh], ['Material.inp', physics]]) {
+  assert.equal(sourceCommand.mesher.provenance.sha256, digest);
+  assert.equal(sourceCommand.mesher.provenance.sourceName, 'Root.inp');
+  assert.equal(Object.keys(sourceCommand.mesher.provenance.sourceFiles).length, 4);
+  for (const [name, text] of [['Parts/Mesh.inc', mesh], ['Nodes.inc', nodes], ['Elements.inc', elements], ['Material.inp', physics]]) {
     assert.equal(sourceCommand.mesher.provenance.sourceFiles[name], createHash('sha256').update(text).digest('hex'));
   }
-  rmSync(source);
-  rmSync(path.join(scratch, 'Parts'), { recursive: true });
-  rmSync(path.join(scratch, 'Material.inp')); // Neither subsequent host has any original source files.
+  rmSync(submission, { recursive: true }); // Neither subsequent host has any original source files.
   const [nativeModel, nativeMesh] = run(['run', saved, '--cpu', '--threads', '1', '--query', '{"query":"query.model"}', '--query', '{"query":"query.mesh"}']);
   assert.equal(nativeModel.steps[0].solved, false);
   assert.equal(nativeMesh.nodes, 12); assert.equal(nativeMesh.elements, 2);
