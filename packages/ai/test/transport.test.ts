@@ -17,7 +17,7 @@ it('retains a whitelisted deep socket cause from a genuine SDK offline fetch fai
   expect(offlineFetch).toHaveBeenCalledOnce();
   expect(events).toEqual([{ type: 'error', message: 'Connection error.' }]);
   expect(diagnostics).toContainEqual(expect.objectContaining({
-    phase: 'request', abortOrigin: 'none', error: { kind: 'APIConnectionError', cause: { kind: 'TypeError', cause: { kind: 'Error', code: 'ECONNRESET' } } },
+    phase: 'request', abortOrigin: 'none', error: { kind: 'APIConnectionError', codePresent: true, codeType: 'undefined', codeRecognized: false, cause: { kind: 'TypeError', codePresent: false, codeType: 'absent', codeRecognized: false, cause: { kind: 'Error', code: 'ECONNRESET', codePresent: true, codeType: 'string', codeRecognized: true } } },
   }));
   expect(JSON.stringify({ events, diagnostics })).not.toContain(secret);
   expect(JSON.stringify({ events, diagnostics })).not.toContain('private payload');
@@ -30,7 +30,7 @@ it('captures real SDK HTTP status/request ID while excluding response headers an
   const offlineFetch: typeof fetch = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'private response payload', type: 'invalid_request_error' } }), { status: 401, headers: { 'content-type': 'application/json', 'x-request-id': 'req_fixture123', 'authorization': 'private-header' } }));
   const client = new OpenAI({ apiKey: 'unused-offline', fetch: offlineFetch, maxRetries: 0 });
   await collect(responsesProvider(client, [request.model], { now: () => 7, record: d => { diagnostic.push(d); } }).chat(request));
-  expect(diagnostic).toEqual([{ phase: 'request', abortOrigin: 'none', elapsedMs: 0, error: { kind: 'AuthenticationError', status: 401, requestId: 'req_fixture123' } }]);
+  expect(diagnostic).toEqual([{ phase: 'request', abortOrigin: 'none', elapsedMs: 0, error: { kind: 'AuthenticationError', status: 401, requestId: 'req_fixture123', codePresent: true, codeType: 'undefined', codeRecognized: false } }]);
   expect(JSON.stringify(diagnostic)).not.toContain('private');
 });
 
@@ -41,7 +41,7 @@ it('retains a genuine SDK response-body failure as stream phase without retrying
   const client = new OpenAI({ apiKey: 'unused-offline', fetch: offlineFetch, maxRetries: 0 });
   await collect(responsesProvider(client, [request.model], { now: () => 8, record: d => { diagnostic.push(d); } }).chat(request));
   expect(offlineFetch).toHaveBeenCalledOnce();
-  expect(diagnostic).toEqual([{ phase: 'stream', abortOrigin: 'none', elapsedMs: 0, error: { kind: 'TypeError', cause: { kind: 'Error', code: 'UND_ERR_SOCKET' } } }]);
+  expect(diagnostic).toEqual([{ phase: 'stream', abortOrigin: 'none', elapsedMs: 0, error: { kind: 'TypeError', codePresent: false, codeType: 'absent', codeRecognized: false, cause: { kind: 'Error', code: 'UND_ERR_SOCKET', codePresent: true, codeType: 'string', codeRecognized: true } } }]);
 });
 
 it('distinguishes an owned caller abort from an SDK timeout using real SDK requests', async () => {
@@ -80,14 +80,45 @@ it('bounds adversarial cause chains and never accesses messages, headers, reques
   for (const key of ['message', 'headers', 'request', 'url', 'stack']) Object.defineProperty(root, key, { get: hidden });
   Object.assign(root, { name: 'TypeError', code: 'ECONNRESET', status: 503, requestID: 'req_fixture456', cause: root, errors: [null, 'private', undefined, 42, new Error('fifth ignored')] });
   const d = providerDiagnostic(root, 'input-count', undefined, 11);
-  expect(d).toEqual({ phase: 'input-count', abortOrigin: 'none', elapsedMs: 11, error: { kind: 'TypeError', code: 'ECONNRESET', status: 503, requestId: 'req_fixture456', cause: { kind: 'UnknownError' }, errors: Array.from({ length: 4 }, () => ({ kind: 'UnknownError' })) } });
+  expect(d).toEqual({ phase: 'input-count', abortOrigin: 'none', elapsedMs: 11, error: { kind: 'TypeError', code: 'ECONNRESET', codePresent: true, codeType: 'string', codeRecognized: true, status: 503, requestId: 'req_fixture456', cause: { kind: 'UnknownError' }, errors: Array.from({ length: 4 }, () => ({ kind: 'UnknownError' })) } });
   expect(JSON.stringify(d)).not.toContain('private');
-  expect(providerDiagnostic({ name: 'private-name', code: 'private-code', status: 99, requestID: 'private-id' }, 'request', undefined, NaN).error).toEqual({ kind: 'UnknownError' });
+  expect(providerDiagnostic({ name: 'private-name', code: 'private-code', status: 99, requestID: 'private-id' }, 'request', undefined, NaN).error).toEqual({ kind: 'UnknownError', codePresent: true, codeType: 'string', codeRecognized: false });
   expect(providerDiagnostic({ name: 'Error', code: 3, status: 600, requestID: 5 }, 'request', undefined, -1).elapsedMs).toBe(0);
   expect(providerDiagnostic({ name: 'Error', status: 200.5 }, 'request', undefined, Infinity).elapsedMs).toBe(0);
   const nested = new Error('private', { cause: new Error('private', { cause: new Error('private', { cause: new Error('private', { cause: new Error('depth ignored') }) }) }) });
   expect(providerDiagnostic(nested, 'request', undefined, 0).error.cause?.cause?.cause?.cause).toEqual({ kind: 'UnknownError' });
   const unreadable = Object.create(null) as Record<string, unknown>;
   for (const key of ['constructor', 'name', 'code', 'status', 'requestID', 'cause', 'errors']) Object.defineProperty(unreadable, key, { get: hidden });
-  expect(providerDiagnostic(unreadable, 'request', undefined, 1).error).toEqual({ kind: 'UnknownError' });
+  expect(providerDiagnostic(unreadable, 'request', undefined, 1).error).toEqual({ kind: 'UnknownError', codePresent: true, codeType: 'unreadable', codeRecognized: false });
+});
+
+
+it.each(['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'])('retains the explicit safe TLS code %s from a genuine SDK count failure', async code => {
+  const secret = 'private-key-url-and-payload';
+  const failure = Object.assign(new Error(secret), { code });
+  const offlineFetch: typeof fetch = vi.fn(async () => { throw new TypeError(secret, { cause: failure }); });
+  const client = new OpenAI({ apiKey: secret, maxRetries: 0, fetch: offlineFetch });
+  let observed: unknown;
+  try { await client.responses.inputTokens.count({ model: request.model, input: 'offline fixture' }); }
+  catch (error) { observed = providerDiagnostic(error, 'input-count', undefined, 14); }
+  expect(offlineFetch).toHaveBeenCalledOnce();
+  expect(observed).toMatchObject({ phase: 'input-count', abortOrigin: 'none', error: { kind: 'APIConnectionError', codePresent: true, codeType: 'undefined', codeRecognized: false, cause: { kind: 'TypeError', cause: { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true } } } });
+  expect(JSON.stringify(observed)).not.toContain(secret);
+});
+
+it('distinguishes absent, rejected, nonstring and unreadable codes without copying private values', () => {
+  const rejected = ['private-key-code', 'EPRIVATE_KEY_PAYLOAD', 'ERR_PRIVATE_URL', 'UND_ERR_PRIVATE_PAYLOAD', 'CERT_PRIVATE_SECRET'];
+  for (const code of rejected) {
+    const receipt = providerDiagnostic({ name: 'Error', code }, 'input-count', undefined, 0).error;
+    expect(receipt).toEqual({ kind: 'Error', codePresent: true, codeType: 'string', codeRecognized: false });
+    expect(JSON.stringify(receipt)).not.toContain(code);
+  }
+  expect(providerDiagnostic(new Error(), 'input-count', undefined, 0).error).toEqual({ kind: 'Error', codePresent: false, codeType: 'absent', codeRecognized: false });
+  for (const [code, codeType] of [[undefined, 'undefined'], [null, 'null'], [42, 'number'], [true, 'boolean'], [3n, 'bigint'], [Symbol('private'), 'symbol'], [() => 'private', 'function'], [{ private: 'secret' }, 'object']] as const) {
+    expect(providerDiagnostic({ name: 'Error', code }, 'input-count', undefined, 0).error).toEqual({ kind: 'Error', codePresent: true, codeType, codeRecognized: false });
+  }
+  const getter = { get code(): string { throw new Error('private getter'); } };
+  expect(providerDiagnostic(getter, 'input-count', undefined, 0).error).toEqual({ kind: 'UnknownError', codePresent: true, codeType: 'unreadable', codeRecognized: false });
+  const inaccessible = new Proxy({}, { has() { throw new Error('private has trap'); } });
+  expect(providerDiagnostic(inaccessible, 'input-count', undefined, 0).error).toEqual({ kind: 'UnknownError', codePresent: null, codeType: 'unreadable', codeRecognized: false });
 });

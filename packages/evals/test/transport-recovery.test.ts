@@ -148,3 +148,18 @@ it('treats even an empty provider error as failed and never releases its text or
   expect(await collect(run.provider.chat(request))).toEqual([{ type: 'error', message: '' }]);
   expect(run.receipts[0]).toMatchObject({ outcome: 'stopped', discardedEvents: 5, reason: '' });
 });
+
+
+it('records the real SDK TLS input-count failure without retry, generation, or a budget reservation', async () => {
+  const secret = 'private-count-key-message-url';
+  const fetch: typeof globalThis.fetch = vi.fn(async () => { throw new TypeError(secret, { cause: Object.assign(new Error(secret), { code: 'CERT_HAS_EXPIRED' }) }); });
+  const client = new OpenAI({ apiKey: secret, maxRetries: 0, fetch });
+  const factory = vi.fn((observer: ProviderObserver) => responsesProvider(client, [request.model], observer));
+  const run = setup(factory, { count: async () => (await client.responses.inputTokens.count({ model: request.model, input: 'offline count' })).input_tokens });
+  expect(await collect(run.provider.chat(request))).toEqual([{ type: 'error', message: 'Connection error.' }]);
+  expect(fetch).toHaveBeenCalledOnce(); expect(run.count).toHaveBeenCalledOnce(); expect(factory).not.toHaveBeenCalled();
+  expect(run.budget.snapshot()).toMatchObject({ requests: 0, inFlightRequests: 0, chargedOrReservedUsd: 0, retainedUnknown: [], stoppedReason: 'Connection error.' });
+  expect(run.receipts).toMatchObject([{ outcome: 'stopped', unknownUsageRetained: false, discardedEvents: 0, diagnostics: [{ phase: 'input-count', abortOrigin: 'none', error: { kind: 'APIConnectionError', cause: { kind: 'TypeError', cause: { kind: 'Error', code: 'CERT_HAS_EXPIRED', codePresent: true, codeType: 'string', codeRecognized: true } } } }] }]);
+  expect(run.states).toHaveLength(1); expect(run.states[0]?.inFlightRequests).toBe(0);
+  expect(JSON.stringify(run.receipts)).not.toContain(secret);
+});
