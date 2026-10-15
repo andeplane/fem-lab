@@ -68,6 +68,10 @@ test('@cpu independent retained panes preserve physics, surfaces, legends, scope
   expect(state.left!.summary.stale).toBe(true); expect(state.right!.summary.stale).toBe(false);
   const surfaces = await page.evaluate(async ids => [await window.fem.query.surface({ resultId: ids.left }), await window.fem.query.surface({ resultId: ids.right })], ids);
   expect(surfaces[0]!.nodeCount).not.toBe(surfaces[1]!.nodeCount);
+  const leftMesh = state.catalogue.records.find(record => record.id === ids.left)!, rightMesh = state.catalogue.records.find(record => record.id === ids.right)!;
+  expect(leftMesh.nodes).toBe(surfaces[0]!.nodeCount); expect(rightMesh.nodes).toBe(surfaces[1]!.nodeCount); expect(leftMesh.elements).not.toBe(rightMesh.elements);
+  await expect(page.locator('[data-comparison-pane="left"] .comparison-mesh')).toHaveText(`Mesh · nodes ${leftMesh.nodes} · elements ${leftMesh.elements}`);
+  await expect(page.locator('[data-comparison-pane="right"] .comparison-mesh')).toHaveText(`Mesh · nodes ${rightMesh.nodes} · elements ${rightMesh.elements}`);
   await expect.poll(async () => (await raster(page, 'left')).count).toBeGreaterThan(200);
   await expect.poll(async () => (await raster(page, 'right')).count).toBeGreaterThan(200);
   for (const name of ['left', 'right']) {
@@ -143,6 +147,7 @@ test('@cpu engine differences retain the target mesh, missing coverage and ident
   await page.evaluate(async () => { for (let i = 0; i < 8; i++) await window.fem.solve.run({ step: 'axial', solver: 'cpu-direct' }); });
   const unavailable = await read(page); expect(unavailable.configuration).toEqual(input); expect(unavailable.difference!.error?.code).toBe('not-found');
   await expect(page.locator('.comparison-pane-title')).toContainText('unavailable or evicted');
+  await expect(page.locator('.comparison-mesh')).toHaveCount(0);
   expect((await raster(page, 'difference')).count).toBe(0);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'replacement session' }));
   expect((await read(page)).configuration.mode).toBe('single'); expect((await read(page)).catalogue.records).toEqual([]);

@@ -6,11 +6,12 @@ import { ComparisonControls, ComparisonPaneChrome } from '../src/ui/ResultCompar
 import { Store } from '../src/store';
 import { afterEffects, waitFor } from './wait-for';
 import type { Query } from '../src/ui/SchemaForm';
+import type { ComparisonPaneState } from '@femlab/registry';
 
 afterEach(async () => { await act(async () => { for (const root of [...document.body.children]) render(null, root); }); document.body.replaceChildren(); });
 function setup() {
   const store = new Store(), dispatch = vi.fn(async () => undefined);
-  const catalogue = { limit: 8, records: ['old', 'new'].map((id, i) => ({ id, step: 'static', solvedRevision: i, modelName: id, modelHash: id, inputHash: id, stale: i === 0, nodes: 3, elements: 1, fieldBytes: 72, meshBytes: 100, modelJsonBytes: 100 })) };
+  const catalogue = { limit: 8, records: ['old', 'new'].map((id, i) => ({ id, step: 'static', solvedRevision: i, modelName: id, modelHash: id, inputHash: id, stale: i === 0, nodes: i ? 9 : 3, elements: i ? 4 : 1, fieldBytes: 72, meshBytes: 100, modelJsonBytes: 100 })) };
   store.set({ resultComparison: { ...store.state.resultComparison, catalogue } });
   const root = document.createElement('div'); document.body.append(root);
   const query = vi.fn(async (input: Parameters<Query>[0]) => ({ ...RESULT, resultId: input['resultId'], extremes: [RESULT.extremes[0]!, { ...RESULT.extremes[0]!, field: 'vonMises' }] }));
@@ -58,4 +59,17 @@ it('keeps an available pane field picker usable when the other retained id has b
   await waitFor(() => root.querySelector<HTMLSelectElement>('[aria-label="right field"]')?.options.length === 5);
   expect(root.querySelector('[aria-label="left field"]')?.textContent).toContain('No available fields');
   expect(root.querySelector<HTMLButtonElement>('.comparison-actions .apply')?.disabled).toBe(true);
+});
+
+it('shows each exact retained Mesh count and preserves an evicted pane diagnostic without inventing counts', async () => {
+  const { store, dispatch, root } = setup();
+  const pane = (resultId: string): ComparisonPaneState => ({ operand: { resultId, field: 'displacement', component: 0 }, summary: RESULT, label: 'ux', legend: null, bodyNames: [], hiddenBodies: [], canDeform: false, pick: null, error: null });
+  const left = pane('old'), right = pane('new');
+  await act(async () => render(<><ComparisonPaneChrome pane={left} name="left" s={store.state} dispatch={dispatch} /><ComparisonPaneChrome pane={right} name="right" s={store.state} dispatch={dispatch} /></>, root));
+  expect([...root.querySelectorAll('.comparison-mesh')].map(element => element.textContent)).toEqual(['Mesh · nodes 3 · elements 1', 'Mesh · nodes 9 · elements 4']);
+  store.set({ resultComparison: { ...store.state.resultComparison, catalogue: { ...store.state.resultComparison.catalogue, records: store.state.resultComparison.catalogue.records.filter(record => record.id !== 'old') } } });
+  const evicted: ComparisonPaneState = { ...left, error: { code: 'not-found', cause: "retained Result 'old' is unavailable or evicted", where: 'resultId', suggestion: 'select an available id from query.results' } };
+  await act(async () => render(<><ComparisonPaneChrome pane={evicted} name="left" s={store.state} dispatch={dispatch} /><ComparisonPaneChrome pane={right} name="right" s={store.state} dispatch={dispatch} /></>, root));
+  expect(root.querySelector('.comparison-pane-title')?.textContent).toContain('unavailable or evicted');
+  expect([...root.querySelectorAll('.comparison-mesh')].map(element => element.textContent)).toEqual(['Mesh · nodes 9 · elements 4']);
 });

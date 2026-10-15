@@ -99,6 +99,7 @@ export function ComparisonPaneChrome({ pane, name, s, dispatch }: { pane: Compar
       <strong>{name === 'difference' ? 'Left − right' : name} · {pane.summary.step}</strong>
       <span class="mono">{pane.operand.resultId}</span>
       <span>{record?.modelName ?? ''} · rev {pane.summary.revision} · {pane.summary.stale ? 'stale' : 'current'}</span>
+      {record ? <span class="comparison-mesh">Mesh · nodes {record.nodes} · elements {record.elements}</span> : null}
       {name === 'difference' && s.resultComparison.coverage ? <span>onto {pane.operand.resultId} · {s.resultComparison.coverage.insideNodes}/{s.resultComparison.coverage.totalNodes} nodes covered{s.resultComparison.interpolated ? ' · interpolated' : ''}</span> : null}
       {pane.error ? <span role="alert">{pane.error.code} · {pane.error.cause}</span> : null}
     </div>
