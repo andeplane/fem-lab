@@ -107,8 +107,15 @@ evaluation branch.
 
 Run the live lane from a clean commit after confirming the available credential, spending
 bound and host capacity. A successful model-list read proves access, not generation credits.
-The runner keeps the 30 GiB disk floor, checks it before preparation, cases and requests,
-and does not automatically start an engine build. Use the reviewed source/runtime receipts
+The runner checks actual free disk before preparation, cases and every provider request.
+Fresh or unverified engine routes retain a 30 GiB floor. Fully verified WASM reuse with
+a matching staged STEP corresponding-source kit uses a 24 GiB operational floor; the
+selected route, source-kit hash and floor are sealed into the run configuration. This
+measured allowance avoids native compilation and source extraction; it is not a quota
+on arbitrary model-directed export files, tool replies, checkpoints or system swap.
+The reuse route refuses missing or mismatched receipts/source kit before preparation
+and disables STEP source reconstruction in the app prebuild. It does not automatically
+start an engine build. Use the reviewed source/runtime receipts
 when the engine source has not changed:
 
 ```sh

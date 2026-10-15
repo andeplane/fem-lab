@@ -52,3 +52,9 @@ test('fails closed on stale bytes, source, paths, omitted patches and notices', 
     async f => { await writeFile(join(f.vendor, 'NOTICE.txt'), ''); },
   ]) await fixture(async f => { await edit(f); await assert.rejects(prepareStepAssets(f)); });
 });
+
+test('reuse-only preparation refuses missing source before invoking any reconstruction', async () => fixture(async f => {
+  await rm(join(f.vendor, 'corresponding-source.tar.gz')); let builds = 0;
+  await assert.rejects(prepareStepAssets({ ...f, requireSourceKit: true, buildSource: () => { builds++; } }), /reconstruction is disabled/);
+  assert.equal(builds, 0);
+}));

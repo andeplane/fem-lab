@@ -10,7 +10,7 @@ const safe = path => {
   if (typeof path !== 'string' || !/^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/.test(path) || path.split('/').some(p => p === '..' || p === '.')) throw new Error('invalid converter manifest path');
   return path;
 };
-export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vendor/step-converter'), output = join(repo, 'packages/app/public/third-party/step-converter'), buildSource = () => {
+export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vendor/step-converter'), output = join(repo, 'packages/app/public/third-party/step-converter'), requireSourceKit = false, buildSource = () => {
   const result = spawnSync(process.env.PYTHON ?? 'python3', [join(repo, 'tools/build-step-converter.py'), '--source-kit-only', '--output-dir', vendor], { stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error('complete STEP corresponding-source assembly failed');
@@ -19,7 +19,7 @@ export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vend
   if (manifest.version !== 'occt-import-js-0.0.23+femlab.1') throw new Error('unsupported STEP converter manifest');
   const source = manifest.artifacts?.sourceKit;
   if (!source || source.path !== 'corresponding-source.tar.gz') throw new Error('complete STEP corresponding-source kit is missing from manifest');
-  try { await access(join(vendor, safe(source.path))); } catch { await buildSource(); }
+  try { await access(join(vendor, safe(source.path))); } catch { if (requireSourceKit) throw new Error('verified reuse requires a staged STEP source kit; reconstruction is disabled'); await buildSource(); }
   const checked = async (spec, withSize = true) => {
     const path = safe(spec.path); const bytes = await readFile(join(vendor, path));
     if (sha256(bytes) !== spec.sha256 || (withSize && bytes.length !== spec.bytes)) throw new Error(`STEP converter integrity mismatch: ${path}`);
@@ -62,6 +62,6 @@ export async function prepareStepAssets({ repo = root, vendor = join(repo, 'vend
   return manifest;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const manifest = await prepareStepAssets();
+  const manifest = await prepareStepAssets({ requireSourceKit: process.env.FEMLAB_REQUIRE_STEP_SOURCE_KIT === '1' });
   console.log(`STEP converter/source kit checked and prepared: ${manifest.version}`);
 }

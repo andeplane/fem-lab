@@ -56,12 +56,20 @@ describe('bounded evaluation generation', () => {
     one.reserve(request.model, 100, 1000).finish(usage);
     expect(() => one.reserve(request.model, 100, 1000)).toThrow('request limit');
   });
-  it('never counts or generates below the unchanged 30 GiB disk floor', async () => {
+  it('never counts or generates below the selected disk floor, including after earlier admitted requests', async () => {
     const p = provider(), count = vi.fn(async () => 100);
     const bounded = boundedProvider(p, new EvaluationBudget(limits), count, async () => requireFreeDisk(29.85 * 2 ** 30, 30 * 2 ** 30));
     expect(await drain(bounded.chat(request))).toContainEqual({ type: 'error', message: expect.stringContaining('30 GiB') });
     expect(count).not.toHaveBeenCalled(); expect(p.chat).not.toHaveBeenCalled();
     expect(() => requireFreeDisk(30 * 2 ** 30, 30 * 2 ** 30)).not.toThrow();
+    let freeGiB = 24;
+    const reuseProvider = provider(), reuseCount = vi.fn(async () => 100);
+    const reuse = boundedProvider(reuseProvider, new EvaluationBudget(limits), reuseCount, async () => requireFreeDisk(freeGiB * 2 ** 30, 24 * 2 ** 30));
+    await drain(reuse.chat(request));
+    freeGiB = 23.9;
+    expect(await drain(reuse.chat(request))).toContainEqual({ type: 'error', message: expect.stringContaining('24 GiB') });
+    expect(reuseProvider.chat).toHaveBeenCalledOnce();
+    expect(reuseCount).toHaveBeenCalledOnce();
   });
   it('restores spent budget only under identical resolved limits and refuses unresolved billing', () => {
     const budget = new EvaluationBudget(limits);

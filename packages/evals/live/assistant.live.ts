@@ -10,6 +10,7 @@ import { BrowserEvalAdapter, McpEvalAdapter } from '../src/adapters';
 import { boundedProvider, EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../src/budget';
 import { EVAL_CASES } from '../src/cases';
 import { prepareFrozenBuild, hashFrozenArtifacts } from '../src/frozen-build';
+import { preparationPolicy } from '../src/preparation-policy';
 import { markdownReport } from '../src/report';
 import { runLane, serializeArtifact, type EvaluationArtifact, type FrozenManifest, type EvalAdapter } from '../src/runner';
 import { laneResult } from '../src/score';
@@ -34,13 +35,17 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const previousBytes = resume ? await readFile(path.resolve(root, resume)) : undefined;
   const previous = previousBytes ? JSON.parse(previousBytes.toString()) as EvaluationArtifact : undefined;
   const sdkVersion = (JSON.parse(await readFile(path.join(root, 'node_modules/openai/package.json'), 'utf8')) as { version: string }).version;
-  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, minimumFreeGiB: 30, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
+  const reuseSource = process.env['FEMLAB_EVAL_WASM_SOURCE_MANIFEST'];
+  const reuseRuntime = process.env['FEMLAB_EVAL_WASM_RUNTIME_MANIFEST'];
+  const reusedWasm = reuseSource && reuseRuntime ? { sourceManifest: reuseSource, runtimeManifest: reuseRuntime } : undefined;
+  const diskPolicy = await preparationPolicy(root, reusedWasm, reference => execFileSync('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], { cwd: root, encoding: 'utf8' }));
+  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
   if (previous && (previous.format !== 'femlab-assistant-eval/1' || previous.manifest.gitCommit !== commit || previous.manifest.dirty || previous.manifest.specificationSha256 !== sha(JSON.stringify(EVAL_CASES)) || previous.manifest.provider !== 'openai' || previous.manifest.model !== model || JSON.stringify(previous.manifest.configuration) !== JSON.stringify(configuration) || previous.lanes.some(lane => !lane.live) || !previous.controls || previous.controls.caseInFlight !== false)) throw new Error('checkpoint configuration or frozen source differs; start a new evaluation');
   const budget = previous ? restoreEvaluationBudget(limits, previous.controls?.budget) : new EvaluationBudget(limits);
   const runStartedAt = previous?.manifest.startedAt ?? startedAt;
   const resources = async () => {
     const disk = await statfs(root);
-    requireFreeDisk(disk.bavail * disk.bsize, 30 * 2 ** 30);
+    requireFreeDisk(disk.bavail * disk.bsize, diskPolicy.minimumFreeGiB * 2 ** 30);
     if (Date.now() - Date.parse(runStartedAt) > maxWallMs) throw new Error('evaluation wall-time limit reached');
   };
   let caseInFlight = false;
@@ -53,9 +58,6 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
     return (await client.responses.inputTokens.count({ model: requestedModel, input, instructions, tools }, { signal: request.signal })).input_tokens;
   }, resources, () => persistProgress()) : unavailableProvider;
   const common = { provider, credential: key, model, ...controls };
-  const reuseSource = process.env['FEMLAB_EVAL_WASM_SOURCE_MANIFEST'];
-  const reuseRuntime = process.env['FEMLAB_EVAL_WASM_RUNTIME_MANIFEST'];
-  const reusedWasm = reuseSource && reuseRuntime ? { sourceManifest: reuseSource, runtimeManifest: reuseRuntime } : undefined;
   let unavailable: string | undefined = !key ? 'provider credential unavailable' : undefined;
   if (key && dirty) throw new Error('live evaluation requires a clean frozen commit');
   if (!unavailable && !reusedWasm && process.env['FEMLAB_EVAL_BUILD_ENGINE'] !== '1') unavailable = 'verified wasm receipts unavailable; supply both manifests or explicitly authorize an engine build';

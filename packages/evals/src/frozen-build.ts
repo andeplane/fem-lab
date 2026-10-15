@@ -20,8 +20,8 @@ export interface FrozenBuild {
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
-function run(command: string, args: string[], cwd: string): string {
-  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 1_800_000, stdio: ['ignore', 'pipe', 'inherit'] });
+function run(command: string, args: string[], cwd: string, environment?: NodeJS.ProcessEnv): string {
+  return execFileSync(command, args, { cwd, encoding: 'utf8', timeout: 1_800_000, stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, ...environment } });
 }
 
 /** Build HEAD, pack MCP, and install its actual tarball away from the checkout. */
@@ -31,7 +31,7 @@ export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm):
   try {
     const wasmProvenance = reusedWasm ? await verifyReusedWasm(root, reusedWasm, reference => run('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], root)) : undefined;
     if (!reusedWasm) run(process.execPath, ['tools/build-wasm.mjs'], root);
-    run(npm, ['run', 'build', '-w', 'packages/app'], root);
+    run(npm, ['run', 'build', '-w', 'packages/app'], root, reusedWasm ? { FEMLAB_REQUIRE_STEP_SOURCE_KIT: '1' } : undefined);
     const packedOutput = run(npm, ['pack', '--json', '--pack-destination', directory], path.join(root, 'packages/mcp'));
     const start = packedOutput.lastIndexOf('\n[') + 1;
     const packed = JSON.parse(packedOutput.slice(start)) as { filename: string }[];

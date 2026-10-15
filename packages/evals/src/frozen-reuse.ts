@@ -17,6 +17,7 @@ export async function verifyReusedWasm(root: string, reuse: ReusedWasm, changedC
   const source = JSON.parse(sourceBytes.toString()) as { head: string; productionSourcesIncludingShadersCargoAndToolchain: HashedFile[] };
   const runtime = JSON.parse(runtimeBytes.toString()) as { head: string; producer: string; runId: number; payloads: HashedFile[] };
   if (!/^[0-9a-f]{40}$/.test(source.head) || runtime.head !== source.head) throw new Error('reused wasm source identities differ');
+  if (!/^[0-9a-f]{40}$/.test(runtime.producer) || !Number.isSafeInteger(runtime.runId) || runtime.runId <= 0) throw new Error('reused wasm producer receipt is missing');
   if (changedCore(source.head).trim() !== '') throw new Error('reused wasm does not match the current engine source tree');
   if (source.productionSourcesIncludingShadersCargoAndToolchain.length === 0) throw new Error('reused wasm source manifest is empty');
   for (const file of source.productionSourcesIncludingShadersCargoAndToolchain) {
