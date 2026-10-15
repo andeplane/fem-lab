@@ -9,11 +9,13 @@ import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
+import type { ResultComparison } from '../result-comparison';
 import { lazy } from '../lazy';
 import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
+import { ComparisonControls, ComparisonPaneChrome } from './ResultComparison';
 import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
 import { ImportAbaqus, AbaqusImportReport } from './ImportAbaqus';
@@ -38,6 +40,8 @@ export interface AppProps {
   sessionKey?: string;
   dispatch: Dispatch;
   viewer: ViewerRef;
+  rightViewer?: ViewerRef;
+  comparison?: ResultComparison;
   /** Reads for the live parts of the form (`query.convert`); defaults to a no-op for tests. */
   query?: Query;
   /** `registry.list().commands`, which is what the ⌘K palette is a view of. */
@@ -494,12 +498,16 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
   );
 }
 
-function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+function ViewerPane({ s, store, dispatch, viewer, comparison, side = 'left' }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef; comparison?: ResultComparison; side?: 'left' | 'right' }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
   const [broken, setBroken] = useState('');
   useEffect(() => { setProbe(''); }, [s.transient?.generation, s.transient?.frame.index]);
-  const results = s.viewMode === 'results' && s.result !== null;
+  const comparing = s.viewMode === 'results' && s.resultComparison.configuration.mode !== 'single';
+  const paneName = s.resultComparison.configuration.mode === 'difference' ? 'difference' : side;
+  const pane = comparing ? s.resultComparison[paneName] : null;
+  const comparisonDeforms = paneName === 'difference' ? pane?.canDeform : s.resultComparison.left?.canDeform || s.resultComparison.right?.canDeform;
+  const results = s.viewMode === 'results' && s.result !== null && !comparing;
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
@@ -508,7 +516,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;
-    const onResize = () => v?.resize();
+    const onResize = () => { v?.resize(); comparison?.resize(); };
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
       try {
@@ -519,21 +527,31 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         return;
       }
       viewer.current = v;
-      v.setSelection(store.state.selection);
-      v.setHover(store.state.hover);
+      if (!comparison?.active) { v.setSelection(store.state.selection); v.setHover(store.state.hover); }
       viewer.onReady?.();
       v.onPick((p) => {
+        if (comparison?.active) {
+          const configuration = store.state.resultComparison.configuration;
+          const name = configuration.mode === 'difference' ? 'difference' : side;
+          const metadata = store.state.resultComparison[name];
+          if (p && metadata) void dispatch({ cmd: 'view.pickComparison', pane: name, resultId: metadata.operand.resultId,
+            at: p.point.map(value => ({ value, unit: 'm' })), ...(p.body ? { body: p.body } : {}), ...(p.face ? { face: p.face } : {}) }).catch(() => undefined);
+          return;
+        }
         const frame = store.state.transient?.frame;
         setProbe(`${probeLine(p)}${p && frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
+      v.onCameraChange(() => comparison?.cameraChanged(side));
+      v.onCameraEnd(() => { if (v) void dispatch({ cmd: 'view.setCamera', ...v.getCamera() }).catch(() => undefined); });
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
-        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
-        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        // The layout box catches splitters; the canvas CSS size also changes when comparison
+        // reserves a legend column without changing that box. The fixed CSS dimensions keep
+        // backing-buffer writes from feeding the observer. Resize then reads the actual pane.
         observer.observe(el.parentElement ?? el);
+        observer.observe(el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
@@ -545,18 +563,18 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch, store]);
+  }, [viewer, dispatch, store, comparison, side]);
 
-  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
-  useEffect(() => viewer.current?.setHover(s.hover), [viewer, s.hover]);
+  useEffect(() => { if (!comparing) viewer.current?.setSelection(s.selection); }, [viewer, s.selection, comparing]);
+  useEffect(() => { if (!comparing) viewer.current?.setHover(s.hover); }, [viewer, s.hover, comparing]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
   const reSolveBlocker = solveBlockers(s.model, s.result?.step ?? '')[0];
   return (
-    <div class="viewer">
-      <canvas ref={canvas} />
-      <div class="viewer-chrome">
+    <div class={`viewer${comparing ? ' comparison-pane' : ''}`} data-comparison-pane={comparing ? paneName : undefined} data-result-id={pane?.operand.resultId}>
+      <canvas ref={canvas} aria-label={comparing ? `${paneName} retained Result` : 'Model viewer'} data-cmd={comparing ? 'view.pickComparison' : 'selection.set'} />
+      {side === 'left' ? <div class="viewer-chrome">
         <div class="viewer-toolbar">
           <div class="segmented" role="group" aria-label="display mode">
             {MODES.map((mode) => (
@@ -582,7 +600,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             fit
           </Cmd>
         </div>
-        {ref ? (
+        {ref && !comparing ? (
           <div class="selection-chip">
             <span>@{ref}</span>
             <Cmd dispatch={dispatch} cmd="clipboard.copy" class="key" args={{ what: { kind: 'selection' } }}>
@@ -590,9 +608,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             </Cmd>
           </div>
         ) : null}
-        {s.pickInto ? <div class="selection-chip armed">click a face in the viewer to fill {s.pickInto.join('.')}</div> : null}
-      </div>
-      {stale ? (
+        {s.pickInto && !comparing ? <div class="selection-chip armed">click a face in the viewer to fill {s.pickInto.join('.')}</div> : null}
+      </div> : null}
+      {stale && !comparing ? (
         <div class="stale-banner" role="status">
           <span>
             Result is stale — Model changed after revision {s.result!.revision}.
@@ -605,9 +623,15 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       ) : null}
       {results ? <Legend s={s} dispatch={dispatch} /> : null}
       {results ? <DeformBar s={s} store={store} dispatch={dispatch} viewer={viewer} /> : null}
-      <SolvingCard s={s} dispatch={dispatch} />
-      <ErrorCard s={s} dispatch={dispatch} />
-      <div class="probe mono">{probe}</div>
+      {pane ? <ComparisonPaneChrome pane={pane} name={paneName} s={s} dispatch={dispatch} /> : null}
+      {comparing && comparisonDeforms && side === 'left' ? <div class="deform-bar comparison-deform">
+        <span>Shared deformation ×{formatNumber(s.deformScale)}</span>
+        <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'true' }}>True</Cmd>
+        <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'auto' }}>Auto</Cmd>
+        <input type="number" step="any" min="0" aria-label="comparison deformation scale" data-cmd="view.setDeformScale" value={s.deformScale} onChange={e => { const scale = Number(e.currentTarget.value); if (Number.isFinite(scale) && scale >= 0) void dispatch({ cmd: 'view.setDeformScale', scale }).catch(() => undefined); }} />
+      </div> : null}
+      {side === 'left' ? <><SolvingCard s={s} dispatch={dispatch} /><ErrorCard s={s} dispatch={dispatch} /></> : null}
+      {!comparing ? <div class="probe mono">{probe}</div> : null}
       {broken ? (
         <div class="hint">{broken}</div>
       ) : (s.model?.bodies.length ?? 0) === 0 ? (
@@ -689,7 +713,7 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
   );
 }
 
-function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps) {
+function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, commands = [] }: AppProps) {
   const s = useStore(store);
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
@@ -719,7 +743,13 @@ function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
               <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
-                <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
+                <div class="result-workspace">
+                  <ComparisonControls s={s} dispatch={dispatch} query={read} />
+                  <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>
+                    <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} comparison={comparison} />
+                    {rightViewer && s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? <ViewerPane s={s} store={store} dispatch={dispatch} viewer={rightViewer} comparison={comparison} side="right" /> : null}
+                  </div>
+                </div>
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
                 <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>

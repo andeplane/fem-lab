@@ -38,6 +38,7 @@ export interface CameraState {
   position: [number, number, number];
   target: [number, number, number];
   up?: [number, number, number];
+  zoom?: number;
 }
 export interface AnimationState {
   playing: boolean;
@@ -114,6 +115,8 @@ export class Viewer {
   private mode: ViewMode = 'geometry';
   private colormap: ColormapName = 'viridis';
   private field: Float32Array | null = null;
+  /** Missing difference samples remain neutral and unprobeable, independently of their staging value. */
+  private fieldValidity: Uint8Array | null = null;
   private fieldPer = 'node';
   private range: [number, number] = [0, 1];
   /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
@@ -130,6 +133,9 @@ export class Viewer {
   private readonly layerVisibility = new Map<string, boolean>();
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   private pickCb: ((p: Pick | null) => void) | null = null;
+  private cameraChangeCb: (() => void) | null = null;
+  private cameraEndCb: (() => void) | null = null;
+  private comparisonFrameHeight: number | null = null;
   private frame = 0;
   private disposed = false;
   private animation: AnimationState = { playing: false, phase: 0.25, speed: 1 };
@@ -165,7 +171,8 @@ export class Viewer {
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = false;
-    this.controls.addEventListener('change', () => this.render());
+    this.controls.addEventListener('change', () => { this.render(); this.cameraChangeCb?.(); });
+    this.controls.addEventListener('end', () => this.cameraEndCb?.());
 
     canvas.addEventListener('click', this.click);
     canvas.addEventListener('pointermove', this.pointerMove);
@@ -178,6 +185,10 @@ export class Viewer {
   onPick(cb: (p: Pick | null) => void): void {
     this.pickCb = cb;
   }
+
+  /** Continuous pane synchronization and one final registry Command per orbit gesture. */
+  onCameraChange(cb: () => void): void { this.cameraChangeCb = cb; }
+  onCameraEnd(cb: () => void): void { this.cameraEndCb = cb; }
 
   /** Persistent selection and transient Journal hover share the same drawable name boundary. */
   setSelection(s: { bodies: string[]; faces: string[]; sets: string[] }): void {
@@ -379,9 +390,11 @@ export class Viewer {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
           const entity = this.fieldPer === 'elementNode' ? s.triElementNode?.[t * 3 + k] : this.fieldPer === 'element' ? s.triElement?.[t] : this.vert[vertex];
-          const value = entity === undefined ? lo : this.field[entity] ?? lo;
-          const [r, g, b] = sample(this.colormap, (value - lo) / span);
-          c.setRGB(r, g, b);
+          if (entity === undefined || this.fieldValidity && !this.fieldValidity[entity]) c.setScalar(GREY_MESH);
+          else {
+            const [r, g, b] = sample(this.colormap, ((this.field[entity] ?? lo) - lo) / span);
+            c.setRGB(r, g, b);
+          }
         } else if (this.mode === 'mesh') {
           c.setScalar(grey);
         } else {
@@ -410,9 +423,11 @@ export class Viewer {
           const node = s.edges?.[edge * 2 + k];
           if (this.mode === 'results' && this.field) {
             const entity = this.fieldPer === 'elementNode' ? s.edgeElementNode?.[edge * 2 + k] : this.fieldPer === 'element' ? s.edgeElement?.[edge] : node;
-            const value = entity === undefined ? lo : this.field[entity] ?? lo;
-            const [r, g, b] = sample(this.colormap, (value - lo) / span);
-            c.setRGB(r, g, b);
+            if (entity === undefined || this.fieldValidity && !this.fieldValidity[entity]) c.setScalar(GREY_MESH);
+            else {
+              const [r, g, b] = sample(this.colormap, ((this.field[entity] ?? lo) - lo) / span);
+              c.setRGB(r, g, b);
+            }
           } else {
             c.set(0xbac3d0);
           }
@@ -489,8 +504,17 @@ export class Viewer {
       throw new FemError('internal', 'the Result surface has no edge element field mapping', 'view.showField', 'query.surface with this Result id');
     }
     this.field = values;
+    this.fieldValidity = null;
     this.fieldPer = per;
     this.range = range;
+    this.paint();
+    this.render();
+  }
+
+  setFieldValidity(validity: Uint8Array | null): void {
+    if (validity && (!this.field || validity.length !== this.field.length))
+      throw new FemError('internal', 'field coverage does not match the displayed entity count');
+    this.fieldValidity = validity;
     this.paint();
     this.render();
   }
@@ -612,6 +636,8 @@ export class Viewer {
     this.frameOrtho();
     this.setCamera(state);
   }
+  getProjection(): 'perspective' | 'orthographic' { return this.camera === this.orthographic ? 'orthographic' : 'perspective'; }
+  viewportAspect(): number { return (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480); }
 
   setTheme(theme: 'dark' | 'light'): void {
     this.scene.background = new Color(theme === 'dark' ? 0x0d0f13 : 0xf3f4f6);
@@ -688,17 +714,24 @@ export class Viewer {
     this.preset('iso');
   }
 
-  preset(view: ViewPreset): void {
-    const size = this.box.getSize(new Vector3());
-    const centre = this.box.getCenter(new Vector3());
+  preset(view: ViewPreset, bounds?: { min: [number, number, number]; max: [number, number, number] }, fitAspect?: number): void {
+    const box = bounds ? new Box3(new Vector3(...bounds.min), new Vector3(...bounds.max)) : this.box;
+    const size = box.getSize(new Vector3());
+    const centre = box.getCenter(new Vector3());
     const radius = Math.max(size.length() * 0.5, 1e-6);
-    const eye = centre.clone().add(new Vector3(...DIRECTIONS[view]).normalize().multiplyScalar(radius * 3.2));
+    // Comparison panes can be much narrower than the original single canvas. Fit the shared
+    // perspective eye to the narrowest pane; ordinary single-Result presets retain their span.
+    const aspect = this.camera === this.perspective ? Math.min(1, fitAspect ?? 1) : 1;
+    const eye = centre.clone().add(new Vector3(...DIRECTIONS[view]).normalize().multiplyScalar(radius * 3.2 / aspect));
+    this.camera.zoom = 1;
+    this.camera.updateProjectionMatrix();
     this.setCamera({ position: [eye.x, eye.y, eye.z], target: [centre.x, centre.y, centre.z] });
   }
 
   setCamera(c: CameraState): void {
     this.camera.position.set(...c.position);
     if (c.up) this.camera.up.set(...c.up);
+    if (c.zoom !== undefined) { this.camera.zoom = c.zoom; this.camera.updateProjectionMatrix(); }
     this.controls.target.set(...c.target);
     this.frameOrtho();
     this.camera.lookAt(this.controls.target);
@@ -710,7 +743,20 @@ export class Viewer {
     const p = this.camera.position;
     const t = this.controls.target;
     const u = this.camera.up;
-    return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z], up: [u.x, u.y, u.z] };
+    return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z], up: [u.x, u.y, u.z], ...(this.camera.zoom === 1 ? {} : { zoom: this.camera.zoom }) };
+  }
+
+  /** Equal world-space vertical span across panes even when their retained meshes differ. */
+  setComparisonFrameHeight(height: number | null): void {
+    this.comparisonFrameHeight = height;
+    this.frameOrtho();
+    this.render();
+  }
+  getCameraZoom(): number { return this.camera.zoom; }
+  setCameraZoom(zoom: number): void {
+    this.camera.zoom = zoom;
+    this.camera.updateProjectionMatrix();
+    this.render();
   }
 
   /**
@@ -772,6 +818,8 @@ export class Viewer {
     this.canvas.removeEventListener('pointermove', this.pointerMove);
     this.canvas.removeEventListener('pointerleave', this.pointerLeave);
     this.pickCb = null;
+    this.cameraChangeCb = null;
+    this.cameraEndCb = null;
     this.controls.dispose();
     this.disposeSurface();
     this.disposeChrome();
@@ -779,6 +827,7 @@ export class Viewer {
     this.scene.clear();
     this.surface = null;
     this.field = null;
+    this.fieldValidity = null;
     this.deformation = null;
     this.base = new Float32Array(0);
     this.vert = new Uint32Array(0);
@@ -822,7 +871,7 @@ export class Viewer {
         body: s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null,
         point: [hit.point.x, hit.point.y, hit.point.z],
         node,
-        value: entity != null && this.field ? (this.field[entity] ?? null) : null,
+        value: entity != null && this.field && (!this.fieldValidity || this.fieldValidity[entity]) ? (this.field[entity] ?? null) : null,
       };
     }
     if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
@@ -835,7 +884,7 @@ export class Viewer {
       body: s.bodyNames[s.triBody[t]!] ?? null,
       point: [hit.point.x, hit.point.y, hit.point.z],
       node,
-      value: fieldIndex != null && this.field ? (this.field[fieldIndex] ?? null) : null,
+      value: fieldIndex != null && this.field && (!this.fieldValidity || this.fieldValidity[fieldIndex]) ? (this.field[fieldIndex] ?? null) : null,
     };
   }
 
@@ -886,7 +935,7 @@ export class Viewer {
   }
 
   private frameOrtho(aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480)): void {
-    const h = Math.max(this.box.getSize(new Vector3()).length() * 0.7, 1e-6);
+    const h = this.comparisonFrameHeight ?? Math.max(this.box.getSize(new Vector3()).length() * 0.7, 1e-6);
     Object.assign(this.orthographic, { left: -h * aspect, right: h * aspect, top: h, bottom: -h });
     this.orthographic.updateProjectionMatrix();
   }
