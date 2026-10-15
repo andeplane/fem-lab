@@ -10,7 +10,39 @@ async function ready(page: Page) {
 }
 
 test.describe('@cpu project file host', () => {
-  test('scoped native files, scripts, exports, shared context and remembered handles survive reload', async ({ page }) => {
+  test('the actual native picker sees click activation and a nongesture request remains a structured refusal', async ({ page }) => {
+    await page.goto('./'); await ready(page);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+    const cdp = await page.context().newCDPSession(page);
+    // Playwright evaluate() enables CDP userGesture itself. Use an explicit false CDP call and
+    // let its previous activation expire before checking the browser's real permission guard.
+    const denied = await cdp.send('Runtime.evaluate', {
+      expression: `(async () => {
+        await new Promise(resolve => setTimeout(resolve, 6000));
+        const active = navigator.userActivation.isActive;
+        try { await window.fem.dispatch({cmd:'folder.open',picker:true}); return {active,error:null}; }
+        catch (error) { return {active,error:{code:error.code,cause:error.cause}}; }
+      })()`,
+      userGesture: false, awaitPromise: true, returnByValue: true,
+    });
+    expect(denied.result.value).toMatchObject({ active: false, error: { code: 'file.scope', cause: expect.stringContaining('SecurityError') } });
+    // Instrument, without substituting, the native browser picker. Headless Chromium cancels
+    // its OS chooser; that cancellation is distinct from losing click activation en route.
+    await page.evaluate(() => {
+      const target = window as unknown as { showDirectoryPicker: (options: unknown) => Promise<FileSystemDirectoryHandle>; pickerProbe?: { active: boolean; error?: string } };
+      const native = target.showDirectoryPicker.bind(window);
+      target.showDirectoryPicker = async options => {
+        target.pickerProbe = { active: navigator.userActivation.isActive };
+        try { return await native(options); }
+        catch (error) { target.pickerProbe.error = (error as Error).name; throw error; }
+      };
+    });
+    await page.locator('aside.assistant').getByTitle('Open a project folder', { exact: true }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { pickerProbe?: unknown }).pickerProbe)).toEqual({ active: true, error: 'AbortError' });
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folder' }))).toBeNull();
+  });
+
+  test('scoped OPFS files, scripts, exports, shared context and remembered handles survive reload', async ({ page }) => {
     await page.goto('./');
     await ready(page);
     await page.evaluate(async () => {
@@ -92,13 +124,16 @@ test.describe('@cpu project file host', () => {
         request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
       });
       try {
-        return await new Promise<string | null>((resolve, reject) => {
+        return await new Promise<{ name: string; commands: number } | null>((resolve, reject) => {
           const request = db.transaction('revisions', 'readonly').objectStore('revisions').get('last');
-          request.onsuccess = () => resolve((request.result as { name: string }[] | undefined)?.[0]?.name ?? null);
+          request.onsuccess = () => {
+            const saved = (request.result as { name: string; cmds: unknown[] }[] | undefined)?.[0];
+            resolve(saved ? { name: saved.name, commands: saved.cmds.length } : null);
+          };
           request.onerror = () => reject(request.error);
         });
       } finally { db.close(); }
-    })).toBe('saved-project');
+    })).toEqual({ name: 'saved-project', commands: 3 });
     await page.reload(); await ready(page);
     expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folder' }))).toBeNull();
     expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folderRecent' }))).toEqual({ name: 'project-13' });
@@ -106,7 +141,8 @@ test.describe('@cpu project file host', () => {
     expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.autosave' }))).toMatchObject({ enabled: true, saved: { name: 'saved-project', commands: 3 } });
     await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
     await drawer.getByRole('button', { name: 'reopen project-13', exact: true }).click();
-    await expect(drawer).toContainText('AGENTS.md');
+    await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.folder' }))).toMatchObject({ name: 'project-13', agentsMd: 'AGENTS.md' });
+    await expect(drawer).toContainText('/project-13');
     expect(await page.evaluate(() => window.fem.dispatch({ cmd: 'file.read', path: 'AGENTS.md' }))).toEqual({ text: 'Externally revised rules.' });
     await drawer.locator('[data-cmd="folder.close"]').click();
     await expect(drawer).toContainText('open a project folder');
