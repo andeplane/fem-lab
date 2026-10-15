@@ -124,7 +124,10 @@ jobs:
       # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
+      - name: install pinned browser atomics toolchain
+        run: rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
       - run: node tools/build-wasm.mjs
+      - run: node tools/build-wasm-threads.mjs
       - run: cargo build -p femlab --release
       - run: ./target/release/femlab schema --out engine.schema.json
       - uses: actions/upload-artifact@v4
@@ -132,6 +135,7 @@ jobs:
           name: wasm
           path: |
             packages/app/src/generated/wasm
+            packages/app/src/generated/wasm-threads
             tools/wasm-node
             engine.schema.json
             target/release/femlab

@@ -45,3 +45,30 @@ still hold.
 - The second service worker problem Atomify hit (JupyterLite owning the scope) recurs when
   phase Py brings Pyodide: fold the header logic into one worker as Atomify's
   `jupyter_coi_patch.py` does, rather than registering two.
+
+## Browser implementation (#17)
+
+The portable stable-1.94 browser and Node modules remain a matched pair. A separate
+`wasm-threads` feature builds the browser-only shared-memory module with
+`tools/build-wasm-threads.mjs` and pinned `nightly-2026-09-05` (`build-std=panic_abort,std`).
+The build limits shared memory to the existing wasm32 4 GiB ceiling; this is a maximum,
+not a reservation. Native builds and portable wasm retain the stable toolchain.
+
+Each dedicated session Worker owns one wasm module and one wasm-bindgen-rayon pool.
+The browser host selects this runtime only with cross-origin isolation and
+SharedArrayBuffer, initializes the pool before any session or replacement candidate,
+and reuses that pool for candidates. Changing the pool size requires a new Worker;
+a mismatched constructor request is a structured schema error. Portable wasm reports
+one actual thread regardless of a caller's requested count. The engine itself neither
+spawns browser Workers nor reads browser capabilities. Parallel assembly, postprocessing
+and fixed-partition f64 direct solves use the same Rayon algorithms as native hosts.
+
+Chromium smoke tests cover both server COOP/COEP and headerless Pages service-worker
+isolation. They compare exact Journal hashes and IEEE-754 field bytes at one and four
+workers, and check an axial bar against F L / EA and force balance at 2/4/8 cells.
+A headerless document without service workers exercises the portable module and its
+visible single-thread note. Pool initialization failures remain explicit errors; they
+do not silently claim that a requested pool exists.
+
+Upstream build and initialization contract:
+https://github.com/RReverser/wasm-bindgen-rayon/tree/v1.3.0

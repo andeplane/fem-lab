@@ -3079,3 +3079,14 @@ the author values nor either declared tolerance is changed.
 The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
 checking the closed-form extension, Poisson contraction and recovered stress through the
 actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.
+
+### Browser CPU thread determinism (#17)
+
+`packages/app/e2e/browser-threads.spec.ts` runs actual Chromium shared-memory wasm
+at one and four workers under both server COOP/COEP and service-worker isolation.
+A 1 m bar of 0.01 m² area, E=200 GPa and ν=0 under 1000 N axial traction has
+u_tip=F L/(E A)=5e-7 m and support reaction -1000 N. Hex8 grids of 2/4/8 cells must
+retain those closed-form values and bit-identical displacement, stress, reaction and
+Journal hashes at both thread counts. This affine patch is exact at every grid;
+no nonzero discretization convergence rate is asserted. The portable fallback must
+report one real CPU thread and display its isolation note.

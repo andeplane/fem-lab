@@ -9,13 +9,15 @@ Start with the [documentation index](docs/README.md), [getting-started guide](do
 
 ## Run it
 
-You need Rust 1.94 with the `wasm32-unknown-unknown` target and Node 22. Chromium is the
-supported browser (ADR 0014).
+You need Rust 1.94 with the `wasm32-unknown-unknown` target, the pinned browser-thread
+toolchain below, and Node 22. Chromium is the supported browser (ADR 0014).
 
 ```sh
 cargo install --locked wasm-bindgen-cli --version "$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)"
 npm ci
-node tools/build-wasm.mjs      # engine → packages/app/src/generated/wasm (gitignored)
+node tools/build-wasm.mjs      # paired portable browser + Node engines (gitignored)
+rustup toolchain install nightly-2026-09-05 --profile minimal --component rust-src --target wasm32-unknown-unknown
+node tools/build-wasm-threads.mjs # separate browser-only shared-memory engine (gitignored)
 npm run dev                    # http://localhost:5173/fem-lab/
 ```
 
