@@ -8,6 +8,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import corpus
 
@@ -28,6 +29,56 @@ PRINTED = """
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_canonical_source_step_selects_the_reported_engine_target(self):
+        report = {"analyses": [{"sourceStep": "OTHER", "step": "first-engine-target"},
+                               {"sourceStep": "STEP-1", "step": "second-engine-target"}]}
+        self.assertEqual(corpus.analysis_target(report, "STEP-1"), "second-engine-target")
+        for changed in [report, {"analyses": report["analyses"] * 2},
+                        {"analyses": [{"sourceStep": "STEP-1", "step": None}]},
+                        {"analyses": [{"sourceStep": "STEP-1", "step": ""}]}]:
+            expected = "Step-1" if changed is report else "STEP-1"
+            with self.assertRaisesRegex(ValueError, "canonical source step"):
+                corpus.analysis_target(changed, expected)
+        manifest = json.loads(corpus.MANIFEST.read_text())
+        case = next(case for case in manifest["comparisons"] if case["id"] == "author-abaqus-case06")
+        self.assertEqual(case["step"], "STEP-1")
+
+    def test_comparison_solves_and_queries_the_reported_engine_target(self):
+        case = {"id": "mapped-analysis", "deck": "deck.inp", "step": "STEP-1", "reference": "unused",
+                "nodes": 1, "elements": 1, "unitLength": "1 m", "unitForce": "1 N",
+                "referenceDisplacementScaleToMetres": 1, "displacementRelativeTolerance": 2e-6,
+                "displacementAbsoluteToleranceMetres": 1e-13, "totalAppliedForceNewtons": [0, 0, 0]}
+        targeted_queries = []
+        with tempfile.TemporaryDirectory(prefix="femlab-656-mapped-analysis-") as directory:
+            root = Path(directory)
+            (root / "deck.inp").write_text("*STEP,NAME=Step-1\n")
+            native = root / "not-executed-native"
+            native.write_bytes(b"unit-test device boundary; never executed")
+
+            def execute(_native, arguments, folder, name):
+                if name == "convert":
+                    (folder / "imported.femlab.json").write_text(json.dumps({"journal": {"entries": []}}))
+                    return {"sha256": corpus.digest((root / "deck.inp").read_bytes()), "analysisConfigured": True,
+                            "analyses": [{"sourceStep": "STEP-1", "step": "actual-engine-target"}]}
+                script = json.loads(Path(arguments[1]).read_text())
+                self.assertEqual(script, [{"cmd": "solve.run", "step": "actual-engine-target", "solver": "cpu-direct"}])
+                queries = [json.loads(arguments[i + 1]) for i, arg in enumerate(arguments) if arg == "--query"]
+                for query in queries:
+                    if query["query"] in ["query.result", "query.field"]:
+                        self.assertEqual(query["step"], "actual-engine-target")
+                        targeted_queries.append(query)
+                return [{"stale": False}, {"nodes": 1, "elements": 1, "sourceLabels": {"nodes": [7]}}, {},
+                        {"unit": "m", "components": 3, "values": [0, 0, 0]},
+                        {"unit": "Pa", "components": 6, "values": [0] * 6},
+                        {"unit": "N", "components": 3, "values": [0, 0, 0]}]
+
+            with patch.object(corpus, "check_sources"), patch.object(corpus, "execute", side_effect=execute), \
+                    patch.object(corpus, "case_reference", return_value={7: [0, 0, 0]}):
+                receipt = corpus.compare({"comparisons": [case]}, root, native, root / "proof", [case["id"]])
+            self.assertTrue(receipt["completed"])
+            self.assertTrue(receipt["cases"][0]["native1And4Exact"])
+        self.assertEqual(len(targeted_queries), 8)
+
     def test_offline_lgpl_fixture_preserves_original_bytes_and_all_author_vectors(self):
         folder = corpus.ROOT / "crates/engine/tests/fixtures/third-party/brief-finite-element-net/case06"
         provenance = json.loads((folder / "provenance.json").read_text())

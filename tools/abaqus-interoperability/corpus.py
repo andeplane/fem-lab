@@ -312,6 +312,15 @@ def without_clock(value):
     return value
 
 
+def analysis_target(report, source_step):
+    # Manifest identities are canonical source names (unquoted Abaqus names are
+    # uppercase). Engine targets may differ; use the converter's explicit mapping.
+    matches = [analysis for analysis in report["analyses"] if analysis["sourceStep"] == source_step]
+    if len(matches) != 1 or not isinstance(matches[0].get("step"), str) or not matches[0]["step"]:
+        raise ValueError(f"expected exactly one configured analysis for canonical source step {source_step}")
+    return matches[0]["step"]
+
+
 def execute(native, arguments, directory, name):
     command = [str(native), *arguments]
     completed = subprocess.run(command, capture_output=True, timeout=120, check=False)
@@ -381,16 +390,17 @@ def compare(manifest, source, native, destination, selected):
             report = execute(native, args, folder, "convert")
             if report["sha256"] != digest(deck.read_bytes()) or not report["analysisConfigured"]:
                 raise ValueError("import report source identity/analysis configuration mismatch")
+            step = analysis_target(report, case["step"])
             portable = json.loads(model.read_bytes())
             commands = [entry["cmd"] for entry in portable["journal"]["entries"]]
             if any(command["cmd"] == "solve.run" for command in commands):
                 raise ValueError("conversion unexpectedly solved")
-            commands.append({"cmd": "solve.run", "step": case["step"], "solver": "cpu-direct"})
+            commands.append({"cmd": "solve.run", "step": step, "solver": "cpu-direct"})
             script = folder / "explicit-solve.json"
             write_once(script, json_bytes(commands))
-            queries = [{"query": "query.result", "step": case["step"]}, {"query": "query.mesh"},
+            queries = [{"query": "query.result", "step": step}, {"query": "query.mesh"},
                        {"query": "query.surface", "resultId": "result-1"}]
-            queries += [{"query": "query.field", "step": case["step"], "field": field}
+            queries += [{"query": "query.field", "step": step, "field": field}
                         for field in ["displacement", "stress", "reaction"]]
             runs = []
             for threads in [1, 4]:

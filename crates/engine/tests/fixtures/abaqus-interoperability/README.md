@@ -32,6 +32,12 @@ directories prevent old output being mistaken for a new run. Raw CLI arguments, 
 stdout/stderr, portable imported files, explicit solve scripts and comparison receipts remain
 external. An incomplete run records `completed: false` and exits unsuccessfully.
 
+Each manifest `step` is the canonical source identity: unquoted Abaqus names are uppercase,
+so the original `Step-1` is identified as `STEP-1` without changing its source bytes. The
+harness requires exactly one matching `analyses[].sourceStep` in the conversion report and
+uses that entry's engine `step` for the explicit solve and all Result/field queries. It does
+not assume that a source spelling is an engine target or silently select the first analysis.
+
 ## Official CalculiX comparison cases
 
 [The manifest](../../../../../tools/abaqus-interoperability/corpus.json) pins the original

@@ -257,7 +257,7 @@
       "elements": 160,
       "unitLength": "1 m",
       "unitForce": "1 N",
-      "step": "Step-1",
+      "step": "STEP-1",
       "referenceDisplacementScaleToMetres": 1,
       "displacementRelativeTolerance": 2e-06,
       "displacementAbsoluteToleranceMetres": 1e-13,
