@@ -8,7 +8,7 @@
   "taxClassificationConfirmed": false,
   "taxMode": "not_collecting",
   "taxCollectionDecisionConfirmed": true,
-  "policyUrlsConfirmed": false,
+  "policyUrlsConfirmed": true,
   "stagingCheckoutVerified": false,
   "webhookVerified": false,
   "activeTaxRegistrationVerified": false,
@@ -20,7 +20,7 @@
   "portalConfiguration": "bpc_1UQmVGAAtmJJ65hfytjrG5vG",
   "webhook": {
     "id": "we_1UQmVHAAtmJJ65hfv9xlOJ19",
-    "enabled": false,
+    "enabled": true,
     "url": "https://femlab-api-dhphcl4vma-ey.a.run.app/v1/billing/webhook",
     "events": ["invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "charge.refunded", "charge.dispute.created"],
     "secretName": "stripe-webhook-secret"

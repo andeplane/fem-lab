@@ -8,7 +8,7 @@
   "taxClassificationConfirmed": false,
   "taxMode": "not_collecting",
   "taxCollectionDecisionConfirmed": true,
-  "policyUrlsConfirmed": false,
+  "policyUrlsConfirmed": true,
   "stagingCheckoutVerified": false,
   "webhookVerified": false,
   "activeTaxRegistrationVerified": false,
