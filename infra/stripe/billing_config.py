@@ -22,12 +22,19 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
         raise ValueError('Billing project and mode must match the release environment.')
     if catalog['account'] != 'acct_1UQmBTAAtmJJ65hf':
         raise ValueError('Billing catalog must belong to the selected FEM Lab Stripe account.')
+    tax_mode = catalog.get('taxMode', 'pending')
+    if tax_mode not in ('pending', 'automatic', 'not_collecting'):
+        raise ValueError('Invalid Stripe tax mode.')
     enabled = activation == 'enabled' or (activation == 'preserve' and previous_enabled)
     if enabled:
+        if tax_mode == 'pending':
+            raise ValueError('Billing activation requires an explicit taxMode decision: automatic or not_collecting.')
         gates = GATES + (('stagingCheckoutVerified', 'webhookVerified') if mode == 'live' else ())
         missing = [gate for gate in gates if catalog.get(gate) is not True]
         if missing:
             raise ValueError('Billing activation requires recorded acceptance: ' + ', '.join(missing))
+        if tax_mode == 'automatic' and catalog.get('activeTaxRegistrationVerified') is not True:
+            raise ValueError('Automatic tax activation requires activeTaxRegistrationVerified evidence.')
     versions = {}
     for secret in ('stripe-api-key', 'stripe-webhook-secret'):
         result = run('secrets', 'versions', 'list', secret, '--filter=state:ENABLED', '--sort-by=~createTime', '--limit=1', '--format=value(name)', optional=True)
@@ -39,7 +46,7 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
     if len(versions) != 2:
         if enabled:
             raise ValueError('Billing activation requires both Stripe runtime and webhook secrets.')
-        return {'env': {'BILLING_ENABLED': 'false'}, 'secrets': {}, 'mode': mode}
+        return {'env': {'BILLING_ENABLED': 'false', 'BILLING_TAX_MODE': tax_mode}, 'secrets': {}, 'mode': mode}
     # This stdout remains in this process. Never include it in logs or release manifests.
     key = run('secrets', 'versions', 'access', versions['stripe-api-key'], '--secret=stripe-api-key').stdout.strip()
     try:
@@ -47,7 +54,7 @@ def resolve(environment, project, run, previous_enabled=False, activation='prese
         verify(key, mode, catalog)
     finally:
         key = ''
-    variables = {'BILLING_ENABLED': str(enabled).lower(), 'BILLING_MODE': mode,
+    variables = {'BILLING_ENABLED': str(enabled).lower(), 'BILLING_MODE': mode, 'BILLING_TAX_MODE': tax_mode,
                  'STRIPE_PORTAL_CONFIGURATION': catalog['portalConfiguration']}
     for plan in ('plus', 'pro', 'studio'):
         price = catalog['plans'][plan]['price']

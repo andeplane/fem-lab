@@ -87,7 +87,15 @@ Without both enabled secrets it reports billing disabled. With both, it verifies
 the runtime key against the exact catalog and emits only public environment values
 and pinned secret references, never key bytes. A normal service release now binds
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `BILLING_MODE`, the three prices and
-Portal configuration to **both** the API and recovery job. Production's return
+Portal configuration to **both** the API and recovery job, together with
+`BILLING_TAX_MODE`. The public manifest's `taxMode` is `pending`, `automatic`, or
+`not_collecting`. Pending or unknown collection decisions cannot enable checkout;
+disabled billing still prepares webhook and recovery processing. Automatic
+collection requires the owner-confirmed decision and separately verified active
+registration evidence. An explicit owner-confirmed non-collection decision does
+not require fabricating a registration. Both manifests remain pending; the code
+does not infer the owner's tax obligations from company or Stripe account status.
+Production's return
 origin is `https://femlab.app`; staging uses its own Hosting origin.
 
 `release-service.py --billing preserve` is the default: it retains an active
@@ -126,10 +134,15 @@ recovery-job and traffic rollback gates remain in place.
    The owner must confirm the classification and where the business is already
    registered; Stripe account activation is not evidence of VAT registration.
    Record confirmed registrations only after explicit owner authorization.
-   `automatic_tax` currently exists in the checkout adapter; it does not collect
-   tax anywhere without an applicable registration. Never describe that as verified
-   tax collection. Run a test calculation and inspect `taxability_reason` once the
-   collection decision is configured.
+   The adapter enables `automatic_tax` only for `taxMode=automatic`, and release
+   activation requires `activeTaxRegistrationVerified=true` as well as the owner's
+   decision. `taxMode=not_collecting` explicitly sends `automatic_tax.enabled=false`
+   after the owner confirms that collection policy. Neither mode is selected by
+   default. Automatic tax does not collect in a jurisdiction without an applicable
+   registration; never describe that as verified tax collection. Run a test
+   calculation and inspect `taxability_reason` for an automatic collection setup.
+   A later change of tax policy does not retroactively reconfigure existing Stripe
+   subscriptions or completed invoices; handle that as a separately reviewed change.
 4. Enable the staging consumer before its webhook, then test real hosted Checkout
    using Stripe test payment details, paid invoice grant, duplicate delivery,
    renewal, failed payment, cancellation, scheduled plan change, refund/dispute
@@ -178,12 +191,16 @@ choosing one as the default; token price alone is insufficient.
 
 ## Verification
 
-Eleven Python checks exercise secret stdin handling, mode/owner/currency/product
+Thirteen Python checks exercise secret stdin handling, mode/owner/currency/product
 guards, error redaction, missing-key refusal, explicit activation gates,
 preservation across releases, pinned references and both API/recovery bindings.
 The release orchestration check uses fake cloud boundaries and verifies the
 canonical return origin, separate database credentials and retained rollback
-revision. Both live read-only preflights currently report billing disabled because
+revision, including the same explicit tax mode on API and recovery job. Adapter
+tests inspect the actual SDK request body for automatic collection and explicit
+non-collection, reject pending checkout before a network request, and verify that
+enabled runtime configuration refuses a missing or unknown collection decision.
+Both live read-only preflights currently report billing disabled because
 the runtime keys have not been installed. Stripe API readbacks confirmed all six
 prices, both restricted Portal configurations and both version-pinned webhook
 resources. No paid checkout, tax collection or live charge is claimed verified.

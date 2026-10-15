@@ -5,11 +5,12 @@
   "apiVersion": "2026-09-30.endive",
   "billingEnabled": false,
   "taxClassificationConfirmed": false,
+  "taxMode": "pending",
   "taxCollectionDecisionConfirmed": false,
   "policyUrlsConfirmed": false,
   "stagingCheckoutVerified": false,
   "webhookVerified": false,
-  "activeTaxRegistrationsConfirmed": false,
+  "activeTaxRegistrationVerified": false,
   "plans": {
     "plus": {"product": "femlab_plus_2026_10", "price": "price_1UQmUHAAtmJJ65hfQVF4VCnb", "amountUsdCents": 4900, "credits": 4000000},
     "pro": {"product": "femlab_pro_2026_10", "price": "price_1UQmUIAAtmJJ65hfQACv6dMm", "amountUsdCents": 14900, "credits": 16000000},

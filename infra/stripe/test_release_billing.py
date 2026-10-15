@@ -16,6 +16,7 @@ class ReleaseBillingTests(unittest.TestCase):
         output = {}
         manifest = {'buildId': 'abc12345-0000', 'image': 'europe-west3-docker.pkg.dev/femlab-app/femlab/service:commit', 'revision': 'commit'}
         binding = {'env': {'BILLING_ENABLED': 'true', 'BILLING_MODE': 'live',
+                           'BILLING_TAX_MODE': 'not_collecting',
                            'STRIPE_PRICE_PLUS': 'price_plus', 'STRIPE_PRICE_PRO': 'price_pro',
                            'STRIPE_PRICE_STUDIO': 'price_studio', 'STRIPE_PORTAL_CONFIGURATION': 'bpc_portal'},
                    'secrets': {'STRIPE_SECRET_KEY': 'stripe-api-key:8', 'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:7'},

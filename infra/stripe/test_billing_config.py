@@ -20,6 +20,7 @@ class BillingConfigTests(unittest.TestCase):
         self.missing_key = False
         for mode in ('test', 'live'):
             catalog = json.loads(Path(__file__).with_name(mode + '.json').read_text())
+            catalog['taxMode'] = 'not_collecting'
             for gate in config.GATES + ('stagingCheckoutVerified', 'webhookVerified'):
                 catalog[gate] = True
             (self.root / (mode + '.json')).write_text(json.dumps(catalog))
@@ -34,7 +35,7 @@ class BillingConfigTests(unittest.TestCase):
     def test_unconfigured_remains_disabled_and_does_not_read_any_key(self):
         self.missing_key = True
         result = config.resolve('staging', 'femlab-app-staging', self.gcloud, root=self.root)
-        self.assertEqual(result['env'], {'BILLING_ENABLED': 'false'})
+        self.assertEqual(result['env'], {'BILLING_ENABLED': 'false', 'BILLING_TAX_MODE': 'not_collecting'})
         self.assertEqual(result['secrets'], {})
         self.assertFalse(any('access' in args for args in self.calls))
 
@@ -45,6 +46,7 @@ class BillingConfigTests(unittest.TestCase):
         self.assertEqual(verified, [('test', 'femlab-app-staging')])
         self.assertEqual(result['env']['BILLING_ENABLED'], 'false')
         self.assertEqual(result['env']['BILLING_MODE'], 'test')
+        self.assertEqual(result['env']['BILLING_TAX_MODE'], 'not_collecting')
         self.assertEqual(result['secrets'], {'STRIPE_SECRET_KEY': 'stripe-api-key:7', 'STRIPE_WEBHOOK_SECRET': 'stripe-webhook-secret:7'})
         self.assertNotIn('rk_test_', json.dumps(result))
 
@@ -76,6 +78,40 @@ class BillingConfigTests(unittest.TestCase):
             config.resolve('production', 'femlab-app-staging', self.gcloud, root=self.root)
         with self.assertRaisesRegex(ValueError, 'restricted live'):
             config.resolve('production', 'femlab-app', self.gcloud, root=self.root)
+
+    def test_pending_or_unknown_tax_decision_never_activates_billing(self):
+        path = self.root / 'test.json'
+        catalog = json.loads(path.read_text())
+        for tax_mode in ('pending', 'unknown'):
+            catalog['taxMode'] = tax_mode
+            path.write_text(json.dumps(catalog))
+            with self.assertRaisesRegex(ValueError, 'taxMode|tax mode'):
+                config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root)
+        catalog.pop('taxMode')
+        path.write_text(json.dumps(catalog))
+        with self.assertRaisesRegex(ValueError, 'explicit taxMode'):
+            config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root)
+        self.assertEqual(self.calls, [])
+
+    def test_automatic_tax_requires_verified_registration_and_noncollection_does_not(self):
+        path = self.root / 'test.json'
+        catalog = json.loads(path.read_text())
+        catalog['taxMode'] = 'automatic'
+        path.write_text(json.dumps(catalog))
+        with self.assertRaisesRegex(ValueError, 'activeTaxRegistrationVerified'):
+            config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root)
+        self.assertEqual(self.calls, [])
+        catalog['activeTaxRegistrationVerified'] = True
+        path.write_text(json.dumps(catalog))
+        result = config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root, verify=lambda *args: None)
+        self.assertEqual(result['env']['BILLING_TAX_MODE'], 'automatic')
+        self.assertEqual(result['env']['BILLING_ENABLED'], 'true')
+        catalog['activeTaxRegistrationVerified'] = False
+        catalog['taxMode'] = 'not_collecting'
+        path.write_text(json.dumps(catalog))
+        result = config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root, verify=lambda *args: None)
+        self.assertEqual(result['env']['BILLING_TAX_MODE'], 'not_collecting')
+        self.assertEqual(result['env']['BILLING_ENABLED'], 'true')
 
 
 if __name__ == '__main__':
