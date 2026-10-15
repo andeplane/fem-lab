@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Provider } from '../../app/src/ai/eval-api';
 import type { QueryDef } from '@femlab/registry';
 import { EVAL_CASES } from '../src/cases';
+import { boundedProvider, EvaluationBudget } from '../src/budget';
 import { evaluateCase, type RemoteEngine } from '../src/remote';
 import { scoreCase } from '../src/score';
 import { credentialAvailability, runCheckpointedLane, runLane, serializeArtifact, type EvalAdapter, type EvaluationArtifact } from '../src/runner';
@@ -321,9 +322,9 @@ describe('lane orchestration and artifacts', () => {
     const output = path.join(directory, 'checkpoint.json');
     const lanes: LaneResult[] = [];
     let caseInFlight = false;
-    let requestState = 'idle';
-    const persist = async () => { await writeFile(output, JSON.stringify({ lanes, caseInFlight, requestState })); };
-    const read = async () => JSON.parse(await readFile(output, 'utf8')) as { lanes: LaneResult[]; caseInFlight: boolean; requestState: string };
+    const budget = new EvaluationBudget({ model: 'gpt-6.1-sol', maxUsd: 1, maxRequests: 4, maxInputTokens: 1000 });
+    const persist = async () => { await writeFile(output, JSON.stringify({ lanes, caseInFlight, budget: budget.snapshot() })); };
+    const read = async () => JSON.parse(await readFile(output, 'utf8')) as { lanes: LaneResult[]; caseInFlight: boolean; budget: ReturnType<EvaluationBudget['snapshot']> };
     const firstEvidence = complete(EVAL_CASES[0]!);
     // Keep a real failed observation, including its immutable solve identity and journal.
     (firstEvidence.result as { extremes: { max: { value: number } }[] }).extremes[0]!.max.value *= 2;
@@ -336,15 +337,32 @@ describe('lane orchestration and artifacts', () => {
         let entered!: () => void;
         const held = new Promise<void>(resolve => { release = resolve; });
         const inSecond = new Promise<void>(resolve => { entered = resolve; });
+        let finishRequest!: () => void;
+        let settled!: () => void;
+        const requestHeld = new Promise<void>(resolve => { finishRequest = resolve; });
+        const requestSettled = new Promise<void>(resolve => { settled = resolve; });
+        const fakeProvider: Provider = {
+          id: 'openai', models: ['gpt-6.1-sol'],
+          async *chat() {
+            entered();
+            await requestHeld;
+            yield { type: 'usage', usage: { input: 90, cacheRead: 10, output: 20 } };
+            yield { type: 'done', stopReason: 'stop' };
+          },
+        };
+        const provider = boundedProvider(fakeProvider, budget, async () => 100, async () => undefined, async () => {
+          await persist();
+          if (budget.snapshot().inFlightRequests === 0) settled();
+        });
         const completedBrowser = host === 'mcp' ? JSON.parse(JSON.stringify(lanes[0])) : undefined;
         const running = runCheckpointedLane({
           host, live: true, availability: async () => ({ available: true }), close: async () => undefined,
           execute: async spec => {
             seen.push(`${host}:${spec.id}`);
             if (spec.id === EVAL_CASES[1]!.id) {
-              requestState = 'reserved';
-              await persist();
-              entered();
+              for await (const event of provider.chat({ system: 'fixture only', messages: [], tools: [], model: 'gpt-6.1-sol', maxTokens: 1000 })) {
+                expect(event.type).not.toBe('error');
+              }
               await held;
             }
             return spec.id === EVAL_CASES[0]!.id ? firstEvidence : complete(spec);
@@ -362,15 +380,14 @@ describe('lane orchestration and artifacts', () => {
         });
         try {
           await inSecond;
-          for (const state of ['reserved', 'settled']) {
-            requestState = state;
-            await persist();
+          for (const inFlightRequests of [1, 0]) {
+            if (inFlightRequests === 0) { finishRequest(); await requestSettled; }
             const checkpoint = await read();
-            expect(checkpoint).toMatchObject({ caseInFlight: true, requestState: state });
+            expect(checkpoint).toMatchObject({ caseInFlight: true, budget: { inFlightRequests, stoppedReason: null } });
             expect(checkpoint.lanes.find(lane => lane.host === host)).toMatchObject({ status: 'interrupted', gatePassed: false, total: 20, cases: [expectedFirst] });
             if (completedBrowser) expect(checkpoint.lanes[0]).toEqual(completedBrowser);
           }
-        } finally { release(); await running; }
+        } finally { finishRequest(); release(); await running; }
         const result = await running;
         await persist();
         expect(result).toMatchObject({ status: 'completed', passed: 19, total: 20 });
