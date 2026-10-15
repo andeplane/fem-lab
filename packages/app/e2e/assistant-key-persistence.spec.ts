@@ -15,7 +15,10 @@ async function settings(page: Page): Promise<void> {
 test('@cpu BYOK keys survive a real fresh tab and reload, and Forget removes only the selected provider', async ({ page, context }) => {
   let providerRequests = 0;
   await context.route(/https:\/\/api\.(openai|anthropic)\.com\//, async route => { providerRequests++; await route.abort(); });
-  await context.addInitScript(() => { localStorage.setItem('femlab.tour.dismissed', '1'); localStorage.setItem('femlab.autosave', 'off'); });
+  await context.addInitScript(() => {
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+    localStorage.setItem('femlab.tour.dismissed', '1'); localStorage.setItem('femlab.autosave', 'off');
+  });
   await page.goto('./');
   await settings(page);
   const first = page.locator('aside.assistant .settings');
@@ -39,11 +42,13 @@ test('@cpu BYOK keys survive a real fresh tab and reload, and Forget removes onl
   await fresh.reload();
   await settings(fresh);
   await expect(second).toContainText('from localStorage in this browser');
+  const persisted = await fresh.evaluate(() => ({ openai: localStorage.getItem('femlab.ai.key.openai'), anthropic: localStorage.getItem('femlab.ai.key'), session: sessionStorage.getItem('femlab.ai.key.openai') }));
+  expect(persisted).toEqual({ openai: openaiKey, anthropic: anthropicKey, session: null });
   const journal = await fresh.evaluate(() => window.fem.query.journal());
   await second.getByRole('button', { name: 'forget', exact: true }).click();
   await expect(second).toContainText('no key: the assistant cannot send anything');
-  expect(await fresh.evaluate(() => ({ openai: localStorage.getItem('femlab.ai.key.openai'), anthropic: localStorage.getItem('femlab.ai.key') })))
-    .toEqual({ openai: null, anthropic: anthropicKey });
+  const forgotten = await fresh.evaluate(() => ({ openai: localStorage.getItem('femlab.ai.key.openai'), anthropic: localStorage.getItem('femlab.ai.key') }));
+  expect(forgotten).toEqual({ openai: null, anthropic: anthropicKey });
   await fresh.close();
 
   const reopened = await context.newPage();
@@ -58,6 +63,7 @@ test('@cpu BYOK keys survive a real fresh tab and reload, and Forget removes onl
   const document = JSON.stringify(await reopened.evaluate(() => window.fem.query.document()));
   expect(document).not.toContain(anthropicKey); expect(document).not.toContain(openaiKey);
   expect(providerRequests).toBe(0);
+  await test.info().attach('fresh-tab-storage-proof.json', { body: JSON.stringify({ persisted, forgotten, reopenedSource: await last.locator('.source').innerText(), journalUnchanged: true, modelDocumentContainsKeys: false, providerRequests }), contentType: 'application/json' });
 });
 
 test('@cpu refused persistent migration retains the usable tab key and a refused save keeps its draft', async ({ page, context }) => {
@@ -82,7 +88,8 @@ test('@cpu refused persistent migration retains the usable tab key and a refused
   await panel.getByRole('button', { name: 'save', exact: true }).click();
   await expect(page.locator('aside.assistant')).toContainText('unsupported: browser storage could not complete saving the key');
   await expect(panel.locator('input[type=password]')).toHaveValue('replacement-not-saved-485');
-  expect(await page.evaluate(() => ({ persistent: localStorage.getItem('femlab.ai.key.openai'), session: sessionStorage.getItem('femlab.ai.key.openai') })))
-    .toEqual({ persistent: null, session: 'legacy-tab-key-485' });
+  const retained = await page.evaluate(() => ({ persistent: localStorage.getItem('femlab.ai.key.openai'), session: sessionStorage.getItem('femlab.ai.key.openai') }));
+  expect(retained).toEqual({ persistent: null, session: 'legacy-tab-key-485' });
   expect(providerRequests).toBe(0);
+  await test.info().attach('refused-persistence-proof.json', { body: JSON.stringify({ retained, source: await panel.locator('.source').innerText(), draft: await panel.locator('input[type=password]').inputValue(), providerRequests }), contentType: 'application/json' });
 });
