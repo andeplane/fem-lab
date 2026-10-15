@@ -39,3 +39,19 @@ or general design-fidelity claim is included. Procedure-specific wording is outs
 4. Use only the matching complete `1986cd90` WASM pair after protected-source verification;
    preserve producer/runtime identities and use private preview ports. No Rust build is
    required. Full parent #90 remains open after this child.
+
+## Focused verification result
+
+The four typed deferred-read tests failed against the unchanged Checks implementation and
+pass with the receipt fence. Together with the existing Results tests, all 61 focused tests
+pass. App type checking, the production build, secret scan and size check pass.
+
+A genuine production Chromium witness reproduced the obsolete aspect-ratio value `5` while
+the current public Worker reply (aspect ratio `10`) was held. The fixed journey passes with
+zero retries: both current reads show pending state, current Mesh/cost receipts replace them,
+and inspection adds no Journal entry. The ordinary source edit adds exactly one entry. The
+same journey imports explicit units, solves the lengthened bar, checks its 12-row downloaded
+CSV against `F L/(E A) = 1e-6 m`, saves, removes the original input and reopens the portable
+file with the same Mesh quality. All six actual engine responses across the red/green traces
+match the verified `a75ba0f8` WASM payload. Screenshots and public-query receipts are linked
+from #694. This is bounded behavior evidence, not acceptance of every #90 handoff detail.
