@@ -2923,3 +2923,6 @@ input.model-name:focus {
 
 .account-policies{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:24px;font-size:12px;color:#91a7b0}.account-policies a{color:#91cfc2;text-underline-offset:3px}.account-policies a:focus-visible{outline:2px solid #91cfc2;outline-offset:4px}
 .account-purchase-use select{padding:10px;max-width:100%;min-width:0;font:inherit;color:inherit;background:var(--surface,#101c24);border:1px solid var(--line,#31454e);border-radius:5px}
+.account-free{margin:20px 0;padding:18px;border:1px solid #30424e;border-radius:8px}
+.account-free h3{margin-top:0}.account-free small{display:block;margin:12px 0}
+.account-free .tbutton{max-width:100%;white-space:normal}.account-free a{color:#91cfc2}

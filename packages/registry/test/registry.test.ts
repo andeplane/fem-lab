@@ -77,7 +77,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'example.open': { name: 'cantilever' },
   'solve.cancel': {},
   'ai.setKey': { key: null },
-  'account.open':{}, 'account.signIn':{method:'email',email:'me@example.com'},'account.signOut':{},'account.refresh':{},'account.checkout':{plan:'plus'},'account.portal':{},'account.changePlan':{plan:'pro'},'account.export':{},'account.delete':{confirm:'DELETE'},'ai.acceptDisclosure':{},
+  'account.open':{}, 'account.signIn':{method:'email',email:'me@example.com'},'account.signOut':{},'account.refresh':{},'account.claimFreeAllowance':{},'account.checkout':{plan:'plus'},'account.portal':{},'account.changePlan':{plan:'pro'},'account.export':{},'account.delete':{confirm:'DELETE'},'ai.acceptDisclosure':{},
   'ai.setModel': { model: 'claude-opus-5' },
 };
 
@@ -275,7 +275,7 @@ describe('Registry', () => {
     const { registry, host, transport } = make(true);
     await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(MODEL_FILE) });
     await registry.dispatch({ cmd: 'file.open', path: './models/beam.json' });
-    expect(host.folder.readText).toHaveBeenCalledWith('models/beam.json');
+    expect(host.folder.readText).toHaveBeenCalledWith('models/beam.json', 16 * 1024 * 1024);
     await expect(registry.dispatch({ cmd: 'file.open', json: 'not json' })).rejects.toMatchObject({ code: 'schema', where: 'json' });
     await expect(registry.dispatch({ cmd: 'file.open', path: '../secret.json' })).rejects.toMatchObject({ code: 'file.scope' });
     await registry.dispatch({ cmd: 'file.open', picker: true });
@@ -383,6 +383,19 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' });
     expect(host.folder.writeText).toHaveBeenCalledWith('a/b.md', 'x');
     await expect(registry.dispatch({ cmd: 'file.write', path: '../b.md', text: 'x' })).rejects.toMatchObject({ code: 'file.scope' });
+  });
+
+  it('preserves opaque folder handles and exposes remembered-folder metadata', async () => {
+    const { registry, host } = make();
+    class Handle { kind = 'directory'; getName() { return 'bridge'; } }
+    const handle = new Handle();
+    await registry.dispatch({ cmd: 'folder.open', handle });
+    expect(vi.mocked(host.folder.open).mock.calls[0]![0]).toEqual({ handle });
+    expect((vi.mocked(host.folder.open).mock.calls[0]![0] as { handle: unknown }).handle).toBe(handle);
+    await registry.dispatch({ cmd: 'folder.open', reopen: true });
+    expect(host.folder.open).toHaveBeenLastCalledWith({ reopen: true });
+    await expect(registry.dispatch({ cmd: 'folder.open' })).rejects.toMatchObject({ code: 'schema' });
+    await expect(registry.query({ query: 'query.folderRecent' })).resolves.toEqual({ name: FOLDER.name });
   });
 
   it('folder.*, solve.cancel and ai.* call straight through', async () => {
@@ -591,7 +604,14 @@ it('requires an explicit valid execution policy for every engine and host defini
   }
 });
 
-it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});
+it('keeps account authority explicit and unavailable in hosts without it',async()=>{const {registry,host}=make();for(const name of ['account.signIn','account.signOut','account.refresh','account.claimFreeAllowance','account.checkout','account.portal','account.changePlan','account.export','account.delete','ai.acceptDisclosure','query.account'])expect(registry.describe(name).tool).toBe(false);expect(await registry.query({query:'query.account'})).toEqual(host.account!.state());delete host.account;await expect(registry.dispatch({cmd:'account.refresh'})).rejects.toMatchObject({code:'unsupported'});expect(await registry.query({query:'query.account'})).toMatchObject({configured:false,uid:null});});
+it('claims only through the injected account service and refuses identity or approval selectors',async()=>{
+  const {registry,host,transport}=make();
+  await registry.dispatch({cmd:'account.claimFreeAllowance'});
+  expect(host.account!.claimFreeAllowance).toHaveBeenCalledExactlyOnceWith();
+  for(const extra of [{accountId:'other'},{approved:true},{period:'2027-01'}])await expect(registry.dispatch({cmd:'account.claimFreeAllowance',...extra})).rejects.toMatchObject({code:'schema'});
+  expect(host.account!.claimFreeAllowance).toHaveBeenCalledTimes(1);expect(transport.dispatch).not.toHaveBeenCalled();
+});
 
 it('forwards explicit subscription use while preserving legacy direct checkout and fixed plan-change use',async()=>{
   const {registry,host}=make();

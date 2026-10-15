@@ -3,7 +3,7 @@
 // convergence bars; Checks is what the Model is about to hand the solver, live and before any
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber, hasDeformation, modeCount } from '../fields';
 import { benchmarkProvenance } from '../benchmark';
 import { lazy } from '../lazy';
@@ -550,22 +550,40 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
 
 const bytes = (n: number): string => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(0)} MB` : `${(n / 1e3).toFixed(0)} kB`);
 
+interface CheckReceipt<T> { request: object; value: T | null; error: string | null }
+const checkFailure = (error: unknown): string => {
+  if (error && typeof error === 'object' && 'cause' in error && typeof error.cause === 'string') {
+    const code = 'code' in error ? `${String(error.code)} · ` : '';
+    const where = 'where' in error && error.where ? ` (${String(error.where)})` : '';
+    return `${code}${error.cause}${where}`;
+  }
+  return error instanceof Error ? error.message : 'The current measurement could not be read.';
+};
+
 export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
   const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0, s.model?.steps ?? []);
-  const [mesh, setMesh] = useState<MeshSummary | null>(null);
-  const [cost, setCost] = useState<CostEstimate | null>(null);
+  const [meshReceipt, setMesh] = useState<CheckReceipt<MeshSummary> | null>(null);
+  const [costReceipt, setCost] = useState<CheckReceipt<CostEstimate> | null>(null);
   const step = s.model?.steps[0]?.name ?? '';
+  const hasMesh = Boolean(s.model?.meshSettings);
+  const request = useMemo(() => ({}), [query, s.revision, s.model?.hash, s.model?.meshSettings, step]);
+  const currentMesh = meshReceipt?.request === request ? meshReceipt : null;
+  const currentCost = costReceipt?.request === request ? costReceipt : null;
+  const mesh = currentMesh?.value ?? null;
+  const cost = currentCost?.value ?? null;
   useEffect(() => {
     // Both Queries build the Mesh, so they only run once the Model has one to build.
-    if (!s.model?.meshSettings) return void (setMesh(null), setCost(null));
-    query({ query: 'query.mesh' })
-      .then((m) => setMesh(m as MeshSummary))
-      .catch(() => setMesh(null));
-    if (step === '') return void setCost(null);
-    query({ query: 'query.cost', step })
-      .then((c) => setCost(c as CostEstimate))
-      .catch(() => setCost(null));
-  }, [query, s.revision, s.model?.meshSettings, step]);
+    let active = true;
+    if (hasMesh) {
+      query({ query: 'query.mesh' })
+        .then((m) => { if (active) setMesh({ request, value: m as MeshSummary, error: null }); })
+        .catch((error: unknown) => { if (active) setMesh({ request, value: null, error: checkFailure(error) }); });
+      if (step !== '') query({ query: 'query.cost', step })
+        .then((c) => { if (active) setCost({ request, value: c as CostEstimate, error: null }); })
+        .catch((error: unknown) => { if (active) setCost({ request, value: null, error: checkFailure(error) }); });
+    }
+    return () => { active = false; };
+  }, [request]);
 
   const q = mesh?.quality ?? null;
   return (
@@ -574,7 +592,7 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
       {list.length === 0 ? (
         <div class="surface pass">
           <span>✓</span>
-          <span>Nothing blocks a solve: every Body has a Material, the Model is held, loaded and has a Step.</span>
+          <span>No current pre-solve blockers are reported.</span>
         </div>
       ) : null}
       {list.map((b) => (
@@ -615,6 +633,12 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
             </div>
           ) : null}
         </>
+      ) : currentMesh?.error ? (
+        <div class="empty-note" role="alert">Mesh check unavailable: {currentMesh.error}</div>
+      ) : hasMesh && !currentMesh ? (
+        <div class="empty-note" role="status">Reading current Mesh quality…</div>
+      ) : mesh ? (
+        <div class="empty-note">No element-quality data is available for this Mesh.</div>
       ) : (
         <div class="empty-note">Element quality appears once the Model has a Mesh (mesh.set).</div>
       )}
@@ -649,6 +673,10 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
           <span>note</span>
           <span>{cost.note}</span>
         </div>
+      ) : currentCost?.error ? (
+        <div class="empty-note" role="alert">Cost estimate unavailable: {currentCost.error}</div>
+      ) : hasMesh && step !== '' && !currentCost ? (
+        <div class="empty-note" role="status">Reading current cost estimate…</div>
       ) : (
         <div class="empty-note">The DOF and memory estimate appears once a Mesh and a Step exist.</div>
       )}

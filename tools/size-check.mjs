@@ -30,7 +30,9 @@ const walk = (c, into = landing) => {
   for (const css of c.css ?? []) into.add(css);
   for (const k of c.imports ?? []) walk(manifest[k], into);
 };
-walk(Object.values(manifest).find((c) => c.isEntry));
+// Other documents (e.g. the auth host) are separate entries, not part of the engine landing.
+if (!manifest['index.html']?.isEntry) throw new Error('Engine landing entry is missing.');
+walk(manifest['index.html']);
 const application = new Set();
 const main = Object.values(manifest).find(c => c.src === 'src/main.tsx');
 if (!main?.isDynamicEntry) throw new Error('The application must load dynamically after the isolation bootstrap');

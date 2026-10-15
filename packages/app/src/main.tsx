@@ -8,7 +8,7 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, STEP_ACCEPT, type AbaqusConversion, type AbaqusDependencies, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/runtime-schema';
-import { migratePersistentKeys } from './ai/key-storage';
+import { prepareKeyStorage } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, autosaveHistory, type ViewerRef } from './host';
@@ -21,6 +21,7 @@ import type { CameraState } from './viewer/viewer';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
 import { Store, unsaved } from './store';
+import { retireProjectHost } from './project-host';
 import { AnimationCapture, browserAnimationCaptureEnvironment } from './animation-capture';
 import { App } from './ui/App';
 import { SessionWorkspace } from './session-workspace';
@@ -237,6 +238,7 @@ class Bundle {
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
+    retireProjectHost(this.store);
     this.stepImport.dispose();
     this.detachAccount();
     this.capture.cancel();
@@ -390,6 +392,8 @@ const workspace = new SessionWorkspace<Bundle>({
   epoch: () => crypto.randomUUID(), engine: engineOptions,
   build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork()); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
   publish: ({ resources: bundle }) => {
+    // A folder is a workspace capability; replacing the engine keeps the current selection.
+    if (displayed) bundle.store.setFolder(displayed.store.state.folder);
     if (displayed && !bundle.store.state.result && bundle.store.state.viewMode !== 'results') bundle.store.set({ tab: displayed.store.state.tab });
     if (displayed) for (const [panel, open] of Object.entries(displayed.store.state.panels)) {
       if (panel === 'assistant' || panel.startsWith('assistant.') || panel === 'tutorial' || panel.startsWith('skill:')) bundle.store.togglePanel(panel, open);
@@ -430,7 +434,7 @@ const workspace = new SessionWorkspace<Bundle>({
 });
 async function boot(): Promise<void> {
   bootStage('Checking graphics capabilities…', 20);
-  migratePersistentKeys();
+  prepareKeyStorage(__HOSTED_AI__);
   // Select the initial backend from an actual adapter probe. Later candidate device failures
   // still abort replacement; they never silently change an established backend.
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;

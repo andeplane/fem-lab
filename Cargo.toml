@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/geometry", "crates/engine", "crates/engine-wasm", "crates/femlab"]
+members = ["crates/geometry", "crates/engine", "crates/engine-wasm", "crates/femlab", "crates/project-io"]
 
 [workspace.package]
 version = "0.1.0"

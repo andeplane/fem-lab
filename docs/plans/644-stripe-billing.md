@@ -22,9 +22,11 @@ statement formatting still needs verification with a real owner-approved payment
 
 | Plan | Monthly price before tax | Included credits per paid period | Maximum supplier baseline if fully used | Price / supplier baseline |
 |---|---:|---:|---:|---:|
-| Plus | $49 | 4,000,000 | $3.00 | 16.3x |
+| Plus | $49 | 10,000,000 | $7.50 | 6.5x |
 | Pro | $149 | 16,000,000 | $12.00 | 12.4x |
 | Studio | $499 | 50,000,000 | $37.50 | 13.3x |
+
+The Plus allowance follows [#709](709-monthly-ai-allowance.md).
 
 The last two columns use the current tariff's $0.75 per million credits. They
 exclude Stripe fees, tax, Google hosting/storage/database costs, refunds, fraud,
@@ -182,7 +184,7 @@ respectively, with separate cache rates and long-context multipliers.
 
 For an illustrative request with 10,000 uncached input tokens and 2,000 output
 tokens, Mini uses 22,000 credits; Astra uses about 266,667. Plus therefore covers
-about 181 such Mini requests or 15 Astra requests. Real engineering sessions vary
+about 454 such Mini requests or 37 Astra requests. Real engineering sessions vary
 with journal/tool context, retries, reasoning and cache usage; these are not
 guaranteed conversation counts. A 200,000-credit invitation allowance costs at
 most $0.15 at the supplier baseline. Under #645 it is operator-reviewed and

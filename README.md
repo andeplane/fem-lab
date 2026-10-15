@@ -71,12 +71,26 @@ cargo run -p femlab -- import-inp bar.inp --out bar.femlab.json \
 cargo run -p femlab -- run bar.femlab.json --cpu
 ```
 
+That `run` command replays the imported definitions; this new file remains unsolved.
+The CLI executes only `solve.run` entries already present in its input Journal or Command
+list. Open the file in the browser and choose **Solve** for each named Step, or append an
+explicit `solve.run` Command for that Step before CLI replay.
+
 Mesh mode requires `--unit-length` and omits force/time units. Scripts and MCP use the same
 `file.importAbaqus` Command with `text`, `picker: true` (browser), or a `path` inside the open
 project folder. The checked Journal carries the imported source, scoped label identities,
 file digests and conversion version; saved files reopen without the original deck or includes.
 The displayed receipt describes the original import and is local to that session. See the
 [interoperability plan and acceptance matrix](docs/plans/650-abaqus-interoperability.md).
+
+After solving, choose **Export → Nodal displacements (CSV) → export** to compare with the
+source solver. The table preserves scientific f64 coordinates and all three displacement
+components in metres, independent of display units. Each row identifies its Result and Step,
+with separate normalized node labels and original local node/part/instance identities.
+Auxiliary nodes have blank source identities; unused authored nodes are marked `unused`
+with blank displacements. Identity columns are machine-readable text. Stale Results or a
+source Model changed during export are refused before delivery. Scripts and MCP call the
+same `file.export` Command with `spec: { format: 'csv', table: 'nodal-displacements', step: '<Step name>' }`.
 
 ### Import STEP geometry
 
