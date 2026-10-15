@@ -26,6 +26,7 @@ import {
   type HostContext,
   type HostDef,
   type AbaqusConversion,
+  type AbaqusDependencies,
   type AbaqusIo,
 } from '@femlab/registry';
 import { constants } from 'node:fs';
@@ -161,7 +162,12 @@ function scopedRegistry(deps: ScopedDeps): Registry {
   const validator = deps.validator ?? nodeScriptValidator();
   const abaqus: HostContext['abaqus'] = { capture: () => {
     const engine = deps.engine.captureImport();
-    return { io: deps.abaqusIo ?? nodeAbaqusIo(deps.project), convert: async query => await engine.query(query) as AbaqusConversion, replace: commands => engine.replaceCommands(commands) };
+    return {
+      io: deps.abaqusIo ?? nodeAbaqusIo(deps.project),
+      dependencies: async source => await engine.query({ query: 'query.abaqusDependencies', ...source }) as AbaqusDependencies,
+      convert: async query => await engine.query(query) as AbaqusConversion,
+      replace: commands => engine.replaceCommands(commands),
+    };
   } };
   const host = {
     transport: deps.engine as unknown as EngineTransport,

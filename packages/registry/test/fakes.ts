@@ -95,6 +95,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
     abaqus: { capture: vi.fn(() => ({
       io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },
       replace: vi.fn(async () => undefined),
+      dependencies: vi.fn(async () => ({ missingFiles: [] })),
       convert: vi.fn(async () => ABAQUS_CONVERSION),
     })) },
     view: {

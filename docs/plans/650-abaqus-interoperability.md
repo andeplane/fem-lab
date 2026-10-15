@@ -8,7 +8,8 @@ Implementation and evidence: [#652](https://github.com/andeplane/fem-lab/issues/
 [#655](https://github.com/andeplane/fem-lab/issues/655),
 [#656](https://github.com/andeplane/fem-lab/issues/656),
 [#657](https://github.com/andeplane/fem-lab/issues/657),
-[#673](https://github.com/andeplane/fem-lab/issues/673).
+[#673](https://github.com/andeplane/fem-lab/issues/673),
+[#681](https://github.com/andeplane/fem-lab/issues/681).
 
 **Status, 2026-10-15: in progress.** This is an acceptance plan, not a statement that
 these capabilities have shipped. The children are in progress; their separate PRs and the
@@ -58,6 +59,7 @@ is compiled. This plan does not invent a second wire schema.
 | [#655](https://github.com/andeplane/fem-lab/issues/655) | Tet10/Hex20 source kinds over #652; connectivity records coordinated with #653 and face loads with #654 | Original curved geometry, shared curved faces, sound admission, source order/labels and independent C3D10/C3D20 comparisons |
 | [#673](https://github.com/andeplane/fem-lab/issues/673) | Explicit small-strain Hex8 mean-dilatation (B-bar) for Abaqus C3D8, discovered by the unchanged independently published CAE case | Preserve existing Full Journals; volume-weighted distorted-cell patch and energy/refinement oracles; all 825 authored displacement components at the predeclared corpus tolerance; CPU thread determinism and software-adapter GPU correctness |
 | [#656](https://github.com/andeplane/fem-lab/issues/656) | Independent corpus and reference ledger, assembled alongside implementation | Exact source/license/digest/solver receipts; executable acceptance only on completed paths; remaining gaps visible |
+| [#681](https://github.com/andeplane/fem-lab/issues/681) | Data-only alternate files on NODE/ELEMENT INPUT over the same supplied-bundle contract | Inline/alternate geometry and identities agree; original filenames, hashes and source diagnostics survive; real hosts acquire the required files |
 | [#657](https://github.com/andeplane/fem-lab/issues/657) | Browser/CLI/MCP acquisition and reports over #653 supplied-bundle and #654 unit/report contracts | Real file/folder flow through inspection, solve, comparison and portable reopen; path/cancellation/admission atomicity |
 
 ### Source, namespace and lifecycle contract
@@ -100,8 +102,8 @@ and a stale/switched project fail before checked publication. Every asynchronous
 the captured owner/project admission. Retain the existing exact prepared-file byte limit.
 No error may leave half an imported Model or a partially replaced Journal.
 
-The typed report identifies retained regions, materials, source/target names, element kinds
-and formulations, analyses, units and provenance. A documented allowlist of output
+The typed report identifies retained regions, materials, source/target names, element kinds,
+analyses, units and provenance. The imported mesh definition retains the explicit formulation. A documented allowlist of output
 bookkeeping is recognized and reported as configuration not executed by FEM Lab; it must
 not reject an otherwise representable model. Unknown keywords, physical intent and unknown
 parameters must never disappear behind a generic ignore rule. Structured errors identify
@@ -139,10 +141,11 @@ admission. Sampled positive Jacobians alone do not establish that certificate. I
 and failure to prove validity remain distinct; no straightening, tetrahedral replacement,
 order reduction or unreported change of connectivity is allowed.
 
-Standard C3D8 retains full integration rather than the app's incompatible-mode default.
-C3D10/C3D20 acceptance must establish their exact supported formulation. Reduced integration
-is a real kernel gap: the current Formulation inventory is Full/IncompatibleModes, not an
-implementation of C3D8R or C3D20R. Never alias an R, hybrid, modified or otherwise distinct
+Standard C3D8 uses the explicit volume-weighted mean-dilatation formulation from #673,
+with eight-point integration and a projected volumetric strain. Existing Full and
+IncompatibleModes Journals keep their original meanings. C3D10/C3D20 retain their supported
+full integration. C3D8R/C3D20R reduced integration and hourglass control remain separate
+kernel gaps; MeanDilatation is not an implementation of either. Never alias an R, hybrid, modified or otherwise distinct
 element to the closest supported type. If a required corpus deck needs a missing kernel,
 record that blocker and a separate issue; changing its element card is not acceptance of
 the original export.
@@ -241,3 +244,34 @@ values nor either original tolerance is relaxed. The source and report remain
 separately LGPLv3-licensed originals. See [ADR 0034](../adr/0034-explicit-mean-dilatation-hex8.md).
 This finding adds implementation work; it does not close parent #650 or replace
 the composed browser/CLI/portable-file acceptance matrix.
+
+## Observed composed host acceptance — issue #657
+
+The original composed core `49478c56` with CLI host `d66f6d76` and the verified complete
+browser/Node WASM bundle passes the five declared independent corpus comparisons. Both
+CalculiX quadratic beams, the untouched FreeCAD export, the author-published Abaqus Case06
+and the analytical two-material assembly retain their original source identities. Native
+one/four-thread canonical DTOs agree after removing only timing. Public WASM session replay
+preserves every portable Journal hash and passes the same reference displacement/reaction
+oracles; cross-host numerical values are compared with their predeclared tolerances.
+
+All nine actual Chromium import tests pass with zero retries. They cover file selection,
+report inspection, the author's 825 displacement components and 4 MN reaction, explicit
+solve, and portable save/open. The include-folder case reads only requested files, deletes
+its complete submission before reopening, and does not read a selected unrelated file.
+Report and complete-mesh screenshots were inspected. The real MCP nested-include smoke,
+registry 158 tests at 100% coverage, MCP 67 at 100%, app 1,316 tests and native/WASM host
+parity also pass. These are local composed-source results, not a deployment claim.
+
+The source/oracle ledger is maintained in [the corpus PR #658](https://github.com/andeplane/fem-lab/pull/658).
+The author-published input and displacement report are verified originals with matching
+source identities; the author's exact Abaqus/CAE version and export settings are unknown.
+That provenance limitation is retained rather than inferred from the filename. No fresh
+licensed Abaqus run or general stress-recovery equivalence is claimed.
+
+The #681 NODE/ELEMENT INPUT composition has passed 23 parser tests, 53 engine Abaqus tests,
+Clippy and authentic schema/codegen checks. The native CLI's five tests also pass with five
+actual source files and source-free displacement/stress/reaction checks. Its new browser/
+MCP/WASM host acceptance and the final engine/geometry 100% software-GPU coverage gates
+remain pending. Parent #650 remains open while those integration checks and child merges
+are completed.
