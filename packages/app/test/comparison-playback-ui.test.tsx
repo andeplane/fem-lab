@@ -71,7 +71,12 @@ it('previews repeated range input but emits only its final Command, and cancels 
     await act(async () => { for (const index of ['2', '3']) { slider.value = index; slider.dispatchEvent(new Event('input', { bubbles: true })); } });
     expect(s.preview.beginScrub).toHaveBeenCalledTimes(1); expect(s.preview.previewScrub).toHaveBeenCalledTimes(2); expect(s.dispatch).not.toHaveBeenCalled();
     if (cancel === 'Escape') slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    else slider.dispatchEvent(new Event(cancel === 'commit' ? 'change' : cancel, { bubbles: true }));
+    else {
+      // The captured pause receipt can rerender a controlled range before Chromium's
+      // native change event. Commit the final user input, not this older DOM value.
+      if (cancel === 'commit') slider.value = '1';
+      slider.dispatchEvent(new Event(cancel === 'commit' ? 'change' : cancel, { bubbles: true }));
+    }
     if (cancel === 'commit') expect(s.dispatch).toHaveBeenCalledExactlyOnceWith({ cmd: 'view.playComparison', mode: 'independent', pane: 'left', resultId: 'left', playing: false, sample: { kind: 'frame', index: 3 } });
     else { expect(s.dispatch).not.toHaveBeenCalled(); expect(s.preview.cancelScrub).toHaveBeenCalledExactlyOnceWith(s.ticket); }
     await act(async () => render(null, s.root)); s.root.remove();

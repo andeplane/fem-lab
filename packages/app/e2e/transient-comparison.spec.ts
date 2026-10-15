@@ -12,10 +12,16 @@ async function colorful(page: Page, pane: string) {
     const source = element as HTMLCanvasElement, canvas = document.createElement('canvas'); canvas.width = source.width; canvas.height = source.height;
     const context = canvas.getContext('2d')!; context.drawImage(source, 0, 0);
     const bytes = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    let count = 0;
-    for (let i = 0; i < bytes.length; i += 4) if (Math.max(bytes[i]!, bytes[i + 1]!, bytes[i + 2]!) - Math.min(bytes[i]!, bytes[i + 1]!, bytes[i + 2]!) > 20) count++;
-    return count;
+    let count = 0, minX = canvas.width, maxX = 0, minY = canvas.height, maxY = 0;
+    for (let i = 0; i < bytes.length; i += 4) if (Math.max(bytes[i]!, bytes[i + 1]!, bytes[i + 2]!) - Math.min(bytes[i]!, bytes[i + 1]!, bytes[i + 2]!) > 20) {
+      const x = i / 4 % canvas.width, y = Math.floor(i / 4 / canvas.width); count++; minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    return { count, minX, maxX, minY, maxY, width: canvas.width, height: canvas.height };
   });
+}
+async function fits(page: Page, pane: string) {
+  const image = await colorful(page, pane);
+  return image.count > 200 && image.minX > 2 && image.maxX < image.width - 2 && image.minY > 2 && image.maxY < image.height - 2;
 }
 
 test('@cpu sampled thermal comparison resolves independent unequal schedules and primary fields with actual scientific times', async ({ page }, info) => {
@@ -38,6 +44,10 @@ test('@cpu sampled thermal comparison resolves independent unequal schedules and
     return { left, right: (await window.fem.query.result()).resultId };
   });
   const journal = await page.evaluate(() => window.fem.query.journal());
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'axes', on: false });
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'grid', on: false });
+  });
   await page.getByLabel('left Result', { exact: true }).selectOption(ids.left);
   await page.getByLabel('right Result', { exact: true }).selectOption(ids.right);
   await page.getByLabel('left sample selection', { exact: true }).selectOption('frame');
@@ -54,7 +64,7 @@ test('@cpu sampled thermal comparison resolves independent unequal schedules and
   await expect(page.locator('[data-comparison-pane="left"] .comparison-pane-title')).toContainText('frame 1');
   await expect(page.locator('[data-comparison-pane="right"] .comparison-pane-title')).toContainText('0.3 s');
   await expect(page.locator('[data-cmd="view.setDeformScale"]')).toHaveCount(0);
-  await expect.poll(() => colorful(page, 'left')).toBeGreaterThan(200); await expect.poll(() => colorful(page, 'right')).toBeGreaterThan(200);
+  await expect.poll(async () => (await colorful(page, 'left')).count).toBeGreaterThan(200); await expect.poll(async () => (await colorful(page, 'right')).count).toBeGreaterThan(200);
   await page.getByLabel('comparison presentation').selectOption('difference');
   await page.getByLabel('difference target mesh').selectOption('right');
   await page.locator('.comparison-actions .apply').click();
@@ -68,6 +78,108 @@ test('@cpu sampled thermal comparison resolves independent unequal schedules and
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   await page.screenshot({ path: info.outputPath('sampled-unequal-thermal-difference.png') });
   await info.attach('sampled-unequal-thermal-difference', { path: info.outputPath('sampled-unequal-thermal-difference.png'), contentType: 'image/png' });
+
+  // Exercise the actual controls on the same two scientific solves. Historical values
+  // remain immutable while host-only clocks, previews and presentations change.
+  await page.evaluate(ids => window.fem.dispatch({ cmd: 'view.compareResults', mode: 'sideBySide',
+    left: { resultId: ids.left, field: 'temperature', component: 0, sample: { kind: 'frame', index: 1 } },
+    right: { resultId: ids.right, field: 'temperature', component: 0, sample: { kind: 'frame', index: 1 } } }), ids);
+  const seek = async (side: 'left' | 'right' | 'common', time: string, policy: 'exact' | 'nearest') => {
+    const input = page.getByLabel(`${side} comparison physical time`, { exact: true });
+    await input.fill(time);
+    await page.getByLabel(`${side} comparison seek policy`, { exact: true }).selectOption(policy);
+    await input.locator('..').getByRole('button', { name: 'Seek', exact: true }).click();
+  };
+  await seek('right', '450 ms', 'nearest');
+  await expect.poll(async () => (await state(page)).right?.sample?.frame.timeSi).toBe(0.3);
+  const beforeRefusedSeek = (await state(page)).right!.sample;
+  await seek('right', '450 ms', 'exact');
+  await expect.poll(async () => (await state(page)).error?.code).toBe('not-found');
+  expect((await state(page)).right!.sample).toEqual(beforeRefusedSeek);
+  await seek('left', '800 ms', 'exact');
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.index).toBe(2);
+  await seek('left', '400 ms', 'exact');
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.index).toBe(1);
+
+  // A real native range drag previews another retained field. Escape restores the
+  // captured field; a later mouse-up cannot turn that cancelled gesture into a Command.
+  const slider = page.getByLabel('left comparison frame scrub', { exact: true });
+  const box = await slider.boundingBox(); expect(box).not.toBeNull();
+  const x = (index: number) => box!.x + 8 + (box!.width - 16) * index / 3;
+  await page.mouse.move(x(1), box!.y + box!.height / 2); await page.mouse.down();
+  await page.mouse.move(x(2), box!.y + box!.height / 2, { steps: 4 });
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.index).toBe(2);
+  await slider.press('Escape');
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.index).toBe(1);
+  await page.mouse.up();
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.index).toBe(1);
+  await slider.focus(); await slider.press('ArrowRight');
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.index).toBe(2);
+  expect((await state(page)).left!.legend!.max.value).toBeCloseTo(27.65, 8);
+
+  await page.getByLabel('comparison playback mode', { exact: true }).selectOption('synchronized');
+  await expect.poll(async () => (await state(page)).playback?.mode).toBe('synchronized');
+  const beforeSharedExact = await state(page);
+  await seek('common', '400 ms', 'exact');
+  await expect.poll(async () => (await state(page)).error?.code).toBe('not-found');
+  expect((await state(page)).left!.sample).toEqual(beforeSharedExact.left!.sample);
+  expect((await state(page)).right!.sample).toEqual(beforeSharedExact.right!.sample);
+  await seek('common', '450 ms', 'nearest');
+  await expect.poll(async () => (await state(page)).playback?.playheadSi).toBe(0.45);
+  const held = await state(page);
+  expect(held.left!.sample!.frame.timeSi).toBe(0.4); expect(held.right!.sample!.frame.timeSi).toBe(0.3);
+  await expect(page.getByLabel('shared physical playhead')).toContainText('actual retained times');
+  await page.getByLabel('shared comparison playback speed', { exact: true }).selectOption('0.1');
+  await expect.poll(async () => (await state(page)).playback?.left?.speed).toBe(0.1);
+  await page.getByRole('button', { name: 'Play both', exact: true }).click();
+  await expect.poll(async () => (await state(page)).playback?.playheadSi ?? 0).toBeGreaterThan(0.5);
+  await page.getByRole('button', { name: 'Pause both', exact: true }).click();
+  await expect.poll(async () => (await state(page)).playback?.left?.playing).toBe(false);
+  const paused = await state(page);
+  expect(paused.playback!.playheadSi).toBeLessThan(0.9);
+  expect(paused.playback!.left!.playing).toBe(false); expect(paused.playback!.right!.playing).toBe(false);
+  for (const side of ['left', 'right'] as const) expect(paused[side]!.legend!.max.value).toBeCloseTo(26.85 + paused[side]!.sample!.frame.timeSi, 8);
+  await page.getByLabel('shared comparison playback speed', { exact: true }).selectOption('10');
+  await page.getByRole('button', { name: 'Play both', exact: true }).click();
+  await expect.poll(async () => (await state(page)).playback?.playheadSi).toBe(0.9);
+  const endpoint = await state(page);
+  expect(endpoint.playback!.left!.playing).toBe(false); expect(endpoint.playback!.right!.playing).toBe(false);
+  expect(endpoint.left!.sample!.frame.timeSi).toBe(0.8); expect(endpoint.right!.sample!.frame.timeSi).toBe(0.9);
+  await page.getByLabel('comparison playback mode', { exact: true }).selectOption('independent');
+  await expect.poll(async () => (await state(page)).playback?.mode).toBe('independent');
+  await seek('left', '1000 ms', 'exact');
+  await expect.poll(async () => (await state(page)).left?.sample?.frame.timeSi).toBe(1);
+  expect((await state(page)).right!.sample!.frame.timeSi).toBe(0.9);
+  expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+
+  // Both primary histories remain inspectable on their retained meshes after a Model
+  // edit. Lifecycle actions pause timers without silently selecting a newer solve.
+  await page.getByLabel('left comparison playback speed', { exact: true }).selectOption('0.1');
+  await page.getByRole('button', { name: 'Play left', exact: true }).click();
+  await expect.poll(async () => (await state(page)).playback?.left?.playing).toBe(true);
+  await page.evaluate(() => window.fem.material.add({ name: 'thermal', rho: '2 kg/m^3', cp: '3 J/(kg*K)', k: '12 W/(m*K)' }));
+  await expect.poll(async () => (await state(page)).playback?.left?.playing).toBe(false);
+  const stale = await state(page);
+  expect(stale.left!.operand.resultId).toBe(ids.left); expect(stale.right!.operand.resultId).toBe(ids.right);
+  expect(stale.left!.summary.stale).toBe(true); expect(stale.right!.summary.stale).toBe(true);
+  const editedJournal = await page.evaluate(() => window.fem.query.journal());
+  for (const mode of ['geometry', 'mesh', 'results'] as const) {
+    await page.evaluate(mode => window.fem.dispatch({ cmd: 'view.setMode', mode }), mode);
+    await expect.poll(async () => (await state(page)).viewMode).toBe(mode);
+    expect((await state(page)).playback!.left!.playing).toBe(false);
+  }
+  expect(await page.evaluate(() => window.fem.query.journal())).toEqual(editedJournal);
+  await page.evaluate(async () => {
+    const limit = (await window.fem.query.results()).limit;
+    for (let i = 0; i < limit; i++) await window.fem.solve.run({ step: 'warm', solver: 'cpu-direct' });
+  });
+  await expect.poll(async () => (await state(page)).left?.error?.code).toBe('not-found');
+  await expect.poll(async () => (await state(page)).right?.error?.code).toBe('not-found');
+  expect((await state(page)).playback!.left!.playing).toBe(false);
+  expect((await colorful(page, 'left')).count).toBe(0);
+  await page.evaluate(() => window.fem.model.new({ name: 'replacement must retire comparison clocks' }));
+  await expect.poll(async () => (await state(page)).configuration.mode).toBe('single');
+  expect((await state(page)).playback).toBeNull();
 });
 
 test('@cpu sampled explicit comparison colors and deforms the same actual retained free-fall frame', async ({ page }, info) => {
@@ -92,6 +204,8 @@ test('@cpu sampled explicit comparison colors and deforms the same actual retain
   const frames = await page.evaluate(async ids => [await window.fem.query.frames({ resultId: ids.left }), await window.fem.query.frames({ resultId: ids.right })], ids);
   const rightIndex = frames[1]!.frames.length - 1;
   await page.evaluate(async ({ ids, rightIndex }) => {
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'axes', on: false });
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'grid', on: false });
     await window.fem.dispatch({ cmd: 'view.compareResults', mode: 'sideBySide', left: { resultId: ids.left, field: 'displacement', component: 1, sample: { kind: 'frame', index: 1 } }, right: { resultId: ids.right, field: 'displacement', component: 1, sample: { kind: 'frame', index: rightIndex } } });
     await window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 1000 });
   }, { ids, rightIndex });
@@ -103,7 +217,7 @@ test('@cpu sampled explicit comparison colors and deforms the same actual retain
   expect(pair.right!.legend!.min.value).toBeCloseTo(-4.905 * rt * rt * 1000, 10);
   const leftPick = await page.evaluate(ids => window.fem.dispatch({ cmd: 'view.pickComparison', pane: 'left', resultId: ids.left, at: [{ value: 1, unit: 'm' }, { value: 0.1, unit: 'm' }, { value: 0.1, unit: 'm' }] }), ids);
   expect(leftPick).toMatchObject({ value: { unit: 'm' }, samples: { left: { resultId: ids.left, frame: { index: 1 } } } });
-  await expect.poll(() => colorful(page, 'left')).toBeGreaterThan(200); await expect.poll(() => colorful(page, 'right')).toBeGreaterThan(200);
+  await expect.poll(() => fits(page, 'left')).toBe(true); await expect.poll(() => fits(page, 'right')).toBe(true);
   const difference = await page.evaluate(({ ids, rightIndex }) => window.fem.query.difference({ left: { resultId: ids.left, field: 'displacement', component: 1, sample: { kind: 'frame', index: 1 } }, right: { resultId: ids.right, field: 'displacement', component: 1, sample: { kind: 'frame', index: rightIndex } }, onto: 'right' }), { ids, rightIndex });
   for (const value of difference.values) expect(value).toBeCloseTo(-4.905 * (lt * lt - rt * rt), 12);
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);

@@ -19,7 +19,7 @@ export function ComparisonPlaybackControls({ s, store, query, dispatch, preview 
   const [histories, setHistories] = useState<Record<string, FramesResult>>({});
   const [times, setTimes] = useState({ left: '', right: '', common: '' });
   const [policies, setPolicies] = useState({ left: 'exact' as 'exact' | 'nearest', right: 'exact' as 'exact' | 'nearest', common: 'nearest' as 'exact' | 'nearest' });
-  const gesture = useRef<ComparisonScrubTicket | null>(null);
+  const gesture = useRef<{ ticket: ComparisonScrubTicket; input: ComparisonPlaybackSpec } | null>(null);
   useEffect(() => {
     let gone = false;
     void Promise.allSettled([...new Set(ids.filter(Boolean))].map(async resultId => {
@@ -32,7 +32,7 @@ export function ComparisonPlaybackControls({ s, store, query, dispatch, preview 
     });
     return () => { gone = true; };
   }, [ids[0], ids[1], query]);
-  useEffect(() => () => { const ticket = gesture.current; gesture.current = null; if (ticket) void preview?.cancelScrub(ticket).catch(() => undefined); }, [preview]);
+  useEffect(() => () => { const active = gesture.current; gesture.current = null; if (active) void preview?.cancelScrub(active.ticket).catch(() => undefined); }, [preview]);
   useEffect(() => { if (state?.sampling) setPolicies(previous => ({ ...previous, common: state.sampling! })); }, [state?.sampling]);
   if (configuration.mode === 'single') return null;
   const panes = { left: s.resultComparison.left, right: s.resultComparison.right };
@@ -52,8 +52,8 @@ export function ComparisonPlaybackControls({ s, store, query, dispatch, preview 
       : { mode: 'independent', pane: side, resultId: live[side].resultId, playing: false, sample: { kind: 'frame', index } };
   };
   const cancel = () => {
-    const ticket = gesture.current; gesture.current = null;
-    if (ticket) void preview?.cancelScrub(ticket).catch(() => undefined);
+    const active = gesture.current; gesture.current = null;
+    if (active) void preview?.cancelScrub(active.ticket).catch(() => undefined);
   };
   const seek = (side: Side | 'common'): ComparisonPlaybackSpec => {
     if (side === 'common') return { ...shared(false), time: times.common || `${state?.playheadSi ?? state?.interval?.startSi ?? 0} s`, sampling: policies.common };
@@ -101,14 +101,16 @@ export function ComparisonPlaybackControls({ s, store, query, dispatch, preview 
             aria-label={`${side} comparison frame scrub`} aria-valuetext={`${sample?.time.value ?? 0} ${sample?.time.unit ?? 's'}`} data-cmd="view.playComparison"
             onInput={event => {
               const input = selection(side, Number(event.currentTarget.value)); if (!input || !preview) return;
-              gesture.current ??= preview.beginScrub(mode === 'synchronized' ? 'synchronized' : side);
-              if (preview.ownsScrub(gesture.current)) void preview.previewScrub(gesture.current, input).catch(() => undefined);
+              gesture.current ??= { ticket: preview.beginScrub(mode === 'synchronized' ? 'synchronized' : side), input };
+              gesture.current.input = input;
+              if (preview.ownsScrub(gesture.current.ticket)) void preview.previewScrub(gesture.current.ticket, input).catch(() => undefined);
             }}
-            onChange={event => {
-              const ticket = gesture.current; gesture.current = null;
-              const input = selection(side, Number(event.currentTarget.value));
-              if (!ticket || !input || !preview?.ownsScrub(ticket)) return;
-              void dispatch({ cmd: 'view.playComparison', ...input }).catch(() => undefined);
+            onChange={() => {
+              const active = gesture.current; gesture.current = null;
+              if (!active || !preview?.ownsScrub(active.ticket)) return;
+              // A pause/preview render can reset the controlled range before native
+              // change. The last input receipt is the actual user selection.
+              void dispatch({ cmd: 'view.playComparison', ...active.input }).catch(() => undefined);
             }}
             onPointerCancel={cancel} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel(); } }} />
           <output aria-label={`${side} actual retained comparison time`}>frame {sample?.index ?? 0} · {formatNumber(sample?.time.value ?? 0)} {sample?.time.unit ?? 's'}</output>

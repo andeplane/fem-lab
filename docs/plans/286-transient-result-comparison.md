@@ -257,7 +257,23 @@ independent physical fields/differences, null coverage, detached transfer owners
 skip-solves refusal. The first-record UI fixture now expects the exact ordered summary and
 History capability reads; its original CI failure is preserved and all six UI cases pass.
 
-The stronger complete-body browser gate remains prepared source. Production playback/cancellation,
-stale/eviction/mode/project lifecycle checks, the next coherent parent composition and final full
-host/strict coverage remain open. These scoped runtime results are not a current-main claim.
-#286 is incomplete until those gates are fulfilled.
+The stronger two-case production Chromium gate now passes on the same authenticated frozen core,
+with no retries: actual native drag preview/Escape restoration/keyboard final commit, explicit
+exact-time refusal and nearest seeks, unequal actual timestamps, shared physical-clock pause and
+shorter-endpoint stopping, independent remainder, Model-edit pause and stale identities, mode
+return, repeated-solve eviction with cleared rasters, and project replacement. Thermal contours,
+signed differences and scientific picks retain the closed forms; explicit sampled displacement
+and deformation remain paired, with full-body pixel bounds passing without a camera/fit action.
+
+Native Chromium exposed one gesture bug absent from the earlier fake sequence: captured pause
+publication reset the controlled range from input2 to change1 before its final event. The gesture
+now retains the actual last input specification; final change dispatches it only while its receipt
+is still owned. The controlled-reset unit regression first fails, then passes with the original
+native sequence. Escape still retires the receipt and exactly one final Command is emitted. All
+51 focused host/UI cases, types, production build and size pass. A separate original pause fixture
+finished its short0.5s/s interval before Playwright located Pause; its actual clock receipts are
+preserved. Using the supported0.1s/s makes the pause window observable and asserts pause occurs
+before the unchanged0.9s endpoint; the10s/s endpoint and all physical assertions remain intact.
+
+The next coherent parent composition and final full host/strict coverage remain open. These
+scoped runtime results are not a current-main claim. #286 is incomplete until those gates pass.
