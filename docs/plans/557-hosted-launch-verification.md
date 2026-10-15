@@ -54,8 +54,8 @@ the smoke does not mistake an operator-shared signed URL for an ownership failur
 On 15 October 2026 at 19:22:42 UTC, a fresh real production email link completed through
 the normal public Identity Toolkit REST exchange. The existing owner identity/account
 matched, `isNewUser` was false, and `email_verified` was true. No Admin-token injection
-or replacement identity was used. This is a successful real email-link REST exchange,
-**not** evidence of a successful positive browser email-link return.
+or replacement identity was used. This records the public REST exchange separately
+from the later native browser completion below.
 
 The approved owner's public monthly-claim call returned 6,666,666 credits with
 `replay: false`; a repeat returned `replay: true`. A real Mini completion used 40 input
@@ -88,8 +88,8 @@ injected, browser data cleared, claim repeated or AI request made. The original 
 tab was preserved; this observation establishes the current rendered owner balance,
 not a universal cause or source fix for that tab's visual problem. Evidence is
 `/tmp/femlab-native-owner-account-721.json` and `.png`, recorded separately under
-[#721](https://github.com/andeplane/fem-lab/issues/721). It remains a Google sign-in
-check and does not establish positive browser email-link completion.
+[#721](https://github.com/andeplane/fem-lab/issues/721). This observation records
+Google sign-in; native email-link completion is recorded separately below.
 
 After the current `6c5d4daa` publication, actual published Google start/cancel/return/retry
 checks passed again on both origins without a candidate overlay, preserving the local
@@ -104,11 +104,24 @@ project enabled `generativelanguage`, and Firebase public-key API allowlists exc
 Real production email messages arrived, with the first receipt taking one second and
 passing SPF/DKIM, but Gmail placed both the first message and a fresh 19:22 message in
 **Spam**, not Inbox. The fresh message supplied the successful public REST exchange
-above. Positive browser email-link completion remains unverified under
-[#720](https://github.com/andeplane/fem-lab/issues/720); invalid-code Chromium checks did
-reach Firebase and return `INVALID_OOB_CODE` without an identity or Auth resource CSP
-failure, which proves only the negative path. The earlier browser network failure does
-not prove a product defect. [#710](https://github.com/andeplane/fem-lab/issues/710) tracks
+above. A separate actual native Chrome email-link flow completed successfully under
+[#720](https://github.com/andeplane/fem-lab/issues/720). One fresh UI request was made
+on 15 October 2026 at **19:31:53 UTC**; its message arrived at **19:31:57 UTC** in Spam,
+with SPF/DKIM passing. Opening that exact newly requested Firebase action helper in the
+same request tab completed through the normal Firebase SDK and returned to a clean
+`https://femlab.app/` URL and isolated engine. The authenticated Account UI showed the
+existing owner's 6,666,554 available of 6,666,666, zero reserved and already-claimed
+monthly allowance. No identity/token injection, new claim, AI request or payment was
+made. The working Google tab, original blank production tab, staging and local projects
+were preserved. Native accessibility evidence is
+`/tmp/femlab-native-owner-email-720.json`; screenshot capture after successful verification
+was blocked by the Mac lock, so no email-flow screenshot is claimed. The private action
+link/handoff file was removed. This completes the positive browser email-return check.
+
+Earlier invalid-code Chromium checks reached Firebase and returned `INVALID_OOB_CODE`
+without an identity or Auth resource CSP failure; they remain negative-path evidence.
+The earlier browser network failure did not establish a product defect.
+[#710](https://github.com/andeplane/fem-lab/issues/710) tracks
 custom-sender/deliverability work; Cloudflare's explicit terms/login step is still gated,
 and no DNS, sender verification or sender activation is claimed. Mail evidence is
 `/tmp/femlab-email-delivery-557.json`. Disposable Admin-generated links in the staging
@@ -339,16 +352,15 @@ commit separate, with no identity, credentials, action link or export URL.
 - Resolve production email Spam placement/custom-sender deliverability in #710, then
   verify actual Inbox delivery. Receipt and SPF/DKIM checks passed; Google's owner
   chooser/consent return is already verified on both environments.
-- Complete a genuine positive email-link return in the browser under #720. The real
-  public REST exchange and browser invalid-code path are verified separately and do
-  not substitute for that positive browser return.
 - Finish live Managed Payments terms/eligibility and billing activation in #661, with
   current policies, tax coverage, paid controls, canonical live invoice/webhook authority
   and owned cancellation/payment management. TEST success is not live-payment proof.
-- Keep staging AI disabled. Any new real supplier QA needs the explicit isolated,
-  bounded procedure in #669; this smoke cannot open that window. Final-domain TLS,
-  the 227-second stream, cancellation, SQL restore and traffic rollback already have
-  dated evidence; do not list those completed checks as unresolved DNS gates.
-- Coordinate the broader engineering-answer live evaluation with #297's owner. The
-  dated real-AI/registry proof and current owner claim/112-credit request verify transport,
-  authority and accounting, not numerical answer quality or a new physics Benchmark.
+- Complete required exact-head CI and review for the final three-file verification
+  source. Recorded deployed acceptance is separate from that source gate.
+
+Staging AI stays disabled. Any future real supplier QA needs the explicit isolated,
+bounded procedure in #669; this smoke cannot open that window. Final-domain TLS, the
+227-second stream, cancellation, SQL restore and traffic rollback have dated evidence.
+The broader engineering-answer evaluation remains with #297's owner; the recorded
+transport, accounting and registry checks do not establish numerical answer quality
+or a new physics Benchmark.
