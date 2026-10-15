@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Camera, LineSegments, Mesh, Object3D, WebGLRenderer } from 'three';
+import { Vector3, type Camera, type LineSegments, type Mesh, type Object3D, type PerspectiveCamera, type OrthographicCamera, type WebGLRenderer } from 'three';
 import type { AppSurface } from '../src/surface';
 import { Viewer } from '../src/viewer/viewer';
 
@@ -8,9 +8,10 @@ vi.unmock('../src/viewer/viewer');
 // Exercise real three.js geometry, bounds, materials and controls; only the GPU boundary is fake.
 vi.mock('three', async importOriginal => {
   const actual = await importOriginal<typeof import('three')>();
-  class RendererStub implements Pick<WebGLRenderer, 'localClippingEnabled' | 'setPixelRatio' | 'setSize' | 'render' | 'dispose'> {
+  class RendererStub implements Pick<WebGLRenderer, 'localClippingEnabled' | 'setPixelRatio' | 'getPixelRatio' | 'setSize' | 'render' | 'dispose'> {
     localClippingEnabled = false;
     setPixelRatio(): void {}
+    getPixelRatio(): number { return 1; }
     setSize(): void {}
     render(scene: Object3D, camera: Camera): void {
       scene.updateMatrixWorld();
@@ -89,6 +90,32 @@ it('fits a perspective comparison to a portrait pane without changing ordinary s
   expect(camera.position.distanceTo(camera.position.clone().set(0.5, 0.05, 0.05))).toBeCloseTo(radius * 3.2 / 0.375);
   viewer.preset('iso', bounds);
   expect(camera.position.distanceTo(camera.position.clone().set(0.5, 0.05, 0.05))).toBeCloseTo(radius * 3.2);
+});
+
+it.each([0.001, 1, 1e6])('keeps the fitted %s m-scale surface inside both projection depth ranges', async scale => {
+  const { viewer } = setup();
+  const positions = Float32Array.from([0,0,0, scale,0,0, 0,2*scale,0, 0,0,3*scale]);
+  viewer.setSurface({ ...surface, positions, indices: Uint32Array.of(0,1,2, 0,3,1, 0,2,3, 1,3,2), triBody: Uint32Array.of(0,0,0,0), triFace: Uint32Array.of(0,0,0,0), edges: undefined });
+  for (const projection of ['perspective', 'orthographic'] as const) {
+    viewer.setProjection(projection); viewer.fit();
+    const state = viewer.getCamera();
+    const camera = (viewer as unknown as { camera: PerspectiveCamera | OrthographicCamera }).camera;
+    const checkDepth = (points: Float32Array) => {
+      for (let i = 0; i < points.length; i += 3) {
+        const point = new Vector3(points[i], points[i+1], points[i+2]).project(camera);
+        expect(point.z).toBeGreaterThan(-1); expect(point.z).toBeLessThan(1);
+      }
+    };
+    checkDepth(positions);
+    await viewer.atCaptureSize(960, 540, async () => { checkDepth(positions); expect(viewer.getCamera()).toEqual(state); });
+    checkDepth(positions); expect(viewer.getCamera()).toEqual(state);
+    // The common render path must also encompass an exaggerated shape without refitting
+    // or losing the undeformed outline. This displacement extends beyond the old far plane.
+    viewer.setDeformed(Float32Array.from([0,2e6,0, 0,2e6,0, 0,2e6,0, 0,2e6,0]), 1);
+    const drawn = (viewer as unknown as { mesh: Mesh }).mesh.geometry.getAttribute('position').array as Float32Array;
+    checkDepth(drawn); checkDepth(positions);
+    expect(viewer.getCamera()).toEqual(state);
+  }
 });
 
 it('retains hidden Sheet edges across surface and mode rebuilds and disposes each owned geometry once', () => {

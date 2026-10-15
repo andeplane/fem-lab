@@ -231,7 +231,23 @@ export class Viewer {
   }
 
   render(): void {
-    if (!this.disposed) this.renderer.render(this.scene, this.camera);
+    if (this.disposed) return;
+    // Clipping is a property of the physical drawing, not a fixed number of meters. Include
+    // the undeformed outline and the actual exaggerated shape, without refitting the camera.
+    const bounds = this.box.clone();
+    for (const geometry of [this.mesh?.geometry, this.outlines?.geometry]) {
+      if (geometry?.boundingBox) bounds.union(geometry.boundingBox);
+    }
+    const near = Math.max(this.box.getSize(new Vector3()).length() * 1e-4, Number.EPSILON);
+    // Leave room for the ground grid/axis helpers as well as the complete visible Body.
+    const far = Math.max(this.camera.position.distanceTo(bounds.getCenter(new Vector3())) + bounds.getSize(new Vector3()).length() * 2, near * 2);
+    const signedNear = this.camera === this.orthographic ? -far : near;
+    if (this.camera.near !== signedNear || this.camera.far !== far) {
+      this.camera.near = signedNear;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+    this.renderer.render(this.scene, this.camera);
   }
 
   /** False until the first `setSurface`: until then `this.box` is a placeholder. */
