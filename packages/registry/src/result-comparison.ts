@@ -83,6 +83,8 @@ export interface ComparisonPlaybackState {
   right: ComparisonPlaybackPane | null;
   playheadSi: number | null;
   interval: { startSi: number; endSi: number } | null;
+  /** Explicit seek/starting policy. Subsequent playback holds each actual schedule. */
+  sampling: 'exact' | 'nearest' | null;
 }
 
 export interface ComparisonLegendState {

@@ -16,6 +16,7 @@ import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ComparisonControls, ComparisonPaneChrome } from './ResultComparison';
+import { ComparisonPlaybackControls } from './ComparisonPlayback';
 import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
 import { ImportAbaqus, AbaqusImportReport } from './ImportAbaqus';
@@ -745,6 +746,7 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
               <div class="centre">
                 <div class="result-workspace">
                   <ComparisonControls s={s} dispatch={dispatch} query={read} />
+                  <ComparisonPlaybackControls s={s} store={store} dispatch={dispatch} query={read} preview={comparison} />
                   <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>
                     <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} comparison={comparison} />
                     {rightViewer && s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? <ViewerPane s={s} store={store} dispatch={dispatch} viewer={rightViewer} comparison={comparison} side="right" /> : null}

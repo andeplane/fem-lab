@@ -3,7 +3,7 @@ import { fieldChoices, formatNumber, type FieldChoice } from './fields';
 import { checkResultIdentity } from './result-transfer';
 import type { Store } from './store';
 import type { CameraState, Viewer, ViewPreset } from './viewer/viewer';
-import { ComparisonPlayback } from './comparison-playback';
+import { ComparisonPlayback, type ComparisonPlaybackCheckpoint } from './comparison-playback';
 import type { PlaybackClock } from './transient';
 import type { ComparisonPlaybackSpec } from '@femlab/registry';
 
@@ -30,6 +30,16 @@ interface Payload {
   frames: FramesResult | null;
   sample: ResolvedFrame | null;
 }
+type Side = 'left' | 'right';
+type PaneUpdate = { frame: FrameResult; catalogue: FramesResult } | { payload: Payload };
+/** Opaque by object identity: a later project may reuse the number, never this receipt. */
+export interface ComparisonScrubTicket { readonly id: number }
+interface ScrubReceipt {
+  ticket: ComparisonScrubTicket;
+  epoch: number;
+  playback: ComparisonPlaybackCheckpoint;
+  payloads: Partial<Record<Side, Payload>>;
+}
 export interface ComparisonLifecycle {
   pauseSingle(): void;
   restoreSingle(): Promise<void>;
@@ -50,6 +60,7 @@ function engineError(error: unknown): EngineError {
 /** Catalogue/state lifetime is one Bundle/transport; ids never cross a project replacement. */
 export class ResultComparison implements ResultComparisonHost {
   private epoch = 0;
+  private statusSequence = 0;
   private paneRequests = new Map<string, number>();
   private disposed = false;
   private syncingCamera = false;
@@ -61,13 +72,15 @@ export class ResultComparison implements ResultComparisonHost {
   private cameraRevision = 0;
   private clip: Parameters<Viewer['setClip']>[0] = null;
   private readonly playback: ComparisonPlayback;
+  private scrub: ScrubReceipt | null = null;
+  private scrubSequence = 0;
 
   constructor(private readonly store: Store, private readonly transport: EngineTransport,
     readonly viewers: { left: ComparisonViewerRef; right: ComparisonViewerRef }, private readonly lifecycle: ComparisonLifecycle, clock?: PlaybackClock) {
     this.playback = new ComparisonPlayback(transport, clock, {
       configuration: () => this.store.state.resultComparison.configuration,
       commit: (frames, catalogues, current) => this.commitFrames(frames, catalogues, current),
-      changed: playback => this.publish({ playback }), failed: error => this.publish({ error: engineError(error) }),
+      changed: playback => this.publish({ playback }), failed: error => this.playbackFailed(error),
     });
   }
 
@@ -89,6 +102,7 @@ export class ResultComparison implements ResultComparisonHost {
     if (this.disposed) throw new FemError('session.expired', 'comparison belongs to a closed project');
     const ticket = ++this.epoch;
     this.initialFit = null;
+    this.scrub = null; this.scrubSequence++;
     this.playback.invalidate();
     const wasActive = this.active;
     const cameraRevision = this.cameraRevision;
@@ -114,6 +128,7 @@ export class ResultComparison implements ResultComparisonHost {
         payload.summary = { ...payload.summary, stale: record.stale };
       }
       if (difference) difference.payload.summary = { ...difference.payload.summary, stale: left.summary.stale || right.summary.stale };
+      this.statusSequence++;
       this.payloads = { left, right, ...(difference ? { difference: difference.payload } : {}) };
       if (!wasActive && cameraRevision === this.cameraRevision) this.initialFit = ticket;
       this.store.set({ viewMode: 'results', playing: false });
@@ -129,9 +144,9 @@ export class ResultComparison implements ResultComparisonHost {
 
   /** Ordinary edits refresh status without selecting a new solve or rebuilding old values. */
   async refresh(): Promise<void> {
-    const ticket = this.epoch;
+    const ticket = this.epoch, request = ++this.statusSequence;
     const catalogue = await this.transport.query({ query: 'query.results' }) as RetainedResults;
-    if (!this.current(ticket)) return;
+    if (!this.current(ticket) || request !== this.statusSequence) return;
     const patch: Partial<ResultComparisonState> = { catalogue, loading: false };
     for (const name of ['left', 'right', 'difference'] as const) {
       const pane = this.store.state.resultComparison[name];
@@ -147,15 +162,58 @@ export class ResultComparison implements ResultComparisonHost {
     this.draw();
   }
 
-  invalidate(): void { this.epoch++; this.initialFit = null; this.playback.pause(); }
+  invalidate(): void { this.epoch++; this.initialFit = null; this.pausePlayback(); }
   dispose(): void { this.disposed = true; this.invalidate(); this.playback.invalidate(); this.payloads = {}; this.conversions.clear(); }
   /** Current geometry/mesh modes borrow the primary renderer without replacing pinned ids. */
   suspend(): void { this.invalidate(); this.publish({ loading: false }); this.resetPresentation(); }
   resume(): void { this.draw(); this.fitInitial(); }
-  pausePlayback(): void { this.playback.pause(); }
-  play(input: ComparisonPlaybackSpec): Promise<void> {
+  pausePlayback(): void { this.scrub = null; this.scrubSequence++; this.playback.releasePreview(); this.playback.pause(); }
+  async play(input: ComparisonPlaybackSpec): Promise<void> {
     if (!this.active) throw new FemError('unsupported', 'comparison playback requires Results view', 'view.playComparison', 'view.setMode results');
-    return this.playback.select(input);
+    const original = this.scrub, sequence = ++this.scrubSequence, epoch = this.epoch;
+    this.scrub = null; this.playback.releasePreview();
+    try { await this.playback.select(input); }
+    catch (error) {
+      const current = () => this.current(epoch) && this.active && sequence === this.scrubSequence;
+      if (original && current()) await this.restoreScrub(original, current);
+      if (current()) this.playbackFailed(error);
+      throw error;
+    }
+  }
+  beginScrub(side: Side | 'synchronized'): ComparisonScrubTicket {
+    if (!this.active) throw new FemError('unsupported', 'comparison scrub requires Results view', 'view.playComparison');
+    this.scrub = null; this.playback.releasePreview();
+    const ticket = { id: ++this.scrubSequence }, playback = this.playback.capturePreview(side);
+    const payloads = Object.fromEntries(playback.sides.flatMap(name => this.payloads[name] ? [[name, this.payloads[name]!]] : []));
+    this.scrub = { ticket, epoch: this.epoch, playback, payloads };
+    return ticket;
+  }
+  ownsScrub(ticket: ComparisonScrubTicket): boolean { return this.scrub?.ticket === ticket && this.current(this.scrub.epoch) && this.active; }
+  async previewScrub(ticket: ComparisonScrubTicket, input: ComparisonPlaybackSpec): Promise<void> {
+    if (!this.ownsScrub(ticket)) return;
+    const receipt = this.scrub!;
+    if (input.playing || (input.mode === 'synchronized' ? receipt.playback.sides.length !== 2 : !receipt.playback.sides.includes(input.pane)))
+      throw new FemError('schema', 'a scrub previews only its captured paused pane or pair', 'view.playComparison');
+    try { await this.playback.select(input, () => this.ownsScrub(ticket)); }
+    catch (error) { if (this.ownsScrub(ticket)) this.publish({ error: engineError(error) }); throw error; }
+  }
+  async cancelScrub(ticket: ComparisonScrubTicket): Promise<void> {
+    if (!this.ownsScrub(ticket)) return;
+    const receipt = this.scrub!, sequence = ++this.scrubSequence;
+    this.scrub = null;
+    await this.restoreScrub(receipt, () => this.current(receipt.epoch) && this.active && this.scrubSequence === sequence);
+  }
+  private async restoreScrub(receipt: ScrubReceipt, current: () => boolean): Promise<void> {
+    const updates = Object.fromEntries(Object.entries(receipt.payloads).map(([side, payload]) => [side, { payload }]));
+    try { if (await this.commitUpdates(updates, current) && current()) this.playback.restorePreview(receipt.playback); }
+    catch (error) { if (current()) { this.playback.releasePreview(); this.playbackFailed(error); } throw error; }
+  }
+  private playbackFailed(error: unknown): void {
+    const epoch = this.epoch;
+    this.publish({ error: engineError(error) });
+    // A retained id may have been evicted by another producer. Clear its drawing using
+    // the current catalogue, while a valid independent pane can continue on its own id.
+    void this.refresh().catch(refreshError => { if (this.current(epoch)) this.publish({ error: engineError(refreshError) }); });
   }
   resize(): void {
     if (!this.active) return;
@@ -234,29 +292,42 @@ export class ResultComparison implements ResultComparisonHost {
   /** Independent completions merge the latest other pane; synchronized pairs commit together.
    * A status receipt follows all asynchronous scientific and display preparation. */
   private async commitFrames(frames: Partial<Record<'left' | 'right', FrameResult>>, catalogues: Partial<Record<'left' | 'right', FramesResult>>, current: () => boolean): Promise<boolean> {
+    const updates = Object.fromEntries(Object.entries(frames).map(([side, frame]) => [side, { frame, catalogue: catalogues[side as Side]! }]));
+    return this.commitUpdates(updates, current);
+  }
+  private async commitUpdates(updates: Partial<Record<Side, PaneUpdate>>, current: () => boolean): Promise<boolean> {
     const epoch = this.epoch;
     const owns = () => current() && this.current(epoch) && this.active;
     while (owns()) {
       const configuration = this.store.state.resultComparison.configuration;
       if (configuration.mode === 'single') return false;
       const priorLeft = this.payloads.left!, priorRight = this.payloads.right!;
-      const [left, right] = await Promise.all([frames.left ? this.framePayload(priorLeft, frames.left, catalogues.left!) : priorLeft,
-        frames.right ? this.framePayload(priorRight, frames.right, catalogues.right!) : priorRight]);
+      const prepare = (side: Side, prior: Payload): Promise<Payload> | Payload => {
+        const update = updates[side];
+        return update ? 'payload' in update ? update.payload : this.framePayload(prior, update.frame, update.catalogue) : prior;
+      };
+      const [left, right] = await Promise.all([prepare('left', priorLeft), prepare('right', priorRight)]);
       const next = { ...configuration, left: left.operand, right: right.operand };
       const difference = next.mode === 'difference' ? await this.prepareDifference(next, left, right) : null;
       const catalogue = await this.transport.query({ query: 'query.results' }) as RetainedResults;
       if (!owns()) return false;
       // A separate pane selection can finish during any await above. Recompute the pair/difference
       // with its latest payload; never publish that pane's former sample or metadata.
-      if ((!frames.left && priorLeft !== this.payloads.left) || (!frames.right && priorRight !== this.payloads.right)) continue;
-      for (const payload of [left, right]) {
+      if ((!updates.left && priorLeft !== this.payloads.left) || (!updates.right && priorRight !== this.payloads.right)) continue;
+      const missing: Partial<Record<Side, EngineError>> = {};
+      for (const [side, payload] of [['left', left], ['right', right]] as const) {
         const record = catalogue.records.find(record => record.id === payload.operand.resultId);
-        if (!record) throw new FemError('not-found', `retained Result '${payload.operand.resultId}' is unavailable or evicted`, 'resultId', 'query.results');
-        payload.summary = { ...payload.summary, stale: record.stale };
+        if (!record) {
+          const error = new FemError('not-found', `retained Result '${payload.operand.resultId}' is unavailable or evicted`, `${side}.resultId`, 'query.results');
+          if (updates[side] || next.mode === 'difference') throw error;
+          missing[side] = error.toJSON();
+        }
+        payload.summary = { ...payload.summary, stale: record?.stale ?? true };
       }
       if (difference) difference.payload.summary = { ...difference.payload.summary, stale: left.summary.stale || right.summary.stale };
+      this.statusSequence++;
       this.payloads = { left, right, ...(difference ? { difference: difference.payload } : {}) };
-      this.publish({ configuration: next, catalogue, left: this.pane(left), right: this.pane(right), difference: difference ? this.pane(difference.payload) : null,
+      this.publish({ configuration: next, catalogue, left: { ...this.pane(left), error: missing.left ?? null }, right: { ...this.pane(right), error: missing.right ?? null }, difference: difference ? this.pane(difference.payload) : null,
         coverage: difference?.response.coverage ?? null, interpolated: difference?.response.interpolated ?? false, warnings: difference?.response.warnings ?? [], error: null });
       this.draw(); return true;
     }

@@ -12,6 +12,15 @@ interface Run {
   anchor: number;
   playhead: number;
 }
+interface CommonClock { wall: number; anchor: number; playhead: number; speed: number; playing: boolean; sampling: 'exact' | 'nearest' }
+/** Host gesture receipt, scoped to one controller. Scientific arrays remain immutable. */
+export interface ComparisonPlaybackCheckpoint {
+  sides: Side[];
+  runs: Partial<Record<Side, Run>>;
+  mode: 'independent' | 'synchronized';
+  interval: { startSi: number; endSi: number } | null;
+  common: CommonClock;
+}
 /** Only primary arrays cross this boundary. The comparison host prepares and atomically
  * publishes scientific fields, legends, deformation, difference and a final status receipt. */
 export interface ComparisonPlaybackPresentation {
@@ -31,16 +40,18 @@ export class ComparisonPlayback {
   private prefetches: Partial<Record<Side, { index: number; promise: Promise<FrameResult> }>> = {};
   private mode: 'independent' | 'synchronized' = 'independent';
   private interval: { startSi: number; endSi: number } | null = null;
-  private common = { wall: 0, anchor: 0, playhead: 0, speed: 1, playing: false };
+  private common: CommonClock = { wall: 0, anchor: 0, playhead: 0, speed: 1, playing: false, sampling: 'nearest' };
+  private previewing = new Set<Side>();
   private timer: unknown;
   private ticking: { current(): boolean } | undefined;
+  private selecting: Partial<Record<Side, { current(): boolean }>> = {};
 
   constructor(private readonly transport: Pick<EngineTransport, 'query'>, private readonly clock: PlaybackClock | undefined,
     private readonly presentation: ComparisonPlaybackPresentation) {}
 
   invalidate(): void {
     this.epoch++; this.requests.left++; this.requests.right++; this.stop();
-    this.runs = {}; this.caches.left.clear(); this.caches.right.clear(); this.prefetches = {};
+    this.runs = {}; this.caches.left.clear(); this.caches.right.clear(); this.prefetches = {}; this.previewing.clear();
     this.interval = null; this.common.playing = false; this.presentation.changed(null);
   }
   pause(): void {
@@ -49,6 +60,41 @@ export class ComparisonPlayback {
     this.common.playing = false;
     for (const run of Object.values(this.runs)) { run.playhead = Math.min(run.catalogue.frames.at(-1)!.timeSi, this.time(run)); run.playing = false; }
     this.changed();
+  }
+  /** During a scrub retain its original/current pair, rather than prefetching a third array. */
+  capturePreview(side: Side | 'synchronized'): ComparisonPlaybackCheckpoint {
+    const sides: Side[] = side === 'synchronized' || this.mode === 'synchronized' ? ['left', 'right'] : [side];
+    const common = { ...this.common, playhead: this.interval ? Math.min(this.interval.endSi, this.commonTime()) : this.common.playhead };
+    const runs: Partial<Record<Side, Run>> = {};
+    this.stop();
+    for (const name of sides) {
+      const run = this.runs[name];
+      if (run) { runs[name] = { ...run, playhead: Math.min(run.catalogue.frames.at(-1)!.timeSi, this.time(run)) }; run.playhead = runs[name]!.playhead; run.playing = false; }
+      this.requests[name]++; this.previewing.add(name); this.prefetches[name] = undefined;
+      this.caches[name].clear(); if (run) this.caches[name].set(run.frame.sample.frame.index, run.frame);
+    }
+    if (sides.length === 2) { this.common.playhead = common.playhead; this.common.playing = false; }
+    this.changed(); this.queue();
+    return { sides, runs, mode: this.mode, interval: this.interval, common };
+  }
+  releasePreview(): void {
+    this.previewing.clear();
+    for (const side of ['left', 'right'] as const) this.prefetch(side);
+    this.queue();
+  }
+  /** Called only after the controller has atomically restored its owned drawing receipt. */
+  restorePreview(receipt: ComparisonPlaybackCheckpoint): void {
+    const wall = this.clock?.now() ?? 0;
+    this.stop();
+    for (const side of receipt.sides) {
+      this.requests[side]++; this.caches[side].clear(); this.prefetches[side] = undefined;
+      const prior = receipt.runs[side];
+      if (prior) { this.runs[side] = { ...prior, wall, anchor: prior.playhead }; this.caches[side].set(prior.frame.sample.frame.index, prior.frame); }
+      else delete this.runs[side];
+    }
+    this.mode = receipt.mode; this.interval = receipt.interval;
+    if (receipt.sides.length === 2) this.common = { ...receipt.common, wall, anchor: receipt.common.playhead };
+    this.changed(); this.releasePreview();
   }
   private stop(): void { if (this.timer !== undefined) this.clock?.cancel(this.timer); this.timer = undefined; }
   private configuration(): Pair {
@@ -76,17 +122,18 @@ export class ComparisonPlayback {
     return frame;
   }
 
-  async select(input: ComparisonPlaybackSpec): Promise<void> {
+  async select(input: ComparisonPlaybackSpec, admitted: () => boolean = () => true): Promise<void> {
     if (input.playing && !this.clock) throw new FemError('unsupported', 'this host has no playback clock', 'view.playComparison');
     this.stop();
     try {
-      if (input.mode === 'independent') await this.independent(input);
-      else await this.synchronized(input);
+      if (input.mode === 'independent') await this.independent(input, admitted);
+      else await this.synchronized(input, admitted);
     } finally { this.queue(); }
   }
-  private async independent(input: Extract<ComparisonPlaybackSpec, { mode: 'independent' }>): Promise<void> {
+  private async independent(input: Extract<ComparisonPlaybackSpec, { mode: 'independent' }>, admitted: () => boolean): Promise<void> {
     const side = input.pane, epoch = this.epoch, request = ++this.requests[side];
-    const current = () => this.current(side, epoch, request);
+    const current = () => admitted() && this.current(side, epoch, request);
+    const selection = { current }; this.selecting[side] = selection; this.queue();
     try {
       const configuration = this.configuration(), prior = this.runs[side];
       const catalogue = await this.catalogue(side, input.resultId);
@@ -104,10 +151,12 @@ export class ComparisonPlayback {
       this.runs[side] = { catalogue, frame, playing: input.playing, speed, wall: this.clock?.now() ?? 0, anchor: playhead, playhead };
       this.retain(side, frame); this.prefetch(side); this.changed();
     } catch (error) { if (current()) throw error; }
+    finally { if (this.selecting[side] === selection) delete this.selecting[side]; }
   }
-  private async synchronized(input: Extract<ComparisonPlaybackSpec, { mode: 'synchronized' }>): Promise<void> {
+  private async synchronized(input: Extract<ComparisonPlaybackSpec, { mode: 'synchronized' }>, admitted: () => boolean): Promise<void> {
     const epoch = this.epoch, requests = { left: ++this.requests.left, right: ++this.requests.right };
-    const current = () => this.current('left', epoch, requests.left) && this.current('right', epoch, requests.right);
+    const current = () => admitted() && this.current('left', epoch, requests.left) && this.current('right', epoch, requests.right);
+    const selection = { current }; this.selecting.left = selection; this.selecting.right = selection;
     try {
       const [left, right] = await Promise.all([this.catalogue('left', input.leftResultId), this.catalogue('right', input.rightResultId)]);
       const startSi = Math.max(left.frames[0]!.timeSi, right.frames[0]!.timeSi), endSi = Math.min(left.frames.at(-1)!.timeSi, right.frames.at(-1)!.timeSi);
@@ -122,11 +171,12 @@ export class ComparisonPlayback {
       const [lf, rf] = await Promise.all([this.seek(left, sample), this.seek(right, sample)]);
       if (!current() || !await this.presentation.commit({ left: lf, right: rf }, { left, right }, current) || !current()) return;
       const wall = this.clock?.now() ?? 0;
-      this.mode = 'synchronized'; this.interval = { startSi, endSi }; this.common = { wall, anchor: time, playhead: time, speed, playing: input.playing };
+      this.mode = 'synchronized'; this.interval = { startSi, endSi }; this.common = { wall, anchor: time, playhead: time, speed, playing: input.playing, sampling: input.sampling };
       this.runs.left = { catalogue: left, frame: lf, wall, anchor: time, playhead: time, speed, playing: input.playing };
       this.runs.right = { catalogue: right, frame: rf, wall, anchor: time, playhead: time, speed, playing: input.playing };
       this.retain('left', lf); this.retain('right', rf); this.prefetch('left'); this.prefetch('right'); this.changed();
     } catch (error) { if (current()) throw error; }
+    finally { for (const side of ['left', 'right'] as const) if (this.selecting[side] === selection) delete this.selecting[side]; }
   }
   private time(run: Run): number { return run.playing && this.clock ? run.anchor + Math.max(0, this.clock.now() - run.wall) * 0.001 * run.speed : run.playhead; }
   private commonTime(): number { return this.common.playing && this.clock ? this.common.anchor + Math.max(0, this.clock.now() - this.common.wall) * 0.001 * this.common.speed : this.common.playhead; }
@@ -143,7 +193,7 @@ export class ComparisonPlayback {
   }
   private prefetch(side: Side): void {
     const run = this.runs[side];
-    if (!run || run.frame.sample.frame.index + 1 >= run.catalogue.frames.length) return;
+    if (!run || this.previewing.has(side) || run.frame.sample.frame.index + 1 >= run.catalogue.frames.length) return;
     const index = run.frame.sample.frame.index + 1, epoch = this.epoch, request = this.requests[side];
     if (this.caches[side].has(index) || this.prefetches[side]?.index === index) return;
     const promise = this.seek(run.catalogue, { kind: 'frame', index }); this.prefetches[side] = { index, promise };
@@ -155,13 +205,13 @@ export class ComparisonPlayback {
     return next?.index === index ? next.promise : this.seek(this.runs[side]!.catalogue, { kind: 'frame', index });
   }
   private queue(): void {
-    if (!this.clock || this.timer !== undefined || this.ticking?.current() || !Object.values(this.runs).some(run => run.playing)) return;
+    if (!this.clock || this.timer !== undefined || this.ticking?.current() || !(['left', 'right'] as const).some(side => this.runs[side]?.playing && !this.selecting[side]?.current())) return;
     this.timer = this.clock.schedule(() => { this.timer = undefined; void this.tick(); }, 30);
   }
   private async tick(): Promise<void> {
     if (!this.clock || this.ticking?.current()) return;
     const epoch = this.epoch, requests = { ...this.requests };
-    const sides = (['left', 'right'] as const).filter(side => this.runs[side]?.playing);
+    const sides = (['left', 'right'] as const).filter(side => this.runs[side]?.playing && !this.selecting[side]?.current());
     const current = () => epoch === this.epoch && sides.every(side => this.requests[side] === requests[side]);
     if (!sides.length) return;
     const tick = { current }; this.ticking = tick;
@@ -190,6 +240,9 @@ export class ComparisonPlayback {
       if (common !== null) { this.common.playhead = common; this.common.playing = common < this.interval!.endSi; }
       this.changed();
     } catch (error) {
+      // The final publication receipt can identify one evicted operand after both
+      // immutable frame reads succeeded. Keep the other independent clock alive.
+      if (!failedSide && error instanceof FemError) failedSide = sides.find(side => error.where?.startsWith(`${side}.`)) ?? null;
       const affected = (failedSide ? [failedSide] : sides).filter(side => this.current(side, epoch, requests[side]));
       if (!affected.length) return;
       this.stop();
@@ -213,6 +266,6 @@ export class ComparisonPlayback {
   }
   private changed(): void {
     const pane = (side: Side): ComparisonPlaybackPane | null => { const run = this.runs[side]; return run ? { resultId: run.catalogue.resultId, sample: run.frame.sample, playing: run.playing, speed: run.speed, playheadSi: run.playhead } : null; };
-    this.presentation.changed(Object.keys(this.runs).length ? { mode: this.mode, left: pane('left'), right: pane('right'), playheadSi: this.mode === 'synchronized' ? this.common.playhead : null, interval: this.interval } : null);
+    this.presentation.changed(Object.keys(this.runs).length ? { mode: this.mode, left: pane('left'), right: pane('right'), playheadSi: this.mode === 'synchronized' ? this.common.playhead : null, interval: this.interval, sampling: this.mode === 'synchronized' ? this.common.sampling : null } : null);
   }
 }

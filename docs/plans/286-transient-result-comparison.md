@@ -231,6 +231,24 @@ selection suppressed a still-current left error. Both deferred regressions fail 
 clock step and pass with generation-owned tick locks and participating-pane error ownership;
 new right playback continues while the failed left pane pauses. The focused 38-case host suite and
 registry 134 cases pass; registry coverage is 100% on all four measures, and both typechecks pass.
-This step is callable through the registered host Command; playback UI, transactional scrub
-preview/cancel, production playback/lifecycle checks, cross-runtime replay and the final full
-host/strict coverage remain open. #286 is incomplete until those gates are fulfilled.
+The UI now exposes explicit retained ids, primary-field capabilities, independent/shared play,
+speed, physical-time seek policy and actual per-pane times. A range gesture previews through an
+owned controller receipt and emits one final `view.playComparison` Command; Escape, pointer
+cancellation and unmount restore the captured field and elapsed clock without reverting the
+other independent pane or newer controls. Deferred tests cover cancellation back to a final
+field, shared-clock restoration, replaced projects, copied/retired receipts and late replies.
+
+On the composed current-core parent `16113a5b`, eight sampled native cases, actual fresh schema
+emission and schema-currentness pass. The coherent UI/preview step passes 45 focused host/UI
+cases, both typechecks and codegen freshness; registry 134 cases cover 100% of all four measures.
+Three further regressions first fail against the prior host source: a pending left scrub stops
+the right independent clock; an eviction qualified as `left.resultId` stops both clocks; and an
+older overlapping catalogue refresh republishes a now-evicted id. Per-pane selection ownership,
+side-qualified failure handling and ordered status receipts fix these while preserving the
+reviewed generation fences. Unavailable drawings are explicitly cleared and their diagnostic
+identifies the missing operand.
+
+The permanent replay extension and stronger complete-body browser gate remain unverified source
+until authentic current-core sampled bindings are available. Production playback/cancellation,
+stale/eviction/mode/project lifecycle checks, cross-runtime replay and the final full host/strict
+coverage remain open. #286 is incomplete until those gates are fulfilled.

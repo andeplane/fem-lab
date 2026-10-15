@@ -229,4 +229,34 @@ describe('independently retained comparison clocks', () => {
       if (rightPlaying) { await s.advance(650); expect(s.displayed.right?.values).toEqual([302.4, 0, 0]); expect(s.scheduled.size).toBe(0); }
     }
   });
+
+  it('keeps the other independent clock moving while one pane awaits a scrub, and preserves the old run on rejection', async () => {
+    const s = setup(), pending = deferred<FrameResult>();
+    await s.playback.select({ mode: 'independent', pane: 'left', resultId: 'left', playing: true });
+    await s.playback.select({ mode: 'independent', pane: 'right', resultId: 'right', playing: true });
+    await s.advance(350);
+    s.query.mockImplementation(input => input.query === 'query.frame' && input.resultId === 'left' && input.sample?.kind === 'frame' && input.sample.index === 2 ? pending.promise : s.answer(input));
+    const selection = s.playback.select({ mode: 'independent', pane: 'left', resultId: 'left', playing: false, sample: { kind: 'frame', index: 2 } });
+    await settle(); await s.advance(400);
+    expect(s.displayed.right?.sample.frame.timeSi).toBe(0.6);
+    expect(s.displayed.left?.sample.frame.timeSi).toBe(0.2);
+    pending.reject(new FemError('not-found', 'requested frame refused'));
+    await expect(selection).rejects.toMatchObject({ code: 'not-found' });
+    expect(s.state()?.left?.playing).toBe(true); expect(s.state()?.right?.playing).toBe(true);
+    await s.advance(50); expect(s.displayed.left?.sample.frame.timeSi).toBe(0.7);
+    s.playback.pause(); expect(s.scheduled.size).toBe(0);
+  });
+
+  it('pauses only the failed operand when the final status receipt identifies an evicted independent pane', async () => {
+    const s = setup();
+    await s.playback.select({ mode: 'independent', pane: 'left', resultId: 'left', playing: true });
+    await s.playback.select({ mode: 'independent', pane: 'right', resultId: 'right', playing: true });
+    s.commit.mockRejectedValueOnce(new FemError('not-found', 'left was evicted during preparation', 'left.resultId'));
+    await s.advance(350);
+    expect(s.failed).toHaveBeenCalledTimes(1);
+    expect(s.state()?.left?.playing).toBe(false); expect(s.state()?.right?.playing).toBe(true);
+    await s.advance(300);
+    expect(s.displayed.right?.sample.frame.timeSi).toBe(0.6);
+    expect(s.displayed.left?.sample.frame.timeSi).toBe(0);
+  });
 });
