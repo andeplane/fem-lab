@@ -41,7 +41,7 @@ an entitlement. The default staging smoke changes no eligibility, budgets or sub
 Public staging remains deliberately [AI-disabled](669-staging-spend-defaults.md), with
 all supplier-spend caps zero, including for existing test-paid accounts. New completions
 must return HTTP 503 / `ai-unavailable` before input counting or an AI request row is
-created. The prepared smoke verifies zero signup allowance, rejected unapproved monthly
+created. The current smoke verifies zero signup allowance, rejected unapproved monthly
 claims, reopen/refresh stability, denied UI and alias admissions, empty request/credit/
 receipt exports, UI logout preserving the local Model, cross-owner export selectors
 rejected, private export downloads and durable deletion of two disposable identities.
@@ -79,6 +79,17 @@ consent, Firebase callback and authenticated Account UI in both production and s
 then showing free total/available/reserved credits 0/0/0. No AI, Checkout, payment or owner
 deletion occurred in those sign-in checks. Google sign-in is usable; these actual owner
 returns are distinct from provider configuration and cancel/retry checks.
+
+A further native Chrome check at current source `6c5d4daa` used a fresh tab in the
+existing profile and a normal Google redirect with existing authorization. The owner
+Account UI visibly showed 6,666,554 available of 6,666,666, zero reserved, the monthly
+allowance already claimed, and disabled claim/purchase controls. No identity was
+injected, browser data cleared, claim repeated or AI request made. The original blank
+tab was preserved; this observation establishes the current rendered owner balance,
+not a universal cause or source fix for that tab's visual problem. Evidence is
+`/tmp/femlab-native-owner-account-721.json` and `.png`, recorded separately under
+[#721](https://github.com/andeplane/fem-lab/issues/721). It remains a Google sign-in
+check and does not establish positive browser email-link completion.
 
 After the current `6c5d4daa` publication, actual published Google start/cancel/return/retry
 checks passed again on both origins without a candidate overlay, preserving the local
@@ -267,7 +278,7 @@ commit or attach them. Do not blindly rerun consumed links. It never deletes an 
 account. Its sanitized proof attachment records current policy separately from the
 historical real-AI evidence above.
 
-### Dated staging invocation proof and current smoke preparation
+### Dated staging smoke executions
 
 On 15 October 2026 at 18:12 UTC, before the monthly allowance and later Auth/cache changes,
 the command above ran against the deployed staging app and API with two fresh private
@@ -289,18 +300,36 @@ Both input fixtures and the private token-state file were confirmed removed.
 Sanitized evidence, containing no identity, token, action link or signed URL, is retained
 outside the repository at `/tmp/femlab-staging-zero-signup-557-evidence.json`, bound to
 the tested source SHA-256 and commit `f75da285`. The private execution log is separate.
-This proves the dated zero-signup, paused-staging and durable cleanup behavior. The
-prepared smoke now additionally expects `review-required` monthly status, a rejected
-unapproved claim and the current account copy/disabled claim control. It has not been
-rerun with fresh disposable fixtures after this update; the 18:12 result does not prove
-those newly added assertions. The separate current production owner acceptance above
-does establish the approved monthly claim and one real Mini debit/replay; neither run
-establishes live billing or engineering-answer quality.
+That historical result is retained without attributing later monthly assertions to it.
 
-The final prepared source passed `npm run typecheck -w packages/app` and
+On 15 October 2026 at 19:32:41 UTC, the updated staging smoke at verification source
+`afa5cd9520967cedbcfc51b1ec49657b6bbdf0de` ran once against the actual published
+`6c5d4daa` frontend/API: **1 passed in 59.2 seconds**. Exactly two fresh return-only
+Admin-generated `@example.invalid` links completed actual Firebase browser email-link
+exchanges. Neither sent email. Both profiles began at zero credits and `review-required`;
+explicit unapproved monthly claims returned 403 / `eligibility-required`. Reload and
+refresh preserved identity, zero balance and review status. The current monthly copy
+and disabled claim control were visible and inspected at 390px.
+
+Both UI and alias completion admissions returned 503 / `ai-unavailable`, with no SSE
+or request/grant/debit/hold/receipt rows in either authenticated export. Anonymous and
+cross-owner selector denials, unsigned-storage denial, blocked public Firebase deletion,
+logout clearing chat/account state while preserving the Model, durable deletion and
+both old-token 401s passed again. Both private link JSONs and cleanup-token state were
+confirmed absent after success. No eligibility, credits, email, supplier work, payment,
+spend-cap change or owner-account action was created by this run; staging stayed paused.
+
+Sanitized evidence is `/tmp/femlab-staging-monthly-zero-signup-557-evidence.json`, bound
+to the exact tested source and test SHA-256. This proves the current disposable staging
+browser flow and monthly denial, separately from the production owner REST exchange
+and real Mini debit/replay above. It does not prove positive genuine owner email delivery
+through the browser, live billing or engineering-answer quality.
+
+The tested source passed `npm run typecheck -w packages/app` and
 `npm exec -w packages/app -- playwright test --config=playwright.live.config.ts --list`
 on 15 October 2026 (one test discovered), plus `git diff --check`. No new fixture,
-mail, supplier generation or deployment was triggered for this evidence update.
+supplier generation or deployment was triggered by the final documentation update;
+the separately authorized two-fixture rerun is recorded immediately above.
 The sanitized combined rollup is `/tmp/femlab-release-557-evidence.json`; it keeps
 the dated staging source, current deployed source and final verification-source
 commit separate, with no identity, credentials, action link or export URL.
