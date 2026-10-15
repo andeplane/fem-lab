@@ -7,7 +7,7 @@ test.describe('@cpu @hosted optional accounts in the production build',()=>{
     await expect(page.locator('.shell')).toBeVisible();await page.getByRole('button',{name:'Sign in',exact:true}).click();
     await expect(page.getByRole('dialog',{name:'Sign in for AI'})).toContainText('Model, mesh and solve without signing in');await page.getByRole('button',{name:'Close account'}).click();
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'assistant',open:true}));
-    const drawer=page.locator('aside.assistant');await expect(drawer).toBeVisible();await expect(drawer.getByText('Sign in for free AI')).toBeVisible();await expect(drawer.locator('input[type=password]')).toHaveCount(0);
+    const drawer=page.locator('aside.assistant');await expect(drawer).toBeVisible();await expect(drawer.getByText('Sign in for AI')).toBeVisible();await expect(drawer.locator('input[type=password]')).toHaveCount(0);
     await page.evaluate(()=>window.fem.dispatch({cmd:'chat.send',text:'Create a beam'}));await expect(drawer).toContainText('Sign in to use the Assistant.');
     const query=await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));expect(query).toBeUndefined();
     const account=await page.evaluate(()=>window.fem.registry.query({query:'query.account'}));expect(account).toMatchObject({uid:null,profile:null});
