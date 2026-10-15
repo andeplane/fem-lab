@@ -155,7 +155,7 @@ describe('the production project host', () => {
     const complete = vi.fn();
     vi.spyOn(host.files, 'beginSave').mockReturnValue(complete);
     const entries = vi.spyOn(handle, 'entries').mockImplementation(async function* () { throw new DOMException('catalog access revoked', 'NotAllowedError'); });
-    await expect(registry.dispatch({ cmd: 'file.write', path: 'note.txt', text: 'committed' })).resolves.toBeUndefined();
+    await expect(registry.dispatch({ cmd: 'file.write', path: 'note.txt', text: 'committed' })).resolves.toEqual({ name: 'note.txt', to: 'folder' });
     expect(files['note.txt']).toBe('committed');
     await expect(registry.dispatch({ cmd: 'file.save', name: 'saved.femlab.json' })).resolves.toEqual({ name: 'saved.femlab.json', to: 'folder' });
     expect(JSON.parse(files['saved.femlab.json']!)).toEqual(MODEL_FILE);

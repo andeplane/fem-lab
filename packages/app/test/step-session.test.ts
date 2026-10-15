@@ -18,7 +18,7 @@ const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_eng
 class EngineWorker {
   onmessage: ((event: MessageEvent<SessionResponse>) => void) | null = null;
   onerror = null;
-  runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options));
+  runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options), () => 0);
   postMessage(request: SessionRequest) { void this.runtime.accept(request, response => this.onmessage?.({ data: response } as MessageEvent<SessionResponse>)); }
   terminate() {}
 }

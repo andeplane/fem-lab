@@ -24,7 +24,7 @@ class TestWorker {
   pause: Promise<void> = Promise.resolve();
   readonly runtime: SessionRuntime;
   constructor(publication?: ModelFilePublicationPolicy) {
-    this.runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options), publication);
+    this.runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options), () => 0, publication);
   }
   postMessage(request: SessionRequest): void {
     this.requests.push(structuredClone(request));
