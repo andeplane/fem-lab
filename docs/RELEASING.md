@@ -13,7 +13,10 @@ PRs changing the release workflow or packaging helpers run its full build withou
 You can also run the `release` workflow manually from GitHub Actions to validate and build without publishing.
 It runs the same CI workflow with all Windows, GPU and browser GPU checks required. Native builds
 test a copied CLI outside the checkout; npm packaging installs the tarball in a temporary project
-and exercises the actual engine, script worker and validation worker. The downloadable
+and exercises the actual engine, script worker, validation worker, project-relative file
+import and nested export. The native matrix also tests the handle-relative filesystem helper
+and supplies all four helper binaries to the universal npm artifact, with a verified SHA-256
+payload manifest. The downloadable
 `release-bundle` artifact contains these checked outputs. An npm failure or any failed check
 prevents the publishing job.
 
