@@ -269,32 +269,46 @@ impl CollectionBudget {
     }
 }
 
-fn blocks(
-    text: &str,
-    source: Option<&str>,
-    budget: &mut CollectionBudget,
-    collect_data: bool,
-) -> Result<Vec<DeckBlock>, Error> {
-    let source = source.map(Arc::<str>::from);
-    let mut reader = Records::new(text);
-    let mut blocks: Vec<DeckBlock> = Vec::new();
-    let mut labels = BTreeSet::new();
-    let mut pending_element_fields = 0;
-    while let Some(record) = reader.next()? {
-        if record.text.trim_start().starts_with('*') {
-            budget.keyword(record.line)?;
-            labels.clear();
-            pending_element_fields = 0;
-            let mut keyword = reader.keyword(record)?;
-            keyword.source = source.clone();
-            blocks.push(DeckBlock { keyword, records: Vec::new(), scope: DeckScope::Model });
+#[derive(Default)]
+struct RecordCollector {
+    labels: BTreeSet<u32>,
+    pending_element_fields: usize,
+}
+impl RecordCollector {
+    fn push(
+        &mut self,
+        block: &mut DeckBlock,
+        record: Record<'_>,
+        budget: &mut CollectionBudget,
+        collect_data: bool,
+    ) -> Result<(), Error> {
+        // Alternate INPUT data and inline data must never compete for one owning option.
+        if matches!(block.keyword.name.as_str(), "NODE" | "ELEMENT") && block.keyword.parameters.contains_key("INPUT") {
+            return Err(located(
+                malformed(
+                    record.line,
+                    &block.keyword.name,
+                    "INPUT",
+                    "an alternate INPUT option cannot also contain inline data records",
+                ),
+                record.source.map(Arc::as_ref),
+            ));
+        }
+        let arity = if collect_data && block.keyword.name == "ELEMENT" {
+            Some(
+                abaqus::element_kind(&block.keyword)
+                    .map_err(|error| located(error, block.keyword.source.as_deref()))?
+                    .geometry()
+                    .n_nodes()
+                    + 1,
+            )
         } else {
-            let block = blocks
-                .last_mut()
-                .ok_or_else(|| malformed(record.line, "INPUT", "data", "data must follow a keyword"))?;
+            None
+        };
+        let collected = (|| {
             budget.record(record.line)?;
             if !collect_data && block.keyword.name != "INCLUDE" {
-                continue;
+                return Ok(());
             }
             let fields: Vec<String> = if block.keyword.name == "HEADING" {
                 vec![record.text.to_string()]
@@ -305,24 +319,53 @@ fn blocks(
                     .collect()
             };
             if collect_data
-                && (block.keyword.name == "NODE" || (block.keyword.name == "ELEMENT" && pending_element_fields == 0))
+                && (block.keyword.name == "NODE"
+                    || (block.keyword.name == "ELEMENT" && self.pending_element_fields == 0))
             {
                 let id = abaqus::label(&fields[0], record.line, &block.keyword.name, "label")?;
-                budget.entity(block.keyword.name == "NODE", id, &mut labels, record.line)?;
+                budget.entity(block.keyword.name == "NODE", id, &mut self.labels, record.line)?;
             }
-            if collect_data && block.keyword.name == "ELEMENT" {
-                let arity = abaqus::element_kind(&block.keyword)?.geometry().n_nodes() + 1;
-                pending_element_fields += fields.len() - usize::from(fields.last().is_some_and(String::is_empty));
-                if pending_element_fields >= arity {
-                    pending_element_fields = 0;
+            if let Some(arity) = arity {
+                self.pending_element_fields += fields.len() - usize::from(fields.last().is_some_and(String::is_empty));
+                if self.pending_element_fields >= arity {
+                    self.pending_element_fields = 0;
                 }
             }
             block.records.push(DeckRecord {
                 line: record.line,
                 fields,
                 raw: record.text.to_string(),
-                source: source.clone(),
+                source: record.source.cloned(),
             });
+            Ok(())
+        })();
+        collected.map_err(|error| located(error, record.source.map(Arc::as_ref)))
+    }
+}
+
+fn blocks(
+    text: &str,
+    source: Option<&str>,
+    budget: &mut CollectionBudget,
+    collect_data: bool,
+) -> Result<Vec<DeckBlock>, Error> {
+    let source = source.map(Arc::<str>::from);
+    let mut reader = Records::new(text);
+    let mut blocks: Vec<DeckBlock> = Vec::new();
+    let mut collector = RecordCollector::default();
+    while let Some(record) = reader.next()? {
+        let record = Record { source: source.as_ref(), ..record };
+        if record.text.trim_start().starts_with('*') {
+            budget.keyword(record.line)?;
+            collector = RecordCollector::default();
+            let mut keyword = reader.keyword(record)?;
+            keyword.source = source.clone();
+            blocks.push(DeckBlock { keyword, records: Vec::new(), scope: DeckScope::Model });
+        } else {
+            let block = blocks
+                .last_mut()
+                .ok_or_else(|| malformed(record.line, "INPUT", "data", "data must follow a keyword"))?;
+            collector.push(block, record, budget, collect_data)?;
         }
     }
     Ok(blocks)
@@ -344,7 +387,7 @@ fn local_mesh(blocks: &[DeckBlock], scale: f64) -> Result<Builder, Error> {
             )
             .map_err(|e| located(e, record.source.as_deref()))?;
         }
-        active.finish().map_err(|e| located(e, block.keyword.source.as_deref()))?;
+        active.finish()?;
     }
     Ok(mesh)
 }
@@ -1451,34 +1494,31 @@ fn expand_one(
         return Err(located(Error::schema("expanded includes exceed the 16 MiB input bound").at("INCLUDE"), source));
     }
     let mut expanded = Vec::new();
-    for block in blocks(text, source, budget, true).map_err(|e| located(e, source))? {
-        if block.keyword.name != "INCLUDE" {
+    for mut block in blocks(text, source, budget, true).map_err(|e| located(e, source))? {
+        let Some(path) = source_reference(&block, stack).map_err(|e| located(e, source))? else {
             expanded.push(block);
             continue;
-        }
-        let line = block.keyword.line;
-        let path = include_path(&block).map_err(|e| located(e, source))?;
-        if stack.len() >= 16 {
-            return Err(located(malformed(line, "INCLUDE", "depth", "include nesting exceeds 16 files"), source));
-        }
-        if stack.iter().any(|p| p == &path) {
-            return Err(located(malformed(line, "INCLUDE", "cycle", format!("include cycle through {path}")), source));
-        }
+        };
         let included = sources.get(&path).ok_or_else(|| {
             located(
                 malformed(
-                    line,
-                    "INCLUDE",
+                    block.keyword.line,
+                    &block.keyword.name,
                     "INPUT",
                     format!("source file {path} was not supplied; provide the complete source bundle"),
                 ),
                 source,
             )
         })?;
-        stack.push(path.to_string());
-        let records = expand_one(included, Some(&path), sources, stack, expanded_bytes, budget)?;
-        stack.pop();
-        expanded.extend(records);
+        if block.keyword.name == "INCLUDE" {
+            stack.push(path.to_string());
+            let records = expand_one(included, Some(&path), sources, stack, expanded_bytes, budget)?;
+            stack.pop();
+            expanded.extend(records);
+        } else {
+            alternate_records(included, &path, &mut block, budget, expanded_bytes, true)?;
+            expanded.push(block);
+        }
     }
     Ok(expanded)
 }
@@ -1512,27 +1552,18 @@ fn dependencies_one(
     if *bytes > abaqus::MAX_INPUT_BYTES {
         return Err(located(Error::schema("expanded includes exceed the 16 MiB input bound").at("INCLUDE"), source));
     }
-    for block in blocks(text, source, budget, false).map_err(|e| located(e, source))? {
-        if block.keyword.name != "INCLUDE" {
+    for mut block in blocks(text, source, budget, false).map_err(|e| located(e, source))? {
+        let Some(path) = source_reference(&block, stack).map_err(|e| located(e, source))? else {
             continue;
-        }
-        let path = include_path(&block).map_err(|e| located(e, source))?;
-        if stack.len() >= 16 {
-            return Err(located(
-                malformed(block.keyword.line, "INCLUDE", "depth", "include nesting exceeds 16 files"),
-                source,
-            ));
-        }
-        if stack.iter().any(|p| p == &path) {
-            return Err(located(
-                malformed(block.keyword.line, "INCLUDE", "cycle", format!("include cycle through {path}")),
-                source,
-            ));
-        }
+        };
         if let Some(included) = sources.get(&path) {
-            stack.push(path.clone());
-            dependencies_one(included, Some(&path), sources, stack, bytes, missing, budget)?;
-            stack.pop();
+            if block.keyword.name == "INCLUDE" {
+                stack.push(path.clone());
+                dependencies_one(included, Some(&path), sources, stack, bytes, missing, budget)?;
+                stack.pop();
+            } else {
+                alternate_records(included, &path, &mut block, budget, bytes, false)?;
+            }
         } else {
             missing.insert(path);
         }
@@ -1540,19 +1571,81 @@ fn dependencies_one(
     Ok(())
 }
 
-fn include_path(block: &DeckBlock) -> Result<String, Error> {
-    block.keyword.only(&["INPUT"])?;
+/// Both discovery and conversion traverse only the documented owning-keyword references.
+fn source_reference(block: &DeckBlock, stack: &[String]) -> Result<Option<String>, Error> {
+    let keyword = &block.keyword;
+    if keyword.name == "INCLUDE" {
+        keyword.only(&["INPUT"])?;
+    } else if !matches!(keyword.name.as_str(), "NODE" | "ELEMENT") || !keyword.parameters.contains_key("INPUT") {
+        return Ok(None);
+    }
     no_data(block)?;
-    let raw = block.keyword.required("INPUT")?;
+    let path = input_path(keyword)?;
+    if stack.len() >= 16 {
+        return Err(malformed(keyword.line, &keyword.name, "depth", "source reference nesting exceeds 16 files"));
+    }
+    if stack.iter().any(|previous| previous == &path) {
+        return Err(malformed(keyword.line, &keyword.name, "cycle", format!("source reference cycle through {path}")));
+    }
+    Ok(Some(path))
+}
+
+fn input_path(keyword: &Keyword) -> Result<String, Error> {
+    let raw = keyword.required("INPUT")?;
     let path = if raw.starts_with('"') {
         raw.strip_prefix('"')
             .and_then(|s| s.strip_suffix('"'))
-            .ok_or_else(|| malformed(block.keyword.line, "INCLUDE", "INPUT", "quoted filename needs matching quotes"))?
+            .ok_or_else(|| malformed(keyword.line, &keyword.name, "INPUT", "quoted filename needs matching quotes"))?
     } else {
         raw
     };
     source_path(path)?;
     Ok(path.to_string())
+}
+
+/// An alternate file contains records for its existing owner, never keyword declarations.
+fn alternate_records(
+    text: &str,
+    path: &str,
+    block: &mut DeckBlock,
+    budget: &mut CollectionBudget,
+    bytes: &mut usize,
+    collect_data: bool,
+) -> Result<(), Error> {
+    *bytes = bytes.saturating_add(text.len());
+    if *bytes > abaqus::MAX_INPUT_BYTES {
+        return Err(located(
+            Error::schema("expanded source files exceed the 16 MiB input bound").at("INPUT"),
+            Some(path),
+        ));
+    }
+    block.keyword.parameters.remove("INPUT");
+    let source = Arc::<str>::from(path);
+    let mut reader = Records::new(text);
+    let mut collector = RecordCollector::default();
+    let mut records = 0;
+    while let Some(record) = reader.next().map_err(|error| located(error, Some(path)))? {
+        if record.text.trim_start().starts_with('*') {
+            return Err(located(
+                malformed(
+                    record.line,
+                    &block.keyword.name,
+                    "INPUT",
+                    "an alternate data file must contain data records only; keywords are not allowed",
+                ),
+                Some(path),
+            ));
+        }
+        collector.push(block, Record { source: Some(&source), ..record }, budget, collect_data)?;
+        records += 1;
+    }
+    if records == 0 {
+        return Err(located(
+            malformed(1, &block.keyword.name, "INPUT", "an alternate data file must contain at least one data record"),
+            Some(path),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sources(text: &str, source_name: Option<&str>, sources: &BTreeMap<String, String>) -> Result<(), Error> {
@@ -1968,5 +2061,89 @@ mod tests {
         let mut out = Vec::new();
         append_analysis(&mut out, &mut budget, &blocks, None).unwrap();
         assert_eq!(budget.bytes, "ELASTIC".len() + "1,.3".len() + "1".len() + ".3".len());
+    }
+
+    #[test]
+    fn alternate_data_admission_stops_before_oversized_record_entity_and_byte_copies() {
+        for (budget, cause, expected) in [
+            (
+                CollectionBudget { record_limit: 1, ..CollectionBudget::default() },
+                "data records",
+                "Nodes.inp: line 2 *INPUT records",
+            ),
+            (
+                CollectionBudget { entity_limit: 1, ..CollectionBudget::default() },
+                "nodes",
+                "Nodes.inp: line 2 *NODE count",
+            ),
+        ] {
+            let mut budget = budget;
+            let mut owner =
+                blocks("*NODE,INPUT=Nodes.inp\n", Some("Owner.inp"), &mut CollectionBudget::default(), true)
+                    .unwrap()
+                    .remove(0);
+            let mut bytes = 0;
+            let error =
+                alternate_records("1,0,0,0\n2,1,0,0\n∞\n", "Nodes.inp", &mut owner, &mut budget, &mut bytes, true)
+                    .unwrap_err();
+            assert!(error.cause.contains(cause), "{error:?}");
+            assert_eq!(error.where_.as_deref(), Some(expected));
+            assert_eq!(owner.records.len(), 1);
+        }
+        let mut owner = blocks(
+            "*ELEMENT,TYPE=C3D4,INPUT=Elements.inp\n",
+            Some("Owner.inp"),
+            &mut CollectionBudget::default(),
+            true,
+        )
+        .unwrap()
+        .remove(0);
+        let mut bytes = abaqus::MAX_INPUT_BYTES;
+        let error = alternate_records(
+            "1,1,2,3,4\n",
+            "Elements.inp",
+            &mut owner,
+            &mut CollectionBudget::default(),
+            &mut bytes,
+            true,
+        )
+        .unwrap_err();
+        assert!(error.cause.contains("16 MiB"));
+        assert!(owner.records.is_empty());
+    }
+
+    #[test]
+    fn alternate_data_discovery_checks_file_limits_escaping_cycles_and_raw_keywords() {
+        assert_eq!(
+            source_dependencies(
+                "*NODE,INPUT=\"Data/Nodes.inp\"\n*ELEMENT,TYPE=UNKNOWN,INPUT=Data/Elements.inp\n",
+                Some("Main.inp"),
+                &BTreeMap::new()
+            )
+            .unwrap(),
+            ["Data/Elements.inp", "Data/Nodes.inp"]
+        );
+        for text in ["*NODE,INPUT=../Nodes.inp\n", "*ELEMENT,TYPE=C3D4,INPUT=/Elements.inp\n", "*NODE,INPUT=Main.inp\n"]
+        {
+            assert!(source_dependencies(text, Some("Main.inp"), &BTreeMap::new()).is_err());
+        }
+        let sources = BTreeMap::from([("Parts/Beam.inp".into(), "*NODE,INPUT=Main.inp\n".into())]);
+        assert!(source_dependencies("*INCLUDE,INPUT=Parts/Beam.inp\n", Some("Main.inp"), &sources)
+            .unwrap_err()
+            .cause
+            .contains("cycle"));
+        let sources = BTreeMap::from([("Nodes.inp".into(), "*INCLUDE,INPUT=Main.inp\n".into())]);
+        let error = source_dependencies("*NODE,INPUT=Nodes.inp\n", Some("Main.inp"), &sources).unwrap_err();
+        assert_eq!(error.where_.as_deref(), Some("Nodes.inp: line 1 *NODE INPUT"));
+        let sources = (0..129).map(|index| (format!("Nodes{index}.inp"), String::new())).collect();
+        assert!(source_dependencies("*NODE,INPUT=Nodes0.inp\n", Some("Main.inp"), &sources)
+            .unwrap_err()
+            .cause
+            .contains("128"));
+        let sources = BTreeMap::from([("Nodes.inp".into(), format!("**{}\n", "x".repeat(abaqus::MAX_INPUT_BYTES)))]);
+        assert!(source_dependencies("*NODE,INPUT=Nodes.inp\n", Some("Main.inp"), &sources)
+            .unwrap_err()
+            .cause
+            .contains("aggregate"));
     }
 }

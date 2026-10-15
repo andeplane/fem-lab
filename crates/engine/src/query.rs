@@ -279,7 +279,7 @@ pub enum Query {
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
 
-    /// Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.
+    /// Inspect the supplied Abaqus bundle for missing INCLUDE and NODE/ELEMENT INPUT files.
     /// Uses the same bounded lexer and safe relative-path graph as conversion. This read
     /// performs no model/physics conversion or file/network I/O; hosts can acquire listed
     /// files through their captured scoped I/O and repeat until the bundle is complete.
@@ -331,7 +331,7 @@ pub enum Query {
         /// Paths identify bundle entries only; the engine never reads a file system.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_name: Option<String>,
-        /// Explicit relative source filenames and UTF-8 contents for INCLUDE resolution.
+        /// Explicit relative filenames and UTF-8 contents for INCLUDE and NODE/ELEMENT INPUT.
         /// Missing/cyclic/escaping references fail; the engine never fetches a file.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         source_files: BTreeMap<String, String>,
