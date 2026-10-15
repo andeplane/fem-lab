@@ -1,10 +1,11 @@
 # Result and Journal comparison
 
-Status: accepted decomposition; implementation proceeds through the linked child issues.
+Status: implemented; all children #280–#286 are closed. Epic #16 awaits its owner’s
+acceptance decision, not an unimplemented comparison feature. Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
 Parent: [#16](https://github.com/andeplane/fem-lab/issues/16), Plan 5.6 and 5.9,
 jobs J8.10, J12.1 and J12.4. Inspected baseline: `8b38f06` (2026-09-06).
 
-## Existing contracts and missing state
+## Historical baseline and missing state (2026-09-06)
 
 The engine currently stores one `(Model hash, StepResult)` per Step. A later solve of the same
 Step replaces it. The stored Result has no immutable solve identity, solved Mesh or solved Model
@@ -27,7 +28,10 @@ and playback children [#245](https://github.com/andeplane/fem-lab/issues/245) an
 [#246](https://github.com/andeplane/fem-lab/issues/246) remain the owners of generic transient
 transport and playback.
 
-## Result records and numerical comparison
+## Accepted Result records and numerical comparison
+
+The decomposition below preserves the original requirements; every listed child has merged.
+The final acceptance audit follows the completion gates.
 
 [#280](https://github.com/andeplane/fem-lab/issues/280) introduces immutable Result records. A
 record needs a stable solve-instance id, Step, solved revision, #237 input fingerprint, the exact
@@ -97,3 +101,41 @@ Journal selectors, host Commands and Queries stay schema-first and callable by t
 AI. Native and WASM Journal hashes remain identical, generated schema/types remain fresh,
 registry coverage remains 100%, and engine/geometry line, function and region coverage remains
 100% including GPU paths.
+
+## Final acceptance audit (2026-10-15)
+
+The accepted source is main `eced67dd09906269c8bd946c442225846bcb99db`, whole tree
+`0abc2e2799c62f21c7128565a1b93a1a09efa66b`, identical to tested #286 head `79d9b7f5`.
+[Final fast CI](https://github.com/andeplane/fem-lab/actions/runs/38676074047) and
+[full strict validation](https://github.com/andeplane/fem-lab/actions/runs/38676136571) passed.
+The GPU-inclusive report covers 28,545 lines, 3,328 functions and 61,241 regions at 100%, with
+no exclusions. The separate CPU bridge excludes `src/gpu/`; its totals are not the full report.
+Native/WASM replay, registry 135/135 at 100%, app 1,274 passes plus five existing skips,
+27 thumbnails, build/size, CPU Chromium 204 passes plus two skips, service-worker four passes
+and SwiftShader four passes are recorded in those runs.
+
+[Deployment 38679221526](https://github.com/andeplane/fem-lab/actions/runs/38679221526)
+succeeded at that main commit. Three existing production Chromium cases passed against the
+actual deployed app, zero retries: independent retained panes, sampled thermal comparison
+and sampled explicit comparison. Each browser trace loaded WASM SHA256
+`471980d4942142d0bb319e1b265b15f5cfc912756e3882d0872010f08747cfba`, matching the tested
+complete browser/Node binding pair and emitted schema `088b6ebd…`. The deployment receipt,
+source/runtime manifests, original logs and standalone replay dependencies are retained in the
+#612 issue evidence index. Browser/raster acceptance does not claim physical-device or user
+visual acceptance.
+
+The original Plan 5.6/J8.10 and Plan 5.9/J12.1/J12.4 scope is present; neither half is inferred
+from the other. The following public tests run in the completed final fast/strict gates.
+
+| Original requirement | Current implementation and concrete acceptance |
+| --- | --- |
+| Multiple immutable solves, revision/Model identity and exact solved Mesh after edits | #280–#282 are closed. [`retained_cases.rs`](../../crates/engine/tests/registry/retained_cases.rs), [`tools/test-retained-replay.mjs`](../../tools/test-retained-replay.mjs) and [`result-comparison.spec.ts`](../../packages/app/e2e/result-comparison.spec.ts) cover repeated solves, old/current status, unequal retained surfaces, transfer ownership, eviction and immutable reads. |
+| J8.10 before/after, two Materials and unequal meshes, side-by-side and signed differences | Closed #283’s independent-panes case uses the axial `PL/EA` and `P/A` oracles with 1/2 GPa Materials and two Mesh densities. The difference/coverage case checks explicit targets, partial overlap, neutral missing nodes and scientific picks. Thermal comparison checks absolute Celsius legends and signed temperature differences without an origin offset. Real camera/pick/visibility/mode/session cases and default first-entry bounds run in `result-comparison.spec.ts`; the independent-panes case also passed on the final deployed runtime. |
+| Retained transient index/time selection, unequal schedules and real playback | Closed #286 adds sampled primary differences and independent/shared physical clocks. [`transient_comparison.rs`](../../crates/engine/tests/registry/transient_comparison.rs), the 24-variant replay and both final production cases cover closed forms/refinement, actual unequal timestamps, exact/nearest policy, cancellation and stale/eviction/Session fences. See [#286 acceptance](286-transient-result-comparison.md). |
+| J12.1/J12.4 typed Journal comparison between Models, not replacing the open Model | Closed #284 exposes `query.journalDiff`: typed Command+hash shared causal prefix and ordered divergent tails, with no replay. Closed #285 exposes `file.compare`/`query.journalComparison`, the full explicit save/open baseline and an independently parsed imported-file baseline. [`journal-comparison.spec.ts`](../../packages/app/e2e/journal-comparison.spec.ts) checks comparison-file nonmutation, repeated causal Commands, undo, saved/imported labels and current Journal preservation. |
+| Saved/imported baseline authority and late I/O | The same Journal Chromium file and [`store.test.ts`](../../packages/app/test/store.test.ts) check edits during delayed saves, late save/open/query replies, replacement and failed I/O. Autosave does not replace the explicit baseline. These are separate checks from the Result-field physics and preserve the captured saved document. |
+| Registry/host parity, native/WASM hashes, schema and full coverage | The final gates above cover generated declarations and callable host definitions, registry 100%, actual native one/four-thread and Node-WASM replay, all Chromium paths and GPU-inclusive engine/geometry 100%. |
+
+No remaining original #16 implementation gate was identified. All #280–#286 children are closed,
+including the Journal half (#284/#285), and the final deployed acceptance has passed. The
+owner decides epic closeout after reviewing this audit; #612 does not automatically close #16.

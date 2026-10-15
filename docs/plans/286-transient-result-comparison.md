@@ -1,6 +1,8 @@
 # Compare retained transient frames
 
-Status: implementation plan; #286 remains open until the complete acceptance below passes.
+Status: implemented and accepted. PR #603 closed #286 and merged as main `eced67dd`
+with whole tree `0abc2e27`, identical to tested head `79d9b7f5`.
+Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
 Issue: [#286](https://github.com/andeplane/fem-lab/issues/286), child of
 [#16](https://github.com/andeplane/fem-lab/issues/16) and integration with #9.
 Parent plan: [Result and Journal comparison](16-result-journal-comparison.md).
@@ -213,7 +215,50 @@ This extends the existing read/host registry boundaries (ADRs 0003, 0007, 0008, 
 Rust owns frame resolution/interpolation and scientific values; the TypeScript host owns I/O,
 clock, caching and drawing. No new mutable engine entry point or second Model builder is planned.
 
-## Implemented steps and remaining gates
+## Final accepted implementation and verification
+
+The accepted source is main `eced67dd09906269c8bd946c442225846bcb99db`, whole tree
+`0abc2e2799c62f21c7128565a1b93a1a09efa66b`, identical to tested #286 head `79d9b7f5`.
+[Final fast CI](https://github.com/andeplane/fem-lab/actions/runs/38676074047) and
+[full strict validation](https://github.com/andeplane/fem-lab/actions/runs/38676136571) passed.
+The GPU-inclusive report covers 28,545 lines, 3,328 functions and 61,241 regions at 100%, with
+no exclusions. The separate CPU bridge excludes `src/gpu/`; its totals are not the full report.
+Native/WASM replay, registry 135/135 at 100%, app 1,274 passes plus five existing skips,
+27 thumbnails, build/size, CPU Chromium 204 passes plus two skips, service-worker four passes
+and SwiftShader four passes are recorded in those runs.
+
+[Deployment 38679221526](https://github.com/andeplane/fem-lab/actions/runs/38679221526)
+succeeded at that main commit. Three existing production Chromium cases passed against the
+actual deployed app, zero retries: independent retained panes, sampled thermal comparison
+and sampled explicit comparison. Each browser trace loaded WASM SHA256
+`471980d4942142d0bb319e1b265b15f5cfc912756e3882d0872010f08747cfba`, matching the tested
+complete browser/Node binding pair and emitted schema `088b6ebd…`. The deployment receipt,
+source/runtime manifests, original logs and standalone replay dependencies are retained in the
+#612 issue evidence index. Browser/raster acceptance does not claim physical-device or user
+visual acceptance.
+
+Eight public native sampled-comparison cases and all 52 focused clock/controller/preview/UI
+cases pass. Actual native one/four-thread and Node-WASM replay passes all twelve existing
+transient variants plus twelve comparison variants using the matching full eight bindings.
+The source-matching native CLI is `d6418964…`; the genuine macOS ARM release CLI is
+`a3c021be…` and independently emits the same raw schema `088b6ebd…`. Replay claims remain
+scoped to the binaries actually executed.
+
+The two strengthened production cases pass on the authenticated CI dist with zero retries:
+real range drag/Escape/keyboard final commit, exact-policy pause/resume/speed between unequal
+retained times, physical shorter endpoints and independent remainder, stale/eviction/Session
+fences, quantitative fields/differences/picks and complete default first-entry body bounds
+without a camera action. They also pass against the deployed current runtime as recorded above.
+No final #286 integration/coverage gate remains open. #9 and #16 have separate owner acceptance
+records; this change does not close those epics.
+
+## Historical implementation checkpoints
+
+The chronology below preserves original red/green receipts. “Pending”, “remaining” and
+“incomplete” statements refer to their historical checkpoint only; the accepted record above
+supersedes them. Old `791`/`49903d86`/`60b6a4e3` evidence remains separately scoped and is not
+used as current-main proof.
+
 
 The sampled engine boundary, scalar/vector compatibility, same-id selection, uniform thermal,
 explicit rigid-fall, axial affine, partial-coverage and Fourier refinement oracles are implemented.
@@ -287,5 +332,6 @@ next retained timestamp; shorter-endpoint, physical fields, gesture/lifecycle an
 oracles remain unchanged. The original production receipts stay separate. The final coherent
 parent composition will rerun the required integration gates.
 
-The next coherent parent composition and final full host/strict coverage remain open. These
-scoped runtime results are not a current-main claim. #286 is incomplete until those gates pass.
+At that historical checkpoint the next coherent parent composition and final full host/strict
+coverage remained open, so those scoped results did not establish completion. The accepted
+`79d9b7f5`/main `eced67dd` record above now supplies the complete final proof.
