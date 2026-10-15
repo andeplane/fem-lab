@@ -7,8 +7,11 @@ import OpenAI from 'openai';
 import { responseParameters, responsesProvider, type Provider } from '@femlab/ai';
 import { expect, it } from 'vitest';
 import { BrowserEvalAdapter, McpEvalAdapter } from '../src/adapters';
-import { boundedProvider, EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../src/budget';
+import { EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../src/budget';
 import { EVAL_CASES } from '../src/cases';
+import { accountForPriorAttempts } from '../src/evaluation-lineage';
+import { recoverableProvider, type AttemptReceipt } from '../src/transport-recovery';
+import { retainRuntimeLocks } from '../src/runtime-provenance';
 import { prepareFrozenBuild, hashFrozenArtifacts } from '../src/frozen-build';
 import { preparationPolicy } from '../src/preparation-policy';
 import { markdownReport } from '../src/report';
@@ -26,7 +29,11 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const startedAt = new Date().toISOString();
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim() !== '';
-  const limits = { model, maxUsd: Number(process.env['FEMLAB_EVAL_MAX_USD'] ?? 50), maxRequests: Number(process.env['FEMLAB_EVAL_MAX_REQUESTS'] ?? 400), maxInputTokens: Number(process.env['FEMLAB_EVAL_MAX_INPUT_TOKENS'] ?? 128_000) };
+  const originalLimits = { model, maxUsd: Number(process.env['FEMLAB_EVAL_MAX_USD'] ?? 50), maxRequests: Number(process.env['FEMLAB_EVAL_MAX_REQUESTS'] ?? 400), maxInputTokens: Number(process.env['FEMLAB_EVAL_MAX_INPUT_TOKENS'] ?? 128_000) };
+  const references = JSON.parse(process.env['FEMLAB_EVAL_PRIOR_ARTIFACTS'] ?? '[]') as { file: string; sha256: string }[];
+  if (!Array.isArray(references)) throw new Error('prior evaluation references must be an array');
+  const lineage = accountForPriorAttempts(originalLimits, await Promise.all(references.map(async reference => ({ bytes: await readFile(reference.file), sha256: reference.sha256 }))));
+  const limits = lineage.limits;
   const controls = { maxTokens: Number(process.env['FEMLAB_EVAL_MAX_TOKENS'] ?? 16_000), maxRounds: Number(process.env['FEMLAB_EVAL_MAX_ROUNDS'] ?? 20), timeoutMs: Number(process.env['FEMLAB_EVAL_TIMEOUT_MS'] ?? 600_000) };
   const maxWallMs = Number(process.env['FEMLAB_EVAL_MAX_WALL_MS'] ?? 5_400_000);
   if (![controls.maxTokens, controls.maxRounds, controls.timeoutMs, maxWallMs].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('invalid evaluation request/time limits');
@@ -38,7 +45,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const reuseRuntime = process.env['FEMLAB_EVAL_WASM_RUNTIME_MANIFEST'];
   const reusedWasm = reuseSource && reuseRuntime ? { sourceManifest: reuseSource, runtimeManifest: reuseRuntime } : undefined;
   const diskPolicy = await preparationPolicy(root, reusedWasm, reference => execFileSync('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], { cwd: root, encoding: 'utf8' }));
-  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
+  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, originalAllowance: JSON.stringify(originalLimits), priorAttempts: JSON.stringify(lineage.receipts), maxTransportRetries: 1, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
   if (previous && (previous.format !== 'femlab-assistant-eval/1' || previous.manifest.gitCommit !== commit || previous.manifest.dirty || previous.manifest.specificationSha256 !== sha(JSON.stringify(EVAL_CASES)) || previous.manifest.provider !== 'openai' || previous.manifest.model !== model || JSON.stringify(previous.manifest.configuration) !== JSON.stringify(configuration) || previous.lanes.some(lane => !lane.live) || !previous.controls || previous.controls.caseInFlight !== false)) throw new Error('checkpoint configuration or frozen source differs; start a new evaluation');
   const budget = previous ? restoreEvaluationBudget(limits, previous.controls?.budget) : new EvaluationBudget(limits);
   const runStartedAt = previous?.manifest.startedAt ?? startedAt;
@@ -52,10 +59,11 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const beforeCase = async () => { budget.assertReady(); await resources(); caseInFlight = true; await persistProgress(); };
   const client = key ? new OpenAI({ apiKey: key, maxRetries: 0, timeout: 120_000 }) : null;
   const unavailableProvider: Provider = { id: 'openai', models: [], async *chat() { throw new Error('provider credential unavailable'); } };
-  const provider = client ? boundedProvider(responsesProvider(client, [model]), budget, async request => {
+  const providerAttempts: AttemptReceipt[] = [...(previous?.controls?.providerAttempts ?? [])];
+  const provider = client ? recoverableProvider(observer => responsesProvider(client, [model], observer), { id: 'openai', models: [model] }, budget, async request => {
     const { model: requestedModel, input, instructions, tools } = responseParameters(request);
     return (await client.responses.inputTokens.count({ model: requestedModel, input, instructions, tools }, { signal: request.signal })).input_tokens;
-  }, resources, () => persistProgress()) : unavailableProvider;
+  }, resources, () => persistProgress(), { maxTransportRetries: 1, now: () => performance.now(), record: receipt => { providerAttempts.push(receipt); } }) : unavailableProvider;
   const common = { provider, credential: key, model, ...controls };
   let unavailable: string | undefined = !key ? 'provider credential unavailable' : undefined;
   if (key && dirty) throw new Error('live evaluation requires a clean frozen commit');
@@ -68,12 +76,13 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const build = !unavailable ? await prepareFrozenBuild(root, reusedWasm) : null;
   try {
     if (build) await assertInFrozenPackage(build.mcpPackageDirectory, [build.mcpEntry, build.nodeWasm]);
+    const runtimeLocks = build ? await retainRuntimeLocks(build, `${output}.runtime-${randomUUID()}`) : [];
     const before = await hashFrozenArtifacts(build);
     if (previous && JSON.stringify(previous.manifest.artifacts.before) !== JSON.stringify(before)) throw new Error('checkpoint app/MCP artifact hashes differ; start a new evaluation');
     const manifest: FrozenManifest = {
       gitCommit: commit, dirty, engineVersion: 'not-run', schemaVersion: 'not-run', specificationSha256: sha(JSON.stringify(EVAL_CASES)),
       artifacts: { before, after: before, stable: true },
-      provenance: { source: build ? (build.wasmProvenance ? 'built-from-clean-HEAD-with-verified-wasm' : 'built-from-clean-HEAD') : 'not-run', buildCommands: build?.commands ?? [], ...(build?.wasmProvenance ? { wasmProvenance: build.wasmProvenance } : {}), appServer: build ? 'runner-loopback' : 'not-run', mcp: build ? 'isolated-tarball-install' : 'not-run' },
+      provenance: { runtimeLocks: [...(previous?.manifest.provenance.runtimeLocks ?? []), ...runtimeLocks], source: build ? (build.wasmProvenance ? 'built-from-clean-HEAD-with-verified-wasm' : 'built-from-clean-HEAD') : 'not-run', buildCommands: build?.commands ?? [], ...(build?.wasmProvenance ? { wasmProvenance: build.wasmProvenance } : {}), appServer: build ? 'runner-loopback' : 'not-run', mcp: build ? 'isolated-tarball-install' : 'not-run' },
       hosts: { browser: { capabilities: 'not-run' }, mcp: { node: process.version, platform: process.platform, arch: process.arch, capabilities: 'not-run' } },
       provider: 'openai', model, configuration, startedAt: runStartedAt, finishedAt: startedAt,
     };
@@ -81,7 +90,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
     let persistence = Promise.resolve();
     const persist = async () => {
       manifest.finishedAt = new Date().toISOString();
-      const artifact: EvaluationArtifact = { format: 'femlab-assistant-eval/1', manifest, lanes, controls: { budget: budget.snapshot(), resumedFromSha256: previousBytes ? sha(previousBytes) : null, caseInFlight } };
+      const artifact: EvaluationArtifact = { format: 'femlab-assistant-eval/1', manifest, lanes, controls: { budget: budget.snapshot(), resumedFromSha256: previousBytes ? sha(previousBytes) : null, caseInFlight, providerAttempts } };
       const text = serializeArtifact(artifact, [key ?? '']);
       const markdown = markdownReport(artifact);
       persistence = persistence.then(async () => {

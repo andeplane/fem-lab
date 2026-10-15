@@ -23,8 +23,8 @@ it('aborts a stuck supplier, waits for reservation settlement and closes only it
   fire();
   await expect(stuck).rejects.toThrow('host was closed');
   expect(aborted).toBe(true);
-  expect(budget.snapshot()).toMatchObject({ inFlightRequests: 0, chargedOrReservedUsd: 0.01025, stoppedReason: expect.stringContaining('usage unavailable') });
-  expect(() => budget.assertReady()).toThrow('usage unavailable');
+  expect(budget.snapshot()).toMatchObject({ inFlightRequests: 0, chargedOrReservedUsd: 0.01025, stoppedReason: 'supplier aborted', retainedUnknown: [{ request: 1, reservedUsd: 0.01025 }] });
+  expect(() => budget.assertReady()).toThrow('supplier aborted');
   expect(close).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
 });
 

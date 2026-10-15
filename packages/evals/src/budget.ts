@@ -14,22 +14,23 @@ export class EvaluationBudget {
   private requests = 0;
   private inFlightRequests = 0;
   private reason: string | null = null;
+  private retainedUnknown: { request: number; reservedUsd: number }[] = [];
   constructor(readonly limits: EvaluationLimits, checkpoint?: ReturnType<EvaluationBudget['snapshot']>) {
     if (!Number.isFinite(limits.maxUsd) || limits.maxUsd <= 0 || !Number.isSafeInteger(limits.maxRequests) || limits.maxRequests <= 0 || !Number.isSafeInteger(limits.maxInputTokens) || limits.maxInputTokens <= 0) throw new Error('invalid evaluation budget');
     if (checkpoint) {
-      if (checkpoint.model !== limits.model || checkpoint.maxUsd !== limits.maxUsd || checkpoint.maxRequests !== limits.maxRequests || checkpoint.maxInputTokens !== limits.maxInputTokens || checkpoint.stoppedReason !== null || checkpoint.inFlightRequests !== 0 || !Number.isSafeInteger(checkpoint.requests) || checkpoint.requests < 0 || checkpoint.requests > limits.maxRequests || !Number.isFinite(checkpoint.chargedOrReservedUsd) || checkpoint.chargedOrReservedUsd < 0 || checkpoint.chargedOrReservedUsd > limits.maxUsd) throw new Error('evaluation budget checkpoint is incompatible or unresolved');
+      if (checkpoint.model !== limits.model || checkpoint.maxUsd !== limits.maxUsd || checkpoint.maxRequests !== limits.maxRequests || checkpoint.maxInputTokens !== limits.maxInputTokens || checkpoint.stoppedReason !== null || checkpoint.inFlightRequests !== 0 || (checkpoint.retainedUnknown !== undefined && (!Array.isArray(checkpoint.retainedUnknown) || checkpoint.retainedUnknown.length !== 0)) || !Number.isSafeInteger(checkpoint.requests) || checkpoint.requests < 0 || checkpoint.requests > limits.maxRequests || !Number.isFinite(checkpoint.chargedOrReservedUsd) || checkpoint.chargedOrReservedUsd < 0 || checkpoint.chargedOrReservedUsd > limits.maxUsd) throw new Error('evaluation budget checkpoint is incompatible or unresolved');
       this.requests = checkpoint.requests;
       this.chargedMicros = Math.ceil(checkpoint.chargedOrReservedUsd * 1e6);
     }
   }
   interrupt(reason: string): void { this.reason ??= reason; }
   assertReady(): void {
-    if (this.inFlightRequests > 0) { this.reason = 'previous generation is still in flight'; throw new Error(this.reason); }
+    if (this.inFlightRequests > 0) { this.reason ??= 'previous generation is still in flight'; throw new Error(this.reason); }
     if (this.reason !== null) throw new Error(this.reason);
-    if (this.requests >= this.limits.maxRequests) { this.reason = 'evaluation request limit reached'; throw new Error(this.reason); }
+    if (this.requests >= this.limits.maxRequests) { this.reason ??= 'evaluation request limit reached'; throw new Error(this.reason); }
   }
-  snapshot(): EvaluationLimits & { requests: number; chargedOrReservedUsd: number; stoppedReason: string | null; inFlightRequests: number } { return { ...this.limits, requests: this.requests, inFlightRequests: this.inFlightRequests, chargedOrReservedUsd: this.chargedMicros / 1e6, stoppedReason: this.reason }; }
-  reserve(model: string, inputTokens: number, outputTokens: number): { finish(usage: Usage | null): void } {
+  snapshot(): EvaluationLimits & { requests: number; chargedOrReservedUsd: number; stoppedReason: string | null; inFlightRequests: number; retainedUnknown: { request: number; reservedUsd: number }[] } { return { ...this.limits, retainedUnknown: this.retainedUnknown.map(value => ({ ...value })), requests: this.requests, inFlightRequests: this.inFlightRequests, chargedOrReservedUsd: this.chargedMicros / 1e6, stoppedReason: this.reason }; }
+  reserve(model: string, inputTokens: number, outputTokens: number): { finish(usage: Usage | null, unknown?: 'retain-for-transport-retry'): void } {
     this.assertReady();
     if (model !== this.limits.model) throw new Error('evaluation model differs from the budgeted model');
     if (!Number.isSafeInteger(inputTokens) || inputTokens < 0 || inputTokens > this.limits.maxInputTokens || !Number.isSafeInteger(outputTokens) || outputTokens <= 0) throw new Error('evaluation request exceeds its token limits');
@@ -38,20 +39,25 @@ export class EvaluationBudget {
     const maximum = costOf(model, { input: inputTokens, cacheRead: 0, cacheWrite: inputTokens, output: outputTokens });
     if (maximum === null) throw new Error('evaluation model has no verified maximum tariff');
     const held = Math.ceil(maximum * 1e6);
-    if (this.chargedMicros + held > Math.floor(this.limits.maxUsd * 1e6)) { this.reason = 'evaluation cost limit reached before generation'; throw new Error(this.reason); }
+    if (this.chargedMicros + held > Math.floor(this.limits.maxUsd * 1e6)) { this.reason ??= 'evaluation cost limit reached before generation'; throw new Error(this.reason); }
     this.requests++;
     this.inFlightRequests++;
     this.chargedMicros += held;
     let settled = false;
-    return { finish: (usage) => {
+    const request = this.requests;
+    return { finish: (usage, unknown) => {
       if (settled) throw new Error('evaluation reservation already settled');
       settled = true;
       this.inFlightRequests--;
-      if (usage === null) { this.reason = 'provider usage unavailable; reserved cost retained and generation stopped'; return; }
+      if (usage === null) {
+        this.retainedUnknown.push({ request, reservedUsd: held / 1e6 });
+        if (unknown !== 'retain-for-transport-retry') this.interrupt('provider usage unavailable; reserved cost retained and generation stopped');
+        return;
+      }
       const counts = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite ?? 0];
       const actual = costOf(model, usage);
       if (!counts.every(n => Number.isSafeInteger(n) && n >= 0) || (usage.cacheWrite ?? 0) > usage.input || usage.input + usage.cacheRead > inputTokens || usage.output > outputTokens || actual === null || Math.ceil(actual * 1e6) > held) {
-        this.reason = 'provider usage exceeded the counted request reservation'; return;
+        this.reason ??= 'provider usage exceeded the counted request reservation'; return;
       }
       this.chargedMicros += Math.ceil(actual * 1e6) - held;
     } };
