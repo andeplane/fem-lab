@@ -11,6 +11,7 @@ import { EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../s
 import { EVAL_CASES } from '../src/cases';
 import { accountForPriorAttempts } from '../src/evaluation-lineage';
 import { recoverableProvider, type AttemptReceipt } from '../src/transport-recovery';
+import { countEvidenceFetch, localCountEvidence } from '../src/count-evidence';
 import { retainRuntimeLocks } from '../src/runtime-provenance';
 import { prepareFrozenBuild, hashFrozenArtifacts } from '../src/frozen-build';
 import { preparationPolicy } from '../src/preparation-policy';
@@ -47,7 +48,8 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   if (nativeManifests !== undefined && (!Array.isArray(nativeManifests) || nativeManifests.some(file => typeof file !== 'string' || !path.isAbsolute(file)))) throw new Error('native manifests must be an array of absolute receipt paths');
   const reusedWasm = reuseSource && reuseRuntime ? { sourceManifest: reuseSource, runtimeManifest: reuseRuntime, ...(nativeManifests ? { nativeManifests } : {}) } : undefined;
   const diskPolicy = await preparationPolicy(root, reusedWasm, reference => execFileSync('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], { cwd: root, encoding: 'utf8' }));
-  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, originalAllowance: JSON.stringify(originalLimits), priorAttempts: JSON.stringify(lineage.receipts), maxTransportRetries: 1, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
+  const captureParent = process.env['FEMLAB_EVAL_COUNT_EVIDENCE_PARENT'];
+  const configuration = { ...(captureParent ? { countEvidence: 'serialized-count-input/1' } : {}), providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, originalAllowance: JSON.stringify(originalLimits), priorAttempts: JSON.stringify(lineage.receipts), maxTransportRetries: 1, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
   if (previous && (previous.format !== 'femlab-assistant-eval/1' || previous.manifest.gitCommit !== commit || previous.manifest.dirty || previous.manifest.specificationSha256 !== sha(JSON.stringify(EVAL_CASES)) || previous.manifest.provider !== 'openai' || previous.manifest.model !== model || JSON.stringify(previous.manifest.configuration) !== JSON.stringify(configuration) || previous.lanes.some(lane => !lane.live) || !previous.controls || previous.controls.caseInFlight !== false)) throw new Error('checkpoint configuration or frozen source differs; start a new evaluation');
   const budget = previous ? restoreEvaluationBudget(limits, previous.controls?.budget) : new EvaluationBudget(limits);
   const runStartedAt = previous?.manifest.startedAt ?? startedAt;
@@ -59,7 +61,8 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   let caseInFlight = false;
   let persistProgress: () => Promise<void> = async () => undefined;
   const beforeCase = async () => { budget.assertReady(); await resources(); caseInFlight = true; await persistProgress(); };
-  const client = key ? new OpenAI({ apiKey: key, maxRetries: 0, timeout: 120_000 }) : null;
+  const capture = key && captureParent ? await localCountEvidence(root, captureParent, { source: commit, node: process.version, sdk: `openai@${sdkVersion}` }) : undefined;
+  const client = key ? new OpenAI({ apiKey: key, maxRetries: 0, timeout: 120_000, ...(capture ? { fetch: countEvidenceFetch(globalThis.fetch, capture) } : {}) }) : null;
   const unavailableProvider: Provider = { id: 'openai', models: [], async *chat() { throw new Error('provider credential unavailable'); } };
   const providerAttempts: AttemptReceipt[] = [...(previous?.controls?.providerAttempts ?? [])];
   const provider = client ? recoverableProvider(observer => responsesProvider(client, [model], observer), { id: 'openai', models: [model] }, budget, async request => {
