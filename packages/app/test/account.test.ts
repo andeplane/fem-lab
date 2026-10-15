@@ -17,3 +17,24 @@ it('sends the explicit subscription use only to new checkout',async()=>{
   await f.c.services.changePlan('studio');
   expect(f.fetch).toHaveBeenCalledWith('https://api.example.com/v1/billing/plan',expect.objectContaining({body:'{"plan":"studio"}'}));
 });
+it('posts an empty free-claim body with the authenticated token and refreshes authoritative eligibility',async()=>{
+  const f=fixture();await f.c.initialize();f.changed({uid:'a',email:'a@example.com'});await vi.waitFor(()=>expect(f.c.state.status).toBe('active'));
+  const updated={...profile,freeAllowance:{status:'claimed',credits:6666666,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}};
+  f.fetch.mockClear();f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({status:'claimed'}))).mockResolvedValueOnce(new Response(JSON.stringify(updated)));
+  await f.c.services.claimFreeAllowance();
+  expect(f.fetch).toHaveBeenNthCalledWith(1,'https://api.example.com/v1/account/free-allowance',expect.objectContaining({method:'POST',body:'{}',headers:expect.objectContaining({Authorization:'Bearer token-a'})}));
+  expect(f.fetch).toHaveBeenNthCalledWith(2,'https://api.example.com/v1/account',expect.objectContaining({method:'GET'}));
+  expect(f.c.state.profile?.freeAllowance?.status).toBe('claimed');expect(f.c.state.message).toBe('Free allowance claim complete.');expect(f.navigate).not.toHaveBeenCalled();
+});
+it('surfaces denied free eligibility without a refresh or local credit grant',async()=>{
+  const f=fixture();await f.c.initialize();f.changed({uid:'a',email:'a@example.com'});await vi.waitFor(()=>expect(f.c.state.status).toBe('active'));
+  f.fetch.mockClear();f.fetch.mockResolvedValueOnce(new Response(JSON.stringify({code:'eligibility-required',cause:'Eligibility review is required.'}),{status:403}));
+  await expect(f.c.services.claimFreeAllowance()).rejects.toThrow('Eligibility review is required.');
+  expect(f.fetch).toHaveBeenCalledTimes(1);expect(f.c.state.profile).toEqual(profile);expect(f.c.state.error).toBe('Eligibility review is required.');
+});
+it('does not refresh or announce a free claim after the signed-in identity changes',async()=>{
+  const f=fixture();await f.c.initialize();f.changed({uid:'a',email:'a@example.com'});await vi.waitFor(()=>expect(f.c.state.status).toBe('active'));
+  let release!:(response:Response)=>void;f.fetch.mockClear();f.fetch.mockImplementationOnce(()=>new Promise(resolve=>{release=resolve}));
+  const claim=f.c.services.claimFreeAllowance();await vi.waitFor(()=>expect(release).toBeTypeOf('function'));f.changed(null);release(new Response(JSON.stringify({status:'claimed'})));
+  await expect(claim).rejects.toThrow('account changed');expect(f.c.state).toMatchObject({uid:null,profile:null,message:null});expect(f.fetch).toHaveBeenCalledTimes(1);
+});

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build a committed service revision and deploy it with workload identities and pinned secrets."""
-import argparse,os,json,subprocess,tempfile,tarfile,shutil
+import argparse,os,json,subprocess,tempfile,tarfile,shutil,secrets
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--environment',choices=['staging','production'],required=True);p.add_argument('--account',required=True);p.add_argument('--source',type=Path,required=True);a=p.parse_args()
 project='femlab-app-staging' if a.environment=='staging' else 'femlab-app';instance='femlab-staging' if a.environment=='staging' else 'femlab-production';region='europe-west3';infra=Path(__file__).parent
@@ -20,6 +20,13 @@ if run('secrets','describe','openai-api-key',optional=True).returncode:
  if not key:raise RuntimeError('OPENAI_API_KEY is required to initialize the supplier secret; it is never printed or put in source.')
  run('secrets','create','openai-api-key','--replication-policy=user-managed','--locations=europe-west3');run('secrets','versions','add','openai-api-key','--data-file=-',input=key)
 run('secrets','add-iam-policy-binding','openai-api-key',f'--member=serviceAccount:femlab-api@{project}.iam.gserviceaccount.com','--role=roles/secretmanager.secretAccessor')
+# Stable, project-specific fraud markers survive account deletion without storing email.
+# Generate once through stdin; do not log, rotate implicitly, or include this key in builds.
+if run('secrets','describe','free-eligibility-hmac-key',optional=True).returncode:
+ run('secrets','create','free-eligibility-hmac-key','--replication-policy=user-managed','--locations=europe-west3')
+ run('secrets','versions','add','free-eligibility-hmac-key','--data-file=-',input=secrets.token_hex(32))
+for identity in ['femlab-api','femlab-jobs']:
+ run('secrets','add-iam-policy-binding','free-eligibility-hmac-key',f'--member=serviceAccount:{identity}@{project}.iam.gserviceaccount.com','--role=roles/secretmanager.secretAccessor')
 def version(secret):return run('secrets','versions','list',secret,'--filter=state:ENABLED','--sort-by=~createTime','--limit=1','--format=value(name)').stdout.strip().split('/')[-1]
 with tempfile.TemporaryDirectory(prefix='femlab-build-563-') as directory:
  root=Path(directory);archive=root/'source.tar';subprocess.run(['git','archive','--format=tar','-o',str(archive),revision],cwd=a.source,check=True)
