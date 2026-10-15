@@ -12,6 +12,10 @@
 //! round trip per 25 iterations instead of per iteration.
 //! A device-side halt flag freezes vector updates after exact convergence or scalar breakdown,
 //! preserving the correction for the f64 outer loop while the rest of the batch drains.
+//! The next readback distinguishes that halt from budget exhaustion and records actual
+//! updates. An acceptable finite recurrence residual can still be assessed by the f64 loop;
+//! a rounded-operator breakdown with no usable update is a structured `solve.stalled` error.
+//! A finite partial correction still reaches the unchanged f64 acceptance test.
 //!
 //! Everything that needs a device lives in this file, including the error for not having one,
 //! so `src/solve/` reaches 100 % coverage on a machine with no adapter at all.
@@ -28,10 +32,89 @@ const RZ_OLD: u64 = 0;
 const RZ_NEW: u64 = 1;
 const PQ: u64 = 2;
 const BB: u64 = 5;
-/// Floats in `scalars` (`RZ_OLD, RZ_NEW, PQ, ALPHA, BETA, BB, HALTED` and one spare).
+const HALTED: usize = 6;
+const ITERATIONS: usize = 7;
+/// Floats in `scalars` (`RZ_OLD, RZ_NEW, PQ, ALPHA, BETA, BB, HALTED, ITERATIONS`).
 const SCALARS: u64 = 8;
 /// Iterations recorded into one command encoder before the residual is read back.
 const PER_SUBMIT: usize = 25;
+
+/// Why the uploaded f32 system stopped. A curvature breakdown concerns that rounded
+/// operator; it does not establish that the original f64 stiffness is indefinite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CgStopReason {
+    Converged,
+    IterationLimit,
+    NonPositiveCurvature,
+    NonFinite,
+}
+
+/// A device solve's measured outcome, before f64 iterative refinement decides acceptance.
+#[derive(Debug, Clone, Copy)]
+pub struct CgReport {
+    /// Vector updates actually performed, excluding the frozen remainder of a submission.
+    pub iterations: usize,
+    /// Iterations encoded, including a frozen tail. Kept for the low-level solve API.
+    pub submitted_iterations: usize,
+    /// The uploaded system's recurrence residual, `sqrt(r·r) / sqrt(b·b)`.
+    pub relative_residual: f32,
+    pub stop: CgStopReason,
+}
+
+impl CgReport {
+    /// Refuse an unusable correction, or report finite partial progress for the f64
+    /// outer residual to assess. This never accepts a physical solution on its own.
+    pub fn check_correction(self, progress: OnProgress<'_>) -> Result<(), Error> {
+        let cause = match self.stop {
+            CgStopReason::NonPositiveCurvature if self.iterations == 0 => {
+                Some("nonpositive curvature in the uploaded f32 operator")
+            }
+            CgStopReason::NonFinite => Some("a nonfinite scalar in the uploaded f32 solve"),
+            CgStopReason::Converged | CgStopReason::IterationLimit | CgStopReason::NonPositiveCurvature => None,
+        };
+        if let Some(cause) = cause {
+            return Err(Error::new(
+                ErrorCode::SolveStalled,
+                format!(
+                    "GPU CG stopped after {} updates: {cause}; relative residual {:e}",
+                    self.iterations, self.relative_residual
+                ),
+            )
+            .at("solve")
+            .suggest("solve.run { solver: 'cpu-direct' }"));
+        }
+        // A finite correction made before curvature breakdown can still reduce the true
+        // f64 residual. Preserve that established refinement path and report the halt;
+        // never turn an inner recurrence criterion into physical acceptance.
+        if self.stop == CgStopReason::NonPositiveCurvature
+            && !progress(Progress {
+                phase: "solve",
+                fraction: 0.5,
+                message: format!(
+                    "GPU CG stopped on nonpositive uploaded curvature after {} updates; checking the partial correction in f64",
+                    self.iterations
+                ),
+            })
+        {
+            return Err(Error::cancelled());
+        }
+        Ok(())
+    }
+
+    fn from_scalars(s: &[f32; SCALARS as usize], submitted: usize, tol: f32) -> Self {
+        let relative_residual = s[RZ_OLD as usize].sqrt() / s[BB as usize].sqrt().max(f32::MIN_POSITIVE);
+        let stop = if s[HALTED] == 3.0 || !relative_residual.is_finite() {
+            CgStopReason::NonFinite
+        } else if s[HALTED] == 1.0 || relative_residual < tol {
+            CgStopReason::Converged
+        } else if s[HALTED] == 2.0 {
+            CgStopReason::NonPositiveCurvature
+        } else {
+            CgStopReason::IterationLimit
+        };
+        Self { iterations: s[ITERATIONS] as usize, submitted_iterations: submitted, relative_residual, stop }
+    }
+}
 
 /// The inner solver of a refinement loop: the CPU's f64 PCG or the device's f32 CG.
 ///
@@ -114,8 +197,10 @@ impl<'a> GpuCg<'a> {
         for (i, bi) in self.b32.iter_mut().enumerate() {
             *bi = (self.scale[i] * b[i]) as f32;
         }
-        self.iterations +=
-            self.ctx.solve(self.gpu, &self.b32, self.tol, self.max_iters, &mut self.x32, progress).await?;
+        let report =
+            self.ctx.solve_report(self.gpu, &self.b32, self.tol, self.max_iters, &mut self.x32, progress).await?;
+        self.iterations += report.iterations;
+        report.check_correction(progress)?;
         for (i, xi) in x.iter_mut().enumerate() {
             *xi = self.scale[i] * self.x32[i] as f64;
         }
@@ -406,9 +491,8 @@ impl CgContext {
         self.read_f32(gpu, &self.q, y).await
     }
 
-    /// Run CG on the uploaded matrix until `√(r·r)/√(b·b) < tol`, and return the iterations it
-    /// took. Convergence is tested once per [`PER_SUBMIT`] iterations, which is also where a
-    /// host that says stop is heard.
+    /// Run CG on the uploaded matrix and return the number of encoded iterations.
+    /// Use [`Self::solve_report`] to distinguish actual updates, convergence and breakdown.
     pub async fn solve(
         &self,
         gpu: &Gpu,
@@ -418,6 +502,22 @@ impl CgContext {
         x: &mut [f32],
         progress: OnProgress<'_>,
     ) -> Result<usize, Error> {
+        self.solve_report(gpu, b, tol, max_iters, x, progress).await.map(|report| report.submitted_iterations)
+    }
+
+    /// Run the uploaded f32 system until its recurrence residual is below `tol`, the budget
+    /// expires, or the device reports a breakdown. Inspection and cancellation occur at each
+    /// submission boundary, at most [`PER_SUBMIT`] encoded iterations apart. The f64 outer
+    /// residual remains the sole acceptance criterion for a physical solve.
+    pub async fn solve_report(
+        &self,
+        gpu: &Gpu,
+        b: &[f32],
+        tol: f32,
+        max_iters: usize,
+        x: &mut [f32],
+        progress: OnProgress<'_>,
+    ) -> Result<CgReport, Error> {
         gpu.queue.write_buffer(&self.b, 0, bytemuck::cast_slice(b));
         let mut enc = gpu.device.create_command_encoder(&Default::default());
         {
@@ -431,30 +531,41 @@ impl CgContext {
         gpu.queue.submit([enc.finish()]);
 
         let mut done = 0;
+        let mut updates = 0;
+        let mut scalars = [0.0f32; SCALARS as usize];
+        // With no iteration budget, read the initialized residual rather than reporting the
+        // zero-filled host scratch as convergence.
+        if max_iters == 0 {
+            self.read_f32(gpu, &self.scalars, &mut scalars).await?;
+        }
         while done < max_iters {
             let batch = PER_SUBMIT.min(max_iters - done);
+            // A per-submission counter stays exactly representable in f32 even when a
+            // caller supplies an iteration budget above 2^24.
+            gpu.queue.write_buffer(&self.scalars, ITERATIONS as u64 * 4, bytemuck::bytes_of(&0.0f32));
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             for _ in 0..batch {
                 self.encode_iteration(&mut enc);
             }
             gpu.queue.submit([enc.finish()]);
             done += batch;
-            // A readback that fails leaves `s` zeroed, so `rel` is zero and the loop ends here;
-            // the readback of `x` below then reports the lost device once, for both of them.
-            let mut s = [0.0f32; SCALARS as usize];
-            let _ = self.read_f32(gpu, &self.scalars, &mut s).await;
-            let rel = s[RZ_OLD as usize].sqrt() / s[BB as usize].sqrt().max(f32::MIN_POSITIVE);
-            if rel < tol {
+            self.read_f32(gpu, &self.scalars, &mut scalars).await?;
+            updates += scalars[ITERATIONS] as usize;
+            let report = CgReport::from_scalars(&scalars, done, tol);
+            if report.stop != CgStopReason::IterationLimit {
                 break;
             }
             if !progress(Progress {
                 phase: "solve",
                 fraction: 0.5,
-                message: format!("gpu cg {done}: relative residual {rel:e}"),
+                message: format!("gpu cg {updates}: relative residual {:e}", report.relative_residual),
             }) {
                 return Err(Error::cancelled());
             }
         }
-        self.read_f32(gpu, &self.x, x).await.map(|()| done)
+        self.read_f32(gpu, &self.x, x).await?;
+        let mut report = CgReport::from_scalars(&scalars, done, tol);
+        report.iterations = updates;
+        Ok(report)
     }
 }

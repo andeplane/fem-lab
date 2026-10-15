@@ -12,7 +12,7 @@ use femlab_engine::fem::loads::{assemble_loads, Load};
 use femlab_engine::fem::material::builtin_law;
 use femlab_engine::fem::mpc;
 use femlab_engine::fem::problem::{Constraint, Coupling, Problem};
-use femlab_engine::gpu::cg::CgContext;
+use femlab_engine::gpu::cg::{CgContext, CgStopReason, GpuCg};
 use femlab_engine::gpu::{Gpu, MAX_WORKGROUPS, WORKGROUP};
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
@@ -360,6 +360,100 @@ fn gpu_cg_handles_a_nonzero_beta_and_freezes_on_nonpositive_curvature() {
         let mut x = [f32::NAN];
         pollster::block_on(ctx.solve(&g, &[1.0], 1e-5, 50, &mut x, &mut nop)).unwrap();
         assert_eq!(x, [0.0], "no valid step exists for curvature {diagonal}");
+    }
+}
+
+/// Issue #3: report the uploaded operator's actual outcome rather than draining the
+/// entire budget after a device halt. Every oracle below follows from a 1x1 or 2x2 system.
+#[test]
+fn gpu_cg_reports_updates_budget_and_rounded_operator_breakdown() {
+    let g = gpu();
+    let identity = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![1.0] };
+    let ctx = pollster::block_on(CgContext::new(&g, &identity, &[1.0], None)).unwrap();
+    for (load, budget, updates, submitted, stop, residual) in [
+        (1.0, 50, 1, 25, CgStopReason::Converged, 0.0),
+        (0.0, 50, 0, 25, CgStopReason::Converged, 0.0),
+        (1.0, 0, 0, 0, CgStopReason::IterationLimit, 1.0),
+        (0.0, 0, 0, 0, CgStopReason::Converged, 0.0),
+    ] {
+        let mut x = [f32::NAN];
+        let report = pollster::block_on(ctx.solve_report(&g, &[load], 1e-5, budget, &mut x, &mut nop)).unwrap();
+        assert_eq!(report.stop, stop);
+        assert_eq!(report.iterations, updates);
+        assert_eq!(report.submitted_iterations, submitted);
+        assert_eq!(report.relative_residual, residual);
+        assert_eq!(x[0], if updates == 1 { load } else { 0.0 });
+    }
+
+    // One step from zero: alpha=1, x=(1,0), r=(0,-1/2), ||r||/||b||=1/2.
+    let k = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![1.0, 0.5, 0.5, 1.0] };
+    let ctx = pollster::block_on(CgContext::new(&g, &k, &[1.0, 0.5, 0.5, 1.0], None)).unwrap();
+    let mut x = [f32::NAN; 2];
+    let report = pollster::block_on(ctx.solve_report(&g, &[1.0, 0.0], 1e-5, 1, &mut x, &mut nop)).unwrap();
+    assert_eq!(report.stop, CgStopReason::IterationLimit);
+    assert_eq!(report.iterations, 1);
+    assert_eq!(report.relative_residual, 0.5);
+    assert_eq!(x, [1.0, 0.0]);
+
+    // The first update reaches the requested residual before a subsequent batch
+    // iteration sees the small negative eigenspace. Keep that usable correction:
+    // the physical f64 outer residual, rather than the rounded curvature, decides
+    // whether it solves the original problem.
+    let indefinite = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![0, 1], vals: vec![1.0, -1.0] };
+    let ctx = pollster::block_on(CgContext::new(&g, &indefinite, &[1.0, -1.0], None)).unwrap();
+    let report = pollster::block_on(ctx.solve_report(&g, &[1.0, 1e-4], 1e-3, 50, &mut x, &mut nop)).unwrap();
+    assert_eq!(report.stop, CgStopReason::Converged);
+    assert_eq!(report.iterations, 1);
+    assert!((report.relative_residual - 2e-4).abs() < 1e-7);
+    assert_eq!(x, [1.0, 1e-4]);
+
+    // Above the inner target, a finite partial correction still belongs to f64
+    // refinement. Preserve it, expose its actual stop, and honor cancellation.
+    let report = pollster::block_on(ctx.solve_report(&g, &[1.0, 1e-4], 1e-6, 50, &mut x, &mut nop)).unwrap();
+    assert_eq!(report.stop, CgStopReason::NonPositiveCurvature);
+    let mut message = String::new();
+    let mut progress = |p: Progress| {
+        message = p.message;
+        true
+    };
+    report.check_correction(&mut progress).unwrap();
+    assert!(message.contains("checking the partial correction in f64"));
+    assert_eq!(x, [1.0, 1e-4]);
+    assert_eq!(report.iterations, 1);
+    let error = report.check_correction(&mut |_p| false).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Cancelled);
+
+    // Exact eigenvalues are delta and 2-delta, both positive. Rounding to f32 turns
+    // every entry into 1; the eigenvector (1,-1) then has zero uploaded curvature.
+    let delta = 2.0f64.powi(-26);
+    let k =
+        Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![1.0, 1.0 - delta, 1.0 - delta, 1.0] };
+    let vals: Vec<f32> = k.vals.iter().map(|&v| v as f32).collect();
+    assert_eq!(vals, vec![1.0; 4]);
+    let ctx = pollster::block_on(CgContext::new(&g, &k, &vals, None)).unwrap();
+    let report = pollster::block_on(ctx.solve_report(&g, &[1.0, -1.0], 1e-5, 5000, &mut x, &mut nop)).unwrap();
+    assert_eq!(report.stop, CgStopReason::NonPositiveCurvature);
+    assert_eq!(report.iterations, 0);
+    assert_eq!(report.submitted_iterations, 25);
+    assert_eq!(report.relative_residual, 1.0);
+    assert_eq!(x, [0.0, 0.0]);
+    let mut inner = pollster::block_on(GpuCg::new(&g, &k, &SolveOptions::default())).unwrap();
+    let error = pollster::block_on(inner.solve(&[1.0, -1.0], &mut [0.0; 2], &mut nop)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert!(error.cause.contains("nonpositive curvature in the uploaded f32 operator"));
+    assert_eq!(error.where_.as_deref(), Some("solve"));
+    assert_eq!(error.suggestion.as_deref(), Some("solve.run { solver: 'cpu-direct' }"));
+    assert_eq!(inner.iterations, 0);
+
+    // Finite f64 data can exceed the f32 residual range. This is an explicit GPU
+    // failure, without misclassifying the original identity as indefinite.
+    for max_iterations in [0, 50] {
+        let opts = SolveOptions { max_iterations, ..SolveOptions::default() };
+        let mut inner = pollster::block_on(GpuCg::new(&g, &identity, &opts)).unwrap();
+        let error = pollster::block_on(inner.solve(&[1e100], &mut [0.0], &mut nop)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveStalled);
+        assert!(error.cause.contains("nonfinite scalar in the uploaded f32 solve"));
+        assert_eq!(inner.iterations, 0);
     }
 }
 

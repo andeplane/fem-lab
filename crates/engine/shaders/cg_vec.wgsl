@@ -6,7 +6,9 @@
 // that it needs, and wgpu's auto layout gives it a bind-group layout with exactly those.
 // `scalars` is the eight-float scratch the whole iteration lives in, so alpha and beta never
 // leave the device: `p·q` and `r·r` are written into it by `dot.wgsl` (through a buffer copy),
-// and alpha, beta and the running `r·r` are computed from it here.
+// and alpha, beta and the running `r·r` are computed from it here. HALTED distinguishes
+// convergence (1), nonpositive curvature (2) and nonfinite scalars (3); ITERATIONS counts
+// actual updates within one submission, so a frozen tail is never counted as work.
 
 struct Params {
     n: u32,
@@ -20,6 +22,10 @@ const ALPHA = 3u;
 const BETA = 4u;
 const BB = 5u;
 const HALTED = 6u;
+const ITERATIONS = 7u;
+const CONVERGED = 1.0;
+const CURVATURE = 2.0;
+const NONFINITE = 3.0;
 
 @group(0) @binding(0) var<storage, read_write> x: array<f32>;
 @group(0) @binding(1) var<storage, read_write> r: array<f32>;
@@ -45,6 +51,7 @@ fn init(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
     p[i] = b[i];
     if (i == 0u) {
         scalars[HALTED] = 0.0;
+        scalars[ITERATIONS] = 0.0;
     }
 }
 
@@ -63,16 +70,25 @@ fn alpha() {
     let pq = scalars[PQ];
     // Exact convergence (including b=0) and nonpositive curvature must stop on-device:
     // the CPU cannot see them until the remainder of this submission has executed.
-    if (!(rr > 0.0) || !(pq > 0.0) || !finite(rr) || !finite(pq)) {
-        scalars[HALTED] = 1.0;
+    if (!finite(rr) || !finite(pq)) {
+        scalars[HALTED] = NONFINITE;
+        return;
+    }
+    if (!(rr > 0.0)) {
+        scalars[HALTED] = CONVERGED;
+        return;
+    }
+    if (!(pq > 0.0)) {
+        scalars[HALTED] = CURVATURE;
         return;
     }
     let a = rr / pq;
     if (!finite(a)) {
-        scalars[HALTED] = 1.0;
+        scalars[HALTED] = NONFINITE;
         return;
     }
     scalars[ALPHA] = a;
+    scalars[ITERATIONS] += 1.0;
 }
 
 @compute @workgroup_size(256)
@@ -94,8 +110,12 @@ fn beta() {
     let rr = scalars[RZ_NEW];
     let beta = rr / scalars[RZ_OLD];
     scalars[RZ_OLD] = rr;
-    if (!(rr > 0.0) || !finite(rr) || !finite(beta)) {
-        scalars[HALTED] = 1.0;
+    if (!finite(rr) || !finite(beta)) {
+        scalars[HALTED] = NONFINITE;
+        return;
+    }
+    if (!(rr > 0.0)) {
+        scalars[HALTED] = CONVERGED;
         return;
     }
     scalars[BETA] = beta;

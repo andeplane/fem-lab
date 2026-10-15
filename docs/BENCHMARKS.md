@@ -3079,3 +3079,17 @@ the author values nor either declared tolerance is changed.
 The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
 checking the closed-form extension, Poisson contraction and recovered stress through the
 actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.
+
+### GPU inner-stop diagnostics (#3)
+
+The low-level GPU CG report distinguishes encoded iterations from actual vector updates,
+convergence, an exhausted budget, nonpositive uploaded curvature and nonfinite device
+scalars. The physical acceptance criterion remains the unchanged f64 outer residual.
+`gpu_cg_reports_updates_budget_and_rounded_operator_breakdown` checks identity and zero
+loads, zero and one-step budgets, and the exact two-by-two SPD matrix with diagonal 1
+and off-diagonal `1 - 2^-26`. Its eigenvalues are `2^-26` and `2 - 2^-26`; f32 rounding
+produces the singular all-ones matrix. Loading its `(1,-1)` eigenvector must report
+`solve.stalled` from the GPU path after zero updates, without declaring the original
+f64 matrix indefinite or silently solving on the CPU. A finite f64 load beyond the
+f32 range must report a nonfinite GPU scalar. This is a breakdown oracle, not a claim
+that rounding caused the large D5 failure.
