@@ -1,0 +1,253 @@
+{
+  "name": "vm142-finite-quarter-quad8",
+  "reference": "Benchmark C1 finite-width VM142 (tracking #7, implementation #626). Primary Ansys VM142 and its APDL input: https://ansyshelp.ansys.com/public/views/secured/corp/v251/en/ans_vm/Hlp_V_VM142.html and Hlp_V_VM142TXT.html (Roark, 4th ed., p. 384). Full square 12 in by 12 in, hole diameter 1 in, plane-stress thickness 1 in, E = 30e6 psi, nu = 0.3. Quarter domain x,y in [0,6] in, radius 0.5 in, symmetry ux = 0 at x = 0 and uy = 0 at y = 0, tensile pressure 1000 psi on x = 6 in; top and hole free. Independent maximum sigma_xx target 3018 psi at (0,0.5 in), Kt = 3.018, unchanged 2% tolerance. This complete finite plate does not implement Ansys cut-boundary submodel interpolation. Two mapped Quad8 blocks at n = 32 use r = 4^(1/n), preserving the radial grading map across refinement. The registry test covers n = 8,16,32,64,128 with reference gates on all three finest meshes; values cross the target, and the cause of the offset remains unsettled. Observed rates and Richardson limits are diagnostics, not independent oracles or proofs of decreasing true error.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "vm142-finite-quarter-quad8"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "in",
+        "stress": "psi",
+        "force": "lbf"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "1 in"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "30000000 psi",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "plate",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0.5 in",
+                "0 in"
+              ],
+              [
+                "6 in",
+                "0 in"
+              ],
+              [
+                "6 in",
+                "6 in"
+              ],
+              [
+                "0.35355339059327373 in",
+                "0.35355339059327373 in"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 in",
+                  "0 in"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "grading": [
+              1.0442737824274138,
+              1
+            ],
+            "tags": [
+              "ymin",
+              "xmax",
+              null,
+              "hole"
+            ]
+          },
+          {
+            "corners": [
+              [
+                "0.35355339059327373 in",
+                "0.35355339059327373 in"
+              ],
+              [
+                "6 in",
+                "6 in"
+              ],
+              [
+                "0 in",
+                "6 in"
+              ],
+              [
+                "0 in",
+                "0.5 in"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 in",
+                  "0 in"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "grading": [
+              1.0442737824274138,
+              1
+            ],
+            "tags": [
+              null,
+              "ymax",
+              "xmin",
+              "hole"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "plate.xmin",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "plate.ymin",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "tension",
+      "on": "plate.xmax",
+      "value": "-1000 psi"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy"
+      ],
+      "loads": [
+        "tension"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0 in",
+          "0.5 in",
+          "0 in"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 3018,
+      "tol": 0.02,
+      "rel": true,
+      "note": "Independent published VM142 target 3018 psi, unchanged 2% tolerance; preserve the finite geometry."
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0 in",
+          "0.5 in",
+          "0 in"
+        ]
+      },
+      "path": "/value/unit",
+      "expect": "psi"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-08
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/appliedTotal/0/value",
+      "expect": 6000,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "Uniform 1000 psi on 6 in by 1 in gives 6000 lbf."
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/appliedTotal/0/unit",
+      "expect": "lbf"
+    }
+  ]
+}
