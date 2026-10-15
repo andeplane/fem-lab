@@ -10,6 +10,15 @@ on:
         default: false
         description: Require every GPU check for release validation; Windows is always required.
 
+# Two gates (issue #441, ADR 0022). A pull request runs the fast set: Rust on macOS (fmt, clippy,
+# tests), the wasm build, the web build and Chromium smoke on the CPU path — enough to prove the
+# change works on macOS and in Chrome. A push to main, and release validation (`strict: true`),
+# run everything: Linux Rust, Windows, the native-vs-wasm hash comparison, every smoke variant
+# and the required lavapipe GPU job with full 100 % library coverage. So main can go red on what a PR did
+# not run; whoever merged fixes forward before anything else lands. The condition is written out
+# at each job (`github.event_name != 'pull_request' || inputs.strict`); job names are the check
+# names, so keep them.
+
 # One run per ref: a new push cancels the older run of the same branch, so the shared queue holds
 # only what can still matter (issue #290). Not on main: merges land minutes apart there, and a run
 # that is always cancelled never tells anyone whether main is green.
@@ -22,13 +31,24 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  billing-release:
+    name: billing release guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s infra/stripe -p 'test_*.py' -v
+
+  # macOS on every event; Linux only on the full set. Full crate coverage belongs to the GPU job.
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON((github.event_name == 'pull_request' && !inputs.strict) && '["macos-latest"]' || '["ubuntu-latest", "macos-latest"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,21 +61,13 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
-      # 100 % on the library crates. Regions stand in for branches: llvm-cov measures branches only on nightly.
-      # bridge: src/gpu is covered in the GPU job below; delete this exclusion when that job is
-      # required after ADR 0007's week-long green soak.
-      - name: coverage
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cargo install cargo-llvm-cov --locked
-          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
 
   # GPU kernels for real on a GPU-less runner: Mesa lavapipe is the Vulkan adapter (ADR 0007).
   # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
   gpu:
-    name: gpu kernels on lavapipe (advisory during week-long soak)
+    name: gpu kernels on lavapipe
+    if: github.event_name != 'pull_request' || inputs.strict
     runs-on: ubuntu-latest
-    continue-on-error: ${{ !inputs.strict }}
     env:
       LVP_POISON_MEMORY: "true"
     steps:
@@ -72,12 +84,28 @@ jobs:
       # reports 99 % on lines that ran. The 66k-DOF D5 sibling is `#[ignore]`d out of that binary
       # and run on its own in release, where it takes seconds instead of ten minutes. Override
       # the ordinary level-1 test profile here so instrumentation retains exact source regions.
-      - run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      - name: strict GPU coverage
+        id: gpu_coverage
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      # Preserve the failed gate; export its existing profiles so a missed region is located
+      # precisely rather than guessed from rounded percentages. This does not rebuild or retest.
+      - name: export failed GPU coverage detail
+        if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --json --output-path gpu-coverage.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
+        with:
+          name: gpu-coverage-detail
+          path: gpu-coverage.json
+          if-no-files-found: error
+          retention-days: 7
       - run: cargo test --release -p femlab-engine --features gpu-tests --test gpu_kernels -- --ignored sixty_six --nocapture
 
-  # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
-  wasm-hash:
-    name: native vs wasm Journal hashes
+  # The wasm module, the Node wasm build, the schema document and the release CLI, built once and
+  # handed to every job that needs them: `web` bundles the module, `smoke` and `wasm-hash` replay
+  # Journals against the CLI. Runs on every event because the web gate depends on it.
+  wasm:
+    name: wasm build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,13 +125,53 @@ jobs:
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
       - run: node tools/build-wasm.mjs
+      - run: cargo build -p femlab --release
+      - run: ./target/release/femlab schema --out engine.schema.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: |
+            packages/app/src/generated/wasm
+            tools/wasm-node
+            engine.schema.json
+            target/release/femlab
+
+  # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
+  wasm-hash:
+    name: native vs wasm Journal hashes
+    if: github.event_name != 'pull_request' || inputs.strict
+    runs-on: ubuntu-latest
+    needs: wasm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+      - run: chmod +x target/release/femlab
+      - run: npm ci
       - run: node tools/test-units-wasm.mjs
       - run: node tools/test-material-library-wasm.mjs
       - name: install and exercise the MCP npm tarball outside the checkout
         run: npm run test:package -w packages/mcp
-      - run: cargo build -p femlab --release
       - run: node tools/test-transient-replay.mjs
-      - run: ./target/release/femlab schema --out engine.schema.json
+      - run: node tools/test-retained-replay.mjs
+      - run: node tools/test-shell-pressure-area-replay.mjs
+      - run: node tools/test-static-equilibrium-replay.mjs
+      - run: node tools/test-adaptive-replay.mjs
+      - run: node tools/test-imported-source-replay.mjs
+      - run: node tools/test-original-measures-replay.mjs
+      - run: node tools/test-abaqus-mesh-replay.mjs
+      - run: node tools/test-abaqus-static-replay.mjs
+      - run: node tools/test-step-import.mjs
+      - run: node tools/test-abaqus-hosts.mjs target/release/femlab
+      - run: node tools/test-quadratic-measures-replay.mjs
+      - run: node tools/test-random-vibration-replay.mjs
+      - run: node tools/test-harmonic-reciprocal-replay.mjs
+      - run: node tools/test-log-sweep-replay.mjs
       - name: replay every fixture natively and in wasm
         run: |
           mkdir -p hashes/native hashes/wasm
@@ -114,17 +182,10 @@ jobs:
             node tools/replay-wasm.mjs "$j" --skip-solves > "hashes/wasm/$n.txt"
           done
       - run: node tools/compare-hashes.mjs hashes/native hashes/wasm
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wasm
-          path: |
-            packages/app/src/generated/wasm
-            tools/wasm-node
-            engine.schema.json
-            target/release/femlab
 
   windows:
     name: windows
+    if: github.event_name != 'pull_request' || inputs.strict
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,11 +197,23 @@ jobs:
 
   # TypeScript side: generated types are fresh, the registry type-checks, and vitest holds 100 % on
   # all four metrics. No Rust toolchain: the schema document is committed, and the wasm module the
-  # app bundles comes from the `wasm-hash` job's artifact.
+  # app bundles comes from the `wasm` job's artifact.
   web:
     name: web (codegen, typecheck, tests, app build)
     runs-on: ubuntu-latest
-    needs: wasm-hash
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: femlab_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/femlab_test
+    needs: wasm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -152,10 +225,16 @@ jobs:
           name: wasm
       - run: npm ci
       - run: python3 -m unittest discover -s tools -p 'test_release_artifacts.py'
+      - run: python3 -B -m unittest discover -s tools/abaqus-interoperability -p 'test_*.py'
+      - run: python3 -m unittest discover -s infra/google -p 'test_*.py'
       - run: npm run codegen:check
+      - run: node --test tools/test-step-assets.mjs
       - run: npm run typecheck
       - run: npm run test -w packages/registry
-      # The MCP server runs the Node wasm build from the `wasm-hash` job's artifact.
+      - run: npm run test -w packages/ai
+      - run: npm run test -w packages/service
+      - run: npm run build -w packages/service
+      # The MCP server runs the Node wasm build from the `wasm` job's artifact.
       - run: npm run test -w packages/mcp
       - run: npm run build -w packages/mcp
       - run: npm run test -w packages/app
@@ -182,12 +261,14 @@ jobs:
           name: dist
           path: packages/app/dist
 
-  # The built app in a real Chromium (ADR 0014): the CPU path, the service-worker isolation path
-  # without server headers, and WebGPU on SwiftShader.
+  # The built app in a real Chromium (ADR 0014): the CPU path on every event; the service-worker
+  # isolation path without server headers and WebGPU on SwiftShader on the full set.
   smoke:
     name: browser smoke (cpu, sw, gpu)
     runs-on: ubuntu-latest
     needs: web
+    env:
+      FEMLAB_AI_MODE: development
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -213,9 +294,26 @@ jobs:
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.v }}
       - run: npx playwright install --with-deps chromium
         working-directory: packages/app
-      - run: xvfb-run -a npx playwright test --project=cpu --project=sw
+      - name: chromium, hosted anonymous account boundary
+        env:
+          FEMLAB_AI_MODE: hosted
+        run: xvfb-run -a npx playwright test e2e/hosted-account.spec.ts --project=cpu
+        working-directory: packages/app
+      # Preserve the generated thumbnails in the downloaded production artifact.
+      - run: |
+          mkdir -p packages/app/public/examples/thumbnails
+          cp -R packages/app/dist/examples/thumbnails/. packages/app/public/examples/thumbnails/
+      # Existing supplier wire fixtures use the explicit local development host.
+      - run: npm run build -w packages/app
+      - name: chromium, cpu path
+        run: xvfb-run -a npx playwright test --project=cpu
+        working-directory: packages/app
+      - name: chromium, service-worker isolation
+        if: github.event_name != 'pull_request' || inputs.strict
+        run: xvfb-run -a npx playwright test --project=sw
         working-directory: packages/app
       - name: webgpu on swiftshader
+        if: github.event_name != 'pull_request' || inputs.strict
         continue-on-error: ${{ !inputs.strict }}
         run: xvfb-run -a npx playwright test --project=gpu
         working-directory: packages/app

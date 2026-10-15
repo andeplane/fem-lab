@@ -2,6 +2,8 @@
 //! grouped by the Constraint that carried them (plan A §8).
 
 pub mod convergence;
+pub mod equilibrium;
+pub mod estimator;
 pub mod probe;
 pub mod stress;
 
@@ -13,6 +15,8 @@ use crate::fem::problem::Problem;
 /// Where a field's values sit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Per {
+    /// One value per element, in global element order.
+    Element,
     /// One value per mesh node.
     Node,
     /// One value per element Gauss point, elements in order.
@@ -56,9 +60,15 @@ pub struct Extremum {
     pub max_at: [f64; 3],
 }
 
-/// Per-component extremes of a nodal field, with the node coordinates they occur at. Ties go
+/// Per-component extremes of a nodal or element-node field, with the coordinates they occur at. Ties go
 /// to the lowest node index, so the answer does not depend on iteration order.
 pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
+    let element_nodes: Vec<u32> = if f.per == Per::ElemNode {
+        mesh.blocks.iter().flat_map(|b| b.conn.iter().copied()).collect()
+    } else {
+        Vec::new()
+    };
+    let position = |i: usize| mesh.node(element_nodes.get(i).copied().unwrap_or(i as u32));
     (0..f.comps)
         .map(|c| {
             let (mut lo, mut hi) = (0usize, 0usize);
@@ -73,9 +83,9 @@ pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
             Extremum {
                 component: c,
                 min: f.data[lo * f.comps + c],
-                min_at: mesh.node(lo as u32),
+                min_at: position(lo),
                 max: f.data[hi * f.comps + c],
-                max_at: mesh.node(hi as u32),
+                max_at: position(hi),
             }
         })
         .collect()
@@ -85,7 +95,9 @@ pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
 /// belongs to the first one that claimed the DOF, which is what `resolve` recorded.
 ///
 /// `reactions` is the Result's own three-component nodal field, so a host that has a
-/// `StepResult` can regroup the reactions without re-deriving the DOF numbering.
+/// `StepResult` can regroup the reactions without re-deriving the DOF numbering. The three
+/// components are forces; a clamped beam joint's reaction *moment* is not summed here (it is
+/// the member's own end moment, in the `sectionMoment` field) so the totals stay one dimension.
 pub fn reactions_per_constraint(
     p: &Problem<'_>,
     rc: &ResolvedConstraints,
@@ -95,7 +107,9 @@ pub fn reactions_per_constraint(
     let mut totals = vec![[0.0; 3]; p.constraints.len()];
     for (&(dof, _), &owner) in rc.fixed.iter().zip(&rc.owner) {
         let (node, comp) = (dof as usize / dpn, dof as usize % dpn);
-        totals[owner][comp] += reactions.data[node * reactions.comps + comp];
+        if comp < 3 {
+            totals[owner][comp] += reactions.data[node * reactions.comps + comp];
+        }
     }
     p.constraints.iter().map(|c| c.name.clone()).zip(totals).collect()
 }

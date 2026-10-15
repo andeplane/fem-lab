@@ -5,7 +5,7 @@
 // The blocks are emitted in a fixed order, most stable first, so the one cache breakpoint the
 // Anthropic adapter puts on the system prompt actually hits: blocks 1–2 change only on deploy,
 // 3–4 on `folder.refresh`.
-import { FemError, parseMentions, stripDiscriminator, type MentionKind, type Registry, type Selection, type Skill } from '@femlab/registry';
+import { FemError, MENTION_KINDS, parseMentions, parseRef, refOf, stripDiscriminator, type MentionKind, type Registry, type Selection, type Skill, type RetainedResult } from '@femlab/registry';
 import type { ImageBlock, Message } from './provider';
 
 export interface ProjectContext {
@@ -113,17 +113,23 @@ const MODEL_LISTS: Partial<Record<MentionKind, string>> = { body: 'bodies', mate
 
 /** `@face:beam.top` → the `query.*` summary that rides along with the turn as context. */
 export async function resolveMention(ref: string, registry: Registry): Promise<unknown> {
-  const [kind, ...rest] = ref.split(':');
-  const name = rest.join(':');
+  const chip = parseRef(ref);
+  if (!chip) throw await unknownRef(ref, registry);
+  const { kind, name } = chip;
   const list = MODEL_LISTS[kind as MentionKind];
   if (list) {
     const model = (await registry.query({ query: 'query.model' })) as Record<string, { name: string }[]>;
-    const row = (model[list] ?? []).find((r) => r.name === name);
+    const rows = [...(model[list] ?? []), ...(kind === 'constraint' ? model['connections'] ?? [] : [])];
+    const row = rows.find((r) => r.name === name);
     if (!row) throw await unknownRef(ref, registry);
     return row;
   }
   if (kind === 'face' || kind === 'set') return registry.query({ query: 'query.set', name });
-  if (kind === 'result') return registry.query({ query: 'query.result', step: name });
+  if (kind === 'result') return registry.query(name.startsWith('id:') ? { query: 'query.result', resultId: name.slice(3) } : { query: 'query.result', step: name });
+  if (kind === 'mesh' && name === 'mesh') {
+    const model = await registry.query({ query: 'query.model' }) as { meshSettings: unknown };
+    return { settings: model.meshSettings, summary: await registry.query({ query: 'query.mesh' }) };
+  }
   if (kind === 'journal') return registry.query({ query: 'query.journal', fromSeq: Number(name) });
   if (kind === 'file') {
     const { text } = (await registry.dispatch({ cmd: 'file.read', path: name })) as { text: string };
@@ -144,35 +150,45 @@ export interface IndexEntry {
   summary: string;
 }
 
+/** Chips show decoded names; retained solves use the Step caption without changing identity. */
+export function mentionLabel(ref: string, index: IndexEntry[]): string {
+  const chip = parseRef(ref);
+  if (!chip) return ref;
+  const entry = index.find(row => row.ref === chip.ref);
+  return chip.kind === 'result' && chip.name.startsWith('id:')
+    ? `result:${entry?.name ?? 'solve'} (${chip.name.slice(3)})`
+    : `${chip.kind}:${chip.name}`;
+}
+
 /**
  * What the `@` popover lists: the engine's object index, the auto faces and Results it leaves out,
  * and the open project's files.
  *
- * ponytail: `query.objects` carries neither a body's auto-named faces nor a solved Step's Result,
- * though `resolveMention` and `MENTION_KINDS` accept both — so `@face:beam.top` resolves but cannot
- * be found in the picker. Their honest home is the engine's `query_objects`; until it has them the
- * host fills the gap from `query.model`, which is the same source the Properties form's face picker
- * already reads.
+ * Faces and the current global Mesh come from `query.model`; immutable solve identities come
+ * from `query.results`. A Result's Step caption is display text, not its target (ADR 0018).
  */
 export async function objectIndex(registry: Registry): Promise<IndexEntry[]> {
-  const { objects } = (await registry.query({ query: 'query.objects' })) as { objects: IndexEntry[] };
+  const indexed = (await registry.query({ query: 'query.objects' })) as { objects: IndexEntry[] };
+  const objects = indexed.objects.map(entry => MENTION_KINDS.includes(entry.kind as MentionKind) ? { ...entry, ref: refOf(entry.kind as MentionKind, entry.name) } : entry);
   const model = (await registry.query({ query: 'query.model' }).catch(() => null)) as ModelIndex | null;
   const known = new Set(objects.map((o) => o.ref));
   const extra: IndexEntry[] = [];
   const add = (entry: IndexEntry) => {
     if (!known.has(entry.ref)) known.add(entry.ref), extra.push(entry);
   };
-  for (const body of model?.bodies ?? []) for (const face of body.faces ?? []) add({ ref: `face:${face}`, kind: 'face', name: face, summary: `face of ${body.name}` });
-  for (const step of model?.steps ?? []) if (step.solved) add({ ref: `result:${step.name}`, kind: 'result', name: step.name, summary: `${step.procedure} Result` });
+  for (const body of model?.bodies ?? []) for (const face of body.faces ?? []) add({ ref: refOf('face', face), kind: 'face', name: face, summary: `face of ${body.name}` });
+  if (model?.meshSettings) add({ ref: refOf('mesh', 'mesh'), kind: 'mesh', name: 'mesh', summary: 'current global Mesh and settings' });
+  const retained = await registry.query({ query: 'query.results' }) as { records: RetainedResult[] };
+  for (const result of retained.records) add({ ref: refOf('result', `id:${result.id}`), kind: 'result', name: result.step, summary: `revision ${result.solvedRevision}${result.stale ? ' · stale' : ''} · ${result.id}` });
   const project = (await registry.query({ query: 'query.folder' }).catch(() => null)) as ProjectContext | null;
-  const files = (project?.files ?? []).map((f) => ({ ref: `file:${f.path}`, kind: 'file', name: f.path, summary: `${f.size} B · ${f.kind}` }));
+  const files = (project?.files ?? []).map((f) => ({ ref: refOf('file', f.path), kind: 'file', name: f.path, summary: `${f.size} B · ${f.kind}` }));
   return [...objects, ...extra, ...files];
 }
 
-/** Just the two lists `objectIndex` reads off `query.model`; the fakes need no more than this. */
+/** Only the current geometry and Mesh settings are read from `query.model`. */
 interface ModelIndex {
   bodies?: { name: string; faces?: string[] }[];
-  steps?: { name: string; procedure: string; solved: boolean }[];
+  meshSettings?: unknown;
 }
 
 // --- images (PLAN 4.15) -----------------------------------------------------------------------
@@ -251,7 +267,7 @@ export interface BuiltTurn {
   unresolved: { ref: string; cause: string }[];
 }
 
-const SLASH = /^\/([a-z0-9-]+)[ \t]*(.*)$/i;
+const SLASH = /^\/([a-z0-9-]+)(?=\s|$)/i;
 
 /**
  * `parseMentions` gives the chips; each is resolved through `query.*` and the summaries ride along

@@ -16,7 +16,7 @@ use weka::{InputMesh, Pslg, Triangulator};
 
 use crate::mesh::{ElementBlock, ElementKind, Face, Mesh};
 use crate::sketch::Sketch;
-use crate::GeomError;
+use crate::{Affine3, GeomError, Shape};
 
 /// A local element size inside an axis-aligned box, for the free mesher's `refine` pass.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -49,6 +49,14 @@ fn max_area(size: f64) -> f64 {
 /// on the triangles whose centroid is inside it, through a second `weka` refinement pass with
 /// per-triangle area constraints (`weka` 0.1 has no size callback).
 pub fn free(sketch: &Sketch, size: f64, quadratic: bool, refine: &[RefineBox]) -> Result<Mesh, GeomError> {
+    free_sheet(&Shape::Sheet { sketch: sketch.clone() }, size, quadratic, refine)
+}
+
+/// Mesh a Sheet shape after its supported in-plane transform, including named holes.
+/// Element sizes, chord tolerance and refinement boxes are measured in world coordinates.
+/// Uses the same Sheet boundary evaluation as [`crate::Solid`]; nested and out-of-plane
+/// transforms return an explicit geometry error. Curves are resampled for each mesh size.
+pub fn free_sheet(shape: &Shape, size: f64, quadratic: bool, refine: &[RefineBox]) -> Result<Mesh, GeomError> {
     if !(size.is_finite() && size > 0.0) {
         return Err(GeomError(format!("the element size is {size}; it must be finite and positive")));
     }
@@ -57,9 +65,14 @@ pub fn free(sketch: &Sketch, size: f64, quadratic: bool, refine: &[RefineBox]) -
             return Err(GeomError(format!("refine box {i} has size {}; it must be finite and positive", b.size)));
         }
     }
-    // weka panics on crossing or degenerate input segments, so no sketch reaches it unchecked.
+    let (sketch, at, prefix) = crate::solid::sheet_leaf(shape, &Affine3::default(), "")?;
+    at.validate()?;
+    // Never pass degenerate or crossing sketch segments to the triangulator.
     sketch.check()?;
-    let loops = sketch.loops(CHORD_FRACTION * size)?;
+    // Rotation preserves distances; the largest in-plane scale bounds the growth of every
+    // local chord error, including a circle stretched into an ellipse.
+    let local_chord_tol = CHORD_FRACTION * size / at.scale[0].max(at.scale[1]);
+    let loops = crate::solid::transformed_sheet_loops(&sketch, &at, &prefix, local_chord_tol)?;
     let mut lo = [f64::INFINITY; 2];
     let mut hi = [f64::NEG_INFINITY; 2];
     for p in &loops[0].pts {

@@ -5,10 +5,10 @@ use std::path::Path;
 
 use clap::ValueEnum;
 use femlab_engine::command::ExportFormat;
-use femlab_engine::query::Output;
+use femlab_engine::query::{Output, Query, QueryResult};
 use femlab_engine::Command;
 
-use crate::run::{dispatch, new_engine, read_entries};
+use crate::run::{bounded_model_file_text, dispatch, new_engine, read_input};
 
 /// What `--format` accepts. The five the engine writes go through `mesh.export`; the other two
 /// are reads of the Journal itself.
@@ -26,7 +26,7 @@ pub enum ExportKind {
     Report,
     /// The Journal as a TypeScript script against the `fem` API.
     Script,
-    /// The `femlab/1` model file: the Model snapshot plus its Journal.
+    /// The `femlab/1` model file: Model plus Journal, at most 16 MiB including pretty JSON and LF.
     Journal,
 }
 
@@ -55,18 +55,41 @@ pub struct ExportOptions {
 /// Replay `file`, then write the artefact to `out` (or stdout). Exit code, like every other
 /// subcommand: 0 fine, 1 the file could not be read, replayed or written.
 pub fn export(file: &Path, out: Option<&Path>, opts: ExportOptions) -> i32 {
-    let (entries, has_hashes) = match read_entries(file) {
+    let input = match read_input(file) {
         Ok(x) => x,
         Err(code) => return code,
     };
     let mut engine = new_engine(opts.threads, opts.cpu);
-    if let Err(e) = pollster::block_on(engine.replay(&entries, opts.skip_solves, has_hashes)) {
+    if let Err(e) = pollster::block_on(engine.load(input, opts.skip_solves, true)) {
         eprintln!("{}", serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()));
         return 1;
     }
     let text = match opts.format.engine_format() {
-        None if opts.format == ExportKind::Script => engine.journal().as_script(femlab_engine::version()),
-        None => serde_json::to_string_pretty(&engine.export_file()).unwrap_or_default() + "\n",
+        None => match engine.query(Query::Document {}) {
+            Ok(QueryResult::Document(document)) if opts.format == ExportKind::Script => {
+                document.file.journal.as_script(&document.file.engine_version)
+            }
+            Ok(QueryResult::Document(document)) => match bounded_model_file_text(&document.file) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                    return 1;
+                }
+            },
+            Err(error) => {
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                return 1;
+            }
+            Ok(_) => {
+                let error = femlab_engine::Error::new(
+                    femlab_engine::ErrorCode::Internal,
+                    "query.document did not return a Model document",
+                )
+                .at("query.document");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                return 1;
+            }
+        },
         Some(format) => match dispatch(&mut engine, Command::MeshExport { format, step: opts.step }) {
             Ok(ack) => match ack.output {
                 Output::Export { text, .. } => text,

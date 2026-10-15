@@ -15,7 +15,6 @@ const journal = fixture.filter((e) => !String(e.cmd.cmd).startsWith('solve.'));
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 async function shot(page: Page, name: string): Promise<void> {
@@ -29,7 +28,9 @@ const fill = async (page: Page, path: string, value: string, nth = 0): Promise<v
   await field(page, path).locator('input').nth(nth).fill(value);
 };
 const apply = async (page: Page): Promise<void> => {
+  const count = await page.locator('.jrow').count();
   await page.locator('.props .apply').click();
+  await expect(page.locator('.jrow')).toHaveCount(count + 1);
   await expect(page.locator('.props .surface.error')).toHaveCount(0);
 };
 
@@ -84,6 +85,8 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     await fill(page, 'name', 'steel');
     await fill(page, 'E', '210 GPa');
     await fill(page, 'nu', '0.3');
+    await expect(field(page, 'rho')).toHaveCount(0);
+    await page.getByRole('group', { name: 'Material physics', exact: true }).getByRole('button', { name: 'mass', exact: true }).click();
     await fill(page, 'rho', '7850 kg/m^3');
     await fill(page, 'source', 'EN 10025');
     await apply(page);
@@ -120,7 +123,7 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     // 8 · step.add: an enum as a segmented control and two multi-pickers.
     await page.locator('.chip-add', { hasText: '+ add step' }).click();
     await fill(page, 'name', 'static');
-    await field(page, 'procedure').locator('button', { hasText: 'static' }).click();
+    await field(page, 'procedure').locator('button', { hasText: /^static$/ }).click();
     await field(page, 'constraints').locator('.chip-cand', { hasText: 'root' }).click();
     await field(page, 'loads').locator('.chip-cand', { hasText: 'tip' }).click();
     await apply(page);
@@ -276,7 +279,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await ready(page);
     await page.evaluate(() => window.fem.model.new({ name: 'scripted' }));
     await page.locator('.tab', { hasText: 'script' }).click();
-    await page.locator('button[data-cmd="script.setSource"]').click();
+    await page.getByRole('button', { name: 'edit this script' }).click();
     await page.locator('.script-edit').fill('await fem.geometry.addBox({ name: "fromScript", size: ["2 m", "1 m", "1 m"] });\nconsole.log("added");\nreturn (await fem.query.model()).bodies.length;');
     await page.locator('button[data-cmd="script.run"]').click();
     await expect(page.locator('.script-out')).toContainText('added', { timeout: 30_000 });

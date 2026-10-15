@@ -1,0 +1,152 @@
+{
+  "name": "random-vibration-sdof",
+  "reference": "F20 (#73): one-sided white-noise SDOF variance u_static^2 S omega_n/(8 zeta), stress RMS C11*u_rms/L. Same modal Journal runs natively and in WASM.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "random-vibration-sdof"
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "1 m",
+        "0.1 m",
+        "0.1 m"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 1,
+          "ny": 1,
+          "nz": 1
+        }
+      },
+      "order": 1,
+      "formulation": "full"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "bar.xmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "guide",
+      "on": "bar.xmax",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "bar.xmax",
+      "total": [
+        "10 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [],
+      "nModes": 4
+    },
+    {
+      "cmd": "step.add",
+      "name": "random",
+      "procedure": "randomVibration",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "after": "modes",
+      "dampingRatio": 0.02,
+      "psd": [
+        {
+          "frequency": "0 Hz",
+          "density": "0.01 s"
+        },
+        {
+          "frequency": "1 MHz",
+          "density": "0.01 s"
+        }
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "random"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "step": "random",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "1 m",
+          "0.05 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 9.030487136800415e-05,
+      "tol": 1e-07,
+      "rel": true,
+      "note": "Stationary SDOF energy balance, independent of the modal solve and PSD integrator."
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "step": "random",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "1 m",
+          "0.05 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 25528492.482878096,
+      "tol": 1e-07,
+      "rel": true,
+      "note": "Stationary SDOF energy balance, independent of the modal solve and PSD integrator."
+    }
+  ]
+}

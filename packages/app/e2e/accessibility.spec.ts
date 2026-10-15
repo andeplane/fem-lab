@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 test.describe('@cpu accessibility and small screens', () => {
@@ -116,7 +115,7 @@ test.describe('@cpu accessibility and small screens', () => {
       const scriptTab = page.getByRole('tab', { name: /script/ });
       await scriptTab.click();
       await expect(scriptTab).toHaveAttribute('aria-selected', 'true');
-      const script = page.locator('textarea.script-edit');
+      const script = page.getByRole('textbox', { name: 'TypeScript editor' });
       if ((await script.count()) === 0) await page.getByRole('button', { name: 'edit this script', exact: true }).click();
       await script.focus();
       await expect(script).toBeFocused();
@@ -128,7 +127,7 @@ test.describe('@cpu accessibility and small screens', () => {
       const tutorial = page.locator('.tutorial-panel[aria-label="Tutorials"]');
       await expect(tutorial).toBeVisible();
       await assertInside('.tutorial-panel');
-      const tutorialClose = tutorial.getByRole('button', { name: 'close' });
+      const tutorialClose = tutorial.getByRole('button', { name: 'close', exact: true });
       await tutorialClose.focus();
       await tutorialClose.press('Tab');
       await expect(tutorial.locator('button').nth(1)).toBeFocused();

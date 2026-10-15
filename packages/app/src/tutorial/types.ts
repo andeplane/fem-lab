@@ -33,7 +33,7 @@ export interface Step {
    * the point, or a step whose `doIt` is deliberately not what the reader should type.
    */
   fields?: Record<string, string>;
-  /** KaTeX-ready text (rendered plain for now); typically the closing step of a tutorial. */
+  /** Markdown-lite paragraphs, bold, emphasis, code and bullets with inline/display KaTeX; typically the closing step. */
   theory?: string;
 }
 

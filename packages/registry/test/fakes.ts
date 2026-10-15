@@ -1,5 +1,6 @@
+import { EMPTY_ACCOUNT } from '../src/account-types';
 import { vi } from 'vitest';
-import type { Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
+import type { AbaqusConversion, Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
 import type { FolderInfo, HostContext, OpenProject, ProjectMeta } from '../src/host-commands';
 import type { EngineTransport } from '../src/transport';
 
@@ -7,6 +8,10 @@ export const ACK: Ack = { seq: 1, revision: 1, hash: 'h', warnings: [], output: 
 export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { name: 'beam' }, journal: { entries: [] } } as unknown as ModelFile;
 export const FOLDER: FolderInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
 export const PROJECT: ProjectMeta = { id: 'p1', name: 'beam', at: 1_700_000_000_000, createdAt: 1_700_000_000_000, commands: 9, hash: 'h', thumbnail: null };
+export const ABAQUS_CONVERSION: AbaqusConversion = {
+  report: { mode: 'mesh', sha256: 'a'.repeat(64), conversionVersion: 'abaqus/1', inputBytes: 5, body: 'bar', unitLength: { value: 0.001, unit: 'm' }, sourceNodes: 4, activeNodes: 4, sourceElements: 1, elementKind: 'tet4', analysisConfigured: false, bbox: ['0 m', '0 m', '0 m', '1 m', '1 m', '1 m'], sourceLabels: { nodes: [1, 2, 3, 4], elements: [1], unusedNodes: [] }, sets: [], headings: [], preprint: [] },
+  commands: [{ cmd: 'model.new', name: 'imported' }],
+};
 
 export const SAVED = { name: 'beam', at: 1_700_000_000_000, commands: 9 };
 export const AUTOSAVES = [
@@ -14,10 +19,25 @@ export const AUTOSAVES = [
   { id: 'older', name: 'beam', at: 1_699_999_000_000, commands: 7 },
 ];
 
+/**
+ * A unit tetrahedron as an ASCII STL: the smallest watertight solid `geometry.import`
+ * accepts, so the geometry picker's fakes hand back something real.
+ */
+export const TETRA_STL = [
+  'solid t',
+  'facet normal 0 0 -1\n outer loop\n  vertex 0 0 0\n  vertex 0 1 0\n  vertex 1 0 0\n endloop\nendfacet',
+  'facet normal -1 0 0\n outer loop\n  vertex 0 0 0\n  vertex 0 0 1\n  vertex 0 1 0\n endloop\nendfacet',
+  'facet normal 0 -1 0\n outer loop\n  vertex 0 0 0\n  vertex 1 0 0\n  vertex 0 0 1\n endloop\nendfacet',
+  'facet normal 1 1 1\n outer loop\n  vertex 1 0 0\n  vertex 0 1 0\n  vertex 0 0 1\n endloop\nendfacet',
+  'endsolid t',
+].join('\n');
+
 const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
+  modeCount: 0,
+  resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
   revision: 10,
@@ -38,7 +58,9 @@ const REPLIES: Record<string, unknown> = {
   'query.script': { text: 'fem.model.new({ name: "beam" })' },
   'query.model': { name: 'beam', revision: 10, meshSettings: {}, warnings: [] },
   'query.result': RESULT,
+  'query.results': { limit: 8, records: [] },
   'query.path': PATH,
+  'query.convertAbaqus': ABAQUS_CONVERSION,
 };
 
 export function fakeTransport(): EngineTransport {
@@ -49,7 +71,7 @@ export function fakeTransport(): EngineTransport {
     field: vi.fn(),
     export: vi.fn(async () => ({ filename: 'beam.vtu', mime: 'application/xml', bytes: new Uint8Array([1, 2]) })),
     exportFile: vi.fn(async () => MODEL_FILE),
-    importFile: vi.fn(async () => ACK),
+    importFile: vi.fn(async () => ({ ...ACK, journal: MODEL_FILE.journal })),
     cancel: vi.fn(async () => undefined),
   };
 }
@@ -58,11 +80,24 @@ export function fakeTransport(): EngineTransport {
 export function fakeHost(transport = fakeTransport(), folderOpen = false): HostContext {
   // The background save is on by default, as in the app; turning it off keeps what is saved.
   let autosaveOn = true;
+  const markSaved = vi.fn();
   // One project, opened or not, so `query.project` has both answers and rename/delete are seen.
   let open: ProjectMeta | null = PROJECT;
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
   return {
+    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
     transport,
+    step: { import: vi.fn(async () => ({ cancelled: true as const })), cancel: vi.fn(() => true) },
+    resultComparison: {
+      configure: vi.fn(), play: vi.fn(), legend: vi.fn(), visible: vi.fn(), pick: vi.fn(() => null),
+      state: vi.fn(() => ({ configuration: { mode: 'single' as const }, viewMode: 'results' as const, catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null })),
+    },
+    abaqus: { capture: vi.fn(() => ({
+      io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },
+      replace: vi.fn(async () => undefined),
+      dependencies: vi.fn(async () => ({ missingFiles: [] })),
+      convert: vi.fn(async () => ABAQUS_CONVERSION),
+    })) },
     view: {
       fit: vi.fn(),
       setCamera: vi.fn(),
@@ -74,21 +109,29 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       setClip: vi.fn(),
       toggle: vi.fn(),
       setVisible: vi.fn(),
+      highlight: vi.fn(),
+      hover: vi.fn(),
       setTheme: vi.fn(),
       animate: vi.fn(),
       playTransient: vi.fn(),
       camera: vi.fn(() => ({ position: [1, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number] })),
       screenshot: vi.fn(async () => ({ png: 'data:image/png;base64,QUJD' })),
+      captureAnimation: vi.fn(async () => ({ webm: new Uint8Array([26, 69, 223, 163]) })),
+      cancelAnimationCapture: vi.fn(() => true),
     },
     selection: { set: vi.fn(), clear: vi.fn(), setPickTarget: vi.fn(), get: vi.fn(() => ({ bodies: ['beam'], faces: ['beam.top'], sets: [], refs: ['body:beam', 'face:beam.top'] })) },
     panels: { toggle: vi.fn(), resize: vi.fn() },
-    script: { validate: vi.fn(async () => ({ ok: true, diagnostics: [] })), run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn() },
+    report: { print: vi.fn() },
+    script: { validate: vi.fn(async () => ({ ok: true, diagnostics: [] })), run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn(), setEditing: vi.fn() },
     chat: { send: vi.fn(), insertMention: vi.fn(), setDraft: vi.fn(), clear: vi.fn() },
     skills: vi.fn(() => [{ name: 'beam-theory-check', description: 'Compare a cantilever with Euler–Bernoulli beam theory.', when: 'a beam', body: '# Steps', source: 'builtin' as const }]),
     clipboard: { writeText: vi.fn(async () => undefined) },
     files: {
       pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
+      pickBytes: vi.fn(async () => new TextEncoder().encode(TETRA_STL)),
       download: vi.fn(),
+      beginSave: vi.fn(() => markSaved),
+      markSaved,
       shareLink: vi.fn(async () => ({ url: 'https://x/#j' })),
       restore: vi.fn(async (id?: string) => id === undefined ? SAVED : AUTOSAVES.find(x => x.id === id) ?? null),
       autosave: vi.fn(() => ({ enabled: autosaveOn, saved: SAVED })),
@@ -127,10 +170,11 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       info: vi.fn(() => (folderOpen ? FOLDER : null)),
       recent: vi.fn(async () => ({ name: FOLDER.name })),
       readText: vi.fn(async (path: string) => (path === 'big.txt' ? 'x'.repeat(2 * 1024 * 1024 + 1) : path.endsWith('.json') ? JSON.stringify(MODEL_FILE) : `content of ${path}`)),
+      readBytes: vi.fn(async (path: string) => new TextEncoder().encode(path === 'huge.stl' ? 'x'.repeat(33 * 1024 * 1024) : TETRA_STL)),
       writeText: vi.fn(async () => undefined),
       writeBytes: vi.fn(async () => undefined),
     },
-    examples: { fetch: vi.fn(async () => JSON.stringify(MODEL_FILE)) },
+    examples: { open: vi.fn(async (name: string) => ({ name, commands: 2 })) },
     ai: { setKey: vi.fn(), setModel: vi.fn() },
     env: { webgpu: true, crossOriginIsolated: true, threads: 4, userAgent: 'test', engine: 'local' },
   };

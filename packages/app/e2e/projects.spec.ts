@@ -6,7 +6,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 const modelHash = (page: Page): Promise<string> => page.evaluate(async () => ((await window.fem.query.model()) as unknown as { hash: string }).hash);
@@ -43,6 +42,11 @@ test.describe('@cpu projects in this browser', () => {
       model: await window.fem.query.model(),
       journal: await window.fem.query.journal(),
     }));
+    const dirty = page.getByRole('img', { name: 'Unsaved changes' });
+    await expect(dirty).toBeVisible();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dirty).toBeHidden();
+    await expect(page.locator('.saved-chip')).toContainText('autosave off');
     const receipt = await page.evaluate(() => window.fem.dispatch({ cmd: 'project.save' })) as unknown as {
       id: string;
       autosave: boolean;
@@ -55,11 +59,13 @@ test.describe('@cpu projects in this browser', () => {
     // captured by explicit Save, rather than the newest refresh that happened while storage was off.
     await page.evaluate(() => window.fem.geometry.addBox({ name: 'unsaved', size: ['2 m', '20 mm', '20 mm'] }));
     expect((await page.evaluate(() => window.fem.query.journal())).entries).toHaveLength(before.journal.entries.length + 1);
+    await expect(dirty).toBeVisible();
     await page.reload();
     await ready(page);
     await page.evaluate((id) => window.fem.dispatch({ cmd: 'project.open', id }), receipt.id);
     expect(await page.evaluate(() => window.fem.query.journal())).toEqual(before.journal);
     expect(await modelHash(page)).toBe(before.model.hash);
+    await expect(dirty).toBeHidden();
 
     await page.evaluate(() => window.fem.geometry.addBox({ name: 'write-must-fail', size: ['3 m', '30 mm', '30 mm'] }));
     const failure = await page.evaluate(async () => {
@@ -71,6 +77,7 @@ test.describe('@cpu projects in this browser', () => {
         return { name: (error as Error).name, message: (error as Error).message };
       }
     });
+    await expect(dirty).toBeVisible();
     expect(failure).toEqual({ name: 'QuotaExceededError', message: 'injected project Journal failure' });
     await expect(page.locator('.error-card')).toContainText('injected project Journal failure');
 
@@ -137,7 +144,8 @@ test.describe('@cpu projects in this browser', () => {
 
     // Renaming the open project is one Command, and the Recent list follows it.
     await page.evaluate(() => window.fem.dispatch({ cmd: 'project.rename', name: 'corbel-SLS' }));
-    await expect(page.locator('input.model-name')).toHaveValue('corbel-SLS');
+    await expect(page.locator('.saved-chip')).toHaveAttribute('title', /corbel-SLS/);
+    await expect(page.locator('input.model-name')).toHaveValue('corbel-ULS');
   });
 
   test('a femlab/1 file written from a project opens into a new one, same hash again', async ({ page }) => {

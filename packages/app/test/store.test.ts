@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ModelSummary } from '@femlab/registry';
 import { DEFAULT_PANEL_SIZES, Store, clampPanelSize, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer, visibilityReducer } from '../src/store';
+import { journalTarget } from '../src/ui/Bottom';
 
 const sel = (bodies: string[] = [], faces: string[] = [], sets: string[] = []) => ({ bodies, faces, sets, refs: refsOf({ bodies, faces, sets }) });
 
@@ -22,6 +24,20 @@ describe('selectionReducer', () => {
 
   it('expands refs the way @selection does', () => {
     expect(selectionReducer(sel(), { bodies: ['beam'], faces: ['beam.top'], sets: ['s'] }).refs).toEqual(['body:beam', 'face:beam.top', 'set:s']);
+  });
+  it('round-trips quoted selection names to readable renderer names and canonical mention targets', () => {
+    const names = { bodies: ['beam"quoted'], faces: ['beam"quoted.top'], sets: ['odd,set'] };
+    const refs = refsOf(names);
+    expect(refs).toEqual(['body:"beam\\"quoted"', 'face:"beam\\"quoted.top"', 'set:"odd,set"']);
+    expect(selectionReducer(sel(), { refs })).toEqual({ ...names, refs });
+    expect(selectionReducer(sel(), { refs: ['body:"beam"', 'body:beam'] }).refs).toEqual(['body:beam']);
+    const target = journalTarget({ cmd: 'geometry.addBox', name: 'beam"quoted' }, { bodies: [{ name: 'beam"quoted' }] } as ModelSummary, [{ kind: 'body', name: 'beam"quoted', ref: 'body:beam"quoted', summary: '' }]);
+    expect(target).toEqual({ ref: refs[0], highlight: { bodies: ['beam"quoted'] } });
+  });
+
+  it('keeps semantic object refs separate from drawable selection names', () => {
+    expect(selectionReducer(sel(), { refs: ['material:steel', 'constraint:fix'] })).toEqual({ bodies: [], faces: [], sets: [], refs: ['material:steel', 'constraint:fix'] });
+    expect(selectionReducer({ bodies: [], faces: [], sets: [], refs: ['material:steel'] }, { bodies: ['beam'], mode: 'add' }).refs).toEqual(['material:steel', 'body:beam']);
   });
 });
 

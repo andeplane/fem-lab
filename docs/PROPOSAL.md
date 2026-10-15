@@ -100,7 +100,7 @@ file replays a Journal onto a snapshot; sharing a link carries a compressed Jour
 4. **Well-posedness before solving.** Rigid-body modes, missing materials, zero-volume
    elements and unconstrained bodies are reported before a matrix is assembled.
 5. **The Journal is the model.** Review, diff, replay, share, and reproduce from the report.
-6. **No server required.** The GPU in the laptop does the work; nothing leaves the machine
+6. **No server required for local modeling.** The GPU in the laptop does the work; nothing leaves the machine
    except the user's own calls to their own AI account. The same engine runs on a server when
    a model needs one, and a Journal recorded in the browser replays there byte-for-byte.
 7. **User code is first-class.** What an Abaqus user does with a Fortran UMAT, a FEM Lab user
@@ -136,3 +136,7 @@ the tip, quadratic hexes, compare the tip deflection with beam theory", watches 
 Model, mesh, solve, plot, and report a 0.4 % difference with a convergence table, then opens
 the script it wrote, changes the load, and reruns. Every step of that is a Command in the
 Journal, and every Benchmark behind it ran in CI that morning.
+
+Hosted AI is an account-based paid service under ADR 0028 and issues #546–#557.
+Its service credentials and financial state stay outside the browser/engine; the
+browser continues to execute tools against its local registry.

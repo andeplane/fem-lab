@@ -1,0 +1,328 @@
+{
+  "name": "truss-axial-patch",
+  "reference": "Benchmark B8: three collinear bars of the same length carrying the same axial force, meshed with 1, 2 and 5 elements. The bar equation gives u(x) = F x / (E A) at every node, so with E = 200 GPa, A = 1000 mm^2, L = 2 m and F = 100 kN the tip moves exactly 1 mm and any interior node moves in proportion. A displacement field the element reproduces exactly is a patch test: the answer must not depend on the subdivision at all.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "truss-axial-patch"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "bar1",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 1
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "bar2",
+      "points": [
+        [
+          "0 m",
+          "500 mm",
+          "0 m"
+        ],
+        [
+          "2 m",
+          "500 mm",
+          "0 m"
+        ]
+      ],
+      "divisions": 2
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "bar5",
+      "points": [
+        [
+          "0 m",
+          "1 m",
+          "0 m"
+        ],
+        [
+          "2 m",
+          "1 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 5
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "round numbers, so the closed form is exact in floating point"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "bar1",
+        "bar2",
+        "bar5"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "rod",
+      "shape": {
+        "kind": "generic",
+        "a": "1000 mm^2",
+        "iY": "1 mm^4",
+        "iZ": "1 mm^4",
+        "j": "1 mm^4"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "rod",
+      "bodies": [
+        "bar1",
+        "bar2",
+        "bar5"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "everything",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-10 mm",
+          "-10 mm",
+          "-10 mm"
+        ],
+        "max": [
+          "2010 mm",
+          "1010 mm",
+          "10 mm"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "transverse",
+      "on": "everything",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root1",
+      "on": "bar1.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root2",
+      "on": "bar2.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root5",
+      "on": "bar5.p0"
+    },
+    {
+      "cmd": "load.force",
+      "name": "pull1",
+      "on": "bar1.p1",
+      "total": [
+        "100 kN",
+        "0 kN",
+        "0 kN"
+      ]
+    },
+    {
+      "cmd": "load.force",
+      "name": "pull2",
+      "on": "bar2.p1",
+      "total": [
+        "100 kN",
+        "0 kN",
+        "0 kN"
+      ]
+    },
+    {
+      "cmd": "load.force",
+      "name": "pull5",
+      "on": "bar5.p1",
+      "total": [
+        "100 kN",
+        "0 kN",
+        "0 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "transverse",
+        "root1",
+        "root2",
+        "root5"
+      ],
+      "loads": [
+        "pull1",
+        "pull2",
+        "pull5"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "bar1 tip: F L / (E A) = 1 mm, whatever the subdivision"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "2 m",
+          "500 mm",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "bar2 tip: F L / (E A) = 1 mm, whatever the subdivision"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "2 m",
+          "1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "bar5 tip: F L / (E A) = 1 mm, whatever the subdivision"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "1 m",
+          "500 mm",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.5,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "bar2's interior node is exactly halfway: u(x) = F x / (E A)"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "400 mm",
+          "1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.2,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "bar5's first interior node, one fifth along"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 100.0,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "F / A = 100 MPa, uniform along every bar"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the three roots carry the three pulls"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

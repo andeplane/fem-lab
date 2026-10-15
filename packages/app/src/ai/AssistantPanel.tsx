@@ -1,15 +1,20 @@
+import { accounts } from '../account/browser';
+import { hostedProvider, hostedTools, HOSTED_COMMAND_INSTRUCTIONS } from './hosted';
+import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
+import { useStore } from '../ui/cmd';
 // The assistant drawer of docs/design/README.md. It owns the conversation (never persisted, never
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
 // holds this panel against `registry.list()` the same way it holds the shell.
-import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
+import { FemError, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Store, UiState } from '../store';
+import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
+
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
-import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
+import { buildSystem, buildTurn, downscaleImage, mentionLabel, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
@@ -36,35 +41,41 @@ export interface AssistantPanelProps {
  *  Before the panel is mounted `send` keeps the line in `pending` instead of dropping it, and the
  *  panel drains it the moment it mounts (issue #40). Without that, "open the drawer, then
  *  `chat.send`" is a race that both callers lose: the start screen's composer and the error card's
- *  "Send this error to the Assistant" each toggle the panel and send in the same tick. */
+ *  "Send this error to the Assistant" each toggle the panel and send in the same tick.
+ *  References are buffered too, so a tree reference can open the drawer and insert in one tick. */
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
+  pendingProducer: undefined as Promise<RegistryProducer> | undefined,
   pendingDraft: null as string | null,
+  pendingMentions: [] as string[],
   setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
-  send: (text: string): void => {
-    chatBridge.pending = text;
-  },
-  insertMention: (ref: string): void => void ref,
+  send: (text: string, producer?: Promise<RegistryProducer>): void => buffer(text, producer),
+  insertMention: (ref: string): void => bufferMention(ref),
   clear: (): void => {
     chatBridge.pending = null;
+    chatBridge.pendingMentions = [];
   },
 };
 
 /** What `chatBridge.send` goes back to when the panel unmounts: buffer again, never a no-op. */
-const buffer = (text: string): void => {
+const buffer = (text: string, producer?: Promise<RegistryProducer>): void => {
+  void chatBridge.pendingProducer?.then(owner => owner.release()).catch(() => undefined);
+  chatBridge.pendingProducer = producer;
   chatBridge.pending = text;
 };
 
-interface QueuedMessage { text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
+const bufferMention = (ref: string): void => { chatBridge.pendingMentions.push(ref); };
+
+interface QueuedMessage { producer: Promise<RegistryProducer>; text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string; uid?:string; epoch?:number }
 
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
   | { kind: 'prose'; text: string }
-  | { kind: 'verify'; rows: VerifyRow[] }
+  | { kind: 'verify'; record: AssistantVerification }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
-  | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
+  | { kind: 'diff'; owner: RegistryProducer | null; entries: JournalEntry[]; steps: number; journal: string | null }
   | { kind: 'files'; files: string[] }
   | { kind: 'bad'; text: string };
 
@@ -85,6 +96,7 @@ const KIND_LABEL: Record<string, string> = {
   constraint: 'constraints',
   load: 'loads',
   step: 'steps',
+  mesh: 'mesh',
   result: 'results',
   journal: 'journal',
   file: 'files',
@@ -122,12 +134,6 @@ export function mentionAt(draft: string, caret: number): { from: number; q: stri
   return hit === null ? null : { from: before.length - hit[1]!.length - 1, q: hit[1]! };
 }
 
-function useStore(store: Store): UiState {
-  const [state, setState] = useState(store.state);
-  useEffect(() => store.subscribe(() => setState(store.state)), [store]);
-  return state;
-}
-
 /** Every clickable in the drawer: one Command name, one `data-cmd`, errors shown not thrown. */
 function Cmd({ cmd, run, children, ...rest }: { cmd: string; run: () => void | Promise<unknown>; children: ComponentChildren; class?: string; title?: string; disabled?: boolean; pressed?: boolean; selected?: boolean }) {
   return (
@@ -159,7 +165,42 @@ function withRefs(text: string) {
   return text.split(/(@[a-z]+:[^\s,;)]+|@selection\b)/g).map((part, i) => (part.startsWith('@') ? <span class="ref" key={i}>{part}</span> : part));
 }
 
-function ToolCard({ call }: { call: ToolCall }) {
+const object = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+function isResultAssumption(value: unknown): value is ResultAssumption {
+  const row = object(value);
+  const valued = object(row?.value);
+  return row !== null
+    && typeof row.step === 'string'
+    && typeof row.body === 'string'
+    && typeof row.material === 'string'
+    && (row.property === 'rho' || row.property === 'alpha')
+    && valued !== null && typeof valued.value === 'number' && typeof valued.unit === 'string'
+    && (row.source === null || typeof row.source === 'string')
+    && typeof row.cause === 'string';
+}
+
+/** Read typed assumption rows from a Result, solve.run Ack, or a compatible value returned by a
+ * script. Shape validation keeps the dedicated display stable for other script return values. */
+export function resultAssumptions(json: string): ResultAssumption[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  for (let depth = 0; depth < 4; depth++) {
+    const row = object(value);
+    if (row === null) return [];
+    if (Array.isArray(row.assumptions)) return row.assumptions.filter(isResultAssumption);
+    value = row.summary ?? row.output ?? row.result;
+  }
+  return [];
+}
+
+export function ToolCard({ call }: { call: ToolCall }) {
+  const assumptions = call.status === 'succeeded' ? resultAssumptions(call.result) : [];
   const working = call.status === 'preparing' || call.status === 'pending';
   const label = call.status === 'preparing' ? 'Preparing' : call.status === 'pending' ? 'Running' : call.status === 'succeeded' ? 'Succeeded' : call.status === 'cancelled' ? 'Interrupted' : 'Failed';
   return (
@@ -173,6 +214,19 @@ function ToolCard({ call }: { call: ToolCall }) {
       </div>
       <div class="args" tabIndex={0} aria-label="Tool arguments">{toolDisplay(call.arguments ?? JSON.stringify(call.input))}</div>
       {call.result ? <div class="out" tabIndex={0} aria-label="Tool result">{toolDisplay(call.result)}</div> : null}
+      {assumptions.length > 0 ? (
+        <div class="result-assumptions">
+          <div class="label">Solver-used assumptions</div>
+          {assumptions.map((row, i) => (
+            <div class="result-assumption" key={`${row.step}:${row.body}:${row.property}:${i}`}>
+              <div><strong>{row.step}</strong> · {row.body} · {row.material}</div>
+              <div><code>{row.property}</code> = {row.value.value} {row.value.unit}</div>
+              <div>{row.cause}</div>
+              <div class="source">{row.source ?? 'No material source recorded'}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -195,27 +249,64 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [tokens, setTokens] = useState<string[]>([]);
   const [images, setImages] = useState<ImageBlock[]>([]);
   const [index, setIndex] = useState<IndexEntry[]>([]);
+  const indexOwner = useRef({ registry, request: 0 });
+  useLayoutEffect(() => {
+    if (indexOwner.current.registry !== registry) {
+      chatBridge.pendingMentions = [];
+      // Typed immutable targets have the same owner as chips; prose remains an editable draft.
+      const hasRetainedTarget = (text: string) => parseMentions(text).chips.some(chip => chip.kind === 'result' && chip.name.startsWith('id:'));
+      if (hasRetainedTarget(draft)) setDraft('');
+      if (chatBridge.pendingDraft !== null && hasRetainedTarget(chatBridge.pendingDraft)) chatBridge.pendingDraft = null;
+    }
+    indexOwner.current = { registry, request: 0 };
+    setIndex([]);
+    // Targets belong to this engine session; a replacement may reuse an opaque Result ID.
+    setTokens([]);
+  }, [registry]);
   const { folder, skills } = ui;
-  const [provider, setProvider] = useState<ProviderId>(() => defaultProvider());
-  const [model, setModel] = useState(() => storedModel(defaultProvider()));
+  const [provider, setProvider] = useState<ProviderId>(() => __HOSTED_AI__ ? 'openai' : defaultProvider());
+  const [model, setModel] = useState(() => __HOSTED_AI__ ? 'gpt-5.4-mini' : storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
   const [recentProject, setRecentProject] = useState<string | null>(null);
   const [projectFailure, setProjectFailure] = useState<string | null>(null);
+  const [charged, setCharged] = useState(0);
+  const [pendingUsage, setPendingUsage] = useState<string | null>(null);
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
+  const summaries = useRef<RegistryProducer[]>([]);
   const queue = useRef<QueuedMessage[]>([]);
   const [queued, setQueued] = useState<QueuedMessage[]>([]);
   const activeRequest = useRef<AbortController | null>(null);
   const execute = useRef<(job: QueuedMessage, signal: AbortSignal) => Promise<void>>(async () => undefined);
 
   useEffect(() => {
+    if (__HOSTED_AI__) { setProvider('openai'); setModel(ui.account.profile?.usage?.models.includes(ui.assistantModel ?? '') ? ui.assistantModel! : ui.account.profile?.usage?.models[0] ?? 'gpt-5.4-mini'); return; }
     if (!ui.assistantModel) return;
     const owner = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(ui.assistantModel!));
     if (owner) { setProvider(owner); setModel(ui.assistantModel); }
-  }, [ui.assistantModel]);
-  useEffect(() => () => { queue.current = []; activeRequest.current?.abort(); }, []);
+  }, [ui.assistantModel, ui.account.profile]);
+  useEffect(() => () => { for (const owner of summaries.current) void owner.release(); for (const job of queue.current) void job.producer.then(owner => owner.release()).catch(() => undefined); queue.current = []; activeRequest.current?.abort(); }, []);
+  const accountVersion = useRef(accounts.version);
+  useLayoutEffect(() => {
+    if (!__HOSTED_AI__ || accountVersion.current === accounts.version) return;
+    accountVersion.current = accounts.version;
+    activeRequest.current?.abort();
+    for (const job of queue.current) void job.producer.then(owner => owner.release()).catch(() => undefined);
+    for (const owner of summaries.current) void owner.release();
+    summaries.current = []; queue.current = []; messages.current = []; setQueued([]); setItems([]); setTurn(null); setCharged(0); setPendingUsage(null); setStreaming(''); setImages([]); setDraft(''); setTokens([]);
+    chatBridge.clear(); chatBridge.pendingDraft = null;
+    void chatBridge.pendingProducer?.then(owner => owner.release()).catch(() => undefined); chatBridge.pendingProducer = undefined;
+  }, [ui.account.uid, accounts.version]);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const focusDraft = useRef(false);
+  useLayoutEffect(() => {
+    if (focusDraft.current && !hidden) {
+      composer.current?.focus();
+      focusDraft.current = false;
+    }
+  });
 
-  const key = resolveKey(provider);
+  const key = __HOSTED_AI__ ? { key: null, source: 'none' as const } : resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
   const dispatch = useCallback((cmd: { cmd: string } & Record<string, unknown>) => registry.dispatch(cmd), [registry]);
 
@@ -235,7 +326,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       if (active) setRecentProject((info as { name: string } | null)?.name ?? null);
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [folder, registry]);
+  }, [folder, registry, projectFailure]);
 
   const projectCommand = async (cmd: string, args: Record<string, unknown> = {}) => {
     setProjectFailure(null);
@@ -249,7 +340,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   };
 
   const insert = (ref: string) => {
-    setTokens((cur) => (cur.includes(ref) ? cur : [...cur, ref]));
+    const target = parseRef(ref)?.ref ?? ref;
+    setTokens((cur) => (cur.includes(target) ? cur : [...cur, target]));
     store.togglePanel('assistant.mentions', false);
     // The token is a chip now, so the half-typed `@bo` that summoned the picker has to go with it —
     // otherwise it is sent to the model as an orphan word.
@@ -270,27 +362,50 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   };
 
   const runMessage = useCallback(
-    async (job: QueuedMessage, signal: AbortSignal) => {
+    async (job: QueuedMessage, requestSignal: AbortSignal) => {
+      const sameAccount = () => !__HOSTED_AI__ || (accounts.state.uid === job.uid && accounts.version === job.epoch);
+      const add = (item: Item) => { if (sameAccount()) setItems(cur => [...cur, item]); };
+
+      let producer: RegistryProducer;
+      try { producer = await job.producer; } catch (error) { add({ kind: 'bad', text: String(error) }); return; }
+      const registry = producer.registry;
+      const signal = AbortSignal.any([requestSignal, producer.signal]);
+      const ownedStore = () => producer.store() ?? store;
       const { text: line, images: attached, provider, model, key: apiKey } = job;
-      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
+      const providerImpl: Provider = __HOSTED_AI__ ? hostedProvider({origin:__AI_API_ORIGIN__!,uid:job.uid!,models:accounts.state.profile?.usage?.models ?? [],turnId:crypto.randomUUID(),fetch:(...args)=>fetch(...args),token:force=>accounts.token(job.uid!,force),current:sameAccount,request:id=>setPendingUsage(id),receipt:receipt=>{if(sameAccount()){setCharged(cur=>cur+receipt.chargedCredits);setPendingUsage(null);void accounts.refresh().catch(()=>undefined);}}}) : provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
       let prose = '';
+      let proseContext: Omit<AssistantVerification, 'rows'> | null = null;
       const finishProse = () => {
-        if (prose.trim()) flushProse(prose, add);
+        if (!sameAccount()) return;
+        if (prose.trim()) flushProse(prose, add, (rows) => {
+          const record = { rows, ...proseContext! };
+          const target = ownedStore();
+          target.set({ assistantVerifications: [...target.state.assistantVerifications, record] });
+          return record;
+        });
         prose = '';
+        proseContext = null;
         setStreaming('');
       };
       try {
-        const built = await buildTurn({ text: line, registry, images: attached, selection: ui.selection, skills });
-        if (signal.aborted) return;
+        if (signal.aborted || !sameAccount()) return;
+        const built = await buildTurn({ text: line, registry, images: attached, selection: ownedStore().state.selection, skills });
+        if (signal.aborted || !sameAccount()) return;
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
         for (const bad of built.unresolved) add({ kind: 'bad', text: `${bad.ref}: ${bad.cause}` });
         messages.current.push(built.message);
 
-        const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal })) {
+        const baseSystem = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
+        const system = __HOSTED_AI__ ? baseSystem + '\n\n' + HOSTED_COMMAND_INSTRUCTIONS : baseSystem;
+        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: __HOSTED_AI__ ? hostedTools(registry) : toToolDefinitions(registry), messages: messages.current, signal, ...(__HOSTED_AI__ ? {maxTokens:accounts.state.profile?.usage?.maxOutput ?? 4096,timeoutMs:900_000} : {}) })) {
+          if (!sameAccount()) break;
           if (event.type === 'text') {
+            if (!proseContext) {
+              const state = ownedStore().state;
+              proseContext = { model: state.model?.name ?? null, revision: state.revision, journalHash: state.journal?.hash ?? null, result: state.result ? { step: state.result.step, revision: state.result.revision } : null };
+            }
             prose += event.text;
             setStreaming(streamingProse(prose));
             setBusy('writing…');
@@ -310,7 +425,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             finishProse();
             const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
-            if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
+            if (event.turn.diff.length > 0) {
+              const owner = event.turn.undoSteps > 0 ? await acquireRegistryProducer(registry) : null;
+              if (owner) summaries.current.push(owner);
+              add({ kind: 'diff', owner, entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
+            }
             setTurn(event.turn);
           }
         }
@@ -323,30 +442,39 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         setItems(cur => cur.map(i => i.kind === 'tool' && i.call.status === 'preparing'
           ? { kind: 'tool', call: { ...i.call, status: 'cancelled', result: 'Not executed: response ended before this call could run.' } } : i));
         if (signal.aborted) add({ kind: 'prose', text: 'Response interrupted.' });
+        await producer.release();
+        if (__HOSTED_AI__ && sameAccount()) void accounts.refresh().catch(() => undefined);
       }
     },
     [registry, ui.selection, skills, enabled, folder, store],
   );
   execute.current = runMessage;
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, supplied?: Promise<RegistryProducer>) => {
     const line = text.trim();
     if (!line) {
+      void supplied?.then(owner => owner.release());
       if (queue.current.length && activeRequest.current) {
         activeRequest.current.abort();
         setBusy('interrupting… waiting for any active tool');
       }
       return;
     }
-    const selectedModel = store.state.assistantModel ?? model;
+    if (__HOSTED_AI__ && (!accounts.state.uid || accounts.state.status !== 'active' || !accounts.state.disclosureAccepted)) { void supplied?.then(owner => owner.release()); add({kind:'bad',text:accounts.state.uid ? 'Review and accept the AI disclosure before sending.' : 'Sign in to use the Assistant.'}); return; }
+    const available = accounts.state.profile?.usage?.models ?? ['gpt-5.4-mini'];
+    const preferredModel = store.state.assistantModel ?? model;
+    const selectedModel = __HOSTED_AI__ && !available.includes(preferredModel) ? available[0]! : preferredModel;
     const selectedProvider = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(selectedModel)) ?? provider;
-    const apiKey = resolveKey(selectedProvider).key;
+    const apiKey = __HOSTED_AI__ ? 'hosted' : resolveKey(selectedProvider).key;
     if (!apiKey) {
+      void supplied?.then(owner => owner.release());
       add({ kind: 'bad', text: `no ${selectedProvider} API key yet — open Settings and paste one; it stays in this browser` });
       store.togglePanel('assistant.settings', true);
       return;
     }
-    queue.current.push({ text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey });
+    const producer = supplied ?? acquireRegistryProducer(registry);
+    void producer.catch(() => undefined);
+    queue.current.push({ producer, text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey, ...(__HOSTED_AI__ ? {uid:accounts.state.uid!,epoch:accounts.version} : {}) });
     followBottom.current = true;
     setQueued([...queue.current]);
     setDraft('');
@@ -363,27 +491,43 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       finally { activeRequest.current = null; }
     }
     setBusy('');
-  }, [images, provider, model, store]);
+  }, [images, provider, model, store, registry]);
 
   const refreshIndex = useCallback(async () => {
-    setIndex(await objectIndex(registry).catch(() => []));
+    const owner = indexOwner.current;
+    const request = ++owner.request;
+    const entries = await objectIndex(registry).catch(() => []);
+    if (indexOwner.current === owner && owner.registry === registry && owner.request === request) setIndex(entries);
   }, [registry]);
 
   // `chat.send` from a script, the palette or a viewer click reaches the same code the Send button
   // does — including one that arrived before this panel existed, which is what `pending` holds.
   useEffect(() => {
-    chatBridge.send = (text) => {
+    chatBridge.send = (text, producer) => {
       store.togglePanel('assistant', true);
-      void send(text);
+      void send(text, producer);
     };
-    chatBridge.insertMention = insert;
-    chatBridge.setDraft = setDraft;
+    chatBridge.setDraft = (text) => {
+      store.togglePanel('assistant', true);
+      setDraft(text);
+      store.togglePanel('assistant.skills', false);
+      focusDraft.current = true;
+    };
     if (chatBridge.pendingDraft !== null) {
-      setDraft(chatBridge.pendingDraft);
+      chatBridge.setDraft(chatBridge.pendingDraft);
       chatBridge.pendingDraft = null;
     }
+    chatBridge.insertMention = (ref) => {
+      store.togglePanel('assistant', true);
+      insert(ref);
+      focusDraft.current = true;
+    };
+    const mentions = chatBridge.pendingMentions;
+    chatBridge.pendingMentions = [];
+    mentions.forEach(chatBridge.insertMention);
     chatBridge.clear = () => {
       chatBridge.pending = null;
+      chatBridge.pendingMentions = [];
       if (activeRequest.current) return;
       messages.current = [];
       setItems([]);
@@ -391,11 +535,13 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       setTurn(null);
     };
     const queued = chatBridge.pending;
-    chatBridge.pending = null;
-    if (queued !== null) void send(queued);
+    const producer = chatBridge.pendingProducer;
+    chatBridge.pending = null; chatBridge.pendingProducer = undefined;
+    if (queued !== null) void send(queued, producer);
     return () => {
       chatBridge.send = buffer;
       chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
+      chatBridge.insertMention = bufferMention;
     };
   });
 
@@ -421,19 +567,19 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     : [];
   const slash = /^\/(\S*)$/.exec(draft);
   const slashKey = slash ? `/${slash[1]!}` : null;
-  const skillRows: Row[] = (slash && dismissed !== slashKey ? skills.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
+  const skillRows: Row[] = (openPanel('skills') ? enabled : slash && dismissed !== slashKey ? enabled.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
     key: s.name,
     kind: s.source,
     name: s.name,
     meta: s.description,
     cmd: 'chat.setDraft',
-    run: () => void dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ` }),
+    run: () => void dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ${draft.replace(/^\/\S*\s*/, '')}` }),
   }));
   // Only one is ever open, so one cursor serves both.
   const menu = groupRows(mentionRows.length > 0 ? mentionRows : skillRows);
   const cursor = menu.flat.length === 0 ? 0 : Math.min(active, menu.flat.length - 1);
 
-  const compose = () => [...tokens.map((t) => `@${t}`), draft].join(' ').trim();
+  const compose = () => [draft, ...tokens.map((t) => `@${t}`)].join(' ').trim();
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
@@ -499,7 +645,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
       }}>
         {items.map((item, i) => (
-          <Item key={i} item={item} registry={registry} dispatch={dispatch} />
+          <Item key={i} item={item} dispatch={dispatch} state={ui} />
         ))}
         {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
@@ -515,7 +661,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           and needs no offsets. The transcript shifts up when it opens — that is the trade. */}
       {menu.flat.length > 0 ? (
         <div class="popover">
-          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash![1]} — a skill is loaded into the turn it is used in`}</div>
+          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash?.[1] ?? 'skill'} — a skill is loaded into the turn it is used in`}</div>
           <div class="list">
             {menu.groups.map((group) => (
               <div class="group" key={group.kind}>
@@ -551,15 +697,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           </div>
         ) : null}
 
+        <div class="suggestions" aria-label="Prompt suggestions">
+          {(items.some((item) => item.kind === 'user')
+            ? [{ label: 'Check this Model', text: 'Inspect the current Model and identify checks to run before trusting its results.' }, { label: 'Explain the next step', text: 'Explain the next useful modeling or verification step and why.' }]
+            : [{ label: 'Build a cantilever', text: 'Help me build a cantilever beam. Ask for the dimensions, material and load that you need.' }, { label: 'Inspect this Model', text: 'Inspect the current Model and explain its geometry, materials, boundary conditions and loads.' }]
+          ).map((suggestion) => <Cmd key={suggestion.label} cmd="chat.setDraft" disabled={busy !== ''} run={() => dispatch({ cmd: 'chat.setDraft', text: suggestion.text })}>{suggestion.label}</Cmd>)}
+        </div>
+
         <div class="box">
           <div class="tokens">
             {tokens.map((t) => (
-              <span class="token" key={t}>
-                <span>@{t}</span>
+              <span class="token" key={t} data-ref={t}>
+                <span>@{mentionLabel(t, index)}</span>
                 <X label={`remove ${t}`} onRemove={() => setTokens((cur) => cur.filter((c) => c !== t))} />
               </span>
             ))}
             <textarea
+              ref={composer}
               rows={1}
               placeholder={items.length === 0 ? 'Describe the model, or ask for a check…' : 'Reply, or ask for the next step…'}
               value={draft}
@@ -632,6 +786,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => void Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref })))}>
               @selection
             </Cmd>
+            <Cmd cmd="panel.toggle" title="Choose a skill for this draft" disabled={busy !== ''} run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.skills' })}>
+              /skill
+            </Cmd>
             <Cmd
               cmd="query.screenshot"
               title="Attach the current view as an image"
@@ -653,19 +810,23 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
                 }}
               />
             </label>
-            <Cmd cmd="chat.send" class="send" disabled={compose() === '' && !(busy && queued.length)} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
+            <Cmd cmd="chat.send" class="send" disabled={(__HOSTED_AI__ && (ui.account.status !== 'active' || !ui.account.disclosureAccepted)) || (compose() === '' && !(busy && queued.length))} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
               {busy ? (compose() === '' && queued.length ? 'Send next' : 'Queue') : 'Send'}
             </Cmd>
           </div>
         </div>
 
+        {__HOSTED_AI__ ? <div class="hosted-account">
+          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${Math.floor(ui.account.profile?.usage?.availableCredits ?? 0).toLocaleString()} AI credits · Account` : 'Sign in for free AI'}</Cmd>
+          {ui.account.uid && !ui.account.disclosureAccepted ? <div class="ai-disclosure"><p>Your messages, selected model and project context, tool results and attached images pass through FEM Lab to OpenAI. Conversations stay in this browser; OpenAI processes requests under its API data policy. Review sensitive project content before sending.</p><a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noreferrer">Provider data policy</a><Cmd cmd="ai.acceptDisclosure" run={() => dispatch({cmd:'ai.acceptDisclosure'})}>Accept and enable AI</Cmd></div> : null}
+        </div> : null}
         <div class="model-row">
           <label>Model <select aria-label="Assistant model" data-cmd="ai.setModel" value={model}
             onChange={(e) => {
               const next = (e.target as HTMLSelectElement).value;
               void dispatch({ cmd: 'ai.setModel', model: next }).catch(error => add({ kind: 'bad', text: String(error) }));
             }}>
-            {(Object.keys(MODELS) as ProviderId[]).map(id => <optgroup label={id === 'openai' ? 'OpenAI' : 'Anthropic'}>
+            {__HOSTED_AI__ ? (ui.account.profile?.usage?.models ?? ['gpt-5.4-mini']).map(m => <option key={m} value={m}>{m}</option>) : (Object.keys(MODELS) as ProviderId[]).map(id => <optgroup label={id === 'openai' ? 'OpenAI' : 'Anthropic'}>
               {MODELS[id].map(m => <option key={m} value={m}>{m}</option>)}
             </optgroup>)}
           </select></label>
@@ -675,12 +836,12 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           <ol>{queued.map(job => <li>{job.text}{job.images.length ? ` · ${job.images.length} images` : ''}</li>)}</ol>
         </div> : null}
         <div class="cost">
-          <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${__HOSTED_AI__ || turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
+          <span>{__HOSTED_AI__ ? `${charged.toLocaleString()} AI credits used${pendingUsage ? ' · usage pending' : ''}` : key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
-      {openPanel('settings') ? (
+      {!__HOSTED_AI__ && openPanel('settings') ? (
         <div class="settings">
           <label>
             <span>Provider</span>
@@ -730,13 +891,13 @@ function streamingProse(text: string): string {
 }
 
 /** Prose is split on its `<verification>` block, so the card and the sentences both survive. */
-function flushProse(text: string, add: (item: Item) => void): void {
+function flushProse(text: string, add: (item: Item) => void, record: (rows: VerifyRow[]) => AssistantVerification): void {
   const { rows, prose } = parseVerification(text);
   if (prose) add({ kind: 'prose', text: prose });
-  if (rows.length > 0) add({ kind: 'verify', rows });
+  if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
 }
 
-function Item({ item, registry, dispatch }: { item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -766,10 +927,11 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
       <div class="card verify">
         <div class="head">
           <span>◎</span>
-          <span>VERIFICATION</span>
+          <span>VERIFICATION · also in Checks</span>
         </div>
+        <div class="out">Assistant-reported · not independently verified<br />{verificationState(item.record, state)}</div>
         <div class="rows">
-          {item.rows.map((row, i) => (
+          {item.record.rows.map((row, i) => (
             <div key={i}>
               <span class={`icon ${row.status}`}>{row.status === 'ok' ? '✓' : row.status === 'warn' ? '!' : '✕'}</span>
               <span class="what">{row.what}</span>
@@ -799,10 +961,11 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
     <div class="card diff">
       <div class="head">
         <span>Journal diff · this turn</span>
-        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" disabled={undoState !== 'ready' || item.steps === 0} run={async () => {
+        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" disabled={undoState !== 'ready' || item.steps === 0 || !item.owner || item.owner.signal.aborted} run={async () => {
           setUndoState('pending');
           try {
-            await undoTurn(registry, item.steps, item.journal);
+            if (!item.owner || item.owner.signal.aborted) throw new FemError('session.expired', 'this turn belongs to an inactive project');
+            await undoTurn(item.owner.registry, item.steps, item.journal);
             setUndoState('done');
           } catch (e) {
             setUndoState('failed');

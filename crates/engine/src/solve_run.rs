@@ -2,29 +2,104 @@
 //!
 //! This is the seam between the registry and the numerics. Everything above it speaks names,
 //! Sets and `Quantity`; everything below it speaks SI `f64` on a Mesh (plan A §6, plan B §2.1).
-//! Results are kept per Step with the Model hash they were solved at, so an edit does not throw
+//! Results are kept per Step with their Result-validity fingerprint (ADR 0017), so an edit does not throw
 //! them away — it makes them *stale*, which `query.result` says out loud.
 
 use femlab_geometry::Mesh;
 
 use crate::command::{Field, ObjectKind, Procedure, QuantityOfInterest, Solver};
-use crate::engine::{display, Engine, OnProgress};
-use crate::error::{Error, ErrorCode};
+use crate::engine::{display, display_values, Engine, OnProgress};
+use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
-use crate::fem::loads::{face_set_area, Load};
-use crate::fem::problem::{Constraint, Problem};
-use crate::mesh::{scale_mesher, BuiltMesh};
-use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
+use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
+use crate::fem::problem::{Constraint, Coupling, PointMass, Problem, NODE_DOFS_MAX};
+use crate::mesh::{scale_settings, BuiltMesh};
+use crate::model::{Axial, ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
-use crate::post::{Extremum, FieldData};
+use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
-use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
+use crate::query::{
+    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, MomentReactionRow, Output, ReactionRow, ResultAssumption,
+    ResultSummary, StaticEquilibrium, StudyReport, StudyRow, SweepRow, Valued,
+};
 use crate::solve::SolveOptions;
-use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
+use crate::units::{
+    convert, Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
+};
 
-/// The material law every Model material resolves to for now; plugins add their own later.
+/// The three built-in laws a Model material resolves to; plugins add their own later.
 const LAW: &str = "linear-elastic";
+const ORTHOTROPIC_LAW: &str = "orthotropic-elastic";
+const J2_LAW: &str = "j2-plasticity";
+
+/// One Model material as the numbers an element needs.
+///
+/// Heat-only Materials have no constitutive stiffness: heat kernels consume their transport
+/// properties and never call the elastic law. Mechanical problems reject an assigned Material
+/// without stiffness before assembly; unassigned conductors may coexist in the same Model.
+///
+/// The plasticity block is integrated only by the procedure that carries a Gauss-point history,
+/// `static-nonlinear`; every other procedure evaluates a law *at* a strain rather than along a
+/// path, so it gets the elastic part and the Step says so ([`plasticity_ignored`]).
+fn resolve_material(m: &crate::model::Material, procedure: Procedure) -> Material {
+    let (id, props) = match (&m.orthotropic, &m.plasticity) {
+        (Some(o), _) => (ORTHOTROPIC_LAW, o.props()),
+        (None, Some(h)) if procedure == Procedure::StaticNonlinear => {
+            let mut props = vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)];
+            props.extend(h.props());
+            (J2_LAW, props)
+        }
+        (None, _) => {
+            let props = match m.e.zip(m.nu) {
+                Some((e, nu)) => vec![e, nu],
+                None => Vec::new(),
+            };
+            (LAW, props)
+        }
+    };
+    Material {
+        law: crate::fem::material::builtin_law(id).expect("the built-in law"),
+        props,
+        rho: m.rho.unwrap_or(0.0),
+        alpha: m.alpha.map_or([0.0; 3], Axial::axes),
+        k: m.k.map_or([0.0; 3], Axial::axes),
+        cp: m.cp.unwrap_or(0.0),
+        axes: m.orientation.as_ref().map(crate::model::Orientation::rows),
+    }
+}
+
+/// The `material.plasticityIgnored` warning a Step that cannot integrate a history carries when
+/// a Material assigned in it has a plasticity block, naming the Materials; `None` when there is
+/// nothing to say.
+fn plasticity_ignored(model: &Model, p: &Problem<'_>, procedure: Procedure) -> Option<Warning> {
+    if procedure == Procedure::StaticNonlinear {
+        return None;
+    }
+    let mut names: Vec<&str> = assigned_materials(model, p.body_of_block, &p.material_of_block)
+        .into_keys()
+        .map(|(_, i)| &model.materials[i])
+        .filter(|m| m.plasticity.is_some())
+        .map(|m| m.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    (!names.is_empty()).then(|| Warning {
+        step: None,
+        code: "material.plasticityIgnored".to_string(),
+        text: format!(
+            "the {} procedure has no Gauss-point history, so the plasticity of {} was not integrated and the \
+             elastic part was used; step.add with procedure static-nonlinear for the elastic–plastic answer",
+            procedure_name(procedure),
+            names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(", ")
+        ),
+        where_: Some("material".to_string()),
+    })
+}
+
+/// A `contact.add` without a `tol` pairs across this fraction of the Mesh bounding-box
+/// diagonal: tight enough that a tie between faces that are not really touching is refused.
+const DEFAULT_TOL: f64 = 1e-4;
 
 /// The dimension a Result field carries, so a summary reports it in the Model's own units.
 pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
@@ -35,8 +110,16 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
             ReactionQuantity::Power => Power::DIM,
         },
         Field::Temperature => Temperature::DIM,
-        Field::Strain => Dimension::NONE,
-        Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
+        Field::Strain | Field::Rotation | Field::PlasticStrain | Field::ErrorEstimate => Dimension::NONE,
+        Field::Stress
+        | Field::StressUnaveraged
+        | Field::StressTop
+        | Field::StressBottom
+        | Field::VonMises
+        | Field::ContactPressure
+        | Field::Principal => Stress::DIM,
+        Field::SectionForce | Field::ShellMoment => Force::DIM,
+        Field::SectionMoment => Torque::DIM,
     }
 }
 
@@ -61,18 +144,16 @@ fn build_problem_with_temperature<'a>(
     previous: Option<&FieldData>,
 ) -> Result<Problem<'a>, Error> {
     let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
-    let materials: Vec<Material> = model
-        .materials
-        .iter()
-        .map(|m| Material {
-            law: crate::fem::material::builtin_law(LAW).expect("the built-in law"),
-            props: vec![m.e, m.nu],
-            rho: m.rho.unwrap_or(0.0),
-            alpha: m.alpha.unwrap_or(0.0),
-            k: m.k.unwrap_or(0.0),
-            cp: m.cp.unwrap_or(0.0),
-        })
-        .collect();
+    for (block, body) in built.mesh.blocks.iter().zip(&built.body_of_block) {
+        if model.section_of_body(body).is_some_and(|section| !section.plies.is_empty())
+            && block.kind != femlab_geometry::ElementKind::Shell4
+        {
+            return Err(Error::new(ErrorCode::Unsupported, "laminate sections require shell elements")
+                .at(format!("body '{body}'"))
+                .suggest("mesh.set with the surface mesher, or section.assign a compatible section"));
+        }
+    }
+    let materials: Vec<Material> = model.materials.iter().map(|m| resolve_material(m, step.procedure)).collect();
     let material_of_block = built
         .body_of_block
         .iter()
@@ -81,47 +162,181 @@ fn build_problem_with_temperature<'a>(
             model.materials.iter().position(|m| m.name == name)
         })
         .collect();
+    // A tie has no prescribed value and names two Sets, so it leaves the Constraint list here
+    // and becomes a Coupling; `default_tol` is the gap a `contact.add` without one accepts.
+    let (lo, hi) = built.mesh.bbox();
+    let default_tol =
+        DEFAULT_TOL * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    // Every point mass of the Model is on every Mesh, in Model order, whatever the Step does
+    // with it; a Step that couples none of them is what `checks::uncoupled_points` refuses.
+    let points: Vec<PointMass> = model
+        .points
+        .iter()
+        .zip(&built.points)
+        .map(|(pm, &node)| PointMass { name: pm.name.clone(), node, mass: pm.mass })
+        .collect();
+    let mut couplings = Vec::new();
     let mut constraints = Vec::with_capacity(step.constraints.len());
     for name in &step.constraints {
         let c = model.constraint(name).expect("step.add validated the Constraint names");
         let (dofs, value) = match &c.kind {
+            ConstraintKind::Bonded { master, tol } => {
+                couplings.push(Coupling::Bonded {
+                    name: c.name.clone(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Frictionless { master, tol } => {
+                couplings.push(Coupling::Frictionless {
+                    name: c.name.clone(),
+                    master: master.clone(),
+                    slave: c.on.clone(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => {
+                couplings.push(Coupling::Cyclic {
+                    name: c.name.clone(),
+                    from: from.clone(),
+                    to: c.on.clone(),
+                    axis: axis.index(),
+                    through: through.unwrap_or([0.0; 3]),
+                    angle: angle_deg.to_radians(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Couple { point, coupling } => {
+                let pm = points.iter().find(|pm| pm.name == *point).expect("constraint.couple validated the point");
+                couplings.push(Coupling::Couple {
+                    name: c.name.clone(),
+                    point: point.clone(),
+                    node: pm.node,
+                    faces: c.on.clone(),
+                    kind: *coupling,
+                });
+                continue;
+            }
+            // A fix of every displacement that names no rotation is a clamp, so a beam joint
+            // under it cannot turn either; the Model keeps the three-component form every
+            // Journal recorded, and the rotations are added here where the DOFs exist.
             ConstraintKind::Fix { dofs } => {
-                let mut on = [false; 3];
+                let mut on = [false; NODE_DOFS_MAX];
                 for d in dofs {
                     on[d.index()] = true;
                 }
+                if on[..3].iter().all(|&h| h) && !on[3..].iter().any(|&h| h) {
+                    on[3..].fill(true);
+                }
                 (on, 0.0)
             }
+            ConstraintKind::Pin => ([true, true, true, false, false, false], 0.0),
             ConstraintKind::Prescribe { dof, value } => {
-                let mut on = [false; 3];
+                let mut on = [false; NODE_DOFS_MAX];
                 on[dof.index()] = true;
                 (on, *value)
             }
+            // A mirror plane holds the displacement along its normal and, where a node can
+            // rotate, the two rotations about the in-plane axes.
             ConstraintKind::Symmetry { normal } => {
-                let mut on = [false; 3];
+                let mut on = [false; NODE_DOFS_MAX];
                 on[normal.index()] = true;
+                for a in 0..3 {
+                    on[3 + a] = a != normal.index();
+                }
                 (on, 0.0)
             }
             // The heat DOF is component 0; a temperature Constraint in a structural Step holds
             // nothing, which is what an all-false `dofs` means, so it is inert there.
-            ConstraintKind::Temperature { value } => ([heat, false, false], *value),
+            ConstraintKind::Temperature { value } => ([heat, false, false, false, false, false], *value),
         };
         constraints.push(Constraint { name: c.name.clone(), nodes: c.on.clone(), dofs, value });
     }
+    let section_of_block = built
+        .body_of_block
+        .iter()
+        .map(|body| {
+            let section = model.section_of_body(body)?;
+            model.sections.iter().position(|s| s.name == section.name)
+        })
+        .collect();
+    let orientation_of_block = built
+        .body_of_block
+        .iter()
+        .map(|body| {
+            model
+                .body(body)
+                .and_then(|b| b.orientation)
+                .or_else(|| model.imported_region_assignments.get(body).and_then(|a| a.orientation))
+                .or_else(|| model.mesher_orientation.filter(|_| model.mesher_body_names().contains(&body.as_str())))
+                .map(|axis| {
+                    let mut v = [0.0; 3];
+                    v[axis.index()] = 1.0;
+                    v
+                })
+        })
+        .collect();
     let mut p = Problem {
+        directors: &built.directors,
         mesh: &built.mesh,
         sets: &built.sets,
         body_of_block: &built.body_of_block,
         material_of_block,
         materials,
+        section_of_block,
+        sections: model.sections.iter().map(|s| s.section).collect(),
+        plies: model
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .plies
+                    .iter()
+                    .map(|ply| {
+                        let material = model.material(&ply.material).ok_or_else(|| {
+                            Error::not_found("material", &ply.material, &model.names(ObjectKind::Material))
+                        })?;
+                        Ok(crate::fem::shell::Ply {
+                            thickness: ply.thickness,
+                            angle: ply.angle,
+                            material: resolve_material(material, step.procedure),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        orientation_of_block,
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,
+        couplings,
+        points,
         loads: Vec::new(),
         temperature: None,
         heat,
         heat_loads: Vec::new(),
     };
+    if !heat {
+        for ((body, index), ()) in assigned_materials(model, &built.body_of_block, &p.material_of_block) {
+            let material = &model.materials[index];
+            if material.e.zip(material.nu).is_none() && material.orthotropic.is_none() {
+                return Err(Error::new(
+                    ErrorCode::MaterialProps,
+                    format!(
+                        "Body '{body}' cannot run {}: Material '{}' has no elastic stiffness",
+                        procedure_name(step.procedure),
+                        material.name
+                    ),
+                )
+                .at(format!("material '{}'", material.name))
+                .suggest("material.add with E and nu, or with an orthotropic block"));
+            }
+        }
+    }
     let mut loads = Vec::with_capacity(step.loads.len());
     let mut heat_loads = Vec::new();
     for name in &step.loads {
@@ -136,16 +351,33 @@ fn build_problem_with_temperature<'a>(
                 let n = p.set(on)?.nodes.len() as f64;
                 loads.push(Load::NodalForce { nodes: on.clone(), f: total.map(|x| x / n) });
             }
+            LoadKind::Moment { on, total } => {
+                let n = p.set(on)?.nodes.len() as f64;
+                loads.push(Load::NodalMoment { nodes: on.clone(), m: total.map(|x| x / n) });
+            }
             LoadKind::Gravity { g } => loads.push(Load::Gravity { g: *g }),
             // Composed once below, including references for an inherited heat field.
             LoadKind::Temperature { .. } => {}
             LoadKind::Convection { on, h, t_inf } => {
                 heat_loads.push(HeatLoad::Convection { faces: on.clone(), h: *h, t_inf: *t_inf });
             }
+            LoadKind::Radiation { on, emissivity, t_inf } => {
+                heat_loads.push(HeatLoad::Radiation { faces: on.clone(), emissivity: *emissivity, t_inf: *t_inf });
+            }
             LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
             LoadKind::HeatSource { bodies, q } => {
-                heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
+                let selected = if model.implicit_body().is_some_and(|root| bodies.iter().any(|b| b == root)) {
+                    bodies.iter().cloned().chain(model.meshed_body_names().into_iter().map(str::to_string)).collect()
+                } else {
+                    bodies.clone()
+                };
+                heat_loads.push(HeatLoad::Source { bodies: selected, q: *q });
             }
+            LoadKind::Torque { on, total } => {
+                let j = face_set_polar_moment(&p, on)?;
+                loads.push(Load::Torque { faces: on.clone(), c: total / j });
+            }
+            LoadKind::ThermalContact { of, h } => heat_loads.push(HeatLoad::Contact { of: of.clone(), h: *h }),
         }
     }
     p.loads = loads;
@@ -168,7 +400,9 @@ fn thermal_field(
         let load = model.load(name).expect("step.add validated the Load names");
         if let LoadKind::Temperature { bodies, value, reference } = &load.kind {
             let nodal = assigned.get_or_insert_with(|| vec![None; built.mesh.n_nodes()]);
-            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| bodies.contains(body)) {
+            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| {
+                bodies.contains(body) || model.implicit_body().is_some_and(|root| bodies.iter().any(|b| b == root))
+            }) {
                 for &node in &built.mesh.blocks[b].conn {
                     let node = node as usize;
                     let delta = previous.map_or(*value, |t| t.data[node * t.comps]) - reference;
@@ -201,6 +435,92 @@ fn thermal_field(
     Ok(Some((nodal, 0.0)))
 }
 
+/// Explain which mass-bearing path read an omitted density.
+fn rho_assumption_cause(procedure: Procedure, has_gravity: bool) -> Option<&'static str> {
+    match procedure {
+        Procedure::Static if has_gravity => Some("gravity read the omitted density as zero"),
+        Procedure::Modal => Some("modal mass assembly read the omitted density as zero"),
+        Procedure::Explicit => Some("explicit mass assembly read the omitted density as zero"),
+        Procedure::Implicit => Some("implicit mass assembly read the omitted density as zero"),
+        _ => None,
+    }
+}
+
+/// Materials actually integrated in each Body, including every laminate ply.
+fn assigned_materials<'a>(
+    model: &Model,
+    bodies: &'a [String],
+    materials: &[Option<usize>],
+) -> std::collections::BTreeMap<(&'a str, usize), ()> {
+    bodies
+        .iter()
+        .zip(materials)
+        .flat_map(|(body, material)| {
+            let plies = model.section_of_body(body).map_or(&[][..], |section| section.plies.as_slice());
+            let indices: Vec<_> = if plies.is_empty() {
+                material.iter().copied().collect()
+            } else {
+                plies
+                    .iter()
+                    .map(|ply| {
+                        model
+                            .materials
+                            .iter()
+                            .position(|m| m.name == ply.material)
+                            .expect("build_problem resolved every ply material")
+                    })
+                    .collect()
+            };
+            indices.into_iter().map(move |i| ((body.as_str(), i), ()))
+        })
+        .collect()
+}
+
+/// Optional material values this exact procedure read after the Model-to-Problem boundary
+/// resolved an omission to zero. Callers attach these only after the procedure succeeds.
+fn result_assumptions(
+    model: &Model,
+    built: &BuiltMesh,
+    step: &str,
+    procedure: Procedure,
+    p: &Problem<'_>,
+) -> Vec<ResultAssumption> {
+    let rho_cause = rho_assumption_cause(procedure, p.loads.iter().any(|load| matches!(load, Load::Gravity { .. })));
+    // Static, explicit and implicit assembly all form the thermal force. Modal forms stiffness
+    // too, but discards that load vector, so alpha is not solver-used there.
+    let reads_alpha =
+        matches!(procedure, Procedure::Static | Procedure::Explicit | Procedure::Implicit) && p.temperature.is_some();
+    // A BuiltMesh block always has elements. Collecting by Body and material also collapses a
+    // mapped Body made from several blocks into one assumption row per property.
+    let assigned = assigned_materials(model, &built.body_of_block, &p.material_of_block);
+    let mut out = Vec::new();
+    for ((body, material_index), ()) in assigned {
+        let material = &model.materials[material_index];
+        let mut push = |property, unit: &str, cause: &str| {
+            out.push(ResultAssumption {
+                step: step.to_string(),
+                body: body.to_string(),
+                material: material.name.clone(),
+                property,
+                value: Valued { value: 0.0, unit: unit.to_string() },
+                source: material.source.clone(),
+                cause: cause.to_string(),
+            });
+        };
+        if let (Some(cause), None) = (rho_cause, material.rho) {
+            push(AssumedMaterialProperty::Rho, "kg/m^3", cause);
+        }
+        if reads_alpha && material.alpha.is_none() {
+            push(
+                AssumedMaterialProperty::Alpha,
+                "1/K",
+                "the resolved temperature field read the omitted thermal expansion coefficient as zero",
+            );
+        }
+    }
+    out
+}
+
 /// The wire name of a procedure, from serde's rename.
 pub fn procedure_name(p: Procedure) -> String {
     serde_json::to_string(&p).unwrap_or_default().trim_matches('"').to_string()
@@ -209,6 +529,15 @@ pub fn procedure_name(p: Procedure) -> String {
 /// The `procedure::Step` a Model Step means: the fields that procedure reads, and the defaults
 /// plan A names for the ones the Command left out. A missing `dt` or `tEnd` is a schema error
 /// naming the field, because a transient with no clock is not a Step anybody meant.
+/// The convergence control a Step carries, with the defaults an old Journal replays under.
+fn control(step: &Step) -> procedure::NonlinearControl {
+    let d = procedure::NonlinearControl::default();
+    procedure::NonlinearControl {
+        tol: step.nonlinear_tolerance.unwrap_or(d.tol),
+        max_iterations: step.nonlinear_max_iterations.map_or(d.max_iterations, |n| n as usize),
+    }
+}
+
 pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
     let want = |v: Option<f64>, field: &'static str| {
         v.ok_or_else(|| {
@@ -219,12 +548,45 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
         })
     };
     Ok(match step.procedure {
-        Procedure::Static => procedure::Step::Static { solver: opts },
-        Procedure::Modal => {
-            procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
+        Procedure::Static => {
+            // A static Step needs no clock, so unlike a transient one it defaults rather than
+            // refusing: one second of nominal time, covered in a single increment. An
+            // amplitude table written in step fraction therefore works unchanged.
+            let t_end = step.t_end.unwrap_or(1.0);
+            procedure::Step::Static {
+                solver: opts,
+                dt: step.dt.unwrap_or(t_end),
+                t_end,
+                amplitude: step.amplitude.as_ref().map(amplitude),
+                output_every: step.output_every.unwrap_or(1) as usize,
+            }
         }
-        Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts },
+        Procedure::StaticNonlinear => procedure::Step::StaticNonlinear(procedure::nonlinear::Options {
+            increments: step.increments.unwrap_or(10) as usize,
+            converge: procedure::nonlinear::Converge {
+                tolerance: step.nonlinear_tolerance.unwrap_or(1e-8),
+                max_newton: step.nonlinear_max_iterations.unwrap_or(20) as usize,
+            },
+            max_cutbacks: step.max_cutbacks.unwrap_or(5) as usize,
+            // Pseudo-time, not physical time: one second of it is the whole load history.
+            t_end: step.t_end.unwrap_or(1.0),
+            amplitude: step.amplitude.as_ref().map(amplitude),
+            solver: opts,
+        }),
+        // `prestress` is filled in by [`with_prestress`] once the Problem and the predecessor's
+        // Result exist, the way `initial_velocity` is: this stays a pure Model-to-SI mapping.
+        Procedure::Modal => procedure::Step::Modal {
+            n_modes: step.n_modes.unwrap_or(6) as usize,
+            shift: step.shift,
+            solver: opts,
+            prestress: None,
+        },
+        // One factor by default: the smallest is the one that decides whether the structure
+        // stands, and asking for more costs a wider subspace.
+        Procedure::Buckling => procedure::Step::Buckling { n_modes: step.n_modes.unwrap_or(1) as usize, solver: opts },
+        Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts, control: control(step) },
         Procedure::HeatTransient => procedure::Step::HeatTransient {
+            control: control(step),
             dt: want(step.dt, "dt")?,
             t_end: want(step.t_end, "tEnd")?,
             theta: step.theta.unwrap_or(0.5),
@@ -233,13 +595,110 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             amplitude: step.amplitude.as_ref().map(amplitude),
             solver: opts,
         },
+        Procedure::RandomVibration => procedure::Step::RandomVibration {
+            spectrum: procedure::random_vibration::Spectrum {
+                table: step.psd.clone().ok_or_else(|| {
+                    Error::schema("randomVibration needs psd").at("psd").suggest("step.add with a one-sided PSD table")
+                })?,
+            },
+            damping: step.damping_ratios.clone().or_else(|| step.damping_ratio.map(|z| vec![z])).unwrap_or_default(),
+            rayleigh: (step.rayleigh_alpha.unwrap_or(0.0), step.rayleigh_beta.unwrap_or(0.0)),
+        },
+        Procedure::Harmonic => procedure::Step::Harmonic {
+            f_start: want(step.f_start, "fStart")?,
+            f_stop: want(step.f_stop, "fStop")?,
+            points: step.points.unwrap_or(0) as usize,
+            spacing: step.sweep.unwrap_or_default(),
+            damping_ratio: step.damping_ratio,
+            damping_ratios: step.damping_ratios.clone(),
+            rayleigh: (step.rayleigh_alpha.unwrap_or(0.0), step.rayleigh_beta.unwrap_or(0.0)),
+            output_every: step.output_every.unwrap_or(1) as usize,
+        },
+        // The initial velocity needs the Mesh; `initial_velocity` fills it in once the Problem
+        // exists, so this stays a pure SI mapping.
         Procedure::Explicit => procedure::Step::Explicit {
             t_end: want(step.t_end, "tEnd")?,
             dt_factor: step.dt_factor.unwrap_or(0.9),
             initial_velocity: None,
             output_every: step.output_every.unwrap_or(1) as usize,
         },
+        Procedure::Implicit => procedure::Step::Implicit {
+            dt: want(step.dt, "dt")?,
+            t_end: want(step.t_end, "tEnd")?,
+            alpha: step.alpha.unwrap_or(0.0),
+            rayleigh_alpha: step.rayleigh_alpha.unwrap_or(0.0),
+            rayleigh_beta: step.rayleigh_beta.unwrap_or(0.0),
+            initial_velocity: None,
+            output_every: step.output_every.unwrap_or(1) as usize,
+            amplitude: step.amplitude.as_ref().map(amplitude),
+        },
     })
+}
+
+/// The Step's `initialVelocity` entries resolved on the Mesh to one velocity per DOF, or
+/// `None` when the Step starts from rest. Two entries that give one node different velocities
+/// are `model.ill-posed`; the same velocity twice is not. Held components are zeroed by the
+/// procedures themselves.
+fn initial_velocity_of(p: &Problem<'_>, step: &Step) -> Result<Option<Vec<f64>>, Error> {
+    let Some(list) = step.initial_velocity.as_deref().filter(|l| !l.is_empty()) else { return Ok(None) };
+    let dpn = p.dofs_per_node();
+    let mut v = vec![0.0; p.n_dofs()];
+    let mut given: Vec<Option<usize>> = vec![None; p.mesh.n_nodes()];
+    for (i, entry) in list.iter().enumerate() {
+        for &node in &p.set(&entry.on)?.nodes {
+            if let Some(first) = given[node as usize] {
+                if list[first].value != entry.value {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!(
+                            "initialVelocity entries {first} ('{}') and {i} ('{}') give node {node} different velocities",
+                            list[first].on, entry.on
+                        ),
+                    )
+                    .at(format!("initialVelocity[{i}]"))
+                    .suggest("step.add with initialVelocity Sets that do not overlap, or the same value on both"));
+                }
+            }
+            given[node as usize] = Some(i);
+            // A velocity is a translation; a beam joint's rotations start at rest.
+            for c in 0..dpn.min(3) {
+                v[node as usize * dpn + c] = entry.value[c];
+            }
+        }
+    }
+    Ok(Some(v))
+}
+
+/// The preload a prestressed modal Step stiffens with: the displacement of the static Step it
+/// continues, one value per DOF, together with that Step's name.
+///
+/// **Only a static predecessor is a preload.** A linear or nonlinear static Step leaves behind a
+/// displacement whose stress state is exactly what `K_sigma` integrates. A heat Step hands over
+/// a temperature field instead, which has already composed into the Problem before this point.
+/// A modal or buckling predecessor has an *eigenvector* in its displacement slot — a shape with
+/// arbitrary amplitude and therefore no stress state at all — so continuing one stiffens
+/// nothing, which is what it did before #344 and still does.
+fn preload_of(model: &Model, step: &Step, dpn: usize, prev: &StepResult) -> Option<(String, Vec<f64>)> {
+    let name = step.after.as_deref().expect("a Result to continue means the Step named one");
+    let stressed =
+        model.step(name).expect("`after` names a Step that step.remove refuses to remove while it is named").procedure;
+    let is_static = matches!(stressed, Procedure::Static | Procedure::StaticNonlinear);
+    let u = prev.fields.get(&Field::Displacement).filter(|_| is_static)?;
+    Some((name.to_string(), procedure::harmonic::dof_vector(u, dpn)))
+}
+
+/// Give a dynamic Step its resolved initial velocity; every other Step is left alone.
+fn with_initial_velocity(
+    mut proc_step: procedure::Step,
+    p: &Problem<'_>,
+    step: &Step,
+) -> Result<procedure::Step, Error> {
+    if let procedure::Step::Explicit { initial_velocity, .. } | procedure::Step::Implicit { initial_velocity, .. } =
+        &mut proc_step
+    {
+        *initial_velocity = initial_velocity_of(p, step)?;
+    }
+    Ok(proc_step)
 }
 
 pub(crate) struct PlannedCost {
@@ -249,29 +708,78 @@ pub(crate) struct PlannedCost {
 
 /// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
 /// derive their step count from the same element-frequency bound as the integrator.
+///
+/// `dofs_per_node` is the idealisation's structural stride (`Idealisation::dofs_per_node`, not
+/// the mesh's geometric dimension), so a twisted axisymmetric Model's cost reflects its third
+/// DOF; the heat arms ignore it and always budget one unknown per node.
 pub(crate) fn planned_cost(
     mesh: &femlab_geometry::Mesh,
+    dofs_per_node: usize,
     explicit_problem: Option<&Problem<'_>>,
     step: &procedure::Step,
+    modal_modes: usize,
 ) -> Result<PlannedCost, Error> {
     let mut estimate = match step {
-        procedure::Step::Static { solver } | procedure::Step::Modal { solver, .. } => {
-            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
+        // An amplituded static Step retains a displacement history like any transient, so it
+        // is budgeted like one: `f`, `f_thermal`, `u`, `u_th`, `u_L` and the frame being built
+        // are the full-field vectors alive while it retains.
+        procedure::Step::Static { solver, dt, t_end, amplitude: Some(_), output_every } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
         }
-        procedure::Step::HeatSteady { solver } => crate::solve::cost_estimate(mesh, 1, solver.solver),
+        procedure::Step::Static { solver, .. }
+        | procedure::Step::Modal { solver, .. }
+        | procedure::Step::Buckling { solver, .. } => crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver),
+        // A nonlinear Step keeps one displacement field per converged increment — the
+        // load–deflection curve — so its retained history is counted exactly as a transient's.
+        // It is reported rather than enforced: `outputEvery`, which the budget error suggests,
+        // is not a control this procedure has.
+        procedure::Step::StaticNonlinear(o) => {
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, o.solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, o.increments, 1, 5)
+                .map(|estimate| PlannedCost { estimate, transient: None });
+        }
+        procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
             let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 5)
+            // Linear heat: original five plus film, evaluated, previous/rate and capacity_rate.
+            // Radiation retains the conservative thirteen-vector allowance. Contact reuses
+            // film RHS for the original load, drops it after transposition, and drops that
+            // transformed load before expansion: seven outer + old radiation + next iterate
+            // + reduced RHS/solution + replacement = twelve at that peak, within thirteen.
+            // Reduction and matrix/factor storage (including contact fill) remain excluded.
+            let p = explicit_problem.expect("a transient heat cost plan needs its resolved Problem");
+            let work = if procedure::heat::radiates(p) { 13 } else { 9 };
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
         }
+        // A harmonic Step solves nothing, but it retains two nodal fields per frequency, so it
+        // is budgeted like a transient with six stored components instead of three.
+        procedure::Step::Harmonic { f_start, f_stop, points, spacing, output_every, .. } => {
+            procedure::harmonic::sweep_grid(*f_start, *f_stop, *points, *spacing)?;
+            let steps = points - 1;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 6, steps, *output_every, 4)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "harmonic")) });
+        }
+        procedure::Step::RandomVibration { .. } => procedure::random_vibration::cost(mesh, dofs_per_node, modal_modes),
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
-            let components = p.dofs_per_node();
-            let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
+        }
+        // The state and its predictors (u, v, a, ũ, ṽ, w), the two full-length scratch
+        // vectors, the load and the frame being built: ten, always factorised directly.
+        procedure::Step::Implicit { dt, t_end, output_every, .. } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, Solver::CpuDirect);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 10)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "implicit")) });
         }
     };
     estimate.note.push_str(" Retained transient frames: none.");
@@ -279,9 +787,28 @@ pub(crate) fn planned_cost(
 }
 
 impl PlannedCost {
+    pub(crate) fn with_records(mut self, resident: u64, mesh: u64) -> Self {
+        self.estimate.resident_result_bytes = resident;
+        self.estimate.result_mesh_bytes = mesh;
+        self.estimate.bytes = self.estimate.bytes.saturating_add(resident).saturating_add(mesh);
+        self.estimate.feasible = if self.estimate.bytes > self.estimate.budget_bytes { Some(false) } else { None };
+        self.estimate.note.push_str(&format!(" Existing retained Result numeric payload: {resident} bytes; new Result Mesh snapshot: {mesh} bytes; these remain resident through preparation. Model/allocator overhead is additional. Total counted peak: {} bytes.", self.estimate.bytes));
+        self
+    }
+
     fn enforce(&self, step: &str) -> Result<(), Error> {
-        let (steps, every, procedure) = self.transient.expect("solve_run calls this only for transient Steps");
-        crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
+        if let Some((steps, every, procedure)) = self.transient {
+            crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
+        } else if self.estimate.feasible == Some(false) {
+            Err(Error::new(
+                ErrorCode::SolveTooLarge,
+                "random-response modal recovery exceeds the planning memory budget",
+            )
+            .at(format!("step '{step}'"))
+            .suggest("step.add fewer nModes on the modal predecessor, or mesh.set a coarser mesh"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -313,6 +840,9 @@ impl Engine {
             .step(step_name)
             .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
             .clone();
+        if step.output.contains(&Field::ErrorEstimate) {
+            check_estimator_step(&step)?;
+        }
         let opts = SolveOptions {
             solver: solver.unwrap_or_default(),
             rel_tol: tolerance.unwrap_or(SolveOptions::default().rel_tol),
@@ -325,13 +855,13 @@ impl Engine {
         // node count, which a field-length check cannot distinguish from a compatible Result.
         let prev = match &step.after {
             Some(name) => {
-                let current_hash = self.model_hash();
-                let (hash, result) = self.results.get(name).ok_or_else(|| {
+                let current_hash = crate::hash::result_hash(&self.model);
+                let record = self.results.get(name).ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                         .at(format!("step '{}'", step.name))
                         .suggest(format!("solve.run on step '{name}' first"))
                 })?;
-                if hash != &current_hash {
+                if record.input_hash != current_hash {
                     return Err(Error::new(
                         ErrorCode::ResultStale,
                         format!("step '{name}' has a Result that does not match the current Model state"),
@@ -339,7 +869,17 @@ impl Engine {
                     .at(format!("step '{}'", step.name))
                     .suggest(format!("solve.run on step '{name}' again")));
                 }
-                Some(result.clone())
+                if step.procedure == Procedure::RandomVibration {
+                    let source = record.model.step(name).expect("a retained Step belongs to its Model");
+                    if source.procedure != Procedure::Modal || source.constraints != step.constraints {
+                        return Err(Error::schema(
+                            "randomVibration needs a modal predecessor with identical constraints",
+                        )
+                        .at("after")
+                        .suggest("step.add with after naming a modal Step and the same constraints"));
+                    }
+                }
+                Some(std::sync::Arc::clone(record))
             }
             None => None,
         };
@@ -347,21 +887,100 @@ impl Engine {
         let started = self.host.now_ms();
         let mut result = {
             let built = self.mesh.as_ref().expect("built above");
-            let p = build_problem_with_temperature(
+            let mut p = build_problem_with_temperature(
                 &self.model,
                 built,
                 &step,
-                prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
+                prev.as_ref().and_then(|r| r.result.fields.get(&Field::Temperature)),
             )?;
-            if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
-                planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
+            // A static Step chained to a heat-transient Result solves once per retained frame
+            // of that predecessor's temperature History instead of once at its final state
+            // (#84). Every other `after` combination — a steady predecessor, any Step that is
+            // not static, or a static Step with an amplitude, whose own schedule is the one it
+            // retains — keeps today's single end-state solve untouched.
+            let chained_history = match (&proc_step, prev.as_ref()) {
+                (procedure::Step::Static { amplitude: None, .. }, Some(record)) => {
+                    record.result.history.as_ref().filter(|h| h.field == Field::Temperature)
+                }
+                _ => None,
+            };
+            if let Some(h) = chained_history {
+                // Budget before the loop, not the History it would build: the retained field
+                // is one von Mises scalar per node per frame, so it is costed the same way any
+                // other transient output is, with a larger `outputEvery` on the heat Step as
+                // the suggested fix rather than a bigger mesh.
+                let frames = h.times.len();
+                let heat_step = step.after.as_deref().expect("chained_history only matches a Step with `after`");
+                let base = crate::solve::cost_estimate(p.mesh, p.dofs_per_node(), opts.solver);
+                // The predecessor retained exactly these frames of one value per node on this
+                // mesh, so the same count cannot overflow the accounting a second time.
+                let estimate = crate::solve::add_transient_cost(base, p.mesh.n_nodes(), 1, frames - 1, 1, 5)
+                    .expect("the predecessor's retention already budgeted these frames on this mesh");
+                PlannedCost { estimate, transient: Some((frames - 1, 1, "heat-transient")) }
+                    .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                    .enforce(heat_step)?;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let (model, this_step) = (&self.model, &step);
+                let mut compose = |values: &[f64]| {
+                    thermal_field(model, built, this_step, Some(&FieldData::new(Per::Node, 1, values.to_vec())))
+                };
+                let mut result = procedure::static_::run_history(&mut p, h, &mut compose, &self.pool, on_progress)?;
+                result.assumptions = assumptions;
+                result
+            } else {
+                if matches!(
+                    &proc_step,
+                    procedure::Step::HeatTransient { .. }
+                        | procedure::Step::Explicit { .. }
+                        | procedure::Step::Implicit { .. }
+                        | procedure::Step::Harmonic { .. }
+                        | procedure::Step::RandomVibration { .. }
+                        | procedure::Step::Static { amplitude: Some(_), .. }
+                ) {
+                    planned_cost(
+                        p.mesh,
+                        p.dofs_per_node(),
+                        Some(&p),
+                        &proc_step,
+                        prev.as_ref().map_or(0, |r| r.result.modal_dofs.len()),
+                    )?
+                    .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                    .enforce(&step.name)?;
+                }
+                let mut proc_step = with_initial_velocity(proc_step, &p, &step)?;
+                // A modal Step that continues a static one is a *prestressed* modal analysis:
+                // the predecessor's stress stiffening is added to K before the eigenproblem
+                // (#344). Resolved here, where the Model says which procedure the predecessor
+                // ran; every other pairing leaves the Step exactly as it was.
+                let mut preload = None;
+                if let (procedure::Step::Modal { prestress, .. }, Some(record)) = (&mut proc_step, prev.as_ref()) {
+                    if let Some((name, u)) = preload_of(&self.model, &step, p.dofs_per_node(), &record.result) {
+                        *prestress = Some(u);
+                        preload = Some(name);
+                    }
+                }
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let mut result = procedure::run(
+                    &p,
+                    &proc_step,
+                    &self.pool,
+                    self.gpu.as_ref(),
+                    prev.as_ref().map(|record| &record.result),
+                    on_progress,
+                )
+                .await?;
+                result.assumptions = assumptions;
+                result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
+                result.prestress_from = preload;
+                if step.output.contains(&Field::ErrorEstimate) {
+                    self.pool.install(|| estimate_result(&p, &mut result))?;
+                }
+                result
             }
-            procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        let hash = self.model_hash();
-        self.results.insert(step.name.clone(), (hash, result));
-        Ok(Output::Solve { summary: self.result_summary(&step.name) })
+        let summary = self.retain_result(step.name.clone(), result)?;
+        Ok(Output::Solve { summary: Box::new(summary) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -413,6 +1032,9 @@ impl Engine {
             .at("step.after")
             .suggest("mesh.set, then solve.run on each dependency and the target Step for every refinement"));
         }
+        if step.output.contains(&Field::ErrorEstimate) {
+            check_estimator_step(&step)?;
+        }
         let proc_step = procedure_step(&step, SolveOptions::default())?;
         let (settings, h) = self.study_mesh(sizes)?;
         let mut progress = on_progress;
@@ -421,22 +1043,31 @@ impl Engine {
         let mut unit = String::new();
         let mut last = None;
         for (i, &size) in h.iter().enumerate() {
-            let where_ = display(&self.model, size, Length::DIM);
+            let where_ = display(&self.model, size, Length::DIM)?;
             report(
                 &mut progress,
                 "study",
                 i as f64 / h.len() as f64,
                 &format!("size {} {} ({} of {})", crate::units::fmt_sig(where_.value, 4), where_.unit, i + 1, h.len()),
             )?;
-            self.model.mesh = Some(MeshSettings { mesher: scale_mesher(&settings.mesher, h[0], size), ..settings });
+            self.model.mesh = Some(scale_settings(&settings, h[0], size));
             self.mesh = None;
             self.mesh()?;
             let started = self.host.now_ms();
             let (mut result, dofs) = {
                 let built = self.mesh.as_ref().expect("built above");
                 let p = build_problem(&self.model, built, &step)?;
-                let result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
-                (result, p.n_dofs() as u64)
+                let dofs = p.n_dofs() as u64;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let proc_step = with_initial_velocity(proc_step.clone(), &p, &step)?;
+                let mut result =
+                    procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+                result.assumptions = assumptions;
+                result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
+                if step.output.contains(&Field::ErrorEstimate) {
+                    self.pool.install(|| estimate_result(&p, &mut result))?;
+                }
+                (result, dofs)
             };
             result.solver.time_ms = self.host.now_ms() - started;
             let built = self.mesh.as_ref().expect("built above");
@@ -450,8 +1081,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            let hash = self.model_hash();
-            self.results.insert(step.name, (hash, last.expect("at least two sizes ran")));
+            self.retain_result(step.name, last.expect("at least two sizes ran"))?;
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -468,8 +1098,147 @@ impl Engine {
         Ok(Output::Study { report })
     }
 
+    /// Adaptive studies share the procedure, mesh builder and cost checks with solves.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn study_adapt(
+        &mut self,
+        step_name: &str,
+        target: f64,
+        max_iterations: Option<u32>,
+        max_elements: Option<u32>,
+        marking_fraction: Option<f64>,
+        recorded: Option<&[Vec<crate::command::SizeBoxSpec>]>,
+        on_progress: OnProgress<'_>,
+    ) -> Result<Output, Error> {
+        self.check_imported_study()?;
+        let iterations = max_iterations.unwrap_or(8);
+        let limit = max_elements.unwrap_or(100_000);
+        let fraction = marking_fraction.unwrap_or(0.5);
+        if !(target.is_finite() && target > 0.0 && target < 1.0) {
+            return Err(Error::schema("targetError must be between zero and one").at("targetError"));
+        }
+        if iterations == 0 || iterations > 100 {
+            return Err(Error::schema("maxIterations must be in 1..=100").at("maxIterations"));
+        }
+        if limit == 0 {
+            return Err(Error::schema("maxElements must be positive").at("maxElements"));
+        }
+        if !(fraction.is_finite() && fraction > 0.0 && fraction <= 1.0) {
+            return Err(Error::schema("markingFraction must be in (0, 1]").at("markingFraction"));
+        }
+        if recorded.is_some_and(|r| r.len() >= iterations as usize) {
+            return Err(Error::schema("recorded refinements exceed maxIterations").at("refinements"));
+        }
+        let step = self
+            .model
+            .step(step_name)
+            .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
+            .clone();
+        check_estimator_step(&step)?;
+        let proc_step = procedure_step(&step, SolveOptions::default())?;
+        let mut progress = on_progress;
+        let mut rows = Vec::new();
+        let mut choices = Vec::new();
+        loop {
+            let iteration = rows.len();
+            report(
+                &mut progress,
+                "study",
+                iteration as f64 / iterations as f64,
+                &format!("adaptive solve {} of {iterations}", iteration + 1),
+            )?;
+            self.mesh()?;
+            let started = self.host.now_ms();
+            let built = self.mesh.as_ref().expect("built above");
+            if built.mesh.n_elems() > limit as usize {
+                return Err(Error::new(ErrorCode::MeshFailed, "adaptive mesh exceeds maxElements")
+                    .at("maxElements")
+                    .suggest("study.adapt with a larger maxElements or mesh.set with a coarser base"));
+            }
+            let p = build_problem(&self.model, built, &step)?;
+            let dofs = p.n_dofs() as u64;
+            let cost = planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step, 0)?
+                .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built));
+            if cost.transient.is_some() {
+                cost.enforce(step_name)?;
+            }
+            let mut result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+            result.assumptions = result_assumptions(&self.model, built, step_name, step.procedure, &p);
+            result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
+            let estimate = self.pool.install(|| estimate_result(&p, &mut result))?;
+            let relative = estimate.relative();
+            result.solver.time_ms = self.host.now_ms() - started;
+            rows.push(crate::query::AdaptRow {
+                elements: built.mesh.n_elems() as u64,
+                dofs,
+                estimated_error: relative,
+                time_ms: result.solver.time_ms,
+            });
+            let done = match recorded {
+                Some(r) => iteration == r.len(),
+                None => relative <= target || iteration + 1 == iterations as usize,
+            };
+            if done {
+                let summary = self.retain_result(step.name.clone(), result)?;
+                let result_id = summary.result_id;
+                let report = crate::query::AdaptReport {
+                    rows,
+                    converged: relative <= target,
+                    target_error: target,
+                    result_id,
+                    refinements: choices,
+                };
+                self.adaptations.insert(step_name.to_string(), report.clone());
+                return Ok(Output::Adapt { report });
+            }
+            let boxes = match recorded {
+                Some(r) => r[iteration].clone(),
+                None => mark_regions(&built.mesh, &estimate.squared_errors, fraction),
+            };
+            self.apply_adaptive_refinement(&boxes, limit)?;
+            choices.push(boxes);
+        }
+    }
+
+    pub(crate) fn apply_adaptive_refinement(
+        &mut self,
+        boxes: &[crate::command::SizeBoxSpec],
+        limit: u32,
+    ) -> Result<(), Error> {
+        // Recorded choices are also applied by replay with solves omitted. Validate the
+        // source before that path can mutate settings, just as a running study does.
+        self.check_imported_study()?;
+        let new = crate::mesh::local_refinement(&crate::command::LocalRefinementSpec {
+            boxes: boxes.to_vec(),
+            max_elements: limit,
+        })?;
+        let settings = self.model.mesh.as_mut().ok_or_else(|| {
+            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
+                .suggest("mesh.set with a linear simplex mesher")
+        })?;
+        let field =
+            settings.refinement.get_or_insert(crate::model::LocalRefinement { boxes: Vec::new(), max_elements: limit });
+        field.boxes.extend(new.boxes);
+        field.max_elements = limit;
+        self.mesh = None;
+        Ok(())
+    }
+
     /// Mesh inputs shared by a running study and replay that omits its numerical work.
+    pub(crate) fn check_imported_study(&self) -> Result<(), Error> {
+        if self.model.mesh.as_ref().is_some_and(|m| matches!(m.mesher, crate::model::MesherSettings::Imported(_))) {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "an imported source cannot be remeshed or refined by a study",
+            )
+            .at("mesher")
+            .suggest("mesh.set with a separately authored refined imported source"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn study_mesh(&self, sizes: &[Q<Length>]) -> Result<(MeshSettings, Vec<f64>), Error> {
+        self.check_imported_study()?;
         let settings = self.model.mesh.clone().ok_or_else(|| {
             Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
                 .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
@@ -502,10 +1271,13 @@ impl Engine {
                 .at("quantity.field")
                 .suggest("query.result lists the fields that were computed")
         })?;
-        if f.per != crate::post::Per::Node {
-            return Err(Error::new(ErrorCode::Unsupported, format!("{} is not a nodal field", field_name(field)))
-                .at("quantity.field")
-                .suggest("a quantity of interest over displacement, stress, vonMises, principal, strain or reaction"));
+        if f.per != crate::post::Per::Node && f.per != crate::post::Per::Element {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!("{} is not a nodal or element field", field_name(field)),
+            )
+            .at("quantity.field")
+            .suggest("a quantity of interest over displacement, stress, vonMises, principal, strain or reaction"));
         }
         let at = |i: usize| Engine::pick(&f.data[i * f.comps..(i + 1) * f.comps], component);
         let raw = match q {
@@ -521,7 +1293,7 @@ impl Engine {
                 Engine::pick(&v, component)
             }
         };
-        let d = display(&self.model, raw, field_dimension(field, res.reaction_quantity));
+        let d = display(&self.model, raw, field_dimension(field, res.reaction_quantity))?;
         Ok((d.value, d.unit))
     }
 
@@ -531,25 +1303,20 @@ impl Engine {
     }
 
     /// The stored Result of a Step, or `not-found` naming the Steps that have one.
-    pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, &'e StepResult), Error> {
-        let name: &'e str = match step {
-            Some(n) => self.results.get_key_value(n).map(|(k, _)| k.as_str()).unwrap_or(""),
-            None => self
-                .last_solved()
-                .ok_or_else(|| Error::new(ErrorCode::NotFound, "no Step has been solved yet").suggest("solve.run"))?,
-        };
-        let known: Vec<&str> = self.results.keys().map(String::as_str).collect();
-        let (hash, res) = self.results.get(name).ok_or_else(|| {
-            Error::not_found("result", step.unwrap_or(name), &known).suggest("solve.run on that Step first")
-        })?;
-        Ok((name, hash, res))
+    pub(crate) fn stored<'e>(
+        &'e self,
+        step: Option<&str>,
+    ) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
+        let record = self.result_record(step, None)?;
+        Ok((&record.step, &record.input_hash, record.revision, &record.result))
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
-    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    /// changed coordinates or connectivity; the Result-validity fingerprint covers every
+    /// physics and mesh input while deliberately excluding the display name (ADR 0017).
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
-        let (name, hash, result) = self.stored(step)?;
-        if *hash != self.model_hash() {
+        let (name, hash, _, result) = self.stored(step)?;
+        if *hash != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
                 format!("step '{name}' has a Result that does not match the current Model state"),
@@ -563,9 +1330,13 @@ impl Engine {
     /// One Result field by its wire name, which is what a host passes through: a `Field`
     /// spelling (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal
     /// Step, counting from 1.
+    #[cfg(feature = "test-internals")]
     pub fn field_named(&self, step: Option<&str>, name: &str) -> Result<&crate::post::FieldData, Error> {
+        if name.starts_with("stressPly:") {
+            return self.result_record(step, None)?.named_field(name).map(|(field, _)| field);
+        }
         if let Some(k) = name.strip_prefix("mode:") {
-            let (step_name, _, res) = self.stored(step)?;
+            let (step_name, _, _, res) = self.stored(step)?;
             let i: usize = k.parse().unwrap_or(0);
             return res.modes.get(i.wrapping_sub(1)).ok_or_else(|| {
                 Error::new(
@@ -581,8 +1352,9 @@ impl Engine {
     }
 
     /// One Result field, for a host that wants the raw array.
+    #[cfg(feature = "test-internals")]
     pub fn field(&self, step: Option<&str>, field: Field) -> Result<&crate::post::FieldData, Error> {
-        let (name, _, res) = self.stored(step)?;
+        let (name, _, _, res) = self.stored(step)?;
         res.fields.get(&field).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, format!("step '{name}' has no {} field", field_name(field)))
                 .suggest("query.result lists the fields that were computed")
@@ -591,9 +1363,25 @@ impl Engine {
 
     /// `query.result`: what the Step produced, in the Model's display units. The Step must
     /// have a Result: every caller has just stored one or resolved it through [`Engine::stored`].
-    pub(crate) fn result_summary(&self, step: &str) -> ResultSummary {
-        let (name, hash, res) = self.stored(Some(step)).expect("the caller resolved this Step");
-        let m = &self.model;
+    pub(crate) fn result_summary(&self, step: &str) -> Result<ResultSummary, Error> {
+        self.selected_summary(Some(step), None)
+    }
+
+    pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
+        let record = self.result_record(step, id)?;
+        let model = if id.is_some() { &record.model } else { &self.model };
+        self.summarize_record(record, model)
+    }
+
+    /// The same checked display boundary runs on private candidate records before retention.
+    pub(crate) fn summarize_record(
+        &self,
+        record: &crate::retained::ResultRecord,
+        m: &Model,
+    ) -> Result<ResultSummary, Error> {
+        let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
+        // Preserve #445's scoped ledger diagnostics before the broader display boundary.
+        let static_equilibrium = checked_static_equilibrium(m, res.static_equilibrium.as_ref())?;
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
         for (_, r) in &res.reactions {
@@ -601,64 +1389,215 @@ impl Engine {
                 *s += r[c];
             }
         }
-        let residual = sum.iter().map(|x| x * x).sum::<f64>().sqrt();
-        let biggest = res
+        let mut residual = sum.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let mut biggest = res
             .reactions
             .iter()
             .flat_map(|(_, r)| r.iter())
             .chain(applied.iter())
             .fold(f64::MIN_POSITIVE, |acc, x| acc.max(x.abs()));
-        ResultSummary {
-            step: name.to_string(),
-            reaction_quantity: res.reaction_quantity,
-            revision: self.revision(),
-            stale: *hash != self.model_hash(),
-            solver: res.solver.solver.to_string(),
-            iterations: res.solver.iterations as u32,
-            residual: res.solver.rel_residual,
-            time_ms: res.solver.time_ms,
-            extremes: res.extremes.iter().map(|(f, e)| extreme(m, *f, e, res.reaction_quantity)).collect(),
-            reactions: res
-                .reactions
-                .iter()
-                .map(|(n, r)| ReactionRow {
-                    constraint: n.clone(),
-                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity)),
-                })
-                .collect(),
-            applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
-            frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
-            history: res
-                .history
-                .iter()
-                .flat_map(crate::procedure::heat::history_extremes)
-                .map(|(t, lo, hi)| {
-                    let dim = field_dimension(
-                        res.history.as_ref().map_or(Field::Temperature, |h| h.field),
-                        res.reaction_quantity,
-                    );
-                    HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
-                })
-                .collect(),
-            balance: residual / biggest,
+        let storage_power = res.scalars.get("storage_power").copied();
+        if let Some(storage) = storage_power {
+            let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+            residual = (applied[0] - removed - storage).abs();
+            biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
         }
+        if let Some(ledger) = &res.static_equilibrium {
+            residual = crate::post::equilibrium::norm(ledger.force_residual);
+            biggest = ledger.force_scale;
+        }
+        // Keep the checked prefix in publication order before composing frequency output.
+        let storage_power = storage_power.map(|p| display(m, p, Power::DIM)).transpose()?;
+        let extremes = res
+            .extremes
+            .iter()
+            .map(|(f, e)| extreme(m, *f, e, res.reaction_quantity))
+            .chain(res.ply_stresses.iter().enumerate().flat_map(|(i, ply)| {
+                ["bottom", "top"].into_iter().zip(&ply.extremes).flat_map(move |(side, extremes)| {
+                    extremes.iter().map(move |e| {
+                        extreme(m, Field::Stress, e, res.reaction_quantity).map(|mut row| {
+                            row.field = format!("stressPly:{}:{side}", i + 1);
+                            row
+                        })
+                    })
+                })
+            }))
+            .collect::<Result<_, Error>>()?;
+        let reactions = res
+            .reactions
+            .iter()
+            .map(|(n, r)| {
+                Ok(ReactionRow {
+                    constraint: n.clone(),
+                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity))?,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+        let applied_total = vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity))?;
+        res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect::<Result<_, Error>>().and_then(
+            |frequencies| {
+                Ok(ResultSummary {
+                    result_id: record.id.clone(),
+                    step: name.to_string(),
+                    reaction_quantity: res.reaction_quantity,
+                    storage_power,
+                    yielded_fraction: res.scalars.get("yielded_fraction").copied(),
+                    revision: record.revision,
+                    stale: *hash != crate::hash::result_hash(&self.model),
+                    solver: res.solver.solver.to_string(),
+                    iterations: res.solver.iterations as u32,
+                    residual: res.solver.rel_residual,
+                    time_ms: res.solver.time_ms,
+                    extremes,
+                    reactions,
+                    applied_total,
+                    static_equilibrium,
+                    assumptions: res.assumptions.clone(),
+                    mode_count: res.modes.len() as u32,
+                    frequencies,
+                    prestress_from: res.prestress_from.clone(),
+                    // Dimensionless, so no display conversion: a load factor is a load factor in any unit
+                    // system the Model is written in.
+                    buckling_factors: res.buckling_factors.clone(),
+                    history: res
+                        .history
+                        .iter()
+                        .flat_map(crate::procedure::heat::history_extremes)
+                        .map(|(t, lo, hi)| {
+                            let dim = field_dimension(
+                                res.history.as_ref().map_or(Field::Temperature, |h| h.field),
+                                res.reaction_quantity,
+                            );
+                            Ok(HistoryRow {
+                                time: display(m, t, Time::DIM)?,
+                                min: display(m, lo, dim)?,
+                                max: display(m, hi, dim)?,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    sweep: match &res.sweep {
+                        Some(sweep) => sweep_rows(m, sweep)?,
+                        None => Vec::new(),
+                    },
+                    balance: if biggest == 0.0 { 0.0 } else { residual / biggest },
+                    contacts: res
+                        .contacts
+                        .iter()
+                        .map(|c| {
+                            Ok(ContactRow {
+                                contact: c.name.clone(),
+                                active: c.active,
+                                paired: c.paired,
+                                active_fraction: c.active as f64 / c.paired.max(1) as f64,
+                                force: vec3(m, c.force, Force::DIM)?,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    warnings: res.warnings.clone(),
+                })
+            },
+        )
     }
 }
 
-fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {
-    [display(model, v[0], dim), display(model, v[1], dim), display(model, v[2], dim)]
+/// A harmonic sweep as summary rows: per retained frequency, the largest nodal displacement
+/// amplitude and the phase of the very component that reached it. The first maximum wins, so
+/// two DOFs at the same amplitude give the same row at any thread count.
+fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Result<Vec<SweepRow>, Error> {
+    let mut rows = Vec::with_capacity(sweep.frequencies.len());
+    for (i, hz) in sweep.frequencies.iter().enumerate() {
+        let (amplitude, phase) = &(&sweep.amplitude[i], &sweep.phase[i]);
+        let at = amplitude.data.iter().enumerate().fold((0usize, f64::NEG_INFINITY), |best, (j, v)| {
+            if *v > best.1 {
+                (j, *v)
+            } else {
+                best
+            }
+        });
+        rows.push(display(model, *hz, Frequency::DIM).and_then(|frequency| {
+            display(model, at.1, Length::DIM).map(|amplitude| SweepRow {
+                frequency,
+                amplitude,
+                // Radians are the SI angle and the Model has no display unit for one.
+                phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
+            })
+        })?);
+    }
+    Ok(rows)
 }
 
-fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Extreme {
+/// Preserve #445's scoped wrench diagnostics within the complete checked display summary.
+/// A preferred-unit overflow must never relabel SI as that unit.
+pub(crate) fn checked_static_equilibrium(
+    model: &Model,
+    source: Option<&crate::post::equilibrium::StaticEquilibrium>,
+) -> Result<Option<Box<StaticEquilibrium>>, Error> {
+    let Some(ledger) = source else { return Ok(None) };
+    let units = model.units.resolve();
+    // This fixed prefix contains 15 quantities; each Constraint adds three torque values.
+    // Convert in one fallible pass so every reported field has the same boundary policy.
+    let fields = [
+        ("reference", ledger.reference.as_slice(), Length::DIM),
+        ("characteristicLength", std::slice::from_ref(&ledger.characteristic_length), Length::DIM),
+        ("forceResidual", ledger.force_residual.as_slice(), Force::DIM),
+        ("forceScale", std::slice::from_ref(&ledger.force_scale), Force::DIM),
+        ("appliedMoment", ledger.applied_moment.as_slice(), Torque::DIM),
+        ("momentResidual", ledger.moment_residual.as_slice(), Torque::DIM),
+        ("momentScale", std::slice::from_ref(&ledger.moment_scale), Torque::DIM),
+    ];
+    let values: Vec<Valued> = fields
+        .into_iter()
+        .chain(ledger.reaction_moments.iter().map(|(_, values)| ("reactionMoments", values.as_slice(), Torque::DIM)))
+        .flat_map(|(field, values, dimension)| values.iter().map(move |value| (field, *value, dimension)))
+        .map(|(field, value, dimension)| {
+            let unit = units.unit(dimension);
+            convert(value, &unit, Some(dimension)).map(|value| Valued { value, unit: unit.clone() }).map_err(|_| {
+                Error::schema(format!("static equilibrium cannot be represented in display unit '{unit}'"))
+                    .at(format!("staticEquilibrium.{field}"))
+                    .suggest("model.setUnits with force 'N' and length 'm'")
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Some(Box::new(StaticEquilibrium {
+        reference: ledger_vec3(&values, 0),
+        characteristic_length: values[3].clone(),
+        force_residual: ledger_vec3(&values, 4),
+        force_scale: values[7].clone(),
+        applied_moment: ledger_vec3(&values, 8),
+        reaction_moments: ledger
+            .reaction_moments
+            .iter()
+            .enumerate()
+            .map(|(row, (name, _))| MomentReactionRow {
+                constraint: name.clone(),
+                total: ledger_vec3(&values, 15 + 3 * row),
+            })
+            .collect(),
+        moment_residual: ledger_vec3(&values, 11),
+        moment_scale: values[14].clone(),
+        moment_balance: crate::post::equilibrium::relative(ledger.moment_residual, ledger.moment_scale),
+    })))
+}
+
+/// Offsets refer to the fixed checked prefix/Constraint triples constructed above.
+fn ledger_vec3(values: &[Valued], offset: usize) -> [Valued; 3] {
+    std::array::from_fn(|c| values[offset + c].clone())
+}
+
+fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> Result<[Valued; 3], Error> {
+    display_values(model, v, dim)
+}
+
+fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Result<Extreme, Error> {
     let dim = field_dimension(field, reaction);
-    Extreme {
+    Ok(Extreme {
         field: field_name(field),
         component: e.component as u8,
-        min: display(model, e.min, dim),
-        min_at: vec3(model, e.min_at, Length::DIM),
-        max: display(model, e.max, dim),
-        max_at: vec3(model, e.max_at, Length::DIM),
-    }
+        min: display(model, e.min, dim)?,
+        min_at: vec3(model, e.min_at, Length::DIM)?,
+        max: display(model, e.max, dim)?,
+        max_at: vec3(model, e.max_at, Length::DIM)?,
+    })
 }
 
 /// The point fields `mesh.export` writes in SI. Thermal reactions are `ReactionPower_W`,
@@ -672,6 +1611,7 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
         ),
         ("Stress", Field::Stress),
         ("VonMises", Field::VonMises),
+        ("PlasticStrain", Field::PlasticStrain),
         ("Temperature", Field::Temperature),
     ]
     .iter()
@@ -679,9 +1619,124 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
     .collect()
 }
 
+fn check_estimator_step(step: &Step) -> Result<(), Error> {
+    if !matches!(step.procedure, Procedure::Static | Procedure::HeatSteady | Procedure::HeatTransient)
+        || step.after.is_some()
+    {
+        return Err(Error::new(
+            ErrorCode::Unsupported,
+            "ZZ estimation supports static and thermal Steps without after",
+        )
+        .at("step")
+        .suggest("study.adapt on an independent static, heat-steady or heat-transient Step"));
+    }
+    Ok(())
+}
+
+fn estimate_result(p: &Problem<'_>, result: &mut StepResult) -> Result<crate::post::estimator::Estimate, Error> {
+    let which = if p.heat { Field::Temperature } else { Field::Displacement };
+    let f = &result.fields[&which];
+    let stride = if p.heat { 1 } else { p.dofs_per_node() };
+    let primary = FieldData::new(
+        Per::Node,
+        stride,
+        f.data.chunks_exact(f.comps).flat_map(|row| row[..stride].iter().copied()).collect(),
+    );
+    let estimate = crate::post::estimator::zz(p, &primary)?;
+    let denominator = estimate.squared_norm + estimate.squared_errors.iter().sum::<f64>();
+    let values: Vec<f64> = estimate
+        .squared_errors
+        .iter()
+        .map(|e| if denominator == 0.0 { 0.0 } else { (e / denominator).sqrt() })
+        .collect();
+    let mut elements = 0..values.len();
+    result.extremes.extend(elements.next().map(|first| {
+        let mut lo = first;
+        let mut hi = first;
+        for i in elements {
+            if values[i] < values[lo] {
+                lo = i;
+            }
+            if values[i] > values[hi] {
+                hi = i;
+            }
+        }
+        (
+            Field::ErrorEstimate,
+            Extremum {
+                component: 0,
+                min: values[lo],
+                max: values[hi],
+                min_at: femlab_geometry::elem_centroid(p.mesh, lo as u32),
+                max_at: femlab_geometry::elem_centroid(p.mesh, hi as u32),
+            },
+        )
+    }));
+    result.fields.insert(Field::ErrorEstimate, FieldData::new(Per::Element, 1, values));
+    Ok(estimate)
+}
+
+/// Dörfler bulk marking with element-id tie breaking. Quantities preserve f64 SI
+/// values in the Journal; no coordinate rounding can move the refinement region.
+fn mark_regions(mesh: &Mesh, errors: &[f64], fraction: f64) -> Vec<crate::command::SizeBoxSpec> {
+    let mut order: Vec<_> = (0..errors.len()).collect();
+    order.sort_by(|&a, &b| errors[b].total_cmp(&errors[a]).then(a.cmp(&b)));
+    let target = fraction * errors.iter().sum::<f64>();
+    let mut marked = 0.0;
+    let mut regions = Vec::new();
+    for i in order {
+        if marked >= target {
+            break;
+        }
+        marked += errors[i];
+        let nodes = mesh.elem_nodes(i as u32);
+        let mut min = [f64::INFINITY; 3];
+        let mut max = [f64::NEG_INFINITY; 3];
+        for &node in nodes {
+            let x = mesh.node(node);
+            for a in 0..3 {
+                min[a] = min[a].min(x[a]);
+                max[a] = max[a].max(x[a]);
+            }
+        }
+        let mut diameter = 0.0_f64;
+        for &[a, b] in mesh.kind_of(i as u32).edges() {
+            let x = mesh.node(nodes[a as usize]);
+            let y = mesh.node(nodes[b as usize]);
+            diameter = diameter.max(libm::hypot(libm::hypot(x[0] - y[0], x[1] - y[1]), x[2] - y[2]));
+        }
+        regions.push(crate::command::SizeBoxSpec {
+            min: min.map(|x| Q::new(x, "m")),
+            max: max.map(|x| Q::new(x, "m")),
+            size: Q::new(diameter * 0.5, "m"),
+        });
+    }
+    regions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn density_assumption_causes_name_the_procedure_reading_it() {
+        assert_eq!(rho_assumption_cause(Procedure::Static, true), Some("gravity read the omitted density as zero"));
+        assert_eq!(
+            rho_assumption_cause(Procedure::Modal, false),
+            Some("modal mass assembly read the omitted density as zero")
+        );
+        assert_eq!(
+            rho_assumption_cause(Procedure::Explicit, false),
+            Some("explicit mass assembly read the omitted density as zero")
+        );
+        assert_eq!(
+            rho_assumption_cause(Procedure::Implicit, false),
+            Some("implicit mass assembly read the omitted density as zero")
+        );
+        for procedure in [Procedure::Static, Procedure::HeatSteady, Procedure::HeatTransient] {
+            assert_eq!(rho_assumption_cause(procedure, false), None);
+        }
+    }
 
     /// Every Result field reaches a summary in the Model's own units, so every one of them
     /// needs a dimension and a name — including the ones only a later procedure produces.
@@ -692,14 +1747,58 @@ mod tests {
             (Field::Reaction, "reaction", Force::DIM),
             (Field::Temperature, "temperature", Temperature::DIM),
             (Field::Strain, "strain", Dimension::NONE),
+            (Field::Rotation, "rotation", Dimension::NONE),
+            (Field::PlasticStrain, "plasticStrain", Dimension::NONE),
             (Field::Stress, "stress", Stress::DIM),
             (Field::StressUnaveraged, "stressUnaveraged", Stress::DIM),
+            (Field::StressTop, "stressTop", Stress::DIM),
+            (Field::StressBottom, "stressBottom", Stress::DIM),
+            (Field::ShellMoment, "shellMoment", Force::DIM),
             (Field::VonMises, "vonMises", Stress::DIM),
             (Field::Principal, "principal", Stress::DIM),
+            (Field::SectionForce, "sectionForce", Force::DIM),
+            (Field::SectionMoment, "sectionMoment", Torque::DIM),
+            (Field::ContactPressure, "contactPressure", Stress::DIM),
         ];
         for (field, name, dim) in all {
             assert_eq!(field_name(field), name);
             assert_eq!(field_dimension(field, ReactionQuantity::Force), dim);
         }
+    }
+    #[test]
+    fn random_vibration_cost_counts_modes_without_a_matrix_and_enforces_its_budget() {
+        let mesh = femlab_geometry::Structured { kind: femlab_geometry::ElementKind::Hex8, n: [1, 1, 1] }
+            .box_([1.0, 1.0, 1.0]);
+        let step = crate::procedure::Step::RandomVibration {
+            spectrum: crate::procedure::random_vibration::Spectrum { table: vec![[0.0, 1.0], [10.0, 1.0]] },
+            damping: vec![0.02],
+            rayleigh: (0.0, 0.0),
+        };
+        let small = super::planned_cost(&mesh, 3, None, &step, 4).unwrap();
+        assert_eq!((small.estimate.nnz, small.estimate.assembly_bytes), (0, 0));
+        assert!(small.estimate.transient_work_bytes > 4 * 4 * 8);
+        assert!(small.estimate.retained_bytes >= 8 * 3 * 8);
+        small.enforce("noise").unwrap();
+        let beam = femlab_geometry::line(
+            &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &[[0, 1]],
+            1,
+            femlab_geometry::ElementKind::Beam2,
+        )
+        .unwrap();
+        let beam_cost = super::planned_cost(&beam, 6, None, &step, 4).unwrap();
+        assert_eq!(beam_cost.estimate.retained_bytes, 384);
+        let large = super::planned_cost(&mesh, 3, None, &step, 100000).unwrap();
+        let error = large.enforce("noise").unwrap_err();
+        assert_eq!(error.code, crate::ErrorCode::SolveTooLarge);
+        assert_eq!(error.where_.as_deref(), Some("step 'noise'"));
+        assert!(error.suggestion.unwrap().contains("nModes"));
+        // The shared planner must still route a transient refusal to a stride suggestion,
+        // rather than recommending fewer modes for every procedure that exceeds the budget.
+        let estimate = crate::solve::add_transient_cost(small.estimate, mesh.n_nodes(), 3, 100_000_000, 1, 4).unwrap();
+        let transient = super::PlannedCost { estimate, transient: Some((100_000_000, 1, "harmonic")) };
+        let error = transient.enforce("sweep").unwrap_err();
+        assert_eq!(error.code, crate::ErrorCode::SolveTooLarge);
+        assert!(error.suggestion.unwrap().contains("outputEvery"));
     }
 }

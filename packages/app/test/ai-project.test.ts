@@ -74,7 +74,7 @@ describe('the project folder', () => {
     const dir = fakeDir({ 'large.txt': 'x' });
     const handle = await dir.getFileHandle('large.txt');
     const text = vi.fn(async () => 'must not be read');
-    vi.spyOn(dir, 'getFileHandle').mockResolvedValue({ ...handle, getFile: async () => ({ size: 17 * 1024 * 1024, lastModified: 0, text }) });
+    vi.spyOn(dir, 'getFileHandle').mockResolvedValue({ ...handle, getFile: async () => ({ size: 17 * 1024 * 1024, lastModified: 0, text, arrayBuffer: async () => new ArrayBuffer(0) }) });
     const folder = await ProjectFolder.fromHandle(dir);
     await expect(folder.readText('large.txt')).rejects.toMatchObject({ code: 'unsupported' });
     expect(text).not.toHaveBeenCalled();

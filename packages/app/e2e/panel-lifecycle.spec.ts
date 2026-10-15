@@ -10,7 +10,7 @@ test('@cpu every panel, disclosure and tab survives two open/close cycles', asyn
     // Only the OS folder picker is faked; the real ProjectFolder reads and renders the rules.
     const file: FileHandle = {
       kind: 'file', name: 'AGENTS.md',
-      getFile: async () => ({ size: 26, lastModified: 1, text: async () => 'Check dimensions and units.' }),
+      getFile: async () => ({ size: 26, lastModified: 1, text: async () => 'Check dimensions and units.', arrayBuffer: async () => new TextEncoder().encode('Check dimensions and units.').buffer }),
       createWritable: async () => { throw new Error('read-only test folder'); },
     };
     const directory: DirHandle = {
@@ -23,7 +23,7 @@ test('@cpu every panel, disclosure and tab survives two open/close cycles', asyn
   });
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
 
   const topbar = page.locator('.topbar');

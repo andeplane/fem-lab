@@ -1,0 +1,198 @@
+{
+  "name": "orthotropic-cylinder-axisymmetric",
+  "reference": "Benchmark C10. A cylindrically orthotropic thick tube under internal pressure, a = 0.1 m, b = 0.2 m, p = 60 MPa, axisymmetric with eps_z = 0. Under axisymmetry the engine's Voigt rows are already (rr, zz, theta-theta, rz), so material axes 1, 2, 3 are r, z and theta and cylindrical orthotropy needs no orientation at all: E_r = 10 GPa, E_z = 15 GPa, E_theta = 60 GPa, G_rz = G_r-theta = 5 GPa, G_z-theta = 6 GPa, nu_rz = nu_r-theta = nu_z-theta = 0.06. Lekhnitskii's solution (Anisotropic Plates, the cylindrically orthotropic tube): radial equilibrium with eps_z = 0 gives the Euler equation C_rr u'' + C_rr u'/r - C_tt u/r^2 = 0, so u = A r^k + B r^-k with k = sqrt(C_tt/C_rr), where C is the inverse of the 3x3 normal compliance. Here C_rr = 1.030954e10 Pa, C_r-theta = 3.991598e9 Pa, C_tt = 6.242207e10 Pa and k = 2.4606480774; A and B follow from sigma_r(a) = -p and sigma_r(b) = 0. That gives u_r(a) = 2.9723524491e-4 m, sigma_theta(a) = 157.716261 MPa, sigma_theta(0.15) = 46.6407238 MPa and sigma_theta(b) = 27.7361621 MPa. The stiff hoop direction pulls the load towards the bore: an isotropic tube of the same geometry carries sigma_theta(a) = 100 MPa (benchmark C2), so this row would fail by 58 % against the isotropic answer and is a real test of the orthotropic path rather than a restatement of Lame. The mesh is the (r, z) strip as 16 by 4 quad8 with u_z = 0 on both z edges, matching lame-axisymmetric's arrangement. Measured at 16 by 4: sigma_theta(a) = 157.1333 MPa (0.37 %), sigma_theta(0.15) = 46.5654 MPa (0.16 %), sigma_rr(a) = -59.7176 MPa (0.47 %), u_r(a) = 2.9723476e-4 m (0.00016 %). Doubling both divisions to 32 by 8 gives 157.5594 MPa, 46.6220 MPa, -59.9253 MPa and 2.9723521e-4 m, so each stress error falls by about four: the row converges to the closed form at the quadratic element's rate rather than passing at one mesh size.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "orthotropic-cylinder-axisymmetric"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "axisymmetric"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "wound",
+      "orthotropic": {
+        "E1": "10 GPa",
+        "E2": "15 GPa",
+        "E3": "60 GPa",
+        "G12": "5 GPa",
+        "G13": "5 GPa",
+        "G23": "6 GPa",
+        "nu12": 0.06,
+        "nu13": 0.06,
+        "nu23": 0.06
+      },
+      "source": "a representative hoop-wound composite tube"
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "tube",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0.1 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0.1 m"
+              ],
+              [
+                "0.1 m",
+                "0.1 m"
+              ]
+            ],
+            "n": [
+              16,
+              4
+            ],
+            "tags": [
+              "zmin",
+              "outer",
+              "zmax",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "wound",
+      "bodies": [
+        "tube"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "zmin",
+      "on": "tube.zmin",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "zmax",
+      "on": "tube.zmax",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "zmin",
+        "zmax"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 2,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 157.716261,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_theta(a) from Lekhnitskii, against 100 MPa for the isotropic tube of C2"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 2,
+        "at": [
+          "0.15 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 46.6407238,
+      "tol": 0.02,
+      "rel": true,
+      "note": "and at mid-radius, so the whole r^(k-1), r^(-k-1) profile is checked and not one point"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -60.0,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_rr(a) = -p, which no material property can change"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.00029723524491,
+      "tol": 0.005,
+      "rel": true,
+      "note": "u_r(a) = A a^k + B a^-k with eps_z = 0"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

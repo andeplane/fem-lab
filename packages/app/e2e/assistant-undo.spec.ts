@@ -22,7 +22,7 @@ async function assistantTurn(page: Page) {
     status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: response(request++ === 0),
   }));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(() => window.fem.model.new({ name: 'turn-undo' }));
   await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
   const drawer = page.locator('.assistant');
@@ -36,7 +36,7 @@ test('@cpu Assistant turn undo preserves later human edits and reports why it ca
   const drawer = await assistantTurn(page);
   await page.evaluate(() => window.fem.geometry.addBox({ name: 'human-body', size: ['2 m', '1 m', '1 m'] }));
   await drawer.locator('.undo').click();
-  await expect(drawer.locator('.diff')).toContainText('Journal changed after this turn');
+  await expect(drawer.locator('.diff')).toContainText('model state changed after this operation was prepared');
   await expect(drawer.locator('.undo')).toBeDisabled();
   const model = await page.evaluate(() => window.fem.query.model()) as { bodies: { name: string }[] };
   expect(model.bodies.map((body) => body.name)).toEqual(['ai-body', 'human-body']);

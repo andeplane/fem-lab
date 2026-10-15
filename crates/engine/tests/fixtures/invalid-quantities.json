@@ -1,5 +1,7 @@
 {
   "commands": [
+    { "input": { "cmd": "load.force", "name": "bad", "on": "beam.xmax", "total": ["1e-320 uN", "0 N", "0 N"] }, "code": "schema", "cause": "underflows to zero" },
+    { "input": { "cmd": "load.traction", "name": "bad", "on": "beam.xmax", "total": ["-1e-320 uN", "0 N", "0 N"] }, "code": "schema", "cause": "underflows to zero" },
     { "input": { "cmd": "load.force", "name": "bad", "on": "beam.xmax", "total": ["1e999 N", "0 N", "0 N"] }, "code": "schema" },
     { "input": { "cmd": "load.traction", "name": "bad", "on": "beam.xmax", "total": [{ "value": 1e308, "unit": "kN" }, "0 N", "0 N"] }, "code": "schema" },
     { "input": { "cmd": "load.temperature", "name": "bad", "bodies": ["beam"], "value": "-1e999 K" }, "code": "schema" },
@@ -11,6 +13,10 @@
     { "input": { "cmd": "model.setUnits", "units": { "length": "m^-128" } }, "code": "unit.dimension" }
   ],
   "queries": [
+    { "input": { "query": "query.convert", "quantity": { "value": 1e-320, "unit": "N" }, "to": "GN" }, "code": "schema", "cause": "underflows to zero" },
+    { "input": { "query": "query.convert", "quantity": "-1e-320 N", "to": "GN" }, "code": "schema", "cause": "underflows to zero" },
+    { "input": { "query": "query.convert", "quantity": "1e-320 uN", "to": "N" }, "code": "schema", "cause": "underflows to zero" },
+    { "input": { "query": "query.convert", "quantity": { "value": -1e-320, "unit": "uN" }, "to": "N" }, "code": "schema", "cause": "underflows to zero" },
     { "input": { "query": "query.convert", "quantity": "1e999 N", "to": "N" }, "code": "schema" },
     { "input": { "query": "query.convert", "quantity": { "value": 1e308, "unit": "kN" }, "to": "N" }, "code": "schema" },
     { "input": { "query": "query.convert", "quantity": "1e308 N", "to": "mN" }, "code": "schema" },
@@ -19,5 +25,19 @@
     { "input": { "query": "query.convert", "quantity": "1 m", "to": "1/m^-128" }, "code": "unit.unknown" },
     { "input": { "query": "query.convert", "quantity": "1 Gm^35", "to": "m^35" }, "code": "unit.unknown" },
     { "input": { "query": "query.convert", "quantity": "1 m", "to": "nm^20*nm^20" }, "code": "unit.unknown" }
+  ],
+  "conversions": [
+    { "input": { "query": "query.convert", "quantity": "4.9406564584124654e-324 kN", "to": "N" }, "bits": "00000000000003e8" },
+    { "input": { "query": "query.convert", "quantity": "-4.9406564584124654e-324 kN", "to": "N" }, "bits": "80000000000003e8" },
+    { "input": { "query": "query.convert", "quantity": { "value": 4.9406564584124654e-321, "unit": "N" }, "to": "kN" }, "bits": "0000000000000001" },
+    { "input": { "query": "query.convert", "quantity": { "value": -4.9406564584124654e-321, "unit": "N" }, "to": "kN" }, "bits": "8000000000000001" },
+    { "input": { "query": "query.convert", "quantity": "2.2250738585072009e-308 N", "to": "N" }, "bits": "000fffffffffffff" },
+    { "input": { "query": "query.convert", "quantity": "-2.2250738585072009e-308 N", "to": "N" }, "bits": "800fffffffffffff" },
+    { "input": { "query": "query.convert", "quantity": "0 uN", "to": "GN" }, "value": 0 },
+    { "input": { "query": "query.convert", "quantity": "-0 uN", "to": "GN" }, "value": 0 },
+    { "input": { "query": "query.convert", "quantity": "273.15 K", "to": "degC" }, "value": 0 },
+    { "input": { "query": "query.convert", "quantity": "-273.15 degC", "to": "K" }, "value": 0 },
+    { "input": { "query": "query.convert", "quantity": "0 degC", "to": "K" }, "value": 273.15 },
+    { "input": { "query": "query.convert", "quantity": "0 K", "to": "degC" }, "value": -273.15 }
   ]
 }

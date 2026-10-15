@@ -5,6 +5,7 @@
 
 mod bench;
 mod export;
+mod import_inp;
 mod mcp;
 mod run;
 
@@ -25,6 +26,32 @@ struct Cli {
 enum Cmd {
     /// Print engine and geometry crate versions.
     Version,
+    /// Import an Abaqus .inp deck and its scoped include files into an unsolved femlab/1 file.
+    ImportInp {
+        file: PathBuf,
+        /// Write a checked femlab/1 file here; failed imports preserve a prior output file.
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long, value_parser = ["mesh", "static"])]
+        mode: String,
+        /// Positive length Quantity represented by one source unit, e.g. '1 mm'. Required.
+        #[arg(long)]
+        unit_length: String,
+        /// Positive force Quantity represented by one source unit. Required for static mode.
+        #[arg(long)]
+        unit_force: Option<String>,
+        /// Positive time per source unit (for example '1 s'); required for source density.
+        #[arg(long)]
+        unit_time: Option<String>,
+        #[arg(long)]
+        threads: Option<usize>,
+        #[arg(long)]
+        cpu: bool,
+    },
     /// Replay a saved Model file or a Journal and print the Model summary.
     Run {
         /// A `femlab/1` file, a Journal (array of entries) or an array of Commands.
@@ -145,6 +172,13 @@ fn main() {
             );
             0
         }
+        Cmd::ImportInp { file, out, name, body, mode, unit_length, unit_force, unit_time, threads, cpu } => {
+            import_inp::import(
+                &file,
+                &out,
+                import_inp::ImportOptions { name, body, mode, unit_length, unit_force, unit_time, threads, cpu },
+            )
+        }
         Cmd::Run { file, hashes, skip_solves, verify, as_script, journal, json, queries, threads, cpu } => run::run(
             &file,
             run::RunOptions { hashes, skip_solves, verify, as_script, journal, json, queries, threads, cpu },
@@ -157,7 +191,9 @@ fn main() {
         }
         Cmd::Schema { out, check } => run::schema(out.as_deref(), check),
         Cmd::Serve { port } => {
-            eprintln!("femlab serve (port {port}) is planned for phase S; the wire protocol is packages/registry/src/transport.ts");
+            eprintln!(
+                "femlab serve (port {port}) is planned for phase S; the wire protocol is packages/registry/src/transport.ts"
+            );
             2
         }
         Cmd::Mcp { project } => mcp::mcp(project.as_deref()),

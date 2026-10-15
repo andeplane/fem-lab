@@ -121,6 +121,11 @@ export class ScriptHost {
           post({ id: message.id, error: 'nested script.run is not permitted' });
           return;
         }
+        const name=String(message.value[message.kind==='dispatch'?'cmd':'query']);
+        if(name.startsWith('account.')||name.startsWith('billing.')||name==='query.account'||name==='ai.setKey'||name==='ai.acceptDisclosure') {
+          post({id:message.id,error:'Account, billing and credential actions require an explicit user action outside generated scripts'});
+          return;
+        }
         const run = message.kind === 'query' ? this.query : this.dispatch;
         void run(message.value).then(
           (value) => {

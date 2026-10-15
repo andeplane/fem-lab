@@ -1,7 +1,7 @@
 //! Linear solvers behind one trait, and the cost estimate a host asks for before solving.
 //!
 //! `LinearSolve` is the Extension Point: give it a right-hand side, get a solution and what it
-//! took. The sparse direct factorisation ([`direct`]) is exact; the f64 Jacobi-PCG ([`pcg`]) is
+//! took. The sparse direct factorisation ([`direct`]) verifies its residual; the f64 Jacobi-PCG ([`pcg`]) is
 //! approximate and is driven by the f64 refinement loop in [`refine`], which is also what wraps
 //! the GPU's f32 conjugate gradient (ADR 0002, plan A §5.2–§5.4).
 
@@ -20,8 +20,10 @@ use crate::query::CostEstimate;
 
 /// What a Command asked of the solver. `rel_tol` is the accuracy the *answer* must have, which
 /// the f64 refinement loop is measured against; `inner_tol` and `max_iterations` are the
-/// approximate inner solver's own, much looser, budget. The direct path is exact and reports
-/// the residual it achieved.
+/// approximate inner solver's own, much looser, budget. The direct path verifies and reports
+/// its residual against the same f64 acceptance floor. Modal analysis uses `rel_tol` directly
+/// for its normwise generalized-eigenpair backward residual and `max_iterations` for its
+/// subspace sweeps; exhausted sweeps return `solve.stalled`, never a partial spectrum.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveOptions {
     pub solver: Solver,
@@ -105,6 +107,22 @@ pub async fn solve(
     gpu: Option<&crate::gpu::Gpu>,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo), Error> {
+    solve_reusable(k, b, opts, pool, gpu, progress).await.map(|(x, info, _)| (x, info))
+}
+
+/// [`solve`], plus the factorisation when the direct path produced one.
+///
+/// A procedure that needs many more right-hand sides against the same operator — linear
+/// buckling's subspace iteration — takes it from here rather than factorising a second time.
+/// The iterative paths answer `None`: they never build one.
+pub async fn solve_reusable(
+    k: &Csr,
+    b: &[f64],
+    opts: &SolveOptions,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<f64>, SolveInfo, Option<direct::Direct>), Error> {
     let chosen = resolve_solver(opts.solver, k.n, gpu.is_some());
     if !progress(Progress {
         phase: "solve",
@@ -117,7 +135,7 @@ pub async fn solve(
         Solver::CpuDirect => pool.install(|| {
             let mut factored = direct::Direct::factor(k)?;
             let mut x = vec![0.0; k.n];
-            factored.solve(b, &mut x).map(|info| (x, info))
+            factored.solve_with_tolerance(b, &mut x, opts.rel_tol).map(|info| (x, info, Some(factored)))
         }),
         // The iterative paths run on rayon's global pool rather than the engine's: `progress` is
         // a `&mut dyn FnMut` and cannot cross into `Pool::install`, which needs `Send`. Every
@@ -125,12 +143,20 @@ pub async fn solve(
         // answer does not depend on which pool ran it.
         Solver::CpuPcg => {
             let mut inner = crate::gpu::cg::Inner::Cpu(pcg::CpuPcg::new(k, opts.inner_tol, opts.max_iterations));
-            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress).await
+            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress).await.map(no_factor)
         }
         // `Auto` is already resolved, so what is left is the GPU. Its whole body — including
         // the "no adapter" error — lives under `src/gpu/`, so nothing here needs a device.
-        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await,
+        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await.map(no_factor),
     }
+}
+
+/// An iterative answer, with the `None` that says it built no factorisation.
+///
+/// A named function rather than a closure per arm: a host without a GPU never runs the GPU
+/// arm's success path, and a closure there would be a function no test could enter.
+fn no_factor((x, info): (Vec<f64>, SolveInfo)) -> (Vec<f64>, SolveInfo, Option<direct::Direct>) {
+    (x, info, None)
 }
 
 /// Counting scratch is bounded independently of the requested matrix size. The adjacency
@@ -153,6 +179,10 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
         let mut count = 0;
         for node in 0..mesh.n_nodes() {
             let tag = node as u32 + 1;
+            // Every node owns its diagonal whether or not an element touches it, exactly as
+            // `assembly::pattern` seeds it; marking it first also keeps it counted once.
+            marked[node] = tag;
+            count += 1;
             for &elem in adj.of(node) {
                 for &other in mesh.elem_nodes(elem) {
                     if marked[other as usize] != tag {
@@ -175,7 +205,9 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
             let unique = first.iter().enumerate().filter(|(i, n)| !first[..*i].contains(n)).count() as u64;
             lower = lower.max(unique * unique);
         }
-        (lower, upper.min(nodes.saturating_mul(nodes)))
+        // Plus one diagonal per node, which the element cliques do not cover for a node no
+        // element touches.
+        (lower, upper.saturating_add(nodes).min(nodes.saturating_mul(nodes)))
     }
 }
 
@@ -185,6 +217,11 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
 /// an assembled CSR and one RHS. It excludes the resident mesh/model, local element buffers,
 /// reduction, solver vectors, direct-factor fill/workspace and procedure-specific history.
 /// Therefore fitting this lower bound never establishes feasibility, on any host.
+///
+/// It reads the element pattern and nothing else, so it does **not** see the fill-in a
+/// multipoint constraint adds: a `contact.add` couples nodes of two Bodies that share no
+/// element, and `mpc::transform` builds those entries outside `pattern`. A tied model's `nnz`
+/// and `bytes` are therefore under-reported by the size of the interface coupling.
 pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate {
     let dofs = (mesh.n_nodes() as u64).saturating_mul(dofs_per_node as u64);
     let block_size = (dofs_per_node as u64).saturating_mul(dofs_per_node as u64);
@@ -209,7 +246,7 @@ pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostE
     // Device availability and constraints are not known here; Auto reports its CPU choice.
     let chosen = solver_name(resolve_solver(solver, usize::try_from(dofs).unwrap_or(usize::MAX), false));
     CostEstimate {
-        dofs, nnz, nnz_lower, bytes, assembly_bytes, retained_frames: 0,
+        dofs, nnz, nnz_lower, bytes, assembly_bytes, resident_result_bytes: 0, result_mesh_bytes: 0, retained_frames: 0,
         retained_bytes: 0, transient_work_bytes: 0, transport_staging_bytes: 0,
         wasm_transport_staging_bytes: 0, wasm_transport_staging_complete: true,
         budget_bytes: PLANNING_BUDGET, feasible,
@@ -297,9 +334,11 @@ pub(crate) fn enforce_transient_budget(
         return Ok(());
     }
     let frame_bytes = cost.retained_bytes / cost.retained_frames;
-    let solve_fixed = cost.assembly_bytes.saturating_add(cost.transient_work_bytes);
+    let resident = cost.resident_result_bytes.saturating_add(cost.result_mesh_bytes);
+    let solve_fixed = cost.assembly_bytes.saturating_add(cost.transient_work_bytes).saturating_add(resident);
     let max_solve = cost.budget_bytes.saturating_sub(solve_fixed) / frame_bytes;
-    let max_transport = cost.budget_bytes.saturating_sub(cost.wasm_transport_staging_bytes) / frame_bytes;
+    let max_transport =
+        cost.budget_bytes.saturating_sub(cost.wasm_transport_staging_bytes.saturating_add(resident)) / frame_bytes;
     let max_frames = max_solve.min(max_transport);
     let suggestion = if max_frames >= 2 {
         let intervals = (max_frames - 1) as usize;
@@ -337,6 +376,8 @@ mod transient_cost_tests {
             nnz_lower: 0,
             bytes: assembly_bytes,
             assembly_bytes,
+            resident_result_bytes: 0,
+            result_mesh_bytes: 0,
             retained_frames: 0,
             retained_bytes: 0,
             transient_work_bytes: 0,
@@ -373,6 +414,25 @@ mod transient_cost_tests {
         assert!(error.suggestion.as_deref().unwrap().contains("outputEvery at least 5"));
         let error = enforce_transient_budget(&limited, "warm", "heat-transient", usize::MAX, 1).unwrap_err();
         assert!(error.suggestion.as_deref().unwrap().contains("shorter tEnd or larger dt"));
+    }
+
+    #[test]
+    fn retained_records_reduce_the_available_stride_budget() {
+        let mut cost = base(100, 1000);
+        cost.retained_frames = 101;
+        cost.retained_bytes = 808;
+        cost.transient_work_bytes = 100;
+        cost.wasm_transport_staging_bytes = 100;
+        cost.resident_result_bytes = 400;
+        cost.result_mesh_bytes = 100;
+        cost.feasible = Some(false);
+        // 700 fixed solve bytes leave room for 37 eight-byte frames. Over 100
+        // intervals, stride 2 needs 51 frames; stride 3 needs 35 and is the first fit.
+        let error = enforce_transient_budget(&cost, "warm", "heat-transient", 100, 1).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().contains("outputEvery at least 3"));
+        cost.resident_result_bytes = 800;
+        let error = enforce_transient_budget(&cost, "warm", "heat-transient", 100, 1).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().contains("coarser size"));
     }
 
     #[test]

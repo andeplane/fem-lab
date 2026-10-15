@@ -5,7 +5,7 @@ test('@cpu callable form picking and Assistant draft insertion reproduce UI stat
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(async () => {
     await window.fem.model.new({ name: 'command-parity' });
     await window.fem.dispatch({ cmd: 'form.open', command: 'constraint.fix', args: { name: 'root' } });

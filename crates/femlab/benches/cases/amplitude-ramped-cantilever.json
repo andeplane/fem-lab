@@ -1,0 +1,234 @@
+{
+  "name": "amplitude-ramped-cantilever",
+  "reference": "Benchmark B8: B1's quadratic-hexahedron cantilever (1 m x 100 mm x 100 mm of steel at a 25 mm lattice, order 2, 1 kN tip traction) with a triangular load amplitude, t = [0, 1, 2] s and g = [0, 1, 0] at dt = 0.25 s. Linear static is affine in the amplitude, so the tip deflection at every retained increment is g(t) times the Timoshenko value PL^3/3EI + PL/kGA = 0.1919619 mm, gated at the same 1 % as B1 (0.81 % of which is the clamped root, not the mesh). The load-unload cycle ends at g = 0, so the final Result is the unloaded state exactly.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "amplitude-ramped-cantilever"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "25 mm"
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.xmax",
+      "total": [
+        "0 N",
+        "0 N",
+        "-1 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "cycle",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ],
+      "dt": "0.25 s",
+      "tEnd": "2 s",
+      "outputEvery": 1,
+      "amplitude": {
+        "kind": "table",
+        "t": [
+          "0 s",
+          "1 s",
+          "2 s"
+        ],
+        "value": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "cmd": "solve.run",
+      "step": "cycle"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "sample": {
+          "kind": "frame",
+          "index": 4
+        },
+        "at": [
+          "1 m",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.1919619,
+      "tol": 0.01,
+      "rel": true,
+      "note": "fully loaded at t = 1 s: the whole Timoshenko deflection, within 1 % as in B1"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "sample": {
+          "kind": "frame",
+          "index": 2
+        },
+        "at": [
+          "1 m",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.09598095,
+      "tol": 0.01,
+      "rel": true,
+      "note": "half loaded on the way up (g = 0.5 at t = 0.5 s)"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "sample": {
+          "kind": "time",
+          "time": "1.5 s",
+          "sampling": "exact"
+        },
+        "at": [
+          "1 m",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.09598095,
+      "tol": 0.01,
+      "rel": true,
+      "note": "and half loaded again on the way down, selected by physical time"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "sample": {
+          "kind": "frame",
+          "index": 0
+        },
+        "at": [
+          "1 m",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "nothing is loaded at t = 0"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "1 m",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "and the cycle ends unloaded, so the final field is the unloaded state"
+    },
+    {
+      "query": {
+        "query": "query.frames"
+      },
+      "path": "/frames/8/timeSi",
+      "expect": 2.0,
+      "tol": 1e-12,
+      "note": "nine retained frames, the last exactly at tEnd"
+    },
+    {
+      "query": {
+        "query": "query.frames"
+      },
+      "path": "/field",
+      "expect": "displacement",
+      "note": "a static Step retains displacement, as an explicit one does"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/appliedTotal/2/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "the applied total rides the amplitude and is zero at the end of the cycle"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: reactions balance the applied load at the reported increment"
+    }
+  ]
+}

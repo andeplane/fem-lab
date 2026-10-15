@@ -1,0 +1,20 @@
+{
+  "title": "Thick cylinder, axisymmetric (Lamé)",
+  "tag": "NAFEMS",
+  "tags": [
+    "static",
+    "axisymmetric",
+    "pressure"
+  ],
+  "difficulty": 3,
+  "sentence": "The same thick-walled cylinder as the plane-strain example, this time revolved into an axisymmetric slice instead of meshed as a flat quarter section.",
+  "expected": {
+    "quantity": "σ_θθ at the bore",
+    "value": 100,
+    "unit": "MPa",
+    "reference": "Lamé: σ_θθ(a) = 100 MPa"
+  },
+  "theory": "Lamé's solution for a cylinder of bore $a$ and outside $b$ under internal pressure $p$ is $\\sigma_{rr}(r) = \\dfrac{a^2 p}{b^2 - a^2}\\left(1 - \\dfrac{b^2}{r^2}\\right)$ and $\\sigma_{\\theta\\theta}(r) = \\dfrac{a^2 p}{b^2 - a^2}\\left(1 + \\dfrac{b^2}{r^2}\\right)$; at the bore $\\sigma_{\\theta\\theta} = 100\\,\\mathrm{MPa}$ and $\\sigma_{rr} = -p = -60\\,\\mathrm{MPa}$. `model.setIdealisation{axisymmetric}` solves one 2D slice in (r, z) and reconstructs the hoop direction from $u_r/r$ rather than meshing it, which is why this and `lame-cylinder-plane-strain` land on the same stresses from two different idealisations.",
+  "tutorial": "pressure-vessel",
+  "thumbnail": null
+}

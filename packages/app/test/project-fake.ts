@@ -33,7 +33,11 @@ export function fakeDir(files: Record<string, string>, name = 'bridge', at = 1):
   const file = (path: string): FileHandle => ({
     kind: 'file',
     name: path.split('/').at(-1)!,
-    getFile: async () => ({ size: files[path]!.length, lastModified: at, text: async () => files[path]! }),
+    getFile: async () => {
+      const text = files[path]!;
+      const bytes = new TextEncoder().encode(text);
+      return { size: bytes.byteLength, lastModified: at, text: async () => text, arrayBuffer: async () => bytes.buffer };
+    },
     createWritable: async () => {
       let pending = files[path]!;
       return {

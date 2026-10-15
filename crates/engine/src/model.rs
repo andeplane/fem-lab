@@ -1,13 +1,14 @@
 //! The Model: the complete, serialisable description of one analysis, in SI.
 //! Only `Engine::dispatch` changes it. No mesh, no results: those are derived.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use femlab_geometry::{FacePredicate, QuadBlock, RefineBox, RegionPredicate, Shape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::command::{Axis, Dof, Field, Formulation, ObjectKind, Procedure};
+use crate::command::{Axis, CoupleKind, Dof, Field, Formulation, ObjectKind, Procedure, SweepSpacing};
+use crate::fem::section::Section;
 use crate::units::UnitSet;
 
 /// Idealisation in SI.
@@ -15,9 +16,19 @@ use crate::units::UnitSet;
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Idealisation {
     Solid3d,
-    PlaneStress { thickness: f64 },
+    PlaneStress {
+        thickness: f64,
+    },
     PlaneStrain,
-    Axisymmetric,
+    Axisymmetric {
+        /// Adds a third degree of freedom, the circumferential displacement u_theta, so the
+        /// section can carry torsion. With twist, the third component of a vector Command is
+        /// the circumferential direction. Defaults to false, so every Journal and saved Model
+        /// written before this field existed still loads, and an untwisted axisymmetric Model
+        /// serialises byte-identically to before (`MeshSettings::simplices`'s convention).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        twist: bool,
+    },
 }
 
 impl Idealisation {
@@ -27,9 +38,19 @@ impl Idealisation {
             _ => 2,
         }
     }
+
+    /// Unknowns per node for a structural (non-heat) Step: 3 with axisymmetric twist, else the
+    /// spatial dimension. `Problem::dofs_per_node` delegates here so the stride generalises in
+    /// one place for every element kernel, assembly and post-processing path.
+    pub fn dofs_per_node(&self) -> usize {
+        match self {
+            Idealisation::Axisymmetric { twist: true } => 3,
+            _ => self.dim(),
+        }
+    }
 }
 
-/// A Body: one named shape with a material.
+/// A Body: one named shape with a material, and a Section when it is made of line members.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Body {
@@ -37,6 +58,32 @@ pub struct Body {
     pub shape: Shape,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
+    /// The cross-section of its line members; unused by a solid or sheet Body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    /// The global axis the beams of this Body take their local z-axis from (`section.assign`
+    /// `orientation`); `None` is the default rule. Unused by a truss or a solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Axis>,
+}
+
+/// A named cross-section, resolved to SI properties by the section library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedSection {
+    pub name: String,
+    pub section: Section,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plies: Vec<ShellPly>,
+}
+
+/// A shell ply's serialisable definition: material reference, metres and radians.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPly {
+    pub material: String,
+    pub thickness: f64,
+    pub angle: f64,
 }
 
 /// A cut out of a Body.
@@ -63,6 +110,17 @@ pub enum SetSource {
     },
 }
 
+/// A lumped mass at a point: a node of its own with no element around it, and a node Set of its
+/// own name so Constraints, Loads and Queries can target it by that name. `at` is in metres and
+/// `mass` in kilograms.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PointMass {
+    pub name: String,
+    pub at: [f64; 3],
+    pub mass: f64,
+}
+
 /// A named Set from a predicate (auto face Sets are not stored: they follow the shapes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -71,23 +129,145 @@ pub struct NamedSet {
     pub source: SetSource,
 }
 
-/// An isotropic linear-elastic material, SI.
+/// Orthotropic stiffness in the material axes, SI, major Poisson convention.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Orthotropic {
+    #[serde(rename = "E1")]
+    pub e1: f64,
+    #[serde(rename = "E2")]
+    pub e2: f64,
+    #[serde(rename = "E3")]
+    pub e3: f64,
+    #[serde(rename = "G12")]
+    pub g12: f64,
+    #[serde(rename = "G13")]
+    pub g13: f64,
+    #[serde(rename = "G23")]
+    pub g23: f64,
+    pub nu12: f64,
+    pub nu13: f64,
+    pub nu23: f64,
+}
+
+impl Orthotropic {
+    /// The nine values in [`ORTHOTROPIC_PROPS`](crate::fem::material::ORTHOTROPIC_PROPS) order.
+    pub fn props(&self) -> Vec<f64> {
+        vec![self.e1, self.e2, self.e3, self.g12, self.g13, self.g23, self.nu12, self.nu13, self.nu23]
+    }
+}
+
+/// Where a Material's axes point: `angle` radians about the unit `axis`, SI.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Orientation {
+    pub axis: [f64; 3],
+    pub angle: f64,
+}
+
+impl Orientation {
+    /// The rotation whose rows are the material axes in global coordinates.
+    pub fn rows(&self) -> [[f64; 3]; 3] {
+        crate::fem::material::axis_angle_rotation(self.axis, self.angle)
+    }
+}
+
+/// A property given once (isotropic: every material axis the same) or once per material axis.
+/// It is stored as it was given, so an isotropic Material serialises the single number it always
+/// had and saved files, Journal hashes and the tree editor see no change from orthotropic support.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Axial {
+    Isotropic(f64),
+    Axes([f64; 3]),
+}
+
+impl Axial {
+    /// The value along each of the three material axes.
+    pub fn axes(self) -> [f64; 3] {
+        match self {
+            Axial::Isotropic(v) => [v; 3],
+            Axial::Axes(a) => a,
+        }
+    }
+}
+
+/// The isotropic hardening curve of an elastic–plastic Material, SI: the yield stress as a
+/// function of equivalent plastic strain, either a line or a piecewise-linear table that is held
+/// flat beyond its last point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Hardening {
+    /// `σ_y = yield + h ε̄ᵖ`.
+    Linear {
+        #[serde(rename = "yield")]
+        yield_: f64,
+        h: f64,
+    },
+    /// `(plastic_strain[i], stress[i])` points, plastic strain ascending from zero.
+    Table {
+        #[serde(rename = "plasticStrain")]
+        plastic_strain: Vec<f64>,
+        stress: Vec<f64>,
+    },
+}
+
+impl Hardening {
+    /// The initial yield stress.
+    pub fn initial_yield(&self) -> f64 {
+        match self {
+            Hardening::Linear { yield_, .. } => *yield_,
+            Hardening::Table { stress, .. } => stress[0],
+        }
+    }
+
+    /// The tail of [`J2_PROPS`](crate::fem::material::J2_PROPS) after `E` and `nu`: `H`, the
+    /// point count, then the points.
+    pub fn props(&self) -> Vec<f64> {
+        match self {
+            Hardening::Linear { yield_, h } => vec![*h, 1.0, 0.0, *yield_],
+            Hardening::Table { plastic_strain, stress } => {
+                let mut v = vec![0.0, plastic_strain.len() as f64];
+                for (e, s) in plastic_strain.iter().zip(stress) {
+                    v.extend([*e, *s]);
+                }
+                v
+            }
+        }
+    }
+}
+
+/// A material, SI: isotropic or orthotropic, with optional axes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Material {
     pub name: String,
-    pub e: f64,
-    pub nu: f64,
+    /// Isotropic stiffness; absent for orthotropic and heat-only Materials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nu: Option<f64>,
+    /// Orthotropic stiffness in the material axes; absent for isotropic and heat-only Materials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthotropic: Option<Orthotropic>,
+    /// Where the material axes point; `None` means they are the global axes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Orientation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<f64>,
+    /// Thermal expansion, one value or one per material axis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alpha: Option<f64>,
+    pub alpha: Option<Axial>,
+    /// Conductivity, one value or one per material axis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub k: Option<f64>,
+    pub k: Option<Axial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cp: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yield_: Option<f64>,
+    /// J2 plasticity with this hardening; `None` is elastic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plasticity: Option<Hardening>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -99,6 +279,8 @@ pub enum ConstraintKind {
     Fix {
         dofs: Vec<Dof>,
     },
+    /// The three displacements held at zero and every rotation free: `constraint.pin`.
+    Pin,
     Prescribe {
         dof: Dof,
         value: f64,
@@ -109,6 +291,44 @@ pub enum ConstraintKind {
     /// A held temperature, in kelvin: the Dirichlet boundary of a heat Step.
     Temperature {
         value: f64,
+    },
+    /// A bonded contact: the Constraint's own Set is the slave, `master` names the face Set it
+    /// is tied to, and `tol` is the largest pairing gap in metres (`None` scales with the Mesh).
+    Bonded {
+        master: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
+    /// A frictionless contact: the Constraint's own Set is the slave, `master` names the face
+    /// Set it can press on, and `tol` is the search distance in metres (`None` scales with the
+    /// Mesh). Its own variant rather than a flag on `Bonded`, so every saved bonded contact
+    /// serialises byte-for-byte as it did before this kind existed.
+    Frictionless {
+        master: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
+    /// A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector
+    /// face, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`
+    /// (metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales
+    /// with the Mesh).
+    Cyclic {
+        from: String,
+        axis: Axis,
+        #[serde(rename = "angleDeg")]
+        angle_deg: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
+    /// A point mass attached to the Constraint's own face Set: `distributed` makes the point
+    /// follow the face's weighted mean displacement, `rigid` makes every node of the face
+    /// follow the point. `point` names a [`PointMass`]; the field is not called `kind` because
+    /// that tag already names the Constraint kind itself.
+    Couple {
+        point: String,
+        coupling: CoupleKind,
     },
 }
 
@@ -122,18 +342,100 @@ pub struct Constraint {
     pub kind: ConstraintKind,
 }
 
+impl Constraint {
+    /// Every Set this Constraint names: the one it holds, and a bonded tie's master face. One
+    /// accessor, so a rename or an in-use check can never miss the second one.
+    pub fn sets(&self) -> Vec<&str> {
+        let mut out = vec![self.on.as_str()];
+        match &self.kind {
+            ConstraintKind::Bonded { master, .. } | ConstraintKind::Frictionless { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
+            ConstraintKind::Couple { point, .. } => out.push(point),
+            ConstraintKind::Fix { .. }
+            | ConstraintKind::Pin
+            | ConstraintKind::Prescribe { .. }
+            | ConstraintKind::Symmetry { .. }
+            | ConstraintKind::Temperature { .. } => {}
+        }
+        out
+    }
+
+    /// The same Sets, for a rename to rewrite in place.
+    pub fn sets_mut(&mut self) -> Vec<&mut String> {
+        let mut out = vec![&mut self.on];
+        match &mut self.kind {
+            ConstraintKind::Bonded { master, .. } | ConstraintKind::Frictionless { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
+            ConstraintKind::Couple { point, .. } => out.push(point),
+            ConstraintKind::Fix { .. }
+            | ConstraintKind::Pin
+            | ConstraintKind::Prescribe { .. }
+            | ConstraintKind::Symmetry { .. }
+            | ConstraintKind::Temperature { .. } => {}
+        }
+        out
+    }
+}
+
 /// Load kinds, SI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LoadKind {
-    Pressure { on: String, value: f64 },
-    Traction { on: String, total: [f64; 3] },
-    Force { on: String, total: [f64; 3] },
-    Gravity { g: [f64; 3] },
-    Temperature { bodies: Vec<String>, value: f64, reference: f64 },
-    Convection { on: String, h: f64, t_inf: f64 },
-    HeatFlux { on: String, q: f64 },
-    HeatSource { bodies: Vec<String>, q: f64 },
+    Pressure {
+        on: String,
+        value: f64,
+    },
+    Traction {
+        on: String,
+        total: [f64; 3],
+    },
+    Force {
+        on: String,
+        total: [f64; 3],
+    },
+    /// A concentrated moment about the global axes, `total` newton metres split over the Set's
+    /// nodes; it acts on rotational DOFs, which only beam joints have.
+    Moment {
+        on: String,
+        total: [f64; 3],
+    },
+    Gravity {
+        g: [f64; 3],
+    },
+    Temperature {
+        bodies: Vec<String>,
+        value: f64,
+        reference: f64,
+    },
+    Convection {
+        on: String,
+        h: f64,
+        t_inf: f64,
+    },
+    Radiation {
+        on: String,
+        emissivity: f64,
+        t_inf: f64,
+    },
+    HeatFlux {
+        on: String,
+        q: f64,
+    },
+    HeatSource {
+        bodies: Vec<String>,
+        q: f64,
+    },
+    /// Torsional traction on a face Set of an axisymmetric-with-twist Model, `total` newton
+    /// metres delivered exactly via `t_theta = c r` (see `face_set_polar_moment`).
+    Torque {
+        on: String,
+        total: f64,
+    },
+    /// A finite conductance across the bonded contact `of`, replacing its perfect thermal tie.
+    ThermalContact {
+        of: String,
+        h: f64,
+    },
 }
 
 /// A Load.
@@ -153,21 +455,52 @@ impl LoadKind {
             LoadKind::Pressure { .. }
             | LoadKind::Traction { .. }
             | LoadKind::Force { .. }
+            | LoadKind::Moment { .. }
             | LoadKind::Gravity { .. }
             | LoadKind::Convection { .. }
-            | LoadKind::HeatFlux { .. } => &[],
+            | LoadKind::Radiation { .. }
+            | LoadKind::HeatFlux { .. }
+            | LoadKind::Torque { .. }
+            | LoadKind::ThermalContact { .. } => &[],
         }
     }
 
-    /// The Set this load acts on, if any.
+    /// The Set this load acts on, if any. A thermal contact names a Constraint instead — see
+    /// [`LoadKind::constraint`] — so it answers `None` here like Gravity or a Body-targeted load.
     pub fn set(&self) -> Option<&str> {
         match self {
             LoadKind::Pressure { on, .. }
             | LoadKind::Traction { on, .. }
             | LoadKind::Force { on, .. }
+            | LoadKind::Moment { on, .. }
             | LoadKind::Convection { on, .. }
-            | LoadKind::HeatFlux { on, .. } => Some(on),
-            LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => None,
+            | LoadKind::Radiation { on, .. }
+            | LoadKind::HeatFlux { on, .. }
+            | LoadKind::Torque { on, .. } => Some(on),
+            LoadKind::Gravity { .. }
+            | LoadKind::Temperature { .. }
+            | LoadKind::HeatSource { .. }
+            | LoadKind::ThermalContact { .. } => None,
+        }
+    }
+
+    /// The Constraint a thermal contact overrides, for `model.rename` and the in-use check
+    /// `constraint.remove` runs — the one reference a Load makes to a Constraint rather than a
+    /// Set or a Body.
+    pub fn constraint(&self) -> Option<&str> {
+        match self {
+            LoadKind::ThermalContact { of, .. } => Some(of),
+            LoadKind::Pressure { .. }
+            | LoadKind::Traction { .. }
+            | LoadKind::Force { .. }
+            | LoadKind::Moment { .. }
+            | LoadKind::Gravity { .. }
+            | LoadKind::Temperature { .. }
+            | LoadKind::Convection { .. }
+            | LoadKind::Radiation { .. }
+            | LoadKind::HeatFlux { .. }
+            | LoadKind::HeatSource { .. }
+            | LoadKind::Torque { .. } => None,
         }
     }
 }
@@ -178,6 +511,14 @@ impl LoadKind {
 pub enum Amplitude {
     Sine { amplitude: f64, period: f64 },
     Table { t: Vec<f64>, value: Vec<f64> },
+}
+
+/// A uniform initial velocity on a Set of nodes, SI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialVelocity {
+    pub on: String,
+    pub value: [f64; 3],
 }
 
 /// A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
@@ -210,15 +551,53 @@ pub struct Step {
     pub amplitude: Option<Amplitude>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub increments: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cutbacks: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonlinear_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonlinear_max_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub f_start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub f_stop: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepSpacing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damping_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damping_ratios: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psd: Option<Vec<[f64; 2]>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh_alpha: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh_beta: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_velocity: Option<Vec<InitialVelocity>>,
 }
 
 /// Mesher settings, SI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSettings {
+    /// Checked immutable source. Coordinates are SI, memberships retain original labels.
+    Imported(crate::imported::ImportedMesh),
+    Surface {
+        body: String,
+        patches: Vec<femlab_geometry::SurfacePatch>,
+    },
     Lattice {
         size: Option<f64>,
         counts: Option<[u32; 3]>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        sizes: BTreeMap<String, f64>,
     },
     /// Mapped blocks, which are their own geometry: `body` is the implicit Body they make.
     Mapped {
@@ -236,6 +615,11 @@ pub enum MesherSettings {
         base: Box<MesherSettings>,
         sweep: Sweep,
     },
+    /// Free tetrahedra filling every 3D Body of the Model.
+    Tet {
+        size: f64,
+        max_elements: u32,
+    },
 }
 
 /// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
@@ -250,13 +634,35 @@ impl MesherSettings {
     /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
     pub fn rename_body(&mut self, from: &str, to: &str) {
         match self {
-            Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
+            Self::Imported(source) => {
+                if source.body == from {
+                    source.body = to.into();
+                }
+                if let Some(members) = source.regions.remove(from) {
+                    source.regions.insert(to.into(), members);
+                }
+            }
+            Self::Surface { body, .. } | Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
                 if body == from {
                     *body = to.into();
                 }
             }
             Self::Sweep { base, .. } => base.rename_body(from, to),
-            Self::Lattice { .. } => {}
+            Self::Lattice { sizes, .. } => {
+                if let Some(size) = sizes.remove(from) {
+                    sizes.insert(to.into(), size);
+                }
+            }
+            Self::Tet { .. } => {}
+        }
+    }
+
+    /// Whether removing a Body would leave a dangling mesher reference.
+    pub fn references_body(&self, name: &str) -> bool {
+        match self {
+            Self::Lattice { sizes, .. } => sizes.contains_key(name),
+            Self::Sweep { base, .. } => base.references_body(name),
+            _ => self.source_body() == Some(name),
         }
     }
 
@@ -265,19 +671,36 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Mapped { .. } | Self::Lattice { .. } => None,
+            Self::Imported(_)
+            | Self::Surface { .. }
+            | Self::Mapped { .. }
+            | Self::Lattice { .. }
+            | Self::Tet { .. } => None,
         }
     }
 
     /// The Body a mesher makes on its own, without a `geometry.add`: the mapped mesher's.
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
+            MesherSettings::Imported(source) => Some(&source.body),
             MesherSettings::Lattice { .. } => None,
-            MesherSettings::Mapped { body, .. } => Some(body),
-            MesherSettings::Free { .. } => None,
+            MesherSettings::Surface { body, .. } | MesherSettings::Mapped { body, .. } => Some(body),
+            MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
     }
+}
+
+/// Editable assignments of an immutable imported element region.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedRegionAssignment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Axis>,
 }
 
 /// Mesh settings.
@@ -287,6 +710,19 @@ pub struct MeshSettings {
     pub mesher: MesherSettings,
     pub order: u8,
     pub formulation: Formulation,
+    /// Split the chosen mesher's quads/hexes into triangles/tetrahedra.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub simplices: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refinement: Option<LocalRefinement>,
+}
+
+/// Local mesher size field in SI, retained so replay reconstructs the exact mesh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRefinement {
+    pub boxes: Vec<femlab_geometry::SizeBox>,
+    pub max_elements: u32,
 }
 
 /// A Plugin used by the Model (phase P).
@@ -311,10 +747,18 @@ pub struct Model {
     pub bodies: Vec<Body>,
     #[serde(default)]
     pub cuts: Vec<Cut>,
+    /// Lumped point masses, each also a node Set of its own name. Omitted when empty, so a
+    /// Model without one hashes exactly as it did before point masses existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<PointMass>,
     #[serde(default)]
     pub sets: Vec<NamedSet>,
     #[serde(default)]
     pub materials: Vec<Material>,
+    /// Skipped when empty, so a Model with no line members hashes exactly as it did before
+    /// Sections existed and every committed Journal hash still holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<NamedSection>,
     #[serde(default)]
     pub constraints: Vec<Constraint>,
     #[serde(default)]
@@ -328,6 +772,14 @@ pub struct Model {
     /// like any other and the name lands here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesher_material: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub imported_region_assignments: BTreeMap<String, ImportedRegionAssignment>,
+    /// Thickness Section assigned to the implicit surface Body, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_section: Option<String>,
+    /// Projected reference axis for the implicit shell Body's ply angles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_orientation: Option<Axis>,
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
 }
@@ -341,13 +793,18 @@ impl Model {
             idealisation: Idealisation::Solid3d,
             bodies: vec![],
             cuts: vec![],
+            points: vec![],
             sets: vec![],
             materials: vec![],
+            sections: vec![],
             constraints: vec![],
             loads: vec![],
             steps: vec![],
             mesh: None,
             mesher_material: None,
+            imported_region_assignments: BTreeMap::new(),
+            mesher_section: None,
+            mesher_orientation: None,
             plugins: vec![],
         }
     }
@@ -355,8 +812,14 @@ impl Model {
     pub fn body(&self, name: &str) -> Option<&Body> {
         self.bodies.iter().find(|b| b.name == name)
     }
+    pub fn point(&self, name: &str) -> Option<&PointMass> {
+        self.points.iter().find(|p| p.name == name)
+    }
     pub fn material(&self, name: &str) -> Option<&Material> {
         self.materials.iter().find(|m| m.name == name)
+    }
+    pub fn section(&self, name: &str) -> Option<&NamedSection> {
+        self.sections.iter().find(|s| s.name == name)
     }
     pub fn constraint(&self, name: &str) -> Option<&Constraint> {
         self.constraints.iter().find(|c| c.name == name)
@@ -373,13 +836,61 @@ impl Model {
         self.mesh.as_ref().and_then(|m| m.mesher.implicit_body())
     }
 
-    /// The material assigned to a Body, whether that is a [`Body`] record or the mesher's
-    /// implicit Body, whose assignment lives in [`Model::mesher_material`].
+    /// Persistent imported source, if this Model uses one.
+    pub fn imported_source(&self) -> Option<&crate::imported::ImportedMesh> {
+        match &self.mesh.as_ref()?.mesher {
+            MesherSettings::Imported(source) => Some(source),
+            _ => None,
+        }
+    }
+
+    pub fn is_imported_region(&self, name: &str) -> bool {
+        self.imported_source().is_some_and(|s| s.regions.contains_key(name))
+    }
+
+    /// Implicit source owner plus separately editable region Bodies.
+    pub fn mesher_body_names(&self) -> Vec<&str> {
+        self.imported_source().map_or_else(|| self.implicit_body().into_iter().collect(), |s| s.body_names())
+    }
+
+    /// Bodies that actually own elements, excluding a fully partitioned aggregate owner.
+    pub fn meshed_body_names(&self) -> Vec<&str> {
+        self.imported_source()
+            .map_or_else(|| self.mesher_body_names(), |s| s.element_body_names().into_iter().collect())
+    }
+
     pub fn material_of_body(&self, body: &str) -> Option<&str> {
+        if self.is_imported_region(body) {
+            return self
+                .imported_region_assignments
+                .get(body)
+                .and_then(|a| a.material.as_deref())
+                .or(self.mesher_material.as_deref());
+        }
+        if let Some(ply) = self.section_of_body(body).and_then(|section| section.plies.first()) {
+            return Some(&ply.material);
+        }
         match self.body(body) {
             Some(b) => b.material.as_deref(),
             None => self.mesher_material.as_deref().filter(|_| self.implicit_body() == Some(body)),
         }
+    }
+
+    /// Section assigned to explicit geometry or to a mesher-owned Body.
+    pub fn section_of_body(&self, body: &str) -> Option<&NamedSection> {
+        if self.is_imported_region(body) {
+            let name = self
+                .imported_region_assignments
+                .get(body)
+                .and_then(|a| a.section.as_deref())
+                .or(self.mesher_section.as_deref())?;
+            return self.section(name);
+        }
+        let name = match self.body(body) {
+            Some(body) => body.section.as_deref(),
+            None => self.mesher_section.as_deref().filter(|_| self.implicit_body() == Some(body)),
+        }?;
+        self.section(name)
     }
 
     /// The effective shape of a Body: its shape minus its cuts, with names for auto face tags.
@@ -401,8 +912,9 @@ impl Model {
     /// Names of every object of a kind, in Model order.
     pub fn names(&self, kind: ObjectKind) -> Vec<&str> {
         match kind {
-            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.implicit_body()).collect(),
+            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.mesher_body_names()).collect(),
             ObjectKind::Material => self.materials.iter().map(|m| m.name.as_str()).collect(),
+            ObjectKind::Section => self.sections.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Set => self.sets.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Constraint => self.constraints.iter().map(|c| c.name.as_str()).collect(),
             ObjectKind::Load => self.loads.iter().map(|l| l.name.as_str()).collect(),
@@ -418,15 +930,20 @@ impl Model {
             .iter()
             .map(|b| b.name.clone())
             .chain(self.cuts.iter().map(|c| c.name.clone()))
-            .chain(self.mesh.iter().filter_map(|m| m.mesher.implicit_body().map(str::to_string)))
+            .chain(self.mesher_body_names().into_iter().map(str::to_string))
             .collect()
     }
 
     /// Does a Set reference resolve to something the Model knows (a named Set, or an auto face
     /// `<body-or-cut>.<tag>`)? Tags are validated against the shape when meshing.
     pub fn knows_set(&self, set: &str) -> bool {
-        if self.sets.iter().any(|s| s.name == set) {
+        if self.sets.iter().any(|s| s.name == set) || self.points.iter().any(|p| p.name == set) {
             return true;
+        }
+        if let Some(MeshSettings { mesher: MesherSettings::Imported(source), .. }) = &self.mesh {
+            if source.body_names().iter().any(|name| set.starts_with(&format!("{name}."))) {
+                return source.set_names().contains(set);
+            }
         }
         match set.rsplit_once('.') {
             Some((prefix, tag)) => !tag.is_empty() && self.set_prefixes().contains(prefix),
@@ -445,8 +962,19 @@ mod tests {
         assert_eq!(m.idealisation.dim(), 3);
         assert_eq!(Idealisation::PlaneStrain.dim(), 2);
         assert_eq!(Idealisation::PlaneStress { thickness: 0.1 }.dim(), 2);
-        assert_eq!(Idealisation::Axisymmetric.dim(), 2);
-        m.bodies.push(Body { name: "beam".into(), shape: Shape::Box { size: [1.0; 3] }, material: None });
+        assert_eq!(Idealisation::Axisymmetric { twist: false }.dim(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: true }.dim(), 2);
+        assert_eq!(m.idealisation.dofs_per_node(), 3);
+        assert_eq!(Idealisation::PlaneStrain.dofs_per_node(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: false }.dofs_per_node(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: true }.dofs_per_node(), 3);
+        m.bodies.push(Body {
+            name: "beam".into(),
+            shape: Shape::Box { size: [1.0; 3] },
+            material: None,
+            section: None,
+            orientation: None,
+        });
         m.cuts.push(Cut { name: "hole".into(), from: "beam".into(), shape: Shape::Box { size: [0.1; 3] } });
         m.cuts.push(Cut { name: "other".into(), from: "plate".into(), shape: Shape::Box { size: [0.1; 3] } });
         let s = m.body_shape(m.body("beam").unwrap());
@@ -460,7 +988,13 @@ mod tests {
                 }),
             }
         );
-        m.bodies.push(Body { name: "plain".into(), shape: Shape::Box { size: [1.0; 3] }, material: Some("s".into()) });
+        m.bodies.push(Body {
+            name: "plain".into(),
+            shape: Shape::Box { size: [1.0; 3] },
+            material: Some("s".into()),
+            section: None,
+            orientation: None,
+        });
         let s = m.body_shape(m.body("plain").unwrap());
         assert_eq!(s, Shape::Named { name: "plain".into(), shape: Box::new(Shape::Box { size: [1.0; 3] }) });
         assert!(m.body("nope").is_none());
@@ -470,13 +1004,16 @@ mod tests {
         assert!(m.step("x").is_none());
         m.materials.push(Material {
             name: "s".into(),
-            e: 1.0,
-            nu: 0.3,
+            e: Some(1.0),
+            nu: Some(0.3),
+            orthotropic: None,
+            orientation: None,
             rho: None,
             alpha: None,
             k: None,
             cp: None,
             yield_: None,
+            plasticity: None,
             source: None,
         });
         m.constraints.push(Constraint {
@@ -502,6 +1039,21 @@ mod tests {
             dt_factor: None,
             amplitude: None,
             initial: None,
+            increments: None,
+            max_cutbacks: None,
+            nonlinear_tolerance: None,
+            nonlinear_max_iterations: None,
+            f_start: None,
+            f_stop: None,
+            points: None,
+            sweep: None,
+            damping_ratio: None,
+            damping_ratios: None,
+            psd: None,
+            alpha: None,
+            rayleigh_alpha: None,
+            rayleigh_beta: None,
+            initial_velocity: None,
         });
         m.sets.push(NamedSet {
             name: "top".into(),
@@ -524,13 +1076,17 @@ mod tests {
         assert_eq!(LoadKind::Traction { on: "a".into(), total: [0.0; 3] }.set(), Some("a"));
         assert_eq!(LoadKind::Force { on: "a".into(), total: [0.0; 3] }.set(), Some("a"));
         assert_eq!(LoadKind::Temperature { bodies: vec![], value: 300.0, reference: 293.15 }.set(), None);
+        assert_eq!(LoadKind::Torque { on: "a".into(), total: 100.0 }.set(), Some("a"));
         for kind in [
             LoadKind::Pressure { on: "a".into(), value: 1.0 },
             LoadKind::Traction { on: "a".into(), total: [0.0; 3] },
             LoadKind::Force { on: "a".into(), total: [0.0; 3] },
             LoadKind::Gravity { g: [0.0; 3] },
             LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
+            LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
             LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
+            LoadKind::Torque { on: "a".into(), total: 100.0 },
+            LoadKind::ThermalContact { of: "weld".into(), h: 500.0 },
         ] {
             assert!(kind.bodies().is_empty());
         }
@@ -539,6 +1095,24 @@ mod tests {
             LoadKind::HeatSource { bodies: vec!["beam".into(), "plain".into()], q: 1.0 },
         ] {
             assert_eq!(kind.bodies(), &["beam", "plain"]);
+        }
+        // A thermal contact names a Constraint, not a Set or a Body: the odd one out among the
+        // three cross-reference accessors.
+        let contact = LoadKind::ThermalContact { of: "weld".into(), h: 500.0 };
+        assert_eq!(contact.set(), None);
+        assert_eq!(contact.constraint(), Some("weld"));
+        for kind in [
+            LoadKind::Pressure { on: "a".into(), value: 1.0 },
+            LoadKind::Traction { on: "a".into(), total: [0.0; 3] },
+            LoadKind::Force { on: "a".into(), total: [0.0; 3] },
+            LoadKind::Gravity { g: [0.0; 3] },
+            LoadKind::Temperature { bodies: vec![], value: 300.0, reference: 293.15 },
+            LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
+            LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
+            LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
+            LoadKind::HeatSource { bodies: vec![], q: 1.0 },
+        ] {
+            assert_eq!(kind.constraint(), None);
         }
         assert!(m.knows_set("top"));
         assert!(m.knows_set("beam.xmin"));
@@ -552,5 +1126,12 @@ mod tests {
         assert!(j.contains(r#""kind":"fix""#) && j.contains(r#""kind":"pressure""#));
         let minimal: Model = serde_json::from_str(r#"{"name":"x","idealisation":{"kind":"solid3d"}}"#).unwrap();
         assert!(minimal.bodies.is_empty());
+        // A Model saved before `twist` existed has no such field in its JSON; the serde
+        // default must still load it, at twist: false.
+        let old: Model = serde_json::from_str(r#"{"name":"x","idealisation":{"kind":"axisymmetric"}}"#).unwrap();
+        assert_eq!(old.idealisation, Idealisation::Axisymmetric { twist: false });
+        let twisted: Model =
+            serde_json::from_str(r#"{"name":"x","idealisation":{"kind":"axisymmetric","twist":true}}"#).unwrap();
+        assert_eq!(twisted.idealisation, Idealisation::Axisymmetric { twist: true });
     }
 }

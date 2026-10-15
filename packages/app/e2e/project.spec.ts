@@ -88,13 +88,13 @@ test.describe('@cpu project file host', () => {
     // Await the actual debounced IndexedDB commit, not the host's optimistic autosave label.
     await expect.poll(() => page.evaluate(async () => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open('femlab', 1);
+        const request = indexedDB.open('femlab');
         request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
       });
       try {
         return await new Promise<string | null>((resolve, reject) => {
-          const request = db.transaction('autosave', 'readonly').objectStore('autosave').get('last');
-          request.onsuccess = () => resolve((request.result as { name: string } | undefined)?.name ?? null);
+          const request = db.transaction('revisions', 'readonly').objectStore('revisions').get('last');
+          request.onsuccess = () => resolve((request.result as { name: string }[] | undefined)?.[0]?.name ?? null);
           request.onerror = () => reject(request.error);
         });
       } finally { db.close(); }

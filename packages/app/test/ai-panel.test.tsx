@@ -8,28 +8,33 @@ import * as anthropic from '../src/ai/anthropic';
 import * as context from '../src/ai/context';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeTransport } from '../../registry/test/fakes';
-import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
+import { AssistantPanel, ToolCard, chatBridge, resultAssumptions } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
+import { bindRegistryProducer } from '../src/producer-registry';
+import { Checks } from '../src/ui/Results';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import type { ChatRequest } from '../src/ai/provider';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
 import * as project from '../src/ai/project';
 import { fakeDir, memoryProjectAccess } from './project-fake';
+import type { ProjectAccess } from '../src/project-host';
 
-async function mount(patch: Partial<Store['state']> = {}) {
+async function mount(patch: Partial<Store['state']> = {}, access: ProjectAccess = memoryProjectAccess(() => project.pickFolder())) {
   const transport = fakeTransport();
-  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : q.query === 'query.results' ? { limit: 8, records: [] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
   const viewer = { current: null };
-  const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}), undefined, undefined, undefined, memoryProjectAccess(() => project.pickFolder()));
+  const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}), undefined, undefined, undefined, undefined, undefined, undefined, { projects: {} as never, active: async () => undefined, replay: async () => undefined, captureImport: () => ({}) as never }, undefined, undefined, undefined, undefined, access);
   host.chat.send = (text) => chatBridge.send(text);
   host.chat.insertMention = (ref) => chatBridge.insertMention(ref);
   host.chat.setDraft = (text) => chatBridge.setDraft(text);
   host.chat.clear = () => chatBridge.clear();
   const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport as WorkerTransport, viewer, async () => undefined)] });
+
+  bindRegistryProducer(registry, async () => ({ registry, signal: new AbortController().signal, store: () => store, release: async () => undefined }));
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -48,7 +53,7 @@ const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r,
 async function type(root: HTMLElement, text: string) {
   const box = root.querySelector('textarea')!;
   // A person focuses the box before typing in it, and that is what loads the mention index.
-  box.dispatchEvent(new Event('focus', { bubbles: true }));
+  box.focus();
   await tick();
   box.value = text;
   box.dispatchEvent(new Event('input', { bubbles: true }));
@@ -68,6 +73,7 @@ describe('the assistant drawer', () => {
     document.body.innerHTML = '';
     chatBridge.pending = null;
     chatBridge.pendingDraft = null;
+    chatBridge.pendingMentions = [];
     localStorage.clear();
     sessionStorage.clear();
   });
@@ -175,6 +181,43 @@ describe('the assistant drawer', () => {
     } finally { provider.mockRestore(); }
   });
 
+  it('renders every solver-used assumption from direct and script-returned Results beyond the JSON preview', () => {
+    const assumption = {
+      step: 'thermal-explicit',
+      body: 'heated-block',
+      material: 'catalogue-aluminium',
+      property: 'alpha' as const,
+      value: { value: 0, unit: '1/K' },
+      source: 'NASA NTRS 20120014854, Section 2, PDF p. 36',
+      cause: 'the resolved temperature field read the omitted thermal expansion coefficient as zero',
+    };
+    expect(resultAssumptions(JSON.stringify({ assumptions: [assumption] }))).toEqual([assumption]);
+
+    const result = JSON.stringify({
+      result: {
+        paddingBeforeTheSolveResult: 'x'.repeat(13000),
+        output: { type: 'solve', summary: { assumptions: [assumption] } },
+      },
+      console: [],
+    });
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(
+      <ToolCard call={{ id: 'script', tool: 'run_script', command: 'script.run', input: { code: 'return await fem.solve.run({ step: "thermal-explicit" })' }, ms: 4, status: 'succeeded', result }} />,
+      root,
+    );
+    expect(root.querySelector('.out')!.textContent).not.toContain(assumption.cause);
+    const shown = root.querySelector('.result-assumption')!.textContent!;
+    for (const text of [assumption.step, assumption.body, assumption.material, assumption.property, '0 1/K', assumption.cause, assumption.source]) {
+      expect(shown).toContain(text);
+    }
+    render(
+      <ToolCard call={{ id: 'failed', tool: 'run_script', command: 'script.run', input: {}, ms: 4, status: 'failed', result }} />,
+      root,
+    );
+    expect(root.querySelector('.result-assumption')).toBeNull();
+  });
+
   it('shows a script error as a failed tool card with its partial console output', async () => {
     sessionStorage.setItem('femlab.ai.key', 'test-key');
     let round = 0;
@@ -228,7 +271,7 @@ describe('the assistant drawer', () => {
       },
     });
     try {
-      const { root, registry } = await mount();
+      const { root, registry, store } = await mount({ journal: { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false } });
       const original = registry.query.bind(registry);
       vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
       await type(root, 'Check it');
@@ -249,6 +292,28 @@ describe('the assistant drawer', () => {
       expect([...root.querySelectorAll('.prose p')].map((p) => p.textContent)).toEqual(['First sentence.', 'Solved.', 'Done.']);
       expect(root.querySelectorAll('.verify')).toHaveLength(1);
       expect(root.querySelector('.verify')!.textContent).toContain('Reaction balance');
+      expect(root.querySelector('.suggestions')!.textContent).toContain('Check this Model');
+      expect(root.querySelector('.suggestions')!.textContent).not.toContain('Build a cantilever');
+      expect(store.state.assistantVerifications).toHaveLength(1);
+      const checks = document.createElement('div');
+      document.body.append(checks);
+      const showChecks = () => render(<Checks s={store.state} dispatch={registry.dispatch.bind(registry)} query={registry.query.bind(registry)} />, checks);
+      showChecks();
+      expect(checks.textContent).toContain('Assistant-reported checks');
+      expect(checks.textContent).toContain('not independently verified');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Reaction balance');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('0 %');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Recorded at Model rev 0');
+      store.set({ journal: { ...store.state.journal!, hash: 'edited' }, revision: 1 });
+      await tick();
+      showChecks();
+      expect(root.querySelector('.verify')!.textContent).toContain('Stale');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Stale');
+      chatBridge.clear();
+      await tick();
+      expect(root.querySelector('.verify')).toBeNull();
+      expect(store.state.assistantVerifications).toHaveLength(1);
+      expect(checks.textContent).toContain('Reaction balance');
     } finally { provider.mockRestore(); }
   });
 
@@ -271,6 +336,41 @@ describe('the assistant drawer', () => {
     await tick();
     expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
   });
+  it('drains buffered quoted targets unchanged, deduplicates equivalent names and keeps decoded chip labels on reopen', async () => {
+    chatBridge.pendingMentions = ['body:"beam"', 'file:"notes and \\"checks\\".md"'];
+    const { root, registry, store } = await mount();
+    const refs = () => [...root.querySelectorAll('.token')].map(token => token.getAttribute('data-ref'));
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(root.querySelectorAll('.token')[1]!.textContent).toContain('@file:notes and "checks".md');
+    await registry.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root); await paint();
+    render(<AssistantPanel registry={registry} store={store} />, root); await paint();
+    expect(refs()).toEqual(['body:beam', 'file:"notes and \\"checks\\".md"']);
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
+  it('drops unsent chips when replacing their owning registry, while retaining the editable draft', async () => {
+    const previous = await mount();
+    await previous.registry.dispatch({ cmd: 'chat.insertMention', ref: 'result:id:result-1' });
+    await type(previous.root, 'Compare this solve');
+    expect(previous.root.querySelector('.token')!.getAttribute('data-ref')).toBe('result:id:result-1');
+    const next = await mount();
+    render(null, next.root);
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root); await paint();
+    expect(previous.root.querySelectorAll('.token')).toHaveLength(0);
+    expect(previous.root.querySelector('textarea')!.value).toBe('Compare this solve');
+  });
+  it.each(['@result:id:result-1', '@result:"id:result-1"'])('clears a typed immutable target on registry replacement: %s', async target => {
+    const previous = await mount();
+    await type(previous.root, `Inspect ${target}`);
+    const next = await mount();
+    render(null, next.root);
+    chatBridge.pendingMentions = ['result:id:result-1'];
+    chatBridge.pendingDraft = `Inspect ${target}`;
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root); await paint();
+    expect(previous.root.querySelector('textarea')!.value).toBe('');
+    expect(previous.root.querySelectorAll('.token')).toHaveLength(0);
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
 
   it('expands @selection into one token per selected object', async () => {
     const { root, store } = await mount();
@@ -279,6 +379,60 @@ describe('the assistant drawer', () => {
     root.querySelector<HTMLButtonElement>('.bar [data-cmd="chat.insertMention"]')!.click();
     await tick();
     expect([...root.querySelectorAll('.token span:first-child')].map((t) => t.textContent)).toEqual(['@body:beam', '@face:beam.top']);
+  });
+
+  it('prepares editable suggestions and selects a skill without sending the draft', async () => {
+    const { root, registry, store } = await mount();
+    const dispatch = vi.spyOn(registry, 'dispatch');
+    root.querySelector<HTMLButtonElement>('.suggestions button')!.click();
+    await tick();
+    const box = root.querySelector('textarea')!;
+    expect(box.value).toContain('Help me build a cantilever');
+    expect(document.activeElement).toBe(box);
+    expect(root.querySelector('.user')).toBeNull();
+    await type(root, 'Check my beam');
+    root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+    await tick();
+    expect(store.state.panels['assistant.skills']).toBe(true);
+    const skill = [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!;
+    skill.click();
+    await tick();
+    expect(box.value).toBe('/beam-theory-check Check my beam');
+    expect(document.activeElement).toBe(box);
+    expect(root.querySelector('.popover')).toBeNull();
+    expect(dispatch.mock.calls.some(([c]) => c.cmd === 'chat.send' || c.cmd === 'skill.invoke')).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'chat.setDraft', text: '/beam-theory-check Check my beam' });
+  });
+
+  it('loads a selected skill on Send while retaining existing reference chips', async () => {
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
+    let received = '';
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(request) {
+        received = JSON.stringify(request.messages);
+        yield { type: 'text_delta', text: 'Checked' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      chatBridge.insertMention('body:beam');
+      await type(root, 'Check my beam\nExplain assumptions');
+      root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+      await tick();
+      [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!.click();
+      await tick();
+      expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+      const dispatch = vi.spyOn(registry, 'dispatch');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      await tick();
+      expect(dispatch).toHaveBeenCalledWith({ cmd: 'skill.invoke', name: 'beam-theory-check', args: 'Check my beam\nExplain assumptions @body:beam' });
+      expect(received).toContain('Skill beam-theory-check');
+      expect(received).toContain('A beam-shaped model has a closed-form answer.');
+      expect(received).toContain('@body:beam');
+    } finally { provider.mockRestore(); }
   });
 
   it('shows the skill menu when the line starts with a slash', async () => {
@@ -297,6 +451,34 @@ describe('the assistant drawer', () => {
     expect(root.querySelector('.popover')!.textContent).toContain('beam');
     await type(root, 'ask about @zzz');
     expect(root.querySelector('.popover')).toBeNull();
+  });
+
+  it('discards a mention index that finishes after the panel changes sessions', async () => {
+    const previous = await mount();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const oldQuery = previous.registry.query.bind(previous.registry);
+    previous.registry.query = async query => {
+      const result = await oldQuery(query);
+      if (query.query === 'query.objects') await gate;
+      return result;
+    };
+    previous.root.querySelector('textarea')!.focus();
+    await tick();
+    const next = await mount();
+    const nextQuery = next.registry.query.bind(next.registry);
+    next.registry.query = async query => query.query === 'query.objects'
+      ? { objects: [{ ref: 'body:new-part', kind: 'body', name: 'new-part', summary: 'new session' }] }
+      : nextQuery(query);
+    render(null, next.root);
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root);
+    await paint();
+    previous.root.querySelector('textarea')!.blur();
+    await type(previous.root, '@');
+    expect(previous.root.querySelector('.popover')!.textContent).toContain('new-part');
+    finish(); await paint();
+    expect(previous.root.querySelector('.popover')!.textContent).toContain('new-part');
+    expect(previous.root.querySelector('.popover')!.textContent).not.toContain('beam');
   });
 
   it('groups the candidates by kind, with the two context rows pinned above them', async () => {
@@ -361,6 +543,29 @@ describe('the assistant drawer', () => {
       expect(requests[0]!.messages[0]!.content).toEqual([{ type: 'text', text: `Skill ${builtin.name}:\n${builtin.body}\n\n` }]);
       expect(root.textContent).not.toContain('not-found');
     } finally { provider.mockRestore(); }
+  });
+
+  // Issue #247: start-up only ever learns the folder's *name*; the handle behind it is read on
+  // this click, where a browser that can no longer produce one has somewhere to say so.
+  it('offers a remembered folder by name, and reopens it or reports an unusable handle', async () => {
+    const access = memoryProjectAccess(vi.fn(async () => fakeDir({})));
+    await access.remember({ kind: 'directory', name: 'corbel' } as project.DirHandle);
+    const gone = await mount({}, access);
+    await vi.waitFor(() => expect(gone.root.textContent).toContain('reopen corbel'));
+    gone.root.querySelector<HTMLButtonElement>('[title="Reopen corbel"]')!.click();
+    await vi.waitFor(() => expect(gone.root.querySelector('[role="alert"]')?.textContent).toContain('directory handle'));
+    expect(gone.store.state.folder).toBeNull();
+    await vi.waitFor(() => expect(gone.root.textContent).not.toContain('reopen corbel'));
+    expect(gone.root.textContent).toContain('open a project folder');
+    expect(access.pick).not.toHaveBeenCalled();
+
+    await access.remember(fakeDir({ 'AGENTS.md': 'Use the project rules.' }, 'corbel'));
+    const back = await mount({}, access);
+    await vi.waitFor(() => expect(back.root.textContent).toContain('reopen corbel'));
+    back.root.querySelector<HTMLButtonElement>('[title="Reopen corbel"]')!.click();
+    await vi.waitFor(() => expect(back.store.state.folder?.name).toBe('corbel'));
+    expect(back.root.textContent).toContain('/corbel');
+    expect(back.root.querySelector('[role="alert"]')).toBeNull();
   });
 
   it('shares project overrides, refreshed content and close with the host and every skill menu', async () => {
@@ -456,6 +661,48 @@ describe('the assistant drawer', () => {
     render(null, root);
     chatBridge.send('after the drawer closed');
     expect(chatBridge.pending).toBe('after the drawer closed');
+  });
+
+  it('keeps references made before mount and inserts each chip once', async () => {
+    chatBridge.insertMention('body:beam');
+    chatBridge.insertMention('material:steel');
+    chatBridge.insertMention('body:beam');
+    const { root, store } = await mount({ panels: { assistant: false } });
+    await tick();
+    expect(store.state.panels['assistant']).toBe(true);
+    expect([...root.querySelectorAll('.tokens .token')].map(chip => chip.textContent))
+      .toEqual(['@body:beam×', '@material:steel×']);
+    expect(chatBridge.pendingMentions).toEqual([]);
+    await type(root, 'check these');
+    expect(root.querySelectorAll('.tokens .token')).toHaveLength(2);
+  });
+
+  it('opens a collapsed drawer when inserting a reference', async () => {
+    const { root, store, registry } = await mount({ panels: { assistant: false } });
+    render(<AssistantPanel registry={registry} store={store} hidden />, root);
+    await paint();
+    chatBridge.insertMention('body:beam');
+    await tick();
+    expect(store.state.panels['assistant']).toBe(true);
+    expect(root.querySelector('.tokens .token')?.textContent).toContain('@body:beam');
+  });
+
+  it('buffers references after unmount for the next drawer', async () => {
+    const { root } = await mount();
+    render(null, root);
+    chatBridge.insertMention('body:beam');
+    const next = await mount();
+    await tick();
+    expect(next.root.querySelector('.tokens .token')?.textContent).toContain('@body:beam');
+    expect(chatBridge.pendingMentions).toEqual([]);
+  });
+
+  it('discards buffered references when chat is cleared before mount', async () => {
+    chatBridge.insertMention('body:beam');
+    chatBridge.clear();
+    const { root } = await mount();
+    await tick();
+    expect(root.querySelectorAll('.tokens .token')).toHaveLength(0);
   });
 });
 

@@ -1,0 +1,332 @@
+{
+  "id": "concrete-floor-slab",
+  "title": "Concrete floor slab: deflection against span/250",
+  "minutes": 13,
+  "summary": "A 6 m one-way C30/37 floor strip under self-weight and an imposed load, supported on knife edges that let it rotate and contract — checked against 5wL⁴/384EI, against the EN 1992-1-1 span/250 limit, and against the cracked, creeping slab that will actually be built.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A floor slab is rarely governed by strength. It is governed by how far it sags, and by a limit written as a fraction of the span. This tutorial builds the strip, gets the elastic deflection, and then says honestly how far that number is from the one a code check needs.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "concrete-floor-slab"
+      }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres, kilonewtons, megapascals.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "mm",
+          "force": "kN",
+          "stress": "MPa"
+        }
+      }
+    },
+    {
+      "title": "A one-metre strip of floor",
+      "explain": "6 m span, 200 mm thick, and 1 m wide. A one-way slab spans in one direction only, so a strip of unit width carries the whole story: what the strip does, the slab does, per metre of width. Modelling the whole floor plate would add nothing here and cost fifty times as much.",
+      "expect": {
+        "cmd": "geometry.addBox",
+        "match": {
+          "name": "slab"
+        }
+      },
+      "highlight": "geometry.addBox",
+      "doIt": {
+        "cmd": "geometry.addBox",
+        "name": "slab",
+        "size": [
+          "6 m",
+          "1 m",
+          "200 mm"
+        ]
+      }
+    },
+    {
+      "title": "C30/37",
+      "explain": "`E = 33 GPa` is the mean secant modulus Ecm of C30/37, `nu = 0.2`, and `rho = 2500 kg/m³` — the EN 1991-1-1 density for reinforced concrete, a hundred above plain concrete because of the steel. The density is not decoration: it is what makes the self-weight, and self-weight is half the load on a slab like this.",
+      "expect": {
+        "cmd": "material.add",
+        "match": {
+          "name": "C30-37"
+        }
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "C30-37",
+        "E": "33 GPa",
+        "nu": 0.2,
+        "rho": "2500 kg/m^3",
+        "source": "EN 1992-1-1 C30/37 Ecm; rho per EN 1991-1-1 Table A.1, reinforced concrete"
+      }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material, one Body.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "C30-37",
+        "bodies": [
+          "slab"
+        ]
+      }
+    },
+    {
+      "title": "Mesh it, quadratic",
+      "explain": "Thirty elements along the span, five across the width, two through the thickness, `order: 2`. Two hex20 elements through the depth resolve the linear bending strain properly; two linear elements would not. That is 300 elements and a solve in well under a second.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "lattice",
+          "size": {
+            "nx": 30,
+            "ny": 5,
+            "nz": 2
+          }
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "A Set at mid-span",
+      "explain": "A thin slice of the model at x = 3 m, the whole cross-section. It will be used to stop the strip sliding along its own span — not to support it.",
+      "expect": {
+        "cmd": "geometry.nameRegion",
+        "match": {
+          "name": "mid-span"
+        }
+      },
+      "highlight": "geometry.nameRegion",
+      "doIt": {
+        "cmd": "geometry.nameRegion",
+        "name": "mid-span",
+        "where": {
+          "kind": "bbox",
+          "min": [
+            "2995 mm",
+            "-5 mm",
+            "-5 mm"
+          ],
+          "max": [
+            "3005 mm",
+            "1005 mm",
+            "205 mm"
+          ]
+        }
+      }
+    },
+    {
+      "title": "A Set along the centre-line",
+      "explain": "The vertical plane down the middle of the strip's width, y = 500 mm, running the full span.",
+      "expect": {
+        "cmd": "geometry.nameRegion",
+        "match": {
+          "name": "centre-line"
+        }
+      },
+      "highlight": "geometry.nameRegion",
+      "doIt": {
+        "cmd": "geometry.nameRegion",
+        "name": "centre-line",
+        "where": {
+          "kind": "bbox",
+          "min": [
+            "-5 mm",
+            "495 mm",
+            "-5 mm"
+          ],
+          "max": [
+            "6005 mm",
+            "505 mm",
+            "205 mm"
+          ]
+        }
+      }
+    },
+    {
+      "title": "A knife edge at each end",
+      "explain": "`uz` only, on each end face. That is the whole support: the bearing holds the slab up and does nothing else, so the end section is free to rotate and free to slide along the span. This is the step people get wrong. Fixing all three components at one end and two at the other — the obvious thing to type — makes a slab that cannot rotate over its bearing and cannot contract across its width, and it comes out stiffer and stressed in places a simply supported slab is not.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "bearing-a"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "bearing-a",
+        "on": "slab.xmin",
+        "dofs": [
+          "uz"
+        ]
+      }
+    },
+    {
+      "title": "And the other bearing",
+      "explain": "The same again at the far end. Two vertical line supports and nothing else: the strip is now held up, and free to float in every other direction — which the solver will refuse until the next two steps pin down the rigid-body motion.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "bearing-b"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "bearing-b",
+        "on": "slab.xmax",
+        "dofs": [
+          "uz"
+        ]
+      }
+    },
+    {
+      "title": "Stop it sliding along the span",
+      "explain": "`ux = 0` on the mid-span section. Under a symmetric load the mid-span section does not move along the span anyway — this is a statement of symmetry, not a restraint — so it carries no reaction and adds no stiffness. Anchoring the span at an end face instead would keep that section vertical and quietly turn the bearing into a built-in support.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "no-sway"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "no-sway",
+        "on": "mid-span",
+        "dofs": [
+          "ux"
+        ]
+      }
+    },
+    {
+      "title": "Stop it drifting sideways",
+      "explain": "`uy = 0` on the centre-line plane. Same argument: the strip is symmetric about its own centre-line, so nothing crosses that plane, and both halves stay free to contract towards it as the concrete compresses. Holding `uy` on a side face would have stopped that contraction and put a spurious transverse stress into the slab.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "no-drift"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "no-drift",
+        "on": "centre-line",
+        "dofs": [
+          "uy"
+        ]
+      }
+    },
+    {
+      "title": "Self-weight",
+      "explain": "`load.gravity` is a body force on every element that has a density, not a pressure on a face. For this strip it is 4.905 kN/m² — about half the total load, and the half nobody gets to choose.",
+      "expect": {
+        "cmd": "load.gravity",
+        "match": {
+          "name": "self-weight"
+        }
+      },
+      "highlight": "load.gravity",
+      "doIt": {
+        "cmd": "load.gravity",
+        "name": "self-weight",
+        "g": [
+          "0 m/s^2",
+          "0 m/s^2",
+          "-9.81 m/s^2"
+        ]
+      }
+    },
+    {
+      "title": "The imposed load",
+      "explain": "5 kN/m² pressed onto the top face — finishes plus the quasi-permanent part of an office imposed load. `load.pressure` is positive into the surface, so a positive value on the top face pushes down.",
+      "expect": {
+        "cmd": "load.pressure",
+        "match": {
+          "name": "imposed"
+        }
+      },
+      "highlight": "load.pressure",
+      "doIt": {
+        "cmd": "load.pressure",
+        "name": "imposed",
+        "on": "slab.zmax",
+        "value": "0.005 MPa"
+      }
+    },
+    {
+      "title": "One static Step",
+      "explain": "Both loads in one Step, named for the load combination it represents. Deflection limits in EN 1992-1-1 are checked under the quasi-permanent combination, not the ultimate one, so this Step is unfactored.",
+      "expect": {
+        "cmd": "step.add",
+        "match": {
+          "name": "quasi-permanent"
+        }
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "quasi-permanent",
+        "procedure": "static",
+        "constraints": [
+          "bearing-a",
+          "bearing-b",
+          "no-sway",
+          "no-drift"
+        ],
+        "loads": [
+          "self-weight",
+          "imposed"
+        ],
+        "output": [
+          "displacement",
+          "stress",
+          "vonMises",
+          "reaction"
+        ]
+      }
+    },
+    {
+      "title": "Solve, and read the sag",
+      "explain": "Colour by displacement uᶻ. The slab sags 7.6 mm at mid-span, the two bearings each carry 29.7 kN, and the mid-span and centre-line Sets carry nothing at all — which is the proof that they are symmetry conditions and not supports.",
+      "expect": {
+        "cmd": "solve.run",
+        "match": {
+          "step": "quasi-permanent"
+        }
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "quasi-permanent"
+      }
+    },
+    {
+      "title": "Against the formula, and against the code",
+      "explain": "5wL⁴/384EI with the shear term, the span/250 limit, and why a real slab does worse.",
+      "expect": null,
+      "theory": "**The load.** Self-weight is $\\rho g h = 2500 \\times 9.81 \\times 0.2 = 4.905\\,\\mathrm{kN/m^2}$ and the imposed pressure adds $5.0$, so $w = 9.905\\,\\mathrm{kN/m}$ on the metre-wide strip. The Result's reactions read $29.715\\,\\mathrm{kN}$ at each bearing, which is $wL/2$ exactly — the first thing to check on any model with a body load, because it proves the density, the gravity vector and the loaded area are all what you thought.\n\n**The deflection.** For a simply supported span under a uniform load,\n\n$$\\delta = \\frac{5wL^4}{384EI} + \\frac{wL^2}{8GA_s}$$\n\nwith $I = bh^3/12 = 6.667\\times 10^{8}\\,\\mathrm{mm}^4$, $E = E_{cm} = 33\\,\\mathrm{GPa}$, $G = E/2(1+\\nu) = 13.75\\,\\mathrm{GPa}$ and the shear area $A_s = \\tfrac{5}{6}bh$. The bending term is $7.598\\,\\mathrm{mm}$ and the shear term $0.019\\,\\mathrm{mm}$, so $\\delta = 7.617\\,\\mathrm{mm}$. The solid model gives $\\mathbf{7.592\\,\\mathrm{mm}}$ at mid-span on the neutral axis, $0.3\\,\\%$ below — the strip is $1\\,\\mathrm{m}$ wide against a $200\\,\\mathrm{mm}$ depth, so a little plate action stiffens it beyond what a beam formula sees. The extreme in the Result is slightly larger, $7.641\\,\\mathrm{mm}$, at the free long edges, where the anticlastic curvature of a wide strip in bending lifts the section's edges relative to its middle. The extreme-fibre stress is a second check: $M = wL^2/8 = 44.6\\,\\mathrm{kNm}$ and $\\sigma = 6M/bh^2 = 6.686\\,\\mathrm{MPa}$, against $6.697\\,\\mathrm{MPa}$ computed.\n\n**The supports.** A simply supported strip must be free to rotate at its bearings and free to contract across its width, and it is easy to take both away by accident. Here `bearing-a` and `bearing-b` fix $u_z$ and nothing else on the two end faces: a knife edge along each bearing line, which allows the end section to rotate and to slide along the span, so no axial force is locked in. The two remaining Sets are not supports at all, they are the removal of rigid-body motion, and both are exact statements of the model's own symmetry: at mid-span the section does not move along the span ($u_x = 0$), and on the centre-line the strip does not move across it ($u_y = 0$). Because both planes are planes of symmetry of the geometry and the load, they carry zero reaction — the Result confirms it — and add no stiffness. Fixing $u_x$ over a whole end face instead would keep that section vertical, which is a built-in end, not a bearing; fixing $u_y$ over a whole end face would stop the strip contracting under Poisson's ratio and put spurious tension across it.\n\n**The limit.** EN 1992-1-1 §7.4.1(4) sets the deflection under the quasi-permanent combination at $L/250$ for appearance and general utility, which is $24\\,\\mathrm{mm}$ here. At $7.6\\,\\mathrm{mm}$ the strip looks comfortable by a factor of three. (A separate $L/500$ limit on the deflection *after* construction applies where partitions or finishes could be damaged.)\n\n**Why the real slab deflects more — probably much more.** This is an *uncracked, instantaneous, linear-elastic* answer, and a reinforced-concrete floor is none of those three.\n\n- **Cracking.** Once the tensile stress passes $f_{ctm} \\approx 2.9\\,\\mathrm{MPa}$ for C30/37 the section cracks, and this model reaches $6.7\\,\\mathrm{MPa}$: the mid-span region *is* cracked in service. The cracked second moment of area is typically a third to a half of the gross value, and EN 1992-1-1 §7.4.3 interpolates between the uncracked and fully cracked states with the tension-stiffening factor $\\zeta$.\n- **Creep.** Under sustained load concrete goes on straining. §7.4.3(5) replaces $E_{cm}$ with the effective modulus $E_{c,\\mathrm{eff}} = E_{cm}/(1 + \\varphi(\\infty,t_0))$; a creep coefficient of 2 alone triples the deflection, taking $7.6\\,\\mathrm{mm}$ to about $23\\,\\mathrm{mm}$, which is already at $L/250$.\n- **Shrinkage curvature** adds more still, and none of it is in a linear elastic solve.\n\nSo read this number as the *lower bound* it is: it verifies the geometry, the load path and the support idealisation, and it tells you the elastic stiffness of the section. The serviceability check itself belongs to EN 1992-1-1 §7.4, with a cracked, creep-adjusted stiffness — which is why a linear elastic slab model that comes out at $L/260$ is a slab that will fail its deflection check."
+    }
+  ]
+}

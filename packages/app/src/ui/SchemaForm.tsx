@@ -2,12 +2,16 @@
 // Command variant in, the design's fields out. Editing a field is itself a Command (`form.open`
 // with the new arguments), so the AI can fill this form and ADR 0003 still holds for every
 // control. Apply dispatches exactly one Command; Revert goes back to what the form opened with.
-import type { JsonSchema } from '@femlab/registry';
+import { refOf, type JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
+import { materialPickerSummary } from './materialSummary';
+import { PressurePreview } from './PressurePreview';
 import { SketchEditor } from './SketchEditor';
-import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
+import { materialFieldsFor, materialPhysicsFor } from './materialPhysics';
+import { procedureFields, procedureInfo, procedureSummary } from './procedures';
+import { MATERIAL_PHYSICS, applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
 
@@ -59,6 +63,7 @@ function Row({ field, children, error }: { field: Field; children: preact.Compon
         </span>
         <span class="mono field-dim">{field.tag}</span>
       </div>
+      {field.hint ? <div class="rule-note">{field.hint}</div> : null}
       {children}
       {error ? (
         <div class="surface error">
@@ -192,6 +197,9 @@ function FieldView(props: FieldProps) {
             />
           ))
         )}
+        {s.form?.cmd === 'load.pressure' && field.path.join('.') === 'value' ? (
+          <PressurePreview pressure={value} on={values['on']} context={`${s.model?.hash}:${s.revision}`} forceUnit={s.model?.units.force ?? 'N'} lengthUnit={s.model?.units.length ?? 'm'} idealisation={s.model?.idealisation ?? 'solid3d'} query={query} />
+        ) : null}
       </Row>
     );
   }
@@ -226,7 +234,7 @@ function FieldView(props: FieldProps) {
     const byKind: Record<string, { name: string; summary: string }[]> = {
       set: sets,
       body: (s.model?.bodies ?? []).map((b) => ({ name: b.name, summary: `${b.measure.value.toPrecision(3)} ${b.measure.unit}` })),
-      material: (s.model?.materials ?? []).map((m) => ({ name: m.name, summary: `E ${m.E.value} ${m.E.unit}` })),
+      material: (s.model?.materials ?? []).map((m) => ({ name: m.name, summary: materialPickerSummary(m) })),
       constraint: (s.model?.constraints ?? []).map((c) => ({ name: c.name, summary: c.summary })),
       load: (s.model?.loads ?? []).map((l) => ({ name: l.name, summary: l.summary })),
       step: (s.model?.steps ?? []).map((st) => ({ name: st.name, summary: st.procedure })),
@@ -268,7 +276,9 @@ function FieldView(props: FieldProps) {
     // Only describe elements that this engine can actually produce. Order defaults to one.
     const linear = value === undefined || value === null || value === 1;
     const bendingWarning = s.form?.cmd === 'mesh.set' && field.path.join('.') === 'order' && linear
-      ? mesher === 'free'
+      ? values['simplices'] === true || mesher === 'tet'
+        ? 'Linear tetrahedra and triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
+        : mesher === 'free'
         ? 'Linear triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
         : ['lattice', 'mapped', 'sweep'].includes(String(mesher)) && values['formulation'] === 'full'
           ? 'Fully integrated linear quadrilaterals and hexahedra can lock in bending. Use quadratic elements and check mesh convergence.'
@@ -336,6 +346,9 @@ export function SchemaForm(props: FormProps) {
   }
   const fields = fieldsOf(variant, defs);
   const values = defaultFormValues(form.values, fields);
+  const physics = form.materialPhysics ?? materialPhysicsFor(s.model, values, fields, defs);
+  const visibleFields = form.cmd === 'material.add' ? materialFieldsFor(fields, physics) : form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
+  const procedure = form.cmd === 'step.add' && typeof values['procedure'] === 'string' ? procedureInfo(values['procedure'], defs) : null;
   const cmd = { cmd: form.cmd, ...values };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
@@ -357,15 +370,27 @@ export function SchemaForm(props: FormProps) {
       <form class="props-body" onSubmit={(e) => (e.preventDefault(), apply())}>
         <div class="prop-name">
           <span class="mono">{name}</span>
-          <Cmd dispatch={dispatch} cmd="clipboard.copy" class="link" args={{ what: { kind: 'mention', ref: `${form.cmd.split('.')[0]}:${name}` } }}>
+          {form.target ? <Cmd dispatch={dispatch} cmd="chat.insertMention" class="link" args={{ ref: refOf(form.target.kind, form.target.name) }} onRun={() => {
+            const ref = refOf(form.target!.kind, form.target!.name);
+            return dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }));
+          }}>
             @ reference in chat
-          </Cmd>
+          </Cmd> : null}
         </div>
-        <div class="prop-hint">{String(variant['description'] ?? '').split('\n').join(' ')}</div>
-        {fields.map((f) => (
+        <div class="prop-hint">{procedure ? procedure.hint : String(variant['description'] ?? '').split('\n').join(' ')}</div>
+        {procedure ? <div class="prop-hint procedure-summary" role="status">{procedureSummary(procedure.name, defs)}</div> : null}
+        {form.cmd === 'material.add' ? (
+          <div class="material-physics">
+            <div class="rule-note">This material carries:</div>
+            <div class="chips" role="group" aria-label="Material physics">
+              {MATERIAL_PHYSICS.map(tag => <Cmd key={tag} dispatch={dispatch} cmd="form.open" class="chip-cand" pressed={physics.includes(tag)} args={{ command: form.cmd, args: values, keepInitial: true, materialPhysics: physics.includes(tag) ? physics.filter(p => p !== tag) : [...physics, tag] }}>{tag}</Cmd>)}
+            </div>
+          </div>
+        ) : null}
+        {visibleFields.map((f) => (
           <FieldView key={f.path.join('.')} {...props} field={f} values={values} fields={fields} />
         ))}
-        {s.formError && !fields.some((f) => errorFor(s.formError, f.path)) ? (
+        {s.formError && !visibleFields.some((f) => errorFor(s.formError, f.path)) ? (
           <div class="surface error">
             <span>✕</span>
             <span>
@@ -389,7 +414,7 @@ export function SchemaForm(props: FormProps) {
             >
               {label}
             </Cmd>
-            <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: form.cmd, args: form.initial }} title="Revert to the values this form opened with">
+            <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: form.cmd, args: form.initial, keepInitial: true }} title="Revert to the values this form opened with">
               Revert
             </Cmd>
           </div>

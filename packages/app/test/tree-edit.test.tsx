@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // The real tree -> host Command -> engine Query -> Properties -> Apply path. The independent
 // fixture lists public input variants; exact saved Model equality catches omitted/rounded data.
 import { createRequire } from 'node:module';
@@ -14,11 +15,11 @@ import { Store } from '../src/store';
 import { ModelTree } from '../src/ui/Tree';
 import { SchemaForm } from '../src/ui/SchemaForm';
 import type { Defs } from '../src/ui/schema';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import { waitFor } from './wait-for';
 
 const rootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const wasm = createRequire(import.meta.url)(path.join(rootPath, 'tools/wasm-node/femlab_engine_wasm.js')) as {
+const wasm = batchModule(createRequire(import.meta.url)(path.join(rootPath, 'tools/wasm-node/femlab_engine_wasm.js'))) as {
   Engine: new (threads: number) => { dispatch(c: string): Promise<string>; query(q: string): string; export_file(): string; free(): void };
 };
 const doc = schema as unknown as EngineSchema;
@@ -31,6 +32,7 @@ async function mount(input: Record<string, unknown>) {
   const engine = new wasm.Engine(1);
   for (const command of [
     { cmd: 'geometry.addBox', name: 'base', size: ['1 m', '1 m', '1 m'] },
+    { cmd: 'geometry.addMass', name: 'ref', at: ['2 m', '0 m', '0 m'], mass: '1 kg' },
     { cmd: 'step.add', name: 'prior', procedure: 'heat-steady', constraints: [], loads: [] }, input,
   ]) await engine.dispatch(JSON.stringify(command));
   const transport = {
@@ -51,6 +53,7 @@ async function mount(input: Record<string, unknown>) {
   const draw = () => render(<><ModelTree s={store.state} dispatch={dispatch} /><SchemaForm s={store.state} store={store} dispatch={dispatch} query={query} defs={defs} variants={variants} /></>, root);
   const unsubscribe = store.subscribe(draw); draw();
   const row = [...root.querySelectorAll<HTMLButtonElement>('.row-main')].find(el => el.querySelector('.name')?.textContent === 'editable')!;
+  expect(row.title).toBe('Edit editable');
   expect(row).toBeDefined(); row.click(); await last;
   await waitFor(() => store.state.form?.values['name'] === 'editable' ? true : null, 'lossless editable form');
   return { root, store, engine, sent, done: () => last, close: () => { unsubscribe(); render(null, root); engine.free(); } };
@@ -61,8 +64,9 @@ describe('editing Model tree objects', () => {
     const app = await mount(c.command);
     try {
       const before = JSON.parse(app.engine.export_file()).model;
-      expect(app.sent[0]).toEqual({ cmd: 'form.edit', kind: c.kind, name: 'editable' });
-      expect(app.store.state.form!.cmd).toBe(c.kind === 'body' ? 'geometry.add' : c.command.cmd);
+      expect(app.sent.find(command => command.cmd === 'form.edit')).toEqual({ cmd: 'form.edit', kind: c.kind, name: 'editable' });
+      expect(app.store.state.form!.cmd).toBe(c.command.cmd);
+      expect(app.store.state.form!.target).toEqual({ kind: c.kind, name: 'editable' });
       app.root.querySelector<HTMLButtonElement>('.apply')!.click(); await app.done();
       expect(JSON.parse(app.engine.export_file()).model).toEqual(before);
     } finally { app.close(); }
@@ -79,7 +83,7 @@ describe('editing Model tree objects', () => {
       const material = JSON.parse(app.engine.export_file()).model.materials[0];
       expect(material.e).toBe(199876543219); expect(material.alpha).toBe(1.23456789e-5); expect(material.source).toBe('keep this');
       // Reopen the current structured definition, then use the real stepper.
-      app.root.querySelector<HTMLButtonElement>('.row-main[title="form.edit — editable"]')!.click(); await app.done();
+      app.root.querySelector<HTMLButtonElement>('.row-main[title="Edit editable"]')!.click(); await app.done();
       app.root.querySelector<HTMLButtonElement>('[data-field="E"] button[title="+10 %"]')!.click(); await app.done();
       expect(app.store.state.form!.values['E']).toBe('219864000000 Pa');
       app.root.querySelector<HTMLButtonElement>('.apply')!.click(); await app.done();

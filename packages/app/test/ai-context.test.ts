@@ -1,11 +1,11 @@
 // The system prompt is generated (PLAN 4.5), the chips are resolved through `query.*` (4.11), the
 // project's AGENTS.md is standing instructions (4.13) and an image is downscaled before it is sent
 // (4.15). A real `Registry` over the real schema, a fake engine behind it.
-import { Registry, type EngineSchema, type Selection, type Skill } from '@femlab/registry';
+import { Registry, refOf, type EngineSchema, type Selection, type Skill } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeHost, fakeTransport } from '../../registry/test/fakes';
-import { apiReference, buildSystem, buildTurn, downscaleImage, fitTo, objectIndex, projectBlock, resolveMention, screenshotBlock, skillsIndex, type ImageEnv } from '../src/ai/context';
+import { apiReference, buildSystem, buildTurn, downscaleImage, fitTo, mentionLabel, objectIndex, projectBlock, resolveMention, screenshotBlock, skillsIndex, type ImageEnv } from '../src/ai/context';
 
 const MODEL = {
   bodies: [{ name: 'beam', material: 'steel' }],
@@ -22,6 +22,7 @@ function registryWith(answers: Record<string, unknown> = {}, projectOpen = false
     if (q.query in answers) return answers[q.query];
     if (q.query === 'query.model') return MODEL;
     if (q.query === 'query.objects') return OBJECTS;
+    if (q.query === 'query.results') return { records: [] };
     throw new Error(`no fake for ${q.query}`);
   }) as never;
   const host = fakeHost(transport, projectOpen);
@@ -114,24 +115,43 @@ describe('mention resolution', () => {
     expect(withFiles[1]!.summary).toBe('9 B · agents');
   });
 
-  // Issue #39: `@face:beam.top` and `@result:static` resolve, so the picker has to list them —
-  // `query.objects` does not carry either, and until it does the host reads them off the Model.
-  it('adds the auto faces of every body and the Result of every solved Step', async () => {
+  it('indexes auto faces, the current Mesh and every retained Result, independently of Step captions', async () => {
     const model = {
       bodies: [{ name: 'beam', faces: ['beam.top', 'beam.xmin'] }],
-      steps: [
-        { name: 'static', procedure: 'linear-static', solved: true },
-        { name: 'modes', procedure: 'modal', solved: false },
-      ],
+      meshSettings: { order: 1 },
     };
-    const entries = await objectIndex(registryWith({ 'query.model': model }));
-    expect(entries.map((e) => e.ref)).toEqual(['body:beam', 'face:beam.top', 'face:beam.xmin', 'result:static']);
+    const retained = { records: [{ id: 'result-1', step: 'static', solvedRevision: 4, stale: true }, { id: 'result-2', step: 'static', solvedRevision: 5, stale: false }] };
+    const entries = await objectIndex(registryWith({ 'query.model': model, 'query.results': retained }));
+    expect(entries.map((e) => e.ref)).toEqual(['body:beam', 'face:beam.top', 'face:beam.xmin', 'mesh:mesh', 'result:id:result-1', 'result:id:result-2']);
     expect(entries[1]!.summary).toBe('face of beam');
-    expect(entries[3]!.summary).toBe('linear-static Result');
+    expect(entries[4]!.summary).toBe('revision 4 · stale · result-1');
+    expect(mentionLabel('result:id:result-1', entries)).toBe('result:static (result-1)');
+    expect(mentionLabel('result:id:evicted', entries)).toBe('result:solve (evicted)');
+    expect(mentionLabel('planet:mars', entries)).toBe('planet:mars');
+    expect(mentionLabel(refOf('file', 'notes "and" calculations.md'), entries)).toBe('file:notes "and" calculations.md');
     // Whatever the engine already listed wins: no reference is offered twice.
     const already = await objectIndex(registryWith({ 'query.model': model, 'query.objects': { objects: [{ ref: 'face:beam.top', kind: 'face', name: 'beam.top', summary: 'from the engine' }] } }));
     expect(already.filter((e) => e.ref === 'face:beam.top')).toHaveLength(1);
     expect(already[0]!.summary).toBe('from the engine');
+  });
+  it('decodes quoted object and file targets without changing their names', async () => {
+    const name = 'beam"quoted';
+    const registry = registryWith({
+      'query.model': { bodies: [{ name, faces: [`${name}.top`] }] },
+      'query.objects': { objects: [{ ref: `body:${name}`, kind: 'body', name, summary: 'quoted body' }] },
+    }, true, [{ path: 'notes and "checks".md', size: 10, kind: 'file' }]);
+    expect(await resolveMention(refOf('body', name), registry)).toEqual({ name, faces: [`${name}.top`] });
+    expect(await resolveMention(refOf('file', 'notes and "checks".md'), registry)).toEqual({ path: 'notes and "checks".md', text: 'content of notes and "checks".md' });
+    expect((await objectIndex(registry)).map(row => row.ref)).toEqual([refOf('body', name), refOf('face', `${name}.top`), refOf('file', 'notes and "checks".md')]);
+    await expect(resolveMention('mesh:other', registry)).rejects.toMatchObject({ code: 'not-found' });
+  });
+  it('resolves the global Mesh as its settings and generated summary', async () => {
+    const registry = registryWith({ 'query.model': { meshSettings: { order: 2 } }, 'query.mesh': { nodes: 27, elements: 1 } });
+    expect(await resolveMention('mesh:mesh', registry)).toEqual({ settings: { order: 2 }, summary: { nodes: 27, elements: 1 } });
+  });
+  it('resolves Connections through the same constraint identity used by their Tree buttons', async () => {
+    const registry = registryWith({ 'query.model': { connections: [{ name: 'weld', master: 'a.top', slave: 'b.bottom' }], constraints: [] } });
+    expect(await resolveMention('constraint:weld', registry)).toEqual({ name: 'weld', master: 'a.top', slave: 'b.bottom' });
   });
 });
 

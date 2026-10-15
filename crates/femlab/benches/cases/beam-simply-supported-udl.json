@@ -1,0 +1,223 @@
+{
+  "name": "beam-simply-supported-udl",
+  "reference": "Benchmark B22: a simply supported Timoshenko beam under its own weight, eight elements. With E = 200 GPa, nu = 0.3, a 100 x 200 mm rectangle (kappa = 5/6), L = 4 m, rho = 7850 kg/m^3 and g = 10 m/s^2 the load is w = 1570 N/m and the midspan deflection 5 w L^4 / 384EI + w L^2 / (8 kappa G A) = 0.394949 mm; the fixed-end loads qL/2, qL^2/12 make the nodal solution exact, so the quarter-span value, the end rotation w L^3 / 24EI and the midspan moment w L^2 / 8 are exact too.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "beam-simply-supported-udl"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "span",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "4 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 8,
+      "kind": "beam"
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "round numbers, so the closed forms are exact in floating point"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "span"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "rect",
+      "shape": {
+        "kind": "rectangle",
+        "width": "100 mm",
+        "height": "200 mm"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "rect",
+      "bodies": [
+        "span"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "constraint.pin",
+      "name": "left",
+      "on": "span.p0"
+    },
+    {
+      "cmd": "constraint.pin",
+      "name": "right",
+      "on": "span.p1"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "twist",
+      "on": "span.p0",
+      "dofs": [
+        "rx"
+      ]
+    },
+    {
+      "cmd": "load.gravity",
+      "name": "weight",
+      "g": [
+        "0 m/s^2",
+        "0 m/s^2",
+        "-10 m/s^2"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "left",
+        "right",
+        "twist"
+      ],
+      "loads": [
+        "weight"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.39494919999999994,
+      "tol": 1e-09,
+      "note": "midspan: 5 w L^4 / 384EI + w L^2 / (8 kappa G A), nodally exact with the fixed-end loads",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.28149315,
+      "tol": 1e-09,
+      "note": "quarter span: w x (L^3 - 2 L x^2 + x^3)/24EI + w x (L - x)/(2 kappa G A)",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "rotation",
+        "component": 1,
+        "at": [
+          "0 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.000314,
+      "tol": 1e-09,
+      "note": "end rotation of the section theta_y = w L^3 / 24EI; the shear strain does not turn the section",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/22",
+      "expect": -3140.0000000000005,
+      "tol": 1e-09,
+      "note": "midspan M_y = -w L^2 / 8 = -3140 N m: sagging is negative about local y with the load along -z",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionForce"
+      },
+      "path": "/values/2",
+      "expect": -3140.0000000000005,
+      "tol": 1e-09,
+      "note": "V_z at the left support = -w L / 2: the far side of the cut (the whole span) pulls it down with half the load",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/1",
+      "expect": 0.0,
+      "tol": 1e-06,
+      "note": "the pinned end carries no moment"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the supports carry the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

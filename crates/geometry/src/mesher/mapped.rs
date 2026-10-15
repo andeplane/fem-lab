@@ -233,7 +233,7 @@ impl Merger {
 /// is still on the boundary after the merge becomes the face set of its tag; the element set
 /// `all` holds every element.
 pub fn mapped(blocks: &[QuadBlock], kind: ElementKind) -> Result<Mesh, GeomError> {
-    if kind.dim() != 2 {
+    if kind.dim() != 2 || kind == ElementKind::Shell4 {
         return Err(GeomError(format!("the mapped mesher makes 2D elements, not {kind:?}")));
     }
     if blocks.is_empty() {

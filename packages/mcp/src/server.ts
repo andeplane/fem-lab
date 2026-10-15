@@ -12,6 +12,8 @@ import {
   FemError,
   HOST_COMMANDS,
   HOST_QUERIES,
+  boundedModelFileText,
+  type ModelFile,
   type ScriptValidator,
   RUN_SCRIPT,
   type ScriptResult,
@@ -23,15 +25,19 @@ import {
   type EngineTransport,
   type HostContext,
   type HostDef,
+  type AbaqusConversion,
+  type AbaqusDependencies,
+  type AbaqusIo,
 } from '@femlab/registry';
 import { constants } from 'node:fs';
 import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import engineSchema from '../../registry/src/generated/engine.schema.json' with { type: 'json' };
-import type { EngineHandle } from './engine';
+import type { EngineHandle, EngineProvider } from './engine';
 import { runScript, type ScriptDeps } from './script';
 import { nodeScriptValidator } from './script-validation';
+import { nodeAbaqusIo } from './abaqus-files';
 
 export const SCHEMA = engineSchema as unknown as EngineSchema;
 export const SERVER_NAME = 'femlab';
@@ -42,11 +48,13 @@ export const EXPORT_FORMATS = ['vtu', 'msh', 'inp', 'stl', 'report', 'script', '
 export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 export interface ServerDeps {
-  engine: EngineHandle;
+  engine: EngineProvider;
   script?: ScriptDeps;
   validator?: Pick<ScriptValidator, 'validate'>;
   /** Absolute path of the folder `export.file` may write into; without one it refuses. */
   project?: string | undefined;
+  /** Optional I/O injection for a scoped host; production binds the configured project folder. */
+  abaqusIo?: AbaqusIo;
 }
 
 /** One MCP tool as the protocol spells it (`inputSchema`, not Anthropic's `input_schema`). */
@@ -100,7 +108,7 @@ function linkError(p: string): FemError {
 
 /** The text of one export, from the engine or from the Journal. */
 export async function exportText(engine: EngineHandle, format: ExportFormat, step?: string): Promise<string> {
-  if (format === 'journal') return `${JSON.stringify(engine.modelFile(), null, 2)}\n`;
+  if (format === 'journal') return boundedModelFileText(await engine.modelFile() as ModelFile, true);
   if (format === 'script') return ((await engine.query({ query: 'query.script' })) as { text: string }).text;
   const ack = (await engine.dispatch({ cmd: 'mesh.export', format, ...(step === undefined ? {} : { step }) })) as {
     output: { text: string };
@@ -109,11 +117,12 @@ export async function exportText(engine: EngineHandle, format: ExportFormat, ste
 }
 
 /** `export.file`, the one tool that touches the file system; `export_file` to the AI. */
-function exportFileCommand(deps: ServerDeps): HostDef {
+function exportFileCommand(deps: ScopedDeps): HostDef {
   return {
     name: 'export.file',
+    execution: 'modelWrite',
     description:
-      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
+      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. A model file must fit the 16 MiB UTF-8 limit including pretty formatting and its trailing newline; refusal occurs before any file write. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
     schema: z.object({ format: z.enum(EXPORT_FORMATS), path: z.string(), step: z.string().optional() }),
     tool: true,
     run: async ({ format, path: rel, step }) => {
@@ -131,11 +140,38 @@ function exportFileCommand(deps: ServerDeps): HostDef {
  * two host Commands a headless host can honour — `script.run` (the `run_script` tool) and
  * `export.file`. No view, no selection, no panels: this host has no screen to move.
  */
+type ScopedDeps = Omit<ServerDeps, 'engine'> & { engine: EngineHandle };
+
 export function createRegistry(deps: ServerDeps): Registry {
+  // The public registry can describe tools without a lease. Every invocation must acquire
+  // one, and nested script calls use the private registry bound to that same request.
+  const unavailable = (): never => { throw new FemError('session.expired', 'no request lease'); };
+  const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, replaceCommands: unavailable, captureImport: unavailable, modelFile: unavailable, release: unavailable } });
+  const request = async <T>(run: (scoped: Registry) => Promise<T>): Promise<T> => {
+    const engine = await deps.engine.acquire();
+    try { return await run(scopedRegistry({ ...deps, engine })); }
+    finally { await engine.release(); }
+  };
+  registry.dispatch = input => { const command = structuredClone(input); return request(scoped => scoped.dispatch(command)); };
+  registry.query = input => { const query = structuredClone(input); return request(scoped => scoped.query(query)); };
+  return registry;
+}
+
+function scopedRegistry(deps: ScopedDeps): Registry {
   let registry: Registry;
   const validator = deps.validator ?? nodeScriptValidator();
+  const abaqus: HostContext['abaqus'] = { capture: () => {
+    const engine = deps.engine.captureImport();
+    return {
+      io: deps.abaqusIo ?? nodeAbaqusIo(deps.project),
+      dependencies: async source => await engine.query({ query: 'query.abaqusDependencies', ...source }) as AbaqusDependencies,
+      convert: async query => await engine.query(query) as AbaqusConversion,
+      replace: commands => engine.replaceCommands(commands),
+    };
+  } };
   const host = {
     transport: deps.engine as unknown as EngineTransport,
+    abaqus,
     script: {
       validate: (code: string, timeoutMs?: number) => validator.validate(code, timeoutMs),
       run: (code: string, timeoutMs?: number) =>
@@ -152,7 +188,7 @@ export function createRegistry(deps: ServerDeps): Registry {
     ...d,
     description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
   }));
-  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
+  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, ...HOST_COMMANDS.filter(d => d.name === 'file.importAbaqus'), exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
   return registry;
 }
 

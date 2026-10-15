@@ -29,6 +29,88 @@ Without a browser, `cargo run -p femlab --` replays a Journal (`run`), runs the 
 serves the whole registry to an editor over MCP (`mcp --project <dir>`; see
 [`packages/mcp/README.md`](packages/mcp/README.md) for the `mcpServers` snippet).
 
+## Import an Abaqus input deck
+
+Choose **Import .inp** in the browser, select **Mesh and Sets** or **Linear static analysis**,
+and choose the source unit system. The mm · N · s preset means one source length unit is
+`1 mm`, one force unit is `1 N`, and one time unit is `1 s`; each remains editable. Time is
+required for density-bearing materials. The toolbar's display units do not select import units.
+
+The reader preserves parts, translated/rotated instances, quoted and scoped Sets, shared-node
+material regions, and disconnected components. Supported solids are C3D4, C3D8 with the
+Abaqus mean-dilatation formulation, C3D10 and full-integration C3D20, including their original
+quadratic connectivity and geometry. Geometry must pass the engine's exact validity and interface checks.
+Static import translates isotropic elastic materials, translational supports/displacements,
+nodal forces, face pressures and multiple linear-static load cases with their inherited or
+changed active loads. Ordinary output requests appear in import notes. The report maps source
+material and Step names to their FEM Lab names. Import does not solve; solve each named Step
+to compare its final equilibrium with the source application.
+
+For INCLUDE decks and NODE/ELEMENT `INPUT=` data files, choose the submission folder when
+prompted. Paths are relative to that folder, including includes inside other includes;
+filename case is preserved. The CLI reads
+from the input file's directory, and MCP reads within its configured project. Inline tools can
+provide `sourceName` and a `sourceFiles` map of relative filenames to exact UTF-8 contents.
+The engine itself performs no file I/O. The deck and includes together, and the saved Model
+file, each have a 16 MiB UTF-8 limit. Failed or cancelled imports keep the current project;
+an intervening model edit or project switch prevents a pending import from replacing it.
+
+Unsupported physical behavior or element formulations produce an error with source details.
+Reduced-integration, hybrid and modified elements are not substituted with another formulation.
+Abaqus increment history, nonlinear/contact analyses, and binary `.odb`/`.cae` databases are
+outside this text input-deck workflow; export a text `.inp` model for supported analyses.
+
+The CLI writes an unsolved normal Model file:
+
+```sh
+cargo run -p femlab -- import-inp bar.inp --out bar.femlab.json \
+  --name "Imported bar" --body bar --mode static \
+  --unit-length "1 mm" --unit-force "1 N" --unit-time "1 s" --cpu
+cargo run -p femlab -- run bar.femlab.json --cpu
+```
+
+Mesh mode requires `--unit-length` and omits force/time units. Scripts and MCP use the same
+`file.importAbaqus` Command with `text`, `picker: true` (browser), or a `path` inside the open
+project folder. The checked Journal carries the imported source, scoped label identities,
+file digests and conversion version; saved files reopen without the original deck or includes.
+The displayed receipt describes the original import and is local to that session. See the
+[interoperability plan and acceptance matrix](docs/plans/650-abaqus-interoperability.md).
+
+### Import STEP geometry
+
+Choose **Import STEP geometry**, name the Body and supply absolute linear and angular
+deflections, then choose a `.step` or `.stp` file (at most 16 MiB). STEP's declared length
+units are converted to meters independently of display units. The converter downloads only
+when requested and runs in a dedicated cancellable Worker. The equivalent browser Command is:
+
+```ts
+await fem.geometry.importStep({ name: 'part', linearDeflection: '0.1 mm', angularDeflection: '15 deg' });
+```
+
+This adds or re-imports one tessellated Body. All returned meshes become that Body;
+exact B-rep, CAD feature history, original face identifiers and CAD materials are discarded.
+Unsupported free topology, external references and incomplete conversion fail explicitly.
+Reported transfer warnings are also unsupported until complete conversion can be established;
+this conservatively rejects potentially harmless warnings as well as partial geometry.
+Inspect the imported patches, name durable targets with `geometry.nameFace` predicates,
+assign a Material and mesh normally. Smaller deflection adds curved-surface detail;
+source tolerances can supersede the request. The minimum absolute deflection is 0.0000001 m.
+
+`geometry.cancelStep({name: 'part'})` terminates a pending conversion before publication.
+A second pending conversion conflicts, and an intervening model edit or project switch
+rejects publication. The receipt contains source/geometry hashes, SI deflections and counts;
+it describes the last successful conversion in this project. Later edits or Undo can change
+or remove that geometry. The Journal stores one normal `geometry.import` with
+double-precision ASCII triangles and their hash. Saved files and Journals replay in the
+native CLI, Node and other hosts without a converter, original STEP file or file handle.
+Hosts without the converter report original-file conversion as unsupported.
+
+The separately distributed LGPL converter includes its notices and complete corresponding
+source/rebuild kit. App builds prepare and verify those assets; a first uncached build needs
+Python 3.12+ and network access to the pinned source archives. No OCCT compiler is needed for
+ordinary app builds. See the [converter build/replacement instructions](vendor/step-converter/README.md)
+and [scope and verification plan](docs/plans/351-step-import.md).
+
 Tests: `npm test` (vitest), `npm run typecheck`, and in `packages/app`,
 `npx playwright install chromium && npx playwright test` for the browser smokes.
 

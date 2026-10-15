@@ -1,7 +1,8 @@
+import { treeGroups } from '../src/ui/Tree';
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, parseMentions, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
@@ -10,7 +11,9 @@ import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store, visibilityReducer } from '../src/store';
 import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
-import type { WorkerTransport } from '../src/worker-transport';
+import { journalTarget } from '../src/ui/Bottom';
+import type { Dispatch } from '../src/ui/cmd';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import { afterEffects, waitFor, waitForGone } from './wait-for';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
@@ -37,7 +40,55 @@ const model = (): ModelSummary =>
     warnings: [{ code: 'W-1200', text: 'no mesh settings yet', where: null }],
   }) as unknown as ModelSummary;
 
+const objects = (): ObjectRef[] => [
+  { ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' },
+  { ref: 'material:steel', kind: 'material', name: 'steel', summary: 'steel' },
+  { ref: 'constraint:fix', kind: 'constraint', name: 'fix', summary: 'on beam.xmin' },
+  { ref: 'load:p', kind: 'load', name: 'p', summary: 'on beam.top' },
+  { ref: 'step:static', kind: 'step', name: 'static', summary: 'static' },
+] as ObjectRef[];
+
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
+
+const withSteps = (names: string[]): ModelSummary => ({
+  ...model(),
+  steps: names.map((name) => ({ name, procedure: 'static', constraints: ['fix'], loads: ['p'], solved: false })),
+} as unknown as ModelSummary);
+
+function dragEvent(type: string, transfer: DataTransfer, clientY = 0): DragEvent {
+  const event = new DragEvent(type, { bubbles: true, cancelable: true, clientY });
+  // happy-dom does not implement DragEventInit.dataTransfer yet.
+  Object.defineProperties(event, { dataTransfer: { value: transfer }, clientY: { value: clientY } });
+  return event;
+}
+
+const journal = (...commands: Record<string, unknown>[]): JournalDump =>
+  ({
+    entries: commands.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })),
+    revision: commands.length,
+    canUndo: commands.length > 0,
+    canRedo: false,
+  }) as unknown as JournalDump;
+
+const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
+  ({
+    modeCount: 0,
+    resultId: `r${producingSeq}`,
+    step,
+    revision: producingSeq + 1,
+    stale,
+    solver: 'cpu-direct',
+    iterations: 1,
+    residual: 0,
+    timeMs: 1,
+    extremes: [],
+    reactions: [],
+    appliedTotal: [0, 0, 0].map((value) => ({ value, unit: 'N' })),
+    balance: 0,
+  }) as unknown as ResultSummary;
+
+const boundarySeq = (root: HTMLElement): string | undefined => root.querySelector('.boundary')?.previousElementSibling?.querySelector('.no')?.textContent ?? undefined;
+const staleSeqs = (root: HTMLElement): string[] => [...root.querySelectorAll('.jrow.stale .no')].map((el) => el.textContent ?? '');
 
 /**
  * The whole shell with every panel showing at once: the tree, the generated Properties form,
@@ -57,7 +108,7 @@ function mount(
     host: makeHostContext(store, transport, viewer, host),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
-  store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
+  store.set({ ready: true, model: model(), objects: objects(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
@@ -92,8 +143,10 @@ describe('the shell', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ cmd: 'panel.toggle', panel: 'palette' });
     await cleanupShells();
+    // Journal unmount clears its viewer highlight through dispatch. Count only the next key.
+    vi.mocked(dispatch).mockClear();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
     expect(document.body.children).toHaveLength(0);
   });
 
@@ -127,6 +180,45 @@ describe('the shell', () => {
     }
     // Every panel of the design is represented, not just the top bar.
     for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
+  });
+
+  it('inserts the advertised object from every reference control in the rendered shell', async () => {
+    const referenced = new Set<string>();
+    const current = model();
+    current.bodies[0]!.bbox = [{ value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 0, unit: 'mm' }, { value: 1000, unit: 'mm' }, { value: 100, unit: 'mm' }, { value: 100, unit: 'mm' }];
+    current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
+    current.connections = [{ name: 'tie', kind: 'bonded', master: 'beam.xmin', slave: 'beam.xmax', summary: 'bonded' }];
+    current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
+    const solved = { ...result('static', false, 1), modeCount: 1, frequencies: [{ value: 83, unit: 'Hz' }] };
+    const targets = new Map([
+      ['beam', 'body:beam'], ['tip', 'set:tip'], ['steel', 'material:steel'],
+      ['mesh', 'mesh:mesh'], ['fix', 'constraint:fix'], ['tie', 'constraint:tie'], ['p', 'load:p'],
+      ['static', 'step:static'], ['mode 1', `result:id:${solved.resultId}`],
+    ]);
+    for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
+      await cleanupShells();
+      const { root, store, commands } = mount({ tab, model: current, result: solved, panels: { palette: true, examples: true } });
+      // An unapplied name edit must keep the reference on the existing object.
+      store.openForm('load.pressure', { name: 'draft-pressure', on: 'beam.top', value: '2.4 MPa' }, false, { kind: 'load', name: 'p' });
+      await afterEffects();
+      // Discover controls by the wording a person sees, independently of data-cmd. A copy
+      // handler retaining the right label or metadata must fail this behavioral check.
+      const controls = [...root.querySelectorAll<HTMLButtonElement>('button')]
+        .filter((button) => /\breference in chat\b|^reference\b|^@$/i.test(button.textContent?.trim() ?? ''));
+      expect(controls.length, tab).toBeGreaterThan(0);
+      expect(controls.some((button) => button.closest('.props')), tab).toBe(true);
+      for (const control of controls) {
+        const name = control.closest('.row')?.querySelector('.name')?.textContent?.trim() ?? '';
+        const ref = control.closest('.props') ? 'load:p' : targets.get(name);
+        expect(ref, `${tab}: ${control.outerHTML}`).toBeDefined();
+        commands.length = 0;
+        await act(async () => control.click());
+        expect(commands, `${tab}: ${control.outerHTML}`).toEqual([{ cmd: 'chat.insertMention', ref }]);
+        expect(parseMentions(`@${ref}`).chips.map((chip) => chip.ref), `${tab}: ${ref}`).toEqual([ref]);
+        referenced.add(ref!);
+      }
+    }
+    expect([...referenced].sort()).toEqual(['body:beam', 'constraint:fix', 'constraint:tie', 'load:p', 'material:steel', 'mesh:mesh', 'result:id:r1', 'set:tip', 'step:static']);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
@@ -185,6 +277,55 @@ describe('the shell', () => {
     store.togglePanel('examples', true);
     await afterEffects();
     expect(root.querySelector('.menu')).toBeNull();
+  });
+
+  it('reorders Steps once per completed drag and leaves the tree controlled by the Model', async () => {
+    const { root, commands } = mount({ model: withSteps(['heat', 'static', 'modal']) });
+    await afterEffects();
+    const source = root.querySelector<HTMLElement>('[data-step="modal"]')!;
+    const transfer = new DataTransfer();
+
+    // happy-dom does not declare native `ondrag*` properties, so Preact retains the JSX case.
+    source.dispatchEvent(dragEvent('DragStart', transfer));
+    expect(transfer.getData('text/plain')).toBe('modal');
+    await afterEffects();
+    expect(root.querySelector('[data-step="modal"]')!.classList.contains('dragging')).toBe(true);
+    const currentTarget = root.querySelector<HTMLElement>('[data-step="heat"]')!;
+    currentTarget.getBoundingClientRect = () => ({ top: 100, height: 40 } as DOMRect);
+    currentTarget.dispatchEvent(dragEvent('DragOver', transfer, 105));
+    await afterEffects();
+    const markedTarget = root.querySelector<HTMLElement>('[data-step="heat"]')!;
+    expect(markedTarget.classList.contains('drop-before'), markedTarget.className).toBe(true);
+    markedTarget.dispatchEvent(dragEvent('Drop', transfer, 105));
+    source.dispatchEvent(dragEvent('DragEnd', transfer));
+    await afterEffects();
+
+    expect(commands).toEqual([{ cmd: 'step.reorder', order: ['modal', 'heat', 'static'] }]);
+    expect([...root.querySelectorAll('[data-step] .name')].map((el) => el.textContent)).toEqual(['heat', 'static', 'modal']);
+    expect(root.querySelector('.drop-before, .drop-after, .dragging')).toBeNull();
+  });
+
+  it('offers a keyboard reorder and dispatches nothing for cancelled or same-position drags', async () => {
+    const { root, commands } = mount({ model: withSteps(['heat', 'static', 'modal']) });
+    await afterEffects();
+    root.querySelector<HTMLButtonElement>('[aria-label="Move heat later"]')!.click();
+    expect(commands).toEqual([{ cmd: 'step.reorder', order: ['static', 'heat', 'modal'] }]);
+
+    const cancelled = root.querySelector<HTMLElement>('[data-step="modal"]')!;
+    const cancelledTransfer = new DataTransfer();
+    cancelled.dispatchEvent(dragEvent('DragStart', cancelledTransfer));
+    await afterEffects();
+    root.querySelector<HTMLElement>('[data-step="heat"]')!.dispatchEvent(dragEvent('DragOver', cancelledTransfer, 0));
+    root.querySelector<HTMLElement>('[data-step="modal"]')!.dispatchEvent(dragEvent('DragEnd', cancelledTransfer));
+    await afterEffects();
+    expect(commands).toHaveLength(1);
+
+    const row = root.querySelector<HTMLElement>('[data-step="static"]')!;
+    const transfer = new DataTransfer();
+    row.dispatchEvent(dragEvent('DragStart', transfer));
+    row.dispatchEvent(dragEvent('Drop', transfer));
+    row.dispatchEvent(dragEvent('DragEnd', transfer));
+    expect(commands).toHaveLength(1);
   });
 
   it('names only Commands the registry has on every clickable', () => {
@@ -283,9 +424,98 @@ describe('the shell', () => {
     expect(solve.title).toContain('W-1200');
   });
 
+  it('dispatches the valid first Step from both Solve actions while later-Step warnings remain visible', async () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'free', procedure: 'modal', constraints: [], loads: [], solved: false },
+        { name: 'later', procedure: 'static', constraints: [], loads: [], solved: false },
+      ],
+      warnings: [{ code: 'model.unconstrained', text: 'later has no supports', where: "step 'later'", step: 'later' }],
+    } as unknown as ModelSummary;
+    const { root, commands, store } = mount({ model: m, tab: 'results' });
+    const top = root.querySelector<HTMLButtonElement>('button.solve')!;
+    const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]')!;
+    expect(top.disabled).toBe(false);
+    expect(fallback.disabled).toBe(false);
+    expect(root.querySelector('.banner')).toBeNull();
+    await act(async () => { top.click(); fallback.click(); });
+    expect(commands.filter(command => command.cmd === 'solve.run')).toEqual([
+      { cmd: 'solve.run', step: 'free' }, { cmd: 'solve.run', step: 'free' },
+    ]);
+    // The complete warning list stays inspectable even when this target is ready.
+    act(() => store.set({ tab: 'checks' }));
+    expect(root.querySelector('.bottom-body .check-row')?.textContent).toContain('W-1300');
+  });
+
+  it('keeps a target/predecessor blocker on Solve and does not offer an enabled Results fallback', () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'response', procedure: 'harmonic', after: 'modal', constraints: [], loads: [], solved: false },
+        { name: 'modal', procedure: 'modal', constraints: [], loads: [], solved: false },
+      ],
+      warnings: [{ code: 'material.missing-property', text: 'modal has no mass', where: "step 'modal'", step: 'modal' }],
+    } as unknown as ModelSummary;
+    const { root } = mount({ model: m, tab: 'results' });
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.title).toContain('modal has no mass');
+    // An unmapped warning still blocks; it cannot accidentally fall through to an enabled solve.
+    const fallback = root.querySelector<HTMLButtonElement>('.bottom-body button[data-cmd="solve.run"]');
+    expect(fallback?.disabled ?? true).toBe(true);
+    if (fallback) expect(fallback.title).toContain('W-1103');
+  });
+
+  it('scopes stale Result re-solve to that Result Step rather than the first Step', async () => {
+    const m = {
+      ...model(), meshSettings: { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'full' },
+      steps: [
+        { name: 'unfinished', procedure: 'static', constraints: [], loads: [], solved: false },
+        { name: 'free', procedure: 'modal', constraints: [], loads: [], solved: true },
+      ],
+      warnings: [{ code: 'model.unconstrained', text: 'unfinished has no supports', step: 'unfinished' }],
+    } as unknown as ModelSummary;
+    const { root, commands, store } = mount({ model: m, result: result('free', true, 1), viewMode: 'results' });
+    const reSolve = root.querySelector<HTMLButtonElement>('.stale-banner button')!;
+    expect(root.querySelector<HTMLButtonElement>('button.solve')!.disabled).toBe(true);
+    expect(reSolve.disabled).toBe(false);
+    await act(async () => reSolve.click());
+    expect(commands.at(-1)).toEqual({ cmd: 'solve.run', step: 'free' });
+    act(() => store.set({ model: { ...m, warnings: [{ code: 'model.unconstrained', text: 'free is blocked', step: 'free' }] } as unknown as ModelSummary }));
+    expect(reSolve.disabled).toBe(true);
+  });
+
   it('starts on the Journal tab and shows the Command lines', () => {
     const { root } = mount();
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
+  });
+
+  it('keeps an intentional Script draft while showing the live Journal script', async () => {
+    const { registry, store } = mount({ tab: 'script' });
+    await registry.dispatch({ cmd: 'script.setSource', code: '// draft' });
+    expect(store.state).toMatchObject({ tab: 'script', scriptDraft: '// draft', scriptEditing: true });
+    await registry.dispatch({ cmd: 'script.setSource', code: '\n// inserted Journal', append: true });
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+
+    store.set({ script: '// live Journal' });
+    await registry.dispatch({ cmd: 'script.setEditing', editing: false });
+    expect(store.state.scriptEditing).toBe(false);
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+    expect(store.state.script).toBe('// live Journal');
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(store.state).toMatchObject({ tab: 'script', scriptEditing: true, scriptDraft: '// draft\n// inserted Journal' });
+  });
+
+  it('recognises the fields that own editing shortcuts', () => {
+    const { root } = mount();
+    const input = root.querySelector<HTMLInputElement>('input')!;
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    const token = document.createElement('span');
+    editor.append(token);
+    expect(isEditableTarget(input)).toBe(true);
+    expect(isEditableTarget(token)).toBe(true);
+    expect(isEditableTarget(root)).toBe(false);
   });
 
   // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
@@ -326,8 +556,181 @@ describe('the shell', () => {
     expect(root.querySelector('.shell ~ aside.assistant')).not.toBeNull();
   });
 
+  it('shows the Result boundary for a fresh solve', () => {
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' });
+    const { root } = mount({ journal: entries, result: result('static', false, 1) });
+    expect(boundarySeq(root)).toBe('1');
+    expect(staleSeqs(root)).toEqual([]);
+  });
+
+  it('marks only rows after a stale Result and moves the boundary when that Step is re-solved', () => {
+    const staleJournal = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'geometry.addBox', name: 'after' });
+    const stale = mount({ journal: staleJournal, result: result('static', true, 1) }).root;
+    expect(boundarySeq(stale)).toBe('1');
+    expect(staleSeqs(stale)).toEqual(['2']);
+
+    const resolvedJournal = journal(...staleJournal.entries.map((entry) => entry.cmd as unknown as Record<string, unknown>), { cmd: 'solve.run', step: 'static' });
+    const resolved = mount({ journal: resolvedJournal, result: result('static', false, 3) }).root;
+    expect(boundarySeq(resolved)).toBe('3');
+    expect(staleSeqs(resolved)).toEqual([]);
+  });
+
+  it('attributes the boundary to the current Result and does not invent one after undo', () => {
+    const twoSteps = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'solve.run', step: 'modal' });
+    const currentStatic = mount({ journal: twoSteps, result: result('static', false, 1) }).root;
+    expect(boundarySeq(currentStatic)).toBe('1');
+
+    const undone = journal({ cmd: 'model.new', name: 'demo' });
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, undone.revision) }).root)).toBeUndefined();
+    expect(boundarySeq(mount({ journal: twoSteps, result: null }).root)).toBeUndefined();
+  });
+
+  it('does not attribute an undone re-solve to an older solve of the same Step', () => {
+    const solvedTwice = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'solve.run', step: 'static' },
+      { cmd: 'load.traction', name: 'p', on: 'beam.top', total: ['0 N', '0 N', '-2 kN'] },
+      { cmd: 'solve.run', step: 'static' },
+    );
+    expect(boundarySeq(mount({ journal: solvedTwice, result: result('static', false, 3) }).root)).toBe('3');
+
+    const undone = journal(...solvedTwice.entries.slice(0, -1).map((entry) => entry.cmd as unknown as Record<string, unknown>));
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, 3) }).root)).toBeUndefined();
+  });
+
+  it('attributes a retained convergence Result only to its exact producing study', () => {
+    const converged = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: false },
+    );
+    expect(boundarySeq(mount({ journal: converged, result: result('static', false, 1) }).root)).toBe('1');
+
+    const restoring = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: true },
+    );
+    // A restoring study never produces a cached Result, even if inconsistent host data points
+    // at that exact Journal line.
+    expect(boundarySeq(mount({ journal: restoring, result: result('static', false, 1) }).root)).toBeUndefined();
+  });
+
+  it('resolves only explicit, live Journal targets to drawable Model names', () => {
+    const current = model();
+    const refs = objects();
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'material.add', name: 'steel' }, current, refs)).toEqual({ ref: 'material:steel', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'constraint.fix', name: 'fix', on: 'old.face' }, current, refs)).toEqual({ ref: 'constraint:fix', highlight: { sets: ['beam.xmin'] } });
+    expect(journalTarget({ cmd: 'load.pressure', name: 'p', on: 'old.face' }, current, refs)).toEqual({ ref: 'load:p', highlight: { sets: ['beam.top'] } });
+    expect(journalTarget({ cmd: 'model.rename', kind: 'body', name: 'old', to: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'step.add', name: 'static' }, current, refs)).toEqual({ ref: 'step:static', highlight: null });
+
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'deleted' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'geometry.remove', name: 'beam' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current, refs)).toBeNull();
+  });
+
+  it.each([false, true])('selects and highlights a Journal target while keeping copy separate (comparison=%s)', async (comparison) => {
+    const dispatch = vi.fn<Dispatch>(async () => undefined);
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
+    const { root, store } = mount({ tab: 'journal', journal: entries, ...(comparison ? {
+      journalComparison: { baseHash: 'base', currentHash: 'current', sharedEntries: 1, added: entries.entries.slice(1), removed: [entries.entries[1]!] },
+      comparisonSource: 'imported' as const,
+    } : {}) }, dispatch);
+    const row = root.querySelector<HTMLElement>('[data-target-ref="body:beam"]')!;
+    expect(row.closest('.comparison-added') !== null).toBe(comparison);
+    const select = row.querySelector<HTMLButtonElement>('.jrow-main')!;
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    row.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+    select.focus();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    select.blur();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+
+    select.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'selection.set', refs: ['body:beam'] });
+    row.querySelector<HTMLButtonElement>('.jcopy')!.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    expect(store.state.journal).toBe(entries);
+    if (comparison) {
+      // The same live body name in an imported, removed row must never select or highlight
+      // the current object. Copy still exports that baseline Command independently.
+      const removed = root.querySelector<HTMLElement>('.comparison-removed .jrow')!;
+      expect(removed.dataset['targetRef']).toBeUndefined();
+      expect(removed.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+      expect(removed.querySelector('.jwho')!.textContent).toBe('unknown');
+      expect(removed.querySelector('.jtime')!.textContent).toBe('');
+      expect(removed.parentElement!.querySelector('.boundary')).toBeNull();
+      dispatch.mockClear();
+      removed.dispatchEvent(new MouseEvent('mouseenter'));
+      removed.querySelector<HTMLButtonElement>('.jrow-main')!.click();
+      expect(dispatch).not.toHaveBeenCalled();
+      removed.querySelector<HTMLButtonElement>('.jcopy')!.click();
+      expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    }
+
+    const unavailable = [...root.querySelectorAll<HTMLElement>('.jrow')].find((item) => item.textContent?.includes('deleted'))!;
+    expect(unavailable.dataset['targetRef']).toBeUndefined();
+    expect(unavailable.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLElement>('.jrow')!.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    render(null, root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+  });
+
+  it('keeps semantic object selection and Properties on the Journal object', async () => {
+    const { registry, store } = mount();
+    const definition = { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, rho: '7800 kg/m^3', alpha: '12e-6 1/K' } satisfies Command;
+    const query = vi.spyOn(transport, 'query').mockResolvedValueOnce({ command: definition });
+    await registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.definition', kind: 'material', name: 'steel' });
+    expect(store.state.selection.refs).toEqual(['material:steel']);
+    expect(store.state.selection.bodies).toEqual([]);
+    const { cmd, ...values } = definition;
+    expect(store.state.form).toMatchObject({ cmd, values });
+    query.mockRestore();
+  });
+
+  it('keeps a newer explicit form edit when a Journal selection definition returns late', async () => {
+    const { registry, store } = mount();
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }))
+      .mockResolvedValueOnce({ command: { cmd: 'load.pressure', name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch({ cmd: 'form.edit', kind: 'load', name: 'newer' });
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toMatchObject({ cmd: 'load.pressure', values: { name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    query.mockRestore();
+  });
+
+  it.each([
+    { cmd: 'selection.clear' },
+    { cmd: 'selection.set', bodies: ['beam'] },
+  ])('does not open a late Journal definition after $cmd changes the selection', async (next) => {
+    const { registry, store } = mount();
+    const previousForm = store.state.form;
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }));
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch(next);
+    const selected = store.state.selection;
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toBe(previousForm);
+    expect(store.state.selection).toBe(selected);
+    expect(store.state.selection.refs).not.toContain('material:steel');
+    query.mockRestore();
+  });
+
   // Issue #41: the start screen leads with the assistant composer, then New project, then the
-  // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
+  // Recent list, then the import/example/tutorial cards. Each carries its registry Command.
   it('renders the start screen in the issue’s reading order before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
@@ -342,11 +745,14 @@ describe('the shell', () => {
     expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
     // The composer's field and the project-name field carry the Command they feed.
     expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'account.open',
       'chat.send',
       'chat.send',
       'project.new',
       'project.new',
       'file.open',
+      'form.open',
+      'form.open',
       'panel.toggle',
       'panel.toggle',
     ]);
@@ -378,15 +784,16 @@ describe('the shell', () => {
     ]);
   });
 
-  it('puts the project name and its saved state in the top bar, and Projects reopens the list', () => {
+  it('keeps the Model name distinct from browser-project autosave status', () => {
     const at = new Date('2026-09-06T12:04:00Z').getTime();
     const { root } = mount({ project: { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null, saving: false, autosave: true } });
     const field = root.querySelector<HTMLInputElement>('input.model-name')!;
-    expect(field.value).toBe('corbel-ULS');
-    expect(field.getAttribute('data-cmd')).toBe('project.rename');
+    expect(field.value).toBe('demo');
+    expect(root.querySelector('.saved-chip')!.getAttribute('title')).toContain('corbel-ULS');
+    expect(field.getAttribute('data-cmd')).toBe('model.setName');
     expect(root.querySelector('.saved-chip')!.textContent).toContain('saved');
     const bar = [...root.querySelectorAll('.topbar [data-cmd]')].map((el) => el.getAttribute('data-cmd'));
-    expect(bar).toContain('project.rename');
+    expect(bar).toContain('model.setName');
     expect(bar).toContain('project.save');
     expect(bar).toContain('file.save');
   });
@@ -396,7 +803,7 @@ describe('the shell', () => {
     const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
     expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
     await cleanupShells();
-    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
+    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('autosave off');
   });
 
   // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.
@@ -427,4 +834,18 @@ describe('the shell', () => {
     expect(root.querySelector('.add-menu')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });
+});
+
+it('names simplex element families and preserves the mesh editor arguments', () => {
+  for (const [idealisation, order, element] of [['solid3d', 1, 'Tet 4'], ['solid3d', 2, 'Tet 10'], ['planeStress', 1, 'Tri 3'], ['planeStress', 2, 'Tri 6']] as const) {
+    const store = new Store();
+    const current = model();
+    current.idealisation = idealisation;
+    current.meshSettings = { mesher: { kind: 'lattice', size: 1 }, order, formulation: 'incompatible-modes', simplices: true };
+    store.set({ model: current });
+    const row = treeGroups(store.state).find((group) => group.label === 'Mesh')!.items[0]!;
+    expect(row.summary).toContain(element);
+    expect(row.summary).not.toContain('incompatible-modes');
+    expect(row.args).toEqual(current.meshSettings);
+  }
 });

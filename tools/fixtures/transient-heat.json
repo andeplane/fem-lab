@@ -23,8 +23,6 @@
   {
     "cmd": "material.add",
     "name": "mat",
-    "E": "1 MPa",
-    "nu": 0.25,
     "rho": "2 kg/m^3",
     "k": "6 W/(m*K)",
     "cp": "3 J/(kg*K)"

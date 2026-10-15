@@ -1,0 +1,220 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "concrete-floor-slab"
+    },
+    "hashAfter": "45a08209bdacbf47f040ba5aa882d309a559078338b2988134b456b69ff69f1a"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "kN",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "c32595314a5aa35ed41231f71c2cf7c1b8011fea398f2d745c3b78108455dc81"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "slab",
+      "size": [
+        "6 m",
+        "1 m",
+        "200 mm"
+      ]
+    },
+    "hashAfter": "ce541fa85c32cc1ecae21a5f00c25a3787998e468c7ce71e31b956b0e5f4e4f9"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "C30-37",
+      "E": "33 GPa",
+      "nu": 0.2,
+      "rho": "2500 kg/m^3",
+      "source": "EN 1992-1-1 C30/37 Ecm; rho per EN 1991-1-1 Table A.1, reinforced concrete"
+    },
+    "hashAfter": "9ee91a34cbe838affe0fdb8ae09c979bac5f1f18dc41dad179388da2cbb944eb"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "C30-37",
+      "bodies": [
+        "slab"
+      ]
+    },
+    "hashAfter": "9ac3d7b3de7a4f71b585ad42aa5ac098cc987f3229ca9fcd86b7abdc541cdf25"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 30,
+          "ny": 5,
+          "nz": 2
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "48fa37b795ae94af18a33c97161ca10d48919b8cba832b8d897f263ebf838a83"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "geometry.nameRegion",
+      "name": "mid-span",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "2995 mm",
+          "-5 mm",
+          "-5 mm"
+        ],
+        "max": [
+          "3005 mm",
+          "1005 mm",
+          "205 mm"
+        ]
+      }
+    },
+    "hashAfter": "59a61e153a6913e93c27e841d9456d7749a618846a08cc6b9c34b3ac4671695f"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "geometry.nameRegion",
+      "name": "centre-line",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-5 mm",
+          "495 mm",
+          "-5 mm"
+        ],
+        "max": [
+          "6005 mm",
+          "505 mm",
+          "205 mm"
+        ]
+      }
+    },
+    "hashAfter": "5cc6d8a04dbdfe06492cf02a18f22f51237a3204b48ed6bed8772bea52d457d0"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "bearing-a",
+      "on": "slab.xmin",
+      "dofs": [
+        "uz"
+      ]
+    },
+    "hashAfter": "79fe9b658eec9518c307c5ea24d08ed2a611761a21e0e69e158b8e2d28fdc6b3"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "bearing-b",
+      "on": "slab.xmax",
+      "dofs": [
+        "uz"
+      ]
+    },
+    "hashAfter": "386f420fb22b6389685ca06cd1fc50fa15da4ccde6d11aeb23019d3f44d57583"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "no-sway",
+      "on": "mid-span",
+      "dofs": [
+        "ux"
+      ]
+    },
+    "hashAfter": "13d8b901368f6f043dff5c09ae381a6d90c25694cb21603ad3f4f31710773bb0"
+  },
+  {
+    "seq": 11,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "no-drift",
+      "on": "centre-line",
+      "dofs": [
+        "uy"
+      ]
+    },
+    "hashAfter": "23456703c6e43c732cba7ebd5168ea2f9c9e3e66f85873dcee28ff97d06aea47"
+  },
+  {
+    "seq": 12,
+    "cmd": {
+      "cmd": "load.gravity",
+      "name": "self-weight",
+      "g": [
+        "0 m/s^2",
+        "0 m/s^2",
+        "-9.81 m/s^2"
+      ]
+    },
+    "hashAfter": "b4a9758dec55be81fec38229bba237e999fac5efca1c5c21d0a33d6684eed89f"
+  },
+  {
+    "seq": 13,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "imposed",
+      "on": "slab.zmax",
+      "value": "0.005 MPa"
+    },
+    "hashAfter": "1b6b07d52f8d72a2dcf0fd2edf309a25d4ec574d4d0362e909886d2dda559ab7"
+  },
+  {
+    "seq": 14,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "quasi-permanent",
+      "procedure": "static",
+      "constraints": [
+        "bearing-a",
+        "bearing-b",
+        "no-sway",
+        "no-drift"
+      ],
+      "loads": [
+        "self-weight",
+        "imposed"
+      ],
+      "output": [
+        "displacement",
+        "stress",
+        "vonMises",
+        "reaction"
+      ]
+    },
+    "hashAfter": "5d8e8df6f5155246407baacb39a81814d24f195fd9f2fd6c947fd5990b8b80db"
+  },
+  {
+    "seq": 15,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "quasi-permanent"
+    },
+    "hashAfter": "5d8e8df6f5155246407baacb39a81814d24f195fd9f2fd6c947fd5990b8b80db"
+  }
+]

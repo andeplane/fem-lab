@@ -1,0 +1,345 @@
+{
+  "name": "beam-cantilever-tip",
+  "reference": "Benchmark B21: a Timoshenko cantilever under a tip force, one element and four. delta = P L^3 / 3EI + P L / (kappa G A) with E = 200 GPa, nu = 0.3, a 100 x 200 mm rectangle (kappa = 5/6), L = 2 m and P = 10 kN: 2.0156 mm about the strong axis, 8.0156 mm about the weak one. The shear-flexible element is nodally exact, so one element gives the closed form and four give the same number; the root moment is P L and the shear is P everywhere.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "beam-cantilever-tip"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "one",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 1,
+      "kind": "beam"
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "four",
+      "points": [
+        [
+          "0 m",
+          "1 m",
+          "0 m"
+        ],
+        [
+          "2 m",
+          "1 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 4,
+      "kind": "beam"
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "weak",
+      "points": [
+        [
+          "0 m",
+          "2 m",
+          "0 m"
+        ],
+        [
+          "2 m",
+          "2 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 1,
+      "kind": "beam"
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "round numbers, so the closed forms are exact in floating point"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "one",
+        "four",
+        "weak"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "rect",
+      "shape": {
+        "kind": "rectangle",
+        "width": "100 mm",
+        "height": "200 mm"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "rect",
+      "bodies": [
+        "one",
+        "four",
+        "weak"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root1",
+      "on": "one.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root4",
+      "on": "four.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "rootw",
+      "on": "weak.p0"
+    },
+    {
+      "cmd": "load.force",
+      "name": "tip1",
+      "on": "one.p1",
+      "total": [
+        "0 kN",
+        "0 kN",
+        "-10 kN"
+      ]
+    },
+    {
+      "cmd": "load.force",
+      "name": "tip4",
+      "on": "four.p1",
+      "total": [
+        "0 kN",
+        "0 kN",
+        "-10 kN"
+      ]
+    },
+    {
+      "cmd": "load.force",
+      "name": "tipw",
+      "on": "weak.p1",
+      "total": [
+        "0 kN",
+        "10 kN",
+        "0 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root1",
+        "root4",
+        "rootw"
+      ],
+      "loads": [
+        "tip1",
+        "tip4",
+        "tipw"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -2.0155999999999996,
+      "tol": 1e-10,
+      "note": "one element: PL^3/3EI + PL/(kappa G A), the strong axis",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "2 m",
+          "1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -2.0155999999999996,
+      "tol": 1e-10,
+      "note": "four elements: the same number, the element is nodally exact",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "1 m",
+          "1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.6327999999999999,
+      "tol": 1e-10,
+      "note": "four elements, mid-length: P x^2 (3L - x)/6EI + P x/(kappa G A)",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 1,
+        "at": [
+          "2 m",
+          "2 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 8.015599999999997,
+      "tol": 1e-10,
+      "note": "the weak axis: PL^3/3EI_z + PL/(kappa G A)",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 29.999999999999993,
+      "tol": 1e-10,
+      "note": "extreme-fibre stress M c / I = 30 MPa at the root, carried over the one element",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/1",
+      "expect": 20000.0,
+      "tol": 1e-10,
+      "note": "root M_y = P L = 20 kN m (SI: N m); right-handed about the local axes, the far side pulling the tip down",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/4",
+      "expect": 0.0,
+      "tol": 1e-06,
+      "note": "tip M_y = 0"
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionForce"
+      },
+      "path": "/values/2",
+      "expect": -10000.0,
+      "tol": 1e-10,
+      "note": "V_z = -P at the root: the far side pushes the cut down",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionForce"
+      },
+      "path": "/values/5",
+      "expect": -10000.0,
+      "tol": 1e-10,
+      "note": "V_z = -P at the tip too: the shear is uniform",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "rotation",
+        "component": 1,
+        "at": [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0014999999999999998,
+      "tol": 1e-10,
+      "note": "tip rotation theta_y = P L^2 / 2EI, unaffected by shear",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the supports carry the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

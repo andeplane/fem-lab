@@ -1,6 +1,6 @@
 // Project I/O belongs to the browser host, shared by Commands, scripts and the Assistant.
 // The injected boundary is also used by tests; native handles stay opaque through the registry.
-import { FemError, type HostContext } from '@femlab/registry';
+import { FemError, MAX_GEOMETRY_FILE_BYTES, type HostContext } from '@femlab/registry';
 import { forgetHandle, pickFolder, ProjectFolder, recallHandle, recentFolder, rememberHandle, type DirHandle } from './ai/project';
 import type { Store } from './store';
 
@@ -40,13 +40,28 @@ function directoryHandle(value: unknown): DirHandle {
   return handle as DirHandle;
 }
 
-export function makeProjectHost(store: Store, access: ProjectAccess = browserProjectAccess): HostContext['folder'] {
-  let generation = 0;
-  // Store writes follow open/close order even if an earlier IndexedDB transaction is slow.
-  let persistence: Promise<void> = Promise.resolve();
+interface FolderLifetime { generation: number; retired: boolean }
+const lifetimes = new WeakMap<Store, FolderLifetime>();
+const persistenceQueues = new WeakMap<ProjectAccess, { tail: Promise<void> }>();
+
+/** A replaced model cannot publish an unfinished folder selection into its retired UI. */
+export function retireProjectHost(store: Store): void {
+  const lifetime = lifetimes.get(store);
+  if (lifetime) { lifetime.generation++; lifetime.retired = true; }
+}
+
+export function makeProjectHost(store: Store, access: ProjectAccess = browserProjectAccess, admit: () => Promise<void> = async () => undefined): HostContext['folder'] {
+  // Producers are short-lived; the selected folder and open/close ordering belong to their Store.
+  let lifetime = lifetimes.get(store);
+  if (!lifetime) { lifetime = { generation: 0, retired: false }; lifetimes.set(store, lifetime); }
+  const state = lifetime;
+  // The browser's remembered folder is shared across model activations.
+  let persistence = persistenceQueues.get(access);
+  if (!persistence) { persistence = { tail: Promise.resolve() }; persistenceQueues.set(access, persistence); }
+  const queue = persistence;
   const persist = (run: () => Promise<void>) => {
-    const next = persistence.then(run);
-    persistence = next.catch(() => undefined);
+    const next = queue.tail.then(run);
+    queue.tail = next.catch(() => undefined);
     return next;
   };
   const current = () => {
@@ -58,11 +73,11 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
     if (store.state.folder === folder) store.setFolder(folder);
   };
   const check = (started: number) => {
-    if (generation !== started) throw new FemError('cancelled', 'a newer project open or close superseded this request', 'folder.open', 'use query.folder to see the active folder');
+    if (state.retired || state.generation !== started) throw new FemError('cancelled', 'a newer project open or close superseded this request', 'folder.open', 'use query.folder to see the active folder');
   };
   return {
     open: async (how) => {
-      const started = ++generation;
+      const started = ++state.generation;
       try {
         // Call the picker immediately, while the initiating click still has user activation.
         const value = await ('picker' in how ? access.pick() : 'reopen' in how ? access.recall() : how.handle);
@@ -75,18 +90,25 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
         check(started);
         const folder = await ProjectFolder.fromHandle(handle);
         check(started);
+        await admit();
+        check(started);
+        store.setFolder(folder);
         await persist(() => access.remember(handle)).catch((error: unknown) => {
           // Remembering is optional: blocked browser storage must not disable granted file I/O.
           store.log('warn', `project folder is open for this session; could not remember it: ${String(error)}`);
         });
         check(started);
-        store.setFolder(folder);
       } catch (error) {
-        throw projectError(error, 'folder.open');
+        const structured = projectError(error, 'folder.open');
+        if ('reopen' in how && state.generation === started && !state.retired &&
+          (structured.code === 'file.not-found' || structured.code === 'schema' || structured.cause.startsWith('NotReadableError:'))) {
+          await persist(() => access.forget());
+        }
+        throw structured;
       }
     },
     close: async () => {
-      generation++;
+      state.generation++;
       store.setFolder(null);
       try { await persist(() => access.forget()); }
       catch (error) { throw projectError(error, 'folder.close'); }
@@ -99,7 +121,7 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
     info: () => store.state.folder?.info() ?? null,
     recent: async () => {
       try {
-        await persistence;
+        await queue.tail;
         return await access.recent();
       } catch (error) { throw projectError(error, 'query.folderRecent'); }
     },
@@ -107,6 +129,14 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
       const folder = current();
       try { return await folder.readText(path, maxBytes); }
       catch (error) { throw projectError(error, path); }
+    },
+    readBytes: async (path) => {
+      const folder = current();
+      try {
+        const file = await folder.readFile(path);
+        if (file.size > MAX_GEOMETRY_FILE_BYTES) throw new FemError('unsupported', `'${path}' exceeds the 32 MiB read limit`, path, 'read a smaller file');
+        return new Uint8Array(await file.arrayBuffer());
+      } catch (error) { throw projectError(error, path); }
     },
     writeText: async (path, text) => {
       const folder = current();

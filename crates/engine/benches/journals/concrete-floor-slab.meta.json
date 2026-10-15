@@ -1,0 +1,21 @@
+{
+  "title": "One-way concrete floor slab",
+  "tag": "P1 · verify",
+  "tags": [
+    "static",
+    "concrete",
+    "gravity",
+    "serviceability"
+  ],
+  "difficulty": 2,
+  "sentence": "A 6 m simply supported C30/37 floor strip, 1 m wide and 200 mm deep, under its own weight plus a 5 kN/m² quasi-permanent load — a deflection check against span/250.",
+  "expected": {
+    "quantity": "mid-span deflection δ",
+    "value": 7.617,
+    "unit": "mm",
+    "reference": "δ = 5wL⁴/384EI + wL²/8GA_s with w = 9.905 kN/m, E = Ecm = 33 GPa"
+  },
+  "theory": "A simply supported strip under a uniform load $w$ deflects $\\delta = \\dfrac{5wL^4}{384EI} + \\dfrac{wL^2}{8GA_s}$, the second term being the shear contribution a solid model has and Euler–Bernoulli does not. EN 1992-1-1 §7.4.1(4) limits the quasi-permanent deflection to $L/250$. The supports here are knife edges — $u_z$ only on each end face — so the strip is free to rotate and to contract across its width; nothing but rigid-body motion is restrained elsewhere. The answer is an *uncracked, instantaneous, linear* deflection: a real slab cracks in the mid-span region and creeps, and its long-term deflection is several times this.",
+  "tutorial": "concrete-floor-slab",
+  "thumbnail": null
+}

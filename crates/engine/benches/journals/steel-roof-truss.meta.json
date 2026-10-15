@@ -1,0 +1,21 @@
+{
+  "title": "Steel roof truss",
+  "tag": "P1 · verify",
+  "tags": [
+    "static",
+    "truss",
+    "steel",
+    "sections"
+  ],
+  "difficulty": 2,
+  "sentence": "A 12 m parallel-chord Pratt roof truss in CHS 88.9 × 5 S355, pinned one end and rollered the other, with 20 kN at each top-chord joint.",
+  "expected": {
+    "quantity": "mid-span bottom-chord deflection δ",
+    "value": 7.0427,
+    "unit": "mm",
+    "reference": "unit-load virtual work, δ = Σ N n L / EA over the 21 members"
+  },
+  "theory": "A pin-jointed truss carries load as axial force only, so a statically determinate one is solved by statics alone: the reactions are $R = \\frac{1}{2}\\sum P = 50\\,\\mathrm{kN}$, and a vertical cut through any panel gives the diagonal from the shear it has to carry, $N = V/\\sin\\theta$. Because the truss element is exact in extension, the finite-element member forces are the statics answer to machine precision and the mid-span deflection is exactly the unit-load virtual-work sum $\\delta = \\sum N n L / EA$. Read member force as `stressUnaveraged`: the averaged nodal field blends the members meeting at a joint and reports a stress no member carries.",
+  "tutorial": "steel-roof-truss",
+  "thumbnail": null
+}

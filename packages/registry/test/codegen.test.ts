@@ -3,12 +3,23 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { femDts, mergeSchema } from '../../../tools/codegen.mjs';
+import { femDts, mergeSchema, runtimeSchema } from '../../../tools/codegen.mjs';
 import schema from '../src/generated/engine.schema.json';
+import runtime from '../src/generated/runtime-schema';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 
 describe('codegen', () => {
+  it('preserves both runtime schema roots while sharing identical Command definitions', () => {
+    expect(runtime).toEqual({ schemaVersion: schema.schemaVersion, commands: schema.commands, queries: schema.queries });
+    expect(runtime.queries.$defs.Command.oneOf).toBe(runtime.commands.oneOf);
+    expect(runtime.queries.$defs.Quantity).toBe(runtime.commands.$defs.Quantity);
+    const changed = structuredClone(schema);
+    changed.queries.$defs.Command.oneOf.pop();
+    // A future query-specific Command must not accidentally reuse the different root.
+    expect(runtimeSchema(changed)).not.toContain('oneOf: commands.oneOf');
+  });
+
   it('--check passes on the committed output', () => {
     expect(() => execFileSync(process.execPath, [path.join(root, 'tools/codegen.mjs'), '--check'], { stdio: 'pipe' })).not.toThrow();
   });
@@ -32,9 +43,16 @@ describe('codegen', () => {
 
   it('merges the six schemas into one $defs table, renaming only the conflicting defs', () => {
     const merged = mergeSchema(schema) as { $defs: Record<string, unknown>; required: string[] };
-    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile']);
+    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile', 'writeRequest', 'readRequest', 'stamp', 'executionPolicy', 'writeReply', 'readReply', 'runLease', 'documentSnapshot', 'replacementTicket']);
     for (const t of ['Command', 'Query', 'QueryResult', 'Ack', 'EngineError', 'ModelFile', 'Quantity', 'ModelSummary']) expect(merged.$defs).toHaveProperty(t);
-    expect(Object.keys(merged.$defs).filter((k) => /^[A-Z]\w+_[A-Z]/.test(k)).sort()).toEqual(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate']);
+    expect(Object.keys(merged.$defs)).toEqual(expect.arrayContaining(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate']));
+    // Adding envelope schemas cannot change a previously merged definition through an
+    // indirect renamed dependency (Journal -> JournalEntry -> Command -> ShapeSpec).
+    const minimal = { ...schema, writeRequest: { type: 'null' }, readRequest: { type: 'null' }, stamp: { type: 'null' }, executionPolicy: { type: 'null' }, writeReply: { type: 'null' }, readReply: { type: 'null' }, runLease: { type: 'null' }, documentSnapshot: { type: 'null' } };
+    const baseline = mergeSchema(minimal) as { $defs: Record<string, unknown> };
+    for (const key of ['Journal', 'JournalEntry', 'Command', 'ModelFile', 'Query', 'Model']) expect(merged.$defs[key], key).toEqual(baseline.$defs[key]);
+    expect(merged.$defs['JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/Command' } } });
+    expect(merged.$defs['ModelFile_JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/ModelFile_Command' } } });
     expect(Object.keys(merged.$defs).filter((k) => k === 'Error')).toEqual([]);
     // a table's own $defs entry named like the table's type is a real collision
     expect(() => mergeSchema({ ...schema, commands: { ...schema.commands, $defs: { ...schema.commands.$defs, Command: { type: 'null' } } } })).toThrow(/collides/);
@@ -54,5 +72,25 @@ describe('codegen', () => {
     // `new(args)` alone would be a construct signature, so the member is quoted.
     expect(dts).toContain('"new"(args: Omit<Extract<Command, { cmd: \'model.new\' }>, \'cmd\'>): Promise<Ack>;');
     expect(dts).not.toMatch(/^ {4}new\(/m);
+  });
+
+  it('reserves future root names and retargets each enclosing dependency without changing the canonical root', () => {
+    const minimal = Object.fromEntries(Object.keys(schema).map(key => [key, { type: 'null' }]));
+    const nested = {
+      type: 'object',
+      properties: { payload: { $ref: '#/$defs/Wrapper' } },
+      $defs: {
+        ModelFile: { type: 'object', properties: { value: { type: 'string' } } },
+        Wrapper: { type: 'object', properties: { file: { $ref: '#/$defs/ModelFile' } } },
+      },
+    };
+    const canonical = { type: 'object', properties: { value: { type: 'number' } } };
+    const merged = mergeSchema({ ...minimal, commands: nested, queries: structuredClone(nested), modelFile: canonical }) as { $defs: Record<string, unknown> };
+    expect(merged.$defs['ModelFile']).toEqual(canonical);
+    expect(merged.$defs['Command']).toMatchObject({ properties: { payload: { $ref: '#/$defs/Wrapper' } } });
+    expect(merged.$defs['Wrapper']).toMatchObject({ properties: { file: { $ref: '#/$defs/Command_ModelFile' } } });
+    expect(merged.$defs['Query']).toMatchObject({ properties: { payload: { $ref: '#/$defs/Query_Wrapper' } } });
+    expect(merged.$defs['Query_Wrapper']).toMatchObject({ properties: { file: { $ref: '#/$defs/Query_ModelFile' } } });
+    for (const name of ['Command_ModelFile', 'Query_ModelFile']) expect(merged.$defs[name]).toEqual(nested.$defs.ModelFile);
   });
 });

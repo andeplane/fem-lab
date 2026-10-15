@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // engine.schema.json (the output of `femlab schema`) → TypeScript for packages/registry.
 //   node tools/codegen.mjs [--from <engine.schema.json>] [--check]
-// Writes packages/registry/src/generated/engine.ts (types) and fem.d.ts (script API).
-// --check regenerates in memory and exits 1 if either committed file differs.
+// Writes engine.ts (types), fem.d.ts (script API), and runtime-schema.ts (shared browser data).
+// --check regenerates in memory and exits 1 if any committed output differs.
 // Node only, no shell, no Rust toolchain: the schema document is committed.
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -22,6 +22,15 @@ const TOP = {
   ack: 'Ack',
   error: 'EngineError',
   modelFile: 'ModelFile',
+  writeRequest: 'WriteRequest',
+  readRequest: 'ReadRequest',
+  stamp: 'Stamp',
+  executionPolicy: 'ExecutionPolicy',
+  writeReply: 'WriteReply',
+  readReply: 'ReadReply',
+  runLease: 'RunLease',
+  documentSnapshot: 'DocumentSnapshot',
+  replacementTicket: 'ReplacementTicket',
 };
 
 /** Rewrite every `#/$defs/<old>` to `#/$defs/<new>` per `rename`. */
@@ -49,13 +58,27 @@ function retarget(node, rename) {
 export function mergeSchema(doc) {
   const defs = {};
   const properties = {};
+  const rootNames = new Set(Object.values(TOP));
   for (const [key, name] of Object.entries(TOP)) {
     // eslint-disable-next-line no-unused-vars
     const { $schema, title, $defs = {}, ...body } = doc[key];
     const rename = {};
-    for (const [k, v] of Object.entries($defs)) {
-      if (defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(v)) rename[k] = `${name}_${k}`;
-    }
+    // Renaming a dependency also changes its parents. Reach a fixed point before inserting
+    // anything: a later envelope must never overwrite an earlier schema's Journal/Command
+    // with references belonging to the later table.
+    let changed;
+    do {
+      changed = false;
+      for (const [k, v] of Object.entries($defs)) {
+        // An earlier table may nest a later root (query.document contains ModelFile).
+        // Reserve that canonical name before transitive dependency prefixes can claim it.
+        const futureRoot = k !== name && rootNames.has(k) && !defs[k];
+        if (!rename[k] && (futureRoot || (defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(retarget(v, rename))))) {
+          rename[k] = `${name}_${k}`;
+          changed = true;
+        }
+      }
+    } while (changed);
     const fixed = retarget({ ...body, $defs }, rename);
     for (const [k, v] of Object.entries(fixed.$defs)) defs[rename[k] ?? k] = v;
     delete fixed.$defs;
@@ -119,7 +142,24 @@ export async function generate(doc) {
     bannerComment: BANNER,
     strictIndexSignatures: true,
   });
-  return { 'engine.ts': engine, 'fem.d.ts': femDts(doc) };
+  return { 'engine.ts': engine, 'fem.d.ts': femDts(doc), 'runtime-schema.ts': runtimeSchema(doc) };
+}
+
+/** Share identical Command definitions in the browser without changing the canonical schemas. */
+export function runtimeSchema(doc) {
+  const { $defs = {}, ...queries } = doc.queries;
+  const json = (value) => JSON.stringify(value, null, 2);
+  const definitions = Object.entries($defs).map(([name, value]) => {
+    let source = json(value);
+    if (JSON.stringify(value) === JSON.stringify(doc.commands.$defs?.[name])) {
+      source = `commands.$defs[${JSON.stringify(name)}]`;
+    } else if (name === 'Command' && JSON.stringify(value.oneOf) === JSON.stringify(doc.commands.oneOf)) {
+      const { oneOf, ...metadata } = value;
+      source = `{ ...${json(metadata)}, oneOf: commands.oneOf }`;
+    }
+    return `    ${JSON.stringify(name)}: ${source}`;
+  });
+  return `${BANNER}\n// The registry's two schema roots share repeated definitions instead of bundling them twice.\nconst commands = ${json(doc.commands)};\nconst queries = {\n  ...${json(queries)},\n  $defs: {\n${definitions.join(',\n')}\n  },\n};\nexport default { schemaVersion: ${json(doc.schemaVersion)}, commands, queries };\n`;
 }
 
 async function main(argv) {

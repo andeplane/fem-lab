@@ -24,7 +24,7 @@
 import { FemError } from '@femlab/registry';
 import { z } from 'zod';
 import { openDb, REVISIONS } from './db';
-import schema from '../../registry/src/generated/engine.schema.json';
+import schema from '../../registry/src/generated/runtime-schema';
 
 /** A Command in the app's wire shape — the same thing the Journal holds. */
 export type ShareCommand = { cmd: string } & Record<string, unknown>;

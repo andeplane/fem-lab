@@ -1,12 +1,12 @@
 // Issue #13: all project/file routes run through the production browser HostContext and Registry.
-import { Registry, type EngineSchema } from '@femlab/registry';
+import { FemError, Registry, type EngineSchema } from '@femlab/registry';
 import { describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { fakeTransport, MODEL_FILE } from '../../registry/test/fakes';
+import { fakeHost, fakeTransport, MODEL_FILE } from '../../registry/test/fakes';
 import { readHostCaps } from '../src/capabilities';
 import { makeHostContext } from '../src/host';
 import { Store } from '../src/store';
-import type { WorkerTransport } from '../src/worker-transport';
+import { makeProjectHost, retireProjectHost } from '../src/project-host';
 import type { DirHandle } from '../src/ai/project';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
 import { buildSystem, buildTurn, objectIndex } from '../src/ai/context';
@@ -21,7 +21,9 @@ function setup(files: Record<string, string> = {}) {
   const transport = fakeTransport();
   const query = transport.query;
   transport.query = vi.fn(async (q) => q.query === 'query.objects' ? { objects: [] } : query(q));
-  const host = makeHostContext(store, transport as WorkerTransport, { current: null }, readHostCaps({}), undefined, undefined, undefined, access);
+  const host = makeHostContext(store, transport, { current: null }, readHostCaps({}), undefined, undefined, undefined,
+    undefined, undefined, undefined, { projects: {} as never, active: async () => undefined, replay: async () => undefined, captureImport: () => fakeHost().abaqus.capture() },
+    undefined, undefined, undefined, undefined, access);
   const registry = new Registry({ schema: schema as unknown as EngineSchema, host });
   return { handle, access, store, transport, host, registry };
 }
@@ -162,14 +164,15 @@ describe('the production project host', () => {
   });
 
   it.each(['close', 'replace'] as const)('a pending open cannot resurrect a folder after %s', async (action) => {
-    const { registry, store } = setup();
+    const { registry, store, access } = setup();
+    const second = makeProjectHost(store, access);
     const delayed = fakeDir({}, 'old');
     const gate = deferred();
     delayed.entries = async function* () { await gate.promise; };
     const pending = registry.dispatch({ cmd: 'folder.open', handle: delayed });
     const rejected = expect(pending).rejects.toMatchObject({ code: 'cancelled' });
-    if (action === 'close') await registry.dispatch({ cmd: 'folder.close' });
-    else await registry.dispatch({ cmd: 'folder.open', handle: fakeDir({}, 'new') });
+    if (action === 'close') await second.close();
+    else await second.open({ handle: fakeDir({}, 'new') });
     gate.release();
     await rejected;
     expect(store.state.folder?.name ?? null).toBe(action === 'close' ? null : 'new');
@@ -183,7 +186,7 @@ describe('the production project host', () => {
     const opening = registry.dispatch({ cmd: 'folder.open', handle });
     const rejected = expect(opening).rejects.toMatchObject({ code: 'cancelled' });
     await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
-    const closing = registry.dispatch({ cmd: 'folder.close' });
+    const closing = makeProjectHost(store, access).close();
     expect(store.state.folder).toBeNull();
     gate.release();
     await Promise.all([rejected, closing]);
@@ -200,4 +203,40 @@ describe('the production project host', () => {
     await expect(registry.dispatch({ cmd: 'folder.close' })).rejects.toMatchObject({ code: 'file.scope' });
     expect(store.state.folder).toBeNull();
   });
+  it('cannot publish or remember an unfinished selection after model activation retires its Store', async () => {
+    const { registry, store, access } = setup();
+    const delayed = fakeDir({}, 'old');
+    const gate = deferred();
+    delayed.entries = async function* () { await gate.promise; };
+    const pending = registry.dispatch({ cmd: 'folder.open', handle: delayed });
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    retireProjectHost(store);
+    gate.release();
+    await rejected;
+    expect(store.state.folder).toBeNull();
+    expect(await access.recall()).toBeNull();
+  });
+
+  it('requires the captured session admission before publishing or remembering a validated folder', async () => {
+    const { store, access, handle } = setup();
+    const folder = makeProjectHost(store, access, async () => { throw new FemError('session.expired', 'old activation'); });
+    await expect(folder.open({ handle })).rejects.toMatchObject({ code: 'session.expired' });
+    expect(store.state.folder).toBeNull();
+    expect(await access.recall()).toBeNull();
+  });
+
+  it.each(['invalid', 'deleted'] as const)('forgets a remembered %s handle without replacing the open folder or reopening a picker', async kind => {
+    const { registry, store, access, handle } = setup({ 'note.txt': 'kept' });
+    await registry.dispatch({ cmd: 'folder.open', handle });
+    const before = store.state.folder;
+    const bad = kind === 'invalid' ? { kind: 'directory', name: 'gone' } as DirHandle : fakeDir({}, 'gone');
+    if (kind === 'deleted') bad.entries = async function* () { throw new DOMException('folder removed', 'NotFoundError'); };
+    await access.remember(bad);
+    await expect(registry.dispatch({ cmd: 'folder.open', reopen: true })).rejects.toMatchObject({ code: kind === 'invalid' ? 'schema' : 'file.not-found' });
+    expect(store.state.folder).toBe(before);
+    expect(await access.recent()).toBeNull();
+    expect(access.pick).not.toHaveBeenCalled();
+    expect(await registry.dispatch({ cmd: 'file.read', path: 'note.txt' })).toEqual({ text: 'kept' });
+  });
+
 });

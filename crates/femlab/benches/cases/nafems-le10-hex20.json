@@ -1,6 +1,6 @@
 {
-  "name": "nafems-le10-hex20",
-  "reference": "Benchmark D1. NAFEMS LE10 thick plate: LE1's elliptic annulus extruded 0.6 m, E = 210 GPa, nu = 0.3, u_x = 0 on the x = 0 face, u_y = 0 on the y = 0 face, the outer elliptic face held, and 1 MPa of pressure on the top. The target is sigma_yy at D = (2, 0, top surface) = -5.38 MPa. One deviation: LE10 supports the outer face vertically along its mid-plane line only, and no Set predicate in the registry can name a line where a box cannot (the mid-plane box catches the whole mid-surface, which suppresses the bending entirely and gives -0.72 MPa). This model holds u_z on the whole outer face instead, which is the same support once u_x = u_y = 0 has already clamped it in plane. Four layers through the thickness matter more than the in-plane mesh does: at n = 12 two layers give -5.576 MPa and four give -5.348 MPa. This row is 12 x 12 x 4 hex20, giving -5.3477 MPa, 0.6 % from -5.38.",
+  "name": "le10-full-face-hex20",
+  "reference": "Benchmark D1: ESRD full-face-support variant of NAFEMS LE10, not the original mid-plane-line support. Elliptic plate, E=210 GPa, nu=0.3, thickness 0.6 m, 1 MPa top pressure, quarter symmetry, all displacement components fixed on the whole outer elliptic face. ESRD StressCheck Benchmarks Guide (2018), pp. 29\u201331, reports -5.25 MPa for this full-face variant; the original NAFEMS line-supported problem has the different -5.38 MPa reference. Source: https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf. 12 x 12 x 8 quadratic hexes give -5.234137 MPa. The registry test refines both in-plane and thickness resolution from 6 x 6 x 2, with the existing 2% tolerance unchanged.",
   "journal": [
     {
       "cmd": "model.new",
@@ -92,7 +92,7 @@
         },
         "sweep": {
           "kind": "extrude",
-          "layers": 4,
+          "layers": 8,
           "height": "0.6 m"
         }
       },
@@ -159,10 +159,10 @@
         ]
       },
       "path": "/value/value",
-      "expect": -5.38,
+      "expect": -5.25,
       "tol": 0.02,
       "rel": true,
-      "note": "sigma_yy(D) = -5.38 MPa within 2 %"
+      "note": "sigma_yy(D) agrees with the independently published ESRD full-face variant within 2%"
     },
     {
       "query": {
@@ -170,7 +170,7 @@
       },
       "path": "/balance",
       "expect": 0,
-      "tol": 1e-8,
+      "tol": 1e-08,
       "note": "A7: reactions balance the applied load"
     },
     {

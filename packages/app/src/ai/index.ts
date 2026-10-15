@@ -42,14 +42,19 @@ export {
   projectSkills,
   ProjectFolder,
   recallHandle,
+  rememberedFolder,
   rememberHandle,
+  reopenRemembered,
   watchAgents,
   AGENTS_FILES,
+  RESTORING,
+  type Breadcrumbs,
   type DirHandle,
   type FileHandle,
   type FileKind,
   type PickerWindow,
   type ProjectFile,
+  type RememberedFolder,
 } from './project';
 export { costOf, textOf, NO_USAGE, PRICES, type Block, type ChatEvent, type ChatRequest, type ImageBlock, type Message, type Provider, type ProviderId, type Usage } from './provider';
 export { BUILTIN_SKILLS } from './skills';

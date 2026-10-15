@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FemError, nearest } from '../src/error';
-import { MENTION_KINDS, parseMentions, refOf } from '../src/mentions';
+import { MENTION_KINDS, parseMentions, parseRef, refOf } from '../src/mentions';
 import { assertInside, normalisePath } from '../src/project-paths';
 import { makeFemProxy } from '../src/script-api';
 import { mergeSkills, parseSkill, type Skill } from '../src/skills';
@@ -65,9 +65,19 @@ describe('mentions', () => {
   });
   it('round-trips refOf through parseMentions for every kind', () => {
     for (const kind of MENTION_KINDS) {
-      const ref = refOf(kind, 'x.y');
-      expect(parseMentions(`see @${ref};`).chips).toEqual([{ ref, kind, name: 'x.y' }]);
+      for (const name of ['x.y', 'two words', 'a,b;c(d)', 'quoted"name', 'back\\slash', '雪', 'line\nbreak', '', 'id:result-12']) {
+        const ref = refOf(kind, name);
+        expect(parseRef(ref)).toEqual({ ref, kind, name });
+        expect(parseMentions(`see (@${ref});`).chips).toEqual([{ ref, kind, name }]);
+      }
     }
+  });
+  it('canonicalises equivalent quoted names, keeps literal @selection in names and rejects malformed refs', () => {
+    expect(parseMentions('@body:beam @body:"beam" @file:"notes @selection.md"').chips.map(c => c.ref)).toEqual(['body:beam', 'file:"notes @selection.md"']);
+    expect(parseMentions('@file:"notes @selection.md"').selection).toBe(false);
+    expect(parseMentions('@file:"notes @selection.md" @selection').selection).toBe(true);
+    for (const ref of ['planet:mars', 'body:', 'body:"bad\\q"', 'body:"unterminated', 'body:two words', 'body:beam\n']) expect(parseRef(ref)).toBeNull();
+    expect(parseMentions('@body:"bad\\q"').chips).toEqual([]);
   });
 });
 

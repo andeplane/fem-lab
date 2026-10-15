@@ -5,11 +5,11 @@
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import { FemError, type FrameResult, type FramesResult, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
-import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
+import { FemError, type FrameResult, type FramesResult, type ResultSummary, type Ack, type Warning } from '@femlab/registry';
+import { choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
-import type { Store } from './store';
-import type { WorkerTransport } from './worker-transport';
+import type { Store, ViewMode } from './store';
+import type { EngineTransport } from '@femlab/registry';
 import { TransientPlayback, type PlaybackClock, type TransientInput } from './transient';
 
 /** `view.setDeformScale`'s argument. */
@@ -42,17 +42,17 @@ export function derivedRange(kind: 'safety' | 'utilisation', max: number): [numb
 
 /**
  * The picker key to contour a Result by: the one already chosen when this Result has it, the
- * first mode shape when it is a modal Step, and otherwise the first field it did compute. A
+ * first mode shape when it is a modal or buckling Step, and otherwise the first field it did compute. A
  * Result is not obliged to carry the field the previous one did.
  */
 export function available(current: string, result: ResultSummary, hasYield: boolean): string {
   const choices = fieldChoices(
     result.extremes.map((e) => e.field),
-    result.frequencies?.length ?? 0,
+    result,
     hasYield,
   );
   if (choices.some((c) => c.key === current)) return current;
-  return (result.frequencies?.length ?? 0) > 0 ? 'mode:1' : (choices[0]?.key ?? 'vonMises');
+  return modeCount(result) > 0 ? 'mode:1' : (choices[0]?.key ?? 'vonMises');
 }
 
 export class ResultsView {
@@ -70,7 +70,7 @@ export class ResultsView {
 
   constructor(
     private readonly store: Store,
-    private readonly transport: WorkerTransport,
+    private readonly transport: EngineTransport,
     private readonly viewer: ViewerRef,
     clock?: PlaybackClock,
   ) {
@@ -93,8 +93,9 @@ export class ResultsView {
 
   private async prepareFrame(frame: FrameResult, catalogue: FramesResult): Promise<() => void> {
     const result = await this.transport.query({ query: 'query.result', step: catalogue.step }) as ResultSummary;
-    if (result.stale || frame.sample.modelHash !== catalogue.modelHash || frame.sample.step !== catalogue.step)
+    if (result.stale || result.resultId !== frame.sample.resultId || frame.sample.resultId !== catalogue.resultId || frame.sample.modelHash !== catalogue.modelHash || frame.sample.step !== catalogue.step)
       throw new FemError('result.stale', 'the Result changed while its frame was loading', 'view.playTransient', 'solve.run for this Step');
+    const surface = await this.transport.surface({ resultId: frame.sample.resultId });
     const current = choiceOf(this.store.state.fieldKey);
     const choice = current.field === frame.field && !current.derived ? current : choiceOf(frame.field === 'temperature' ? 'temperature' : 'umag');
     const raw = choice.component === null
@@ -106,6 +107,9 @@ export class ResultsView {
     return () => {
       this.selectedStep = catalogue.step;
       this.displacement = displacement;
+      this.viewer.current?.setField(null, [0, 1]);
+      this.viewer.current?.setDeformed(null, 0);
+      this.viewer.current?.setSurface({ ...surface, source: 'mesh' });
       this.viewer.current?.animate(false);
       this.viewer.current?.setDim(false);
       this.viewer.current?.setMode('results');
@@ -154,14 +158,19 @@ export class ResultsView {
    * the contours. Called after every engine Command, so it has to be cheap when nothing moved.
    */
   async refresh(force = false): Promise<void> {
-    const epoch = this.displayEpoch;
+    let epoch = this.displayEpoch;
     const result = await this.readResult();
     if (epoch !== this.displayEpoch) return;
     this.store.set({ result });
+    // A comparison owns its immutable payloads and drawing; keep the single Result metadata
+    // current for restoration without sending a new solve's fields into a retained pane.
+    if (this.store.state.resultComparison.configuration.mode !== 'single' && this.store.state.viewMode === 'results') return;
     const transient = this.store.state.transient;
     if (transient) {
-      if (!result || result.stale || result.step !== transient.catalogue.step) this.invalidateTransient();
-      else {
+      if (!result || result.stale || result.resultId !== transient.catalogue.resultId || this.store.state.viewMode !== 'results') {
+        this.invalidateTransient();
+        epoch = this.displayEpoch;
+      } else {
         if (force) await this.playTransient({ step: result.step, playing: transient.playing, speed: transient.speed });
         return;
       }
@@ -170,8 +179,8 @@ export class ResultsView {
       this.selectedStep = undefined;
       this.loadedFor = '';
       this.displacement = null;
-      this.viewer.current?.setField(null, [0, 1]);
-      this.viewer.current?.setDeformed(null, 0);
+      await this.previewSurface(epoch);
+      if (epoch !== this.displayEpoch) return;
       this.store.set({ legend: null, yieldStress: null });
       return;
     }
@@ -183,10 +192,30 @@ export class ResultsView {
     if (epoch !== this.displayEpoch) return;
     const fieldKey = available(this.store.state.fieldKey, result, yieldStress !== null);
     this.store.set({ yieldStress, ...(fieldKey === this.store.state.fieldKey ? {} : { fieldKey }) });
-    const key = `${result.step}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
+    if (this.store.state.viewMode !== 'results') {
+      this.loadedFor = '';
+      if (this.store.state.viewMode === 'mesh' && !result.stale) {
+        // An unchanged mesh may show the solved deformation, as the mesh view always has.
+        await this.load(result);
+      } else {
+        this.displacement = null;
+        await this.previewSurface(epoch);
+      }
+      if (epoch !== this.displayEpoch) return;
+      this.store.set({ legend: null });
+      return;
+    }
+    const key = `${result.resultId}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
     if (!force && key === this.loadedFor) return;
     this.loadedFor = key;
     await this.load(result);
+  }
+
+  async setMode(mode: ViewMode): Promise<void> {
+    this.invalidateTransient();
+    this.store.set({ viewMode: mode });
+    this.viewer.current?.setMode(mode);
+    await this.refresh(true);
   }
 
   private async readResult(): Promise<ResultSummary | null> {
@@ -194,35 +223,58 @@ export class ResultsView {
     // `not-found`, which is the one error this call swallows.
     try {
       return (await this.transport.query({ query: 'query.result', ...(this.selectedStep === undefined ? {} : { step: this.selectedStep }) })) as ResultSummary;
-    } catch {
-      return null;
+    } catch (error) {
+      if ((error as { code?: string } | null)?.code === 'not-found') return null;
+      throw error;
     }
+  }
+
+  /** Current geometry/mesh previews never carry fields from a retained solve. */
+  private async previewSurface(epoch: number): Promise<void> {
+    const v = this.viewer.current;
+    if (!v) return;
+    const surface = await this.transport.surface();
+    if (epoch !== this.displayEpoch) return;
+    v.animate(false);
+    v.setField(null, [0, 1]);
+    v.setDeformed(null, 0);
+    v.setDim(false);
+    v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    v.setMode(this.store.state.viewMode);
+    this.store.set({ playing: false });
   }
 
   /** Fetch the contoured scalar and the displacement, and hand both to the viewer. */
   private async load(result: ResultSummary): Promise<void> {
     const epoch = this.displayEpoch;
     const v = this.viewer.current;
-    // No Viewer yet (its chunk is still arriving), or one that has not been handed a surface:
-    // its bounding box is still the placeholder, so an `"auto"` computed here would exaggerate
-    // against the wrong model size — the ×1311 of the report. Forget the key either way, so the
-    // refresh that follows the surface push loads the arrays instead of finding them "loaded".
-    if (!v?.hasSurface) {
+    // The surface and both fields belong to one immutable solve, even after Model edits.
+    // Load them before touching the drawing so a new preview never receives an old field.
+    if (!v) {
       this.loadedFor = '';
       return;
     }
+    const surface = await this.transport.surface({ resultId: result.resultId });
     const choice = choiceOf(this.store.state.fieldKey);
-    const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined);
+    const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined, result.resultId);
+    if (scalar.per === 'element' && surface.triElement?.length !== surface.indices.length / 3) {
+      throw new FemError('unsupported', 'the retained surface lacks element identities for this contour', 'view.showField', 'query.surface with this Result id');
+    }
     const { values, range, unit } = await this.contour(choice, scalar.values);
 
     // A mode shape is its own deformation; every other field rides on the Step's displacement,
     // which a heat Step does not have — there the mesh simply stays where it is.
     const moves = choice.mode !== undefined || result.extremes.some((e) => e.field === 'displacement');
-    const displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement')).values : scalar.values;
+    const displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement', undefined, result.resultId)).values : scalar.values;
     const lengthFactor = (await this.conversion('displacement')).scale;
     if (epoch !== this.displayEpoch) return;
     this.displacement = displacement;
-    v.setField(values, range);
+    v.setField(null, [0, 1]);
+    v.setDeformed(null, 0);
+    v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    v.setMode(this.store.state.viewMode);
+    v.setDim(result.stale);
+    v.setField(values, range, scalar.per);
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
     if (choice.mode !== undefined) this.requested = 'auto';
@@ -249,20 +301,18 @@ export class ResultsView {
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
   async showField(f: { field: string | null; component?: number | null }): Promise<void> {
     if (f.field === null) {
-      this.invalidateTransient();
-      this.store.set({ viewMode: 'geometry' });
-      this.viewer.current?.setMode('geometry');
-      this.viewer.current?.setField(null, [0, 1]);
+      await this.setMode('geometry');
       return;
     }
     const key = fieldKeyOf(f.field, f.component ?? null);
     const result = this.store.state.result;
     const choices = result
-      ? fieldChoices(result.extremes.map((e) => e.field), result.frequencies?.length ?? 0, this.store.state.yieldStress !== null)
+      ? fieldChoices(result.extremes.map((e) => e.field), result, this.store.state.yieldStress !== null)
       : [];
     if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     if (this.store.state.transient && choiceOf(key).field !== this.store.state.transient.catalogue.field)
       throw new FemError('unsupported', `retained frames contain only ${this.store.state.transient.catalogue.field}`, 'view.showField', 'query.frames for available historical fields');
+    this.displayEpoch++;
     this.store.set({ fieldKey: key, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     await this.refresh(true);
@@ -295,13 +345,13 @@ export class ResultsView {
     const hadTransient = this.store.state.transient !== null;
     const result = await this.transport.query({ query: 'query.result', step: a.step }) as ResultSummary;
     if (epoch !== this.displayEpoch) return;
-    if (a.mode !== undefined && a.mode > (result.frequencies?.length ?? 0))
+    if (a.mode !== undefined && a.mode > modeCount(result))
       throw new FemError('not-found', `Step '${a.step}' has no mode ${a.mode}`, 'view.animate.mode', 'query.result for the available modes');
-    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !result.frequencies?.length)
+    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !modeCount(result))
       throw new FemError('unsupported', `Step '${a.step}' has no displacement to animate`, 'view.animate', 'view.showField to inspect its static field');
     this.invalidateTransient();
     const fieldKey = a.mode === undefined ? available(this.store.state.fieldKey, result, this.store.state.yieldStress !== null) : `mode:${a.mode}`;
-    const needsLoad = hadTransient || this.selectedStep !== a.step || this.store.state.result?.step !== a.step || this.store.state.fieldKey !== fieldKey;
+    const needsLoad = this.store.state.viewMode !== 'results' || hadTransient || this.selectedStep !== a.step || this.store.state.result?.resultId !== result.resultId || this.store.state.fieldKey !== fieldKey;
     this.selectedStep = a.step;
     this.store.set({ result, fieldKey, viewMode: 'results' });
     this.viewer.current?.setMode('results');
@@ -319,7 +369,7 @@ export class ResultsView {
     const { legend, fieldKey, colormap, viewMode } = this.store.state;
     if (!legend || viewMode !== 'results') return null;
     const sample = this.store.state.transient?.frame;
-    return { title: `${choiceOf(fieldKey).label}${sample ? ` · ${sample.time.value} ${sample.time.unit}` : ''}`, unit: legend.unit, min: legend.min, max: legend.max, colormap };
+    return { title: `${choiceOf(fieldKey, this.store.state.result).label}${sample ? ` · ${sample.time.value} ${sample.time.unit}` : ''}`, unit: legend.unit, min: legend.min, max: legend.max, colormap };
   }
 
   /**
@@ -327,12 +377,18 @@ export class ResultsView {
    * contours (design "Solve completion"), a study keeps its report for the convergence bars.
    */
   async onAck(ack: unknown): Promise<void> {
-    const out = (ack as { output?: { type?: string; report?: StudyReport } } | undefined)?.output;
+    const out = (ack as Ack | undefined)?.output;
     if (out?.type === 'study' && out.report) this.store.set({ study: out.report });
-    if (out?.type !== 'solve') return;
+    if (out?.type !== 'solve' && out?.type !== 'adapt') return;
     this.invalidateTransient();
     const epoch = this.displayEpoch;
     this.selectedStep = undefined;
+    if (out.type === 'adapt') {
+      const solved = await this.transport.query({ query: 'query.result', resultId: out.report.resultId }) as ResultSummary;
+      if (epoch !== this.displayEpoch) return;
+      this.selectedStep = solved.step;
+      this.store.set({ fieldKey: 'errorEstimate', adaptation: out.report });
+    }
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
@@ -341,7 +397,7 @@ export class ResultsView {
     await this.refresh(true);
     if (epoch !== this.displayEpoch) return;
     const result = this.store.state.result;
-    if (result?.history?.length) await this.playTransient({ step: result.step, playing: false, sample: { kind: 'frame', index: result.history.length - 1 } });
+    if (this.store.state.resultComparison.configuration.mode === 'single' && out.type === 'solve' && result?.history?.length) await this.playTransient({ step: result.step, playing: false, sample: { kind: 'frame', index: result.history.length - 1 } });
   }
 }
 
@@ -374,7 +430,7 @@ export function fieldKeyOf(field: string, component: number | null): string {
     if (!/^mode:[1-9]\d*$/.test(field) || component !== null) throw unsupportedField(field, component);
     return field;
   }
-  const choices = FIELD_CHOICES.filter((c) => c.field === field);
+  const choices = fieldChoices([field]);
   if (choices.length === 0) throw unsupportedField(field, component);
   if (component === null) return choices.find((c) => c.component === null)?.key ?? choices[0]!.key;
   const exact = choices.find((c) => c.component === component);

@@ -1,17 +1,31 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/registry';
+import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
+import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
 import { TABS, type Tab } from './ui/tabs';
-import { getAt, setAt } from './ui/schema';
+import { getAt, setAt, type MaterialPhysics } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 import type { TransientState } from './transient';
 
+/** Content identity, independent of JSON object-key order and view-only state. */
+export function journalIdentity(entries: JournalDump['entries']): string {
+  return JSON.stringify(entries, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value);
+}
+
+export function unsaved(s: UiState): boolean {
+  return s.journal !== null && s.journal.entries.length > 0 && journalIdentity(s.journal.entries) !== s.savedJournal;
+}
+
 export type ViewMode = 'geometry' | 'mesh' | 'results';
 export { TABS, type Tab } from './ui/tabs';
+
 export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
 export type PanelSizes = Record<ResizablePanel, number>;
 export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
@@ -21,7 +35,6 @@ export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: numbe
   bottom: { min: 184, max: 480 },
   assistant: { min: 320, max: 520 },
 };
-
 export function clampPanelSize(panel: ResizablePanel, size: number): number {
   const limits = PANEL_SIZE_LIMITS[panel];
   return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
@@ -32,6 +45,10 @@ export interface FormState {
   values: Record<string, unknown>;
   /** What Revert goes back to: the values the form was opened with. */
   initial: Record<string, unknown>;
+  /** Visible Material property groups; view state, never part of the engine Command. */
+  materialPhysics?: MaterialPhysics[];
+  /** Existing object being edited; unsaved field values must not change its chat reference. */
+  target?: { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
 }
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
 export type ExampleDifficulty = 1 | 2 | 3;
@@ -51,11 +68,32 @@ export interface LastError {
   suggestion: string | null;
 }
 
+/** Assistant-authored observations, never engine measurements or a solver acceptance gate. */
+export interface AssistantVerification {
+  rows: { status: 'ok' | 'warn' | 'fail'; what: string; value: string }[];
+  model: string | null;
+  revision: number;
+  journalHash: string | null;
+  result: { step: string; revision: number } | null;
+}
+
+export function verificationState(record: AssistantVerification, state: UiState): string {
+  if (!record.journalHash || !state.journal?.hash) return 'Model revision unconfirmed';
+  if (record.journalHash !== state.journal.hash || record.model !== (state.model?.name ?? null) || record.revision !== state.revision || (record.result === null ? state.result !== null : state.result?.stale || record.result.step !== state.result?.step || record.result.revision !== state.result?.revision)) return 'Stale — Model or Result changed';
+  return `Recorded at Model rev ${record.revision}${record.result ? ` · Result ${record.result.step} rev ${record.result.revision}` : ' · no Result'}`;
+}
+
 export interface UiState {
+  account: AccountState;
+  /** Two immutable solve presentations; never serialized into the Model or Journal. */
+  resultComparison: import('@femlab/registry').ResultComparisonState;
+  assistantVerifications: AssistantVerification[];
+
   autosave: AutosaveState['saved'];
   autosaves: AutosaveVersion[];
   /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
   assistantModel: string | null;
+  paletteIntent: PaletteIntent | null;
   /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
   folder: ProjectFolder | null;
   /** One available catalog; project skills override built-ins by name. */
@@ -63,10 +101,21 @@ export interface UiState {
   ready: boolean;
   model: ModelSummary | null;
   journal: JournalDump | null;
+  /** Exact normalized Journal of the last successful explicit open/save; autosave is separate. */
+  savedJournal: string | null;
+  /** The complete normalized baseline, retained so comparison can show removed entries too. */
+  savedBaseline: JournalDump['entries'] | null;
+  /** Current-vs-baseline causal diff, or an explicitly imported comparison. */
+  journalComparison: JournalDiff | null;
+  comparisonSource: 'saved' | 'imported' | null;
+  /** Imported comparison baseline, retained so a later refresh can recompute it read-only. */
+  comparisonBaseline: JournalDump['entries'] | null;
   script: string;
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
   selection: Selection;
+  /** Tree/AI hover is view state, independent of persistent selection and Journal highlighting. */
+  hover: Pick<Selection, 'bodies' | 'faces' | 'sets'>;
   pickTarget: 'face' | 'body' | 'off';
   viewMode: ViewMode;
   colormap: ColormapName;
@@ -91,8 +140,10 @@ export interface UiState {
   journalWho: Record<number, { who: 'you' | 'ai'; at: number }>;
   /** What the caller of `dispatch` currently counts as; the script host flips it to `ai`. */
   source: 'you' | 'ai';
-  /** `null` while the Script tab shows the Journal; a string once it is being edited. */
+  /** An intentional draft survives switching back to the live Journal script. */
   scriptDraft: string | null;
+  /** Whether the Script tab is showing the draft editor or the live Journal script. */
+  scriptEditing: boolean;
   scriptOut: string[];
   scriptRunning: boolean;
   hostCaps: HostCaps | null;
@@ -104,6 +155,13 @@ export interface UiState {
   theme: 'dark' | 'light';
   /** `query.result` for the last solved Step; `stale` on it is the engine's own hash check. */
   result: ResultSummary | null;
+  /** Metadata for the bundled example that produced this Model, retained while edits stale it. */
+  benchmark: ActiveBenchmark | null;
+  /** Informational import receipt, scoped to this live project; portable provenance is in its source. */
+  abaqusReport: AbaqusConversionReport | null;
+  stepImport: import('./step-import').StepImportState | null;
+  /** Immutable last-successful conversion receipt; later Model edits do not update it. */
+  stepReport: import('@femlab/registry').StepReport | null;
   /** The Step a solve is running for, `null` when none is. */
   solving: string | null;
   /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
@@ -114,6 +172,8 @@ export interface UiState {
   clamp: [number, number] | null;
   /** The last `study.converge` report, for the Results tab's convergence bars. */
   study: StudyReport | null;
+  /** The last adaptive study, shown only with its retained Result. */
+  adaptation: AdaptReport | null;
   /** Every default the solve fell back on: the `warnings` of the solve's own Ack. */
   assumptions: Warning[];
   /** display = SI x this, for the one dimension the camera needs: length. */
@@ -128,9 +188,13 @@ export interface UiState {
   playing: boolean;
   /** Where in one sweep the scrub sits, in turns 0…1. */
   phase: number;
+  /** True while Chromium is encoding the viewer canvas as WebM. */
+  capturingAnimation: boolean;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
   animationSpeed: number;
+  /** True only while the current report Markdown and viewer figure are mounted and printable. */
+  reportReady: boolean;
   /** The retained physical frame shared by contours, deformation, legend and scientific probes. */
   transient: TransientState | null;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
@@ -169,19 +233,30 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 }
 
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
+export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] };
 
 export const initialState: UiState = {
+  account: structuredClone(EMPTY_ACCOUNT),
+  assistantVerifications: [],
+
   autosave: null,
   autosaves: [],
   assistantModel: null,
+  paletteIntent: null,
   folder: null,
   skills: BUILTIN_SKILLS,
   ready: false,
   model: null,
   journal: null,
+  savedJournal: null,
+  savedBaseline: null,
+  journalComparison: null,
+  comparisonSource: null,
+  comparisonBaseline: null,
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
+  hover: EMPTY_HOVER,
   pickTarget: 'face',
   viewMode: 'geometry',
   colormap: 'viridis',
@@ -203,6 +278,7 @@ export const initialState: UiState = {
   },
   panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
+  resultComparison: { configuration: { mode: 'single' }, viewMode: 'geometry', catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null },
   exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],
@@ -212,6 +288,7 @@ export const initialState: UiState = {
   journalWho: {},
   source: 'you',
   scriptDraft: null,
+  scriptEditing: false,
   scriptOut: [],
   scriptRunning: false,
   hostCaps: null,
@@ -222,11 +299,16 @@ export const initialState: UiState = {
   progress: null,
   theme: 'dark',
   result: null,
+  benchmark: null,
+  abaqusReport: null,
+  stepImport: null,
+  stepReport: null,
   solving: null,
   fieldKey: 'vonMises',
   legend: null,
   clamp: null,
   study: null,
+  adaptation: null,
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
@@ -234,8 +316,10 @@ export const initialState: UiState = {
   yieldStress: null,
   playing: false,
   phase: 0,
+  capturingAnimation: false,
   screenshotScale: 1,
   animationSpeed: 1,
+  reportReady: false,
   // --- plan D ---
   projects: [],
   project: null,
@@ -254,17 +338,15 @@ const merge = (mode: 'replace' | 'add' | 'remove', cur: string[], next: string[]
 
 /** `refs` is what `@selection` expands to; `face:` for faces and Sets alike (both are Sets). */
 export function refsOf(s: Omit<Selection, 'refs'>): string[] {
-  return [...s.bodies.map((n) => `body:${n}`), ...s.faces.map((n) => `face:${n}`), ...s.sets.map((n) => `set:${n}`)];
+  return [...s.bodies.map((n) => refOf('body', n)), ...s.faces.map((n) => refOf('face', n)), ...s.sets.map((n) => refOf('set', n))];
 }
 
-export function selectionReducer(cur: Selection, input: { bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
+export function selectionReducer(cur: Selection, input: { refs?: string[]; bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
   const mode = input.mode ?? 'replace';
-  const next = {
-    bodies: merge(mode, cur.bodies, input.bodies),
-    faces: merge(mode, cur.faces, input.faces),
-    sets: merge(mode, cur.sets, input.sets),
-  };
-  return { ...next, refs: refsOf(next) };
+  const supplied = [...(input.refs ?? []), ...refsOf({ bodies: input.bodies ?? [], faces: input.faces ?? [], sets: input.sets ?? [] })];
+  const refs = merge(mode, cur.refs, supplied.map(ref => parseRef(ref)?.ref ?? ref));
+  const names = (kind: string) => refs.map(parseRef).filter(chip => chip?.kind === kind).map(chip => chip!.name);
+  return { bodies: names('body'), faces: names('face'), sets: names('set'), refs };
 }
 
 export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): ConsoleLine[] {
@@ -293,9 +375,13 @@ export class Store {
    * it so "do it for me" behaves exactly like a click on the real control (issue #37, #12).
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
+  private comparisonRequest = 0;
+  private hoverRequest = 0;
+  private documentIdentity = {};
+  private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
-  constructor(public state: UiState = initialState) {}
+  constructor(public state: UiState = structuredClone(initialState)) {}
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -308,8 +394,62 @@ export class Store {
   }
 
   set(patch: Partial<UiState>): void {
+    // Targets belong to the displayed Model. A refresh/replacement must not retain an old
+    // hover, including a name reused by a different document or a deleted Load.
+    if (patch.model && patch.model !== this.state.model) {
+      this.hoverRequest++;
+      if (!('hover' in patch)) patch = { ...patch, hover: EMPTY_HOVER };
+    }
+    // A comparison belongs to the complete current Journal; do not draw an old tail while
+    // refresh is waiting for the next query reply.
+    if (patch.journal && patch.journal !== this.state.journal && !('journalComparison' in patch)) {
+      patch = { ...patch, journalComparison: null };
+    }
     this.state = { ...this.state, ...patch };
     for (const fn of this.listeners) fn();
+  }
+
+  setJournalDiffQuery(query: (base: Journal) => Promise<JournalDiff>): void {
+    this.journalDiffQuery = query;
+  }
+
+  /** All UI/AI producers share this fence; leaving or replacing a Model expires old replies. */
+  beginHover(): (targets: UiState['hover']) => boolean {
+    const request = ++this.hoverRequest;
+    const model = this.state.model;
+    this.set({ hover: EMPTY_HOVER });
+    return targets => {
+      if (request !== this.hoverRequest || model !== this.state.model) return false;
+      this.set({ hover: targets });
+      return true;
+    };
+  }
+
+  /** A reply may draw only while its request, current Journal and baseline selection still match. */
+  beginJournalComparison(): (diff?: JournalDiff) => boolean {
+    const request = ++this.comparisonRequest;
+    const { journal, savedBaseline, comparisonBaseline, comparisonSource } = this.state;
+    return diff => request === this.comparisonRequest && journal === this.state.journal
+      && savedBaseline === this.state.savedBaseline && comparisonBaseline === this.state.comparisonBaseline
+      && comparisonSource === this.state.comparisonSource
+      // The live engine may advance before the displayed Journal finishes hydration.
+      && (diff === undefined || diff.currentHash === journal?.hash);
+  }
+
+  async refreshJournalComparison(): Promise<JournalDiff | null> {
+    const source = this.state.comparisonSource === 'imported' ? 'imported' : 'saved';
+    const entries = source === 'imported' ? this.state.comparisonBaseline : this.state.savedBaseline;
+    const current = this.beginJournalComparison();
+    if (!entries || !this.journalDiffQuery) return null;
+    try {
+      const diff = await this.journalDiffQuery({ entries });
+      if (!current(diff)) return null;
+      this.set({ journalComparison: diff, comparisonSource: source });
+      return diff;
+    } catch (error) {
+      if (!current()) return null;
+      throw error;
+    }
   }
 
   /**
@@ -330,9 +470,11 @@ export class Store {
    * Open the Properties form on a Command, pre-filled with `values`. Every field edit comes
    * back through here with `keepInitial`, so Revert still knows where the form started.
    */
-  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false): void {
+  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false, target?: FormState['target'], materialPhysics?: MaterialPhysics[]): void {
     const initial = keepInitial && this.state.form?.cmd === cmd ? this.state.form.initial : values;
-    this.set({ form: { cmd, values, initial }, formError: null, pickInto: null });
+    const edited = target ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.target : undefined);
+    const physics = materialPhysics ?? (keepInitial && this.state.form?.cmd === cmd ? this.state.form.materialPhysics : undefined);
+    this.set({ form: { cmd, values, initial, ...(edited ? { target: edited } : {}), ...(physics ? { materialPhysics: physics } : {}) }, formError: null, pickInto: null });
   }
 
   log(level: ConsoleLevel, text: string): void {
@@ -343,6 +485,30 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  /** Capture before I/O; ordinary edits keep this identity, replacing the Model does not. */
+  beginSave(): (journal: { entries: JournalDump['entries'] }) => void {
+    const identity = this.documentIdentity;
+    return journal => {
+      if (identity === this.documentIdentity) this.markSaved(journal);
+    };
+  }
+
+  /** A successful explicit open owns a new document and its normalized saved baseline. */
+  markOpened(journal: { entries: JournalDump['entries'] }): void {
+    this.documentIdentity = {};
+    this.markSaved(journal);
+  }
+
+  markSaved(journal: { entries: JournalDump['entries'] }): void {
+    this.set({
+      savedJournal: journalIdentity(journal.entries),
+      savedBaseline: structuredClone(journal.entries),
+      journalComparison: null,
+      comparisonSource: null,
+      comparisonBaseline: null,
+    });
   }
 
   resizePanel(panel: ResizablePanel, size: number): void {

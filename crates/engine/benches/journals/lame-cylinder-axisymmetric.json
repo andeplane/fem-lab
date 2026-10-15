@@ -1,0 +1,152 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "lame-cylinder-axisymmetric"
+    },
+    "hashAfter": "77bb89ba1469355c26d43a01a87657c1a64ac039394e34f877c27ba244e93109"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    "hashAfter": "23db9ca4af01ee26ca40d345e07005dbd8ae05eb8aca1d5c05e120effbb3f7e9"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "axisymmetric"
+      }
+    },
+    "hashAfter": "6e222e7ef443429d02b6baf790acb2131c69e68260dd2a55ca1e286dd182cef2"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "source": "BENCHMARKS.md C2"
+    },
+    "hashAfter": "62218bf046dbdd7bae67920547df71545a05a04f9734f95b3a7a9dc54908c115"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "tube",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0.1 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0.1 m"
+              ],
+              [
+                "0.1 m",
+                "0.1 m"
+              ]
+            ],
+            "n": [
+              8,
+              8
+            ],
+            "tags": [
+              "zmin",
+              "outer",
+              "zmax",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    "hashAfter": "50fe4c20d7f759a056348918c39fa4fca475a518adda16e066d60d44da4264c2"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    "hashAfter": "402ab28caf327cac3df10b1533bc2a026e9874b1313dfd642c5e3c2b4a729214"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "zmin",
+      "on": "tube.zmin",
+      "normal": "y"
+    },
+    "hashAfter": "dfe3471167fe3154cd4a909092237860c87cc6bdf52e46dd08220daaf32c33fd"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "zmax",
+      "on": "tube.zmax",
+      "normal": "y"
+    },
+    "hashAfter": "719410eb36f1aff0e511769de4dc74b0e0922214d598962d59980ab844610fd8"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    "hashAfter": "de169892a5ea8865f884e809bba5b705cea9153fbf8bf4a64e6d0a1747e28057"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "zmin",
+        "zmax"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    "hashAfter": "4cb2665adce93695b1a8abb9229cfaae55d19cb0cb7099fb17c277bd9c4ce837"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "4cb2665adce93695b1a8abb9229cfaae55d19cb0cb7099fb17c277bd9c4ce837"
+  }
+]

@@ -2,6 +2,8 @@
 //! descriptions, so they say what, when, the effect on names and Sets, and the common mistake.
 //! Physical values are `Q<D>` (unit strings); lengths inside shapes too.
 
+use std::collections::BTreeMap;
+
 use femlab_geometry::{
     Affine3, FacePredicate as GeoFacePredicate, RegionPredicate as GeoRegionPredicate, Segment, Shape, Sketch,
 };
@@ -10,20 +12,59 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SpecificHeat, Stress,
-    Temperature, ThermalExpansion, Time, UnitSet, Q,
+    Acceleration, Area, Conductivity, Density, Dimensionless, Force, Frequency, HeatFlux, HeatSource, HeatTransfer,
+    Length, Mass, SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, Torque, UnitSet, Velocity,
+    Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
 pub type SetRef = String;
 
-/// A displacement component.
+/// How two faces interact where they meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ContactKind {
+    /// Glued: the two faces never separate and never slide, so the assembly behaves as one
+    /// part. Linear: one solve, no contact search.
+    Bonded,
+    /// The faces can press on each other, open, and slide without friction. A slave node
+    /// within `tol` of the master is paired with the point it projects onto and its initial gap
+    /// along the master normal is recorded; in the solve it is held on the master surface while
+    /// the normal force there is compressive, released the moment that force turns tensile, and
+    /// held again the moment its gap would go negative. Tangential motion is free, so nothing
+    /// is transmitted along the surface. Small sliding: the pairing and the normal are those of
+    /// the undeformed Mesh. `static` solves this by repeated linear solves (an active set),
+    /// `static-nonlinear` updates the set inside every Newton iteration; heat, modal, buckling,
+    /// harmonic, explicit and implicit Steps refuse it.
+    Frictionless,
+}
+
+/// How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
+/// transmits a moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CoupleKind {
+    /// The point follows the face's weighted mean displacement and adds no stiffness, so a
+    /// force or a mass at the point spreads over the face in exactly the weights a uniform
+    /// traction would produce. How a bearing or a load introduction is idealised.
+    Distributed,
+    /// Every node of the face takes the point's displacement, so the face translates as one
+    /// and cannot deform at all. Stiffer than the real part around a real attachment.
+    Rigid,
+}
+
+/// A nodal degree of freedom: a displacement component, or a rotation about a global axis.
+/// Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
+/// on every other node they are inert, so holding them there changes nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Dof {
     Ux,
     Uy,
     Uz,
+    Rx,
+    Ry,
+    Rz,
 }
 
 impl Dof {
@@ -32,8 +73,26 @@ impl Dof {
             Dof::Ux => 0,
             Dof::Uy => 1,
             Dof::Uz => 2,
+            Dof::Rx => 3,
+            Dof::Ry => 4,
+            Dof::Rz => 5,
         }
     }
+
+    /// Every component, in DOF order: the three translations, then the three rotations.
+    pub const ALL: [Dof; 6] = [Dof::Ux, Dof::Uy, Dof::Uz, Dof::Rx, Dof::Ry, Dof::Rz];
+}
+
+/// What the members of a line Body are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LineKind {
+    /// Pin-jointed bars carrying axial force only (the default).
+    #[default]
+    Truss,
+    /// Timoshenko beams carrying axial force, shear, bending and torsion; their joints gain
+    /// three rotational degrees of freedom.
+    Beam,
 }
 
 /// A coordinate axis.
@@ -55,12 +114,105 @@ impl Axis {
     }
 }
 
+/// Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
+/// three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
+/// contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
+/// fibre, the grain, the rolling direction — and `orientation` says where it points. The nine
+/// numbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the
+/// same for the other two pairs, and `material.add` says so if they do not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Orthotropic {
+    #[schemars(extend("x-physics" = "stiffness"))]
+    #[serde(rename = "E1")]
+    pub e1: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    #[serde(rename = "E2")]
+    pub e2: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    #[serde(rename = "E3")]
+    pub e3: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    #[serde(rename = "G12")]
+    pub g12: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    #[serde(rename = "G13")]
+    pub g13: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    #[serde(rename = "G23")]
+    pub g23: Q<Stress>,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    pub nu12: f64,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    pub nu13: f64,
+    #[schemars(extend("x-physics" = "stiffness"))]
+    pub nu23: f64,
+    /// Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
+    /// `material.add`, never both.
+    #[schemars(extend("x-physics" = "expansion"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<[Q<ThermalExpansion>; 3]>,
+    /// Conductivity along the three material axes. Give this *or* the isotropic `k` on
+    /// `material.add`, never both.
+    #[schemars(extend("x-physics" = "thermal"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<[Q<Conductivity>; 3]>,
+}
+
+/// Rate-independent von Mises (J2) plasticity with isotropic hardening, for an isotropic
+/// Material in a `static-nonlinear` Step. The initial yield stress is `yield` on `material.add`.
+/// Give exactly one of `H` and `table`: `H` is the plastic modulus `dσ_y/dε̄ᵖ` of linear
+/// hardening (the tangent modulus of a tension test is then `E_t = E H / (E + H)`; `"0 Pa"` is
+/// perfect plasticity), `table` is the tension curve as (equivalent plastic strain, yield
+/// stress) points, piecewise linear, starting at plastic strain 0 with `yield` and held flat
+/// beyond its last point. Every other procedure uses the elastic part and warns
+/// `material.plasticityIgnored`. Small strain: not a finite-strain plasticity model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Plasticity {
+    /// Linear hardening modulus, `σ_y = yield + H ε̄ᵖ`; zero is perfectly plastic.
+    #[serde(rename = "H", default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<Q<Stress>>,
+    /// Hardening curve, at least two points with plastic strain ascending from 0 and stress
+    /// not decreasing; the first stress is the initial yield.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Vec<HardeningPoint>>,
+}
+
+/// One point of a hardening curve: the yield stress at an equivalent plastic strain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HardeningPoint {
+    /// Equivalent plastic strain (dimensionless, so 0.02 is 2 %).
+    pub plastic_strain: f64,
+    pub stress: Q<Stress>,
+}
+
+/// Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
+/// is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
+/// first component and `k`'s first component belong to, and a positive angle turns it towards
+/// the second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the
+/// rotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would
+/// couple the in-plane strains to the out-of-plane shears the idealisation does not carry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Orientation {
+    #[serde(default = "out_of_plane_axis")]
+    pub axis: [f64; 3],
+    pub angle: Q<Dimensionless>,
+}
+
+fn out_of_plane_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
+}
+
 /// Kinds of nameable objects in a Model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ObjectKind {
     Body,
     Material,
+    Section,
     Set,
     Constraint,
     Load,
@@ -72,6 +224,7 @@ impl ObjectKind {
         match self {
             ObjectKind::Body => "body",
             ObjectKind::Material => "material",
+            ObjectKind::Section => "section",
             ObjectKind::Set => "set",
             ObjectKind::Constraint => "constraint",
             ObjectKind::Load => "load",
@@ -80,23 +233,153 @@ impl ObjectKind {
     }
 }
 
-/// Analysis procedures.
+/// Analysis procedures. The schema declares each procedure's consumed Material properties,
+/// required property groups and produced results for every host. `x-material-needs` names
+/// alternative stiffness laws as one requirement; `x-material-properties` includes optional
+/// laws the procedure can read, rather than claiming all of them are mandatory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Procedure {
     /// Linear static equilibrium.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "alpha"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
+    #[schemars(extend("x-results" = ["u", "stress", "reactions"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness"]))]
     Static,
+    /// Static equilibrium with geometric nonlinearity: large displacement and large rotation,
+    /// solved by Newton–Raphson over `increments` load increments. The strain measure is
+    /// Green–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so
+    /// the linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**
+    /// stress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.
+    /// Solid and plane-strain idealisations only. Incompatible modes are switched off, so
+    /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
+    /// follow the deformation (a pressure keeps its reference direction and area) and a
+    /// temperature field is applied in full rather than ramped with the load factor.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "yield", "plasticity", "alpha"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness (E, ν or orthotropic)"]))]
+    #[schemars(extend("x-results" = ["u", "Cauchy stress", "reactions"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "plasticity"]))]
+    StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
+    ///
+    /// **Prestressed (stress-stiffened) modal analysis.** Give the Step an `after` naming a
+    /// solved `static` or `static-nonlinear` Step and it vibrates *about that loaded state*:
+    /// the stress stiffening of the preload is added to the stiffness, so a guy rope or a
+    /// tensioned tie rings higher, a strut in compression rings lower, and a member loaded to
+    /// its buckling load has a first frequency of zero. Use it whenever the axial force in a
+    /// member is a large fraction of its Euler load — cable nets, tension rods, preloaded
+    /// bolts, slender bracing — because the unprestressed frequency of such a member is simply
+    /// the wrong number. Without `after` this is the ordinary modal analysis of the unloaded
+    /// structure, unchanged.
+    ///
+    /// The preload Step's own Loads are what does the stiffening; this Step's Loads are
+    /// ignored, as they are for any modal Step. `query.result` reports `prestressFrom` naming
+    /// the Step the stiffening came from. Not available for the axisymmetric idealisation
+    /// (the hoop term of a ring's stress stiffening is not written), and a preload far past the
+    /// buckling load is refused: past it the structure has no vibration about that state.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["natural frequencies", "mode shapes"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     Modal,
+    /// Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening
+    /// that state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`
+    /// with the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this
+    /// Step's Loads by `lambda` to get the critical load.
+    ///
+    /// Read the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*
+    /// the structure buckles, never how far — so never report a displacement from it. A
+    /// **negative** factor is not an error: it means the structure buckles under the *reversed*
+    /// load, which matters if the load can change sign. And the factor is an **upper bound**: it
+    /// ignores imperfections, pre-buckling rotation and yielding, so a real column carries less
+    /// than this predicts. It is not a safety factor; treat it as the ceiling a perfect,
+    /// perfectly elastic structure would reach. Not available for the axisymmetric idealisation,
+    /// and it needs the direct solver: the iteration back-substitutes hundreds of times through
+    /// one factorisation, which `cpu-pcg` and `gpu-pcg` do not build.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "alpha"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness"]))]
+    #[schemars(extend("x-results" = ["load factors", "mode shapes"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness"]))]
+    Buckling,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
+    #[schemars(extend("x-material-properties" = ["k", "orthotropic"]))]
+    #[schemars(extend("x-material-needs" = ["k"]))]
+    #[schemars(extend("x-results" = ["T", "reaction power"]))]
+    #[schemars(extend("x-material-physics" = ["thermal", "mass"]))]
     HeatSteady,
     /// Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.
+    #[schemars(extend("x-material-properties" = ["k", "orthotropic", "rho", "cp"]))]
+    #[schemars(extend("x-material-needs" = ["k", "ρ", "cp"]))]
+    #[schemars(extend("x-results" = ["T", "reaction power", "stored-energy rate"]))]
+    #[schemars(extend("x-material-physics" = ["thermal", "mass"]))]
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho", "alpha"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
     Explicit,
+    /// Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on
+    /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
+    /// `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho", "alpha"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["u", "stress", "reactions", "time history"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
+    Implicit,
+    /// Steady-state response to a sinusoidal load over a frequency sweep, by mode
+    /// superposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,
+    /// `fStop` and `points`.
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["amplitude", "phase", "frequency response"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
+    Harmonic,
+    /// One-sided PSD response of the solved modal Step named by `after`. Produces
+    /// componentwise 1σ displacement and stress, including cross-modal correlations.
+    #[serde(rename = "randomVibration")]
+    #[schemars(extend("x-material-properties" = ["E", "nu", "orthotropic", "rho"]))]
+    #[schemars(extend("x-material-needs" = ["elastic stiffness", "ρ"]))]
+    #[schemars(extend("x-results" = ["1σ displacement", "1σ stress"]))]
+    #[schemars(extend("x-material-physics" = ["stiffness", "mass"]))]
+    RandomVibration,
 }
 
-/// A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+/// One knot of the one-sided PSD of the dimensionless multiplier on this Step's Loads.
+/// Densities have units 1/Hz (equivalently s). Frequencies increase strictly; interpolation
+/// is linear in Hz and density, with zero input outside the table's finite band.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PsdPoint {
+    pub frequency: Q<Frequency>,
+    pub density: Q<Time>,
+}
+
+/// A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
+/// from rest. Constrained components are held at zero whatever this says; two entries that
+/// give one node different velocities are `model.ill-posed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialVelocitySpec {
+    pub on: SetRef,
+    pub value: [Q<Velocity>; 3],
+}
+
+/// How a harmonic Step spaces the frequencies between `fStart` and `fStop`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SweepSpacing {
+    /// Equal steps in frequency; both endpoints are hit exactly.
+    #[default]
+    Linear,
+    /// Equal ratios between neighbours, which is what a resonance plot wants. `fStart` must be
+    /// above zero.
+    Log,
+}
+
+/// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
+/// temperature of a heat-transient Step, and every Load and prescribed displacement of a
+/// static one.
 ///
 /// Commands are replayed from the Journal, so a time function is data, never a closure: it is
 /// either a sine or a piecewise-linear table, and nothing else.
@@ -128,18 +411,47 @@ pub enum Solver {
 
 /// Result fields. Reaction is support force in N for structural Results and removed heat
 /// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
-/// display units.
+/// display units. Transient thermal reactions include stored energy and refer to the last
+/// θ-method integration stage, not an endpoint steady-state residual. A static Result with
+/// beams or shells includes `rotation` (every node's rotation about the global axes, radians,
+/// zero where neither reaches). Beams additionally produce `sectionForce` (`N` positive in
+/// tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
+/// member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
+/// triple at each end of every beam and zeros on every other element. `plasticStrain` is the
+/// equivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with
+/// an elastic–plastic Material produces. `contactPressure` is the normal pressure a
+/// frictionless contact carries, one component, positive in compression, on the slave nodes of
+/// every frictionless pair and zero on every other node; only a Step with such a pair has it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
     Displacement,
     Stress,
     StressUnaveraged,
+    /// Shell stress at +t/2 along the director, global xx, yy, zz, xy, xz, yz;
+    /// extrapolated per element node, with no averaging across creases. Zero on non-shells.
+    StressTop,
+    /// Shell stress at -t/2 along the director, with the same ordering and location as stressTop.
+    StressBottom,
+    /// Shell stress first moment through thickness, integral z*sigma dz, in N (moment
+    /// per unit width). Global tensor components xx, yy, zz, xy, xz, yz, positive for
+    /// tension on the +director side; these are tensor components, not moment-axis
+    /// components. Extrapolated per element node, unaveraged; zero on non-shells.
+    ShellMoment,
+    /// Dimensionless local ZZ energy-error contribution per element. Sum of squares
+    /// equals the squared global relative estimate. Available when requested in
+    /// step.add.output on supported linear simplex static/heat Steps, or after study.adapt.
+    ErrorEstimate,
     VonMises,
     Principal,
     Strain,
+    PlasticStrain,
     Reaction,
     Temperature,
+    Rotation,
+    SectionForce,
+    SectionMoment,
+    ContactPressure,
 }
 
 /// Element formulation for linear hexahedra and quadrilaterals.
@@ -151,6 +463,10 @@ pub enum Formulation {
     IncompatibleModes,
     /// Full integration: the textbook linear element, which locks in bending.
     Full,
+    /// Small-strain Hex8 B-bar: eight-point deviatoric strain with volume-averaged dilatation.
+    /// Other element kinds retain full integration. This is the Abaqus C3D8 formulation,
+    /// not uniformly reduced integration; finite-deformation Hex8 steps are unsupported.
+    MeanDilatation,
 }
 
 /// How a 3D world is reduced, if at all.
@@ -163,8 +479,85 @@ pub enum IdealisationSpec {
     PlaneStress { thickness: Q<Length> },
     /// Long 2D body in the xy plane with zero z strain.
     PlaneStrain,
-    /// Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.
-    Axisymmetric,
+    /// Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution. `twist` adds a
+    /// third degree of freedom, the circumferential displacement, so the section can carry
+    /// torsion. With twist, the third component of a vector Command is the circumferential
+    /// direction.
+    Axisymmetric {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        twist: bool,
+    },
+}
+
+/// A cross-section for line members (trusses and frames). The library turns the shape into the
+/// area, the two second moments, the St Venant torsion constant, the shear correction factors
+/// and the extreme-fibre distances a line element integrates with.
+///
+/// Local axes: `y` is the section's width direction and `z` its height, both through the
+/// centroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and
+/// `iZ` about local z. The shear centre and warping torsion are not modelled, so an open
+/// section (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the
+/// torsional stiffness of a channel and ignores the twist a load through the centroid causes.
+/// `kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for
+/// a circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's
+/// nu-dependent values, which at nu = 0.3 are 0.850 and 0.886.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SectionSpec {
+    /// Homogeneous MITC4 shell section, centred on the meshed midsurface.
+    Shell { thickness: Q<Length> },
+    /// Perfectly bonded shell plies, ordered bottom to top. Total thickness is their
+    /// sum, centred on the meshed midsurface. Each ply supplies its Material and angle;
+    /// ply materials replace the Body material. Uses a common MITC4 displacement field
+    /// with per-ply integration and separate stresses on both sides of each interface.
+    Laminate { plies: Vec<ShellPlySpec> },
+    /// Solid rectangle, `width` along local y and `height` along local z.
+    Rectangle { width: Q<Length>, height: Q<Length> },
+    /// Solid circle.
+    Circle { radius: Q<Length> },
+    /// Circular tube of outer `radius` and wall `thickness` (which must be below the radius).
+    Tube { radius: Q<Length>, thickness: Q<Length> },
+    /// Doubly symmetric I-section: total `height` along local z, flange `width` along local y,
+    /// a web of `webThickness` and two flanges of `flangeThickness`.
+    #[serde(rename_all = "camelCase")]
+    I { height: Q<Length>, width: Q<Length>, web_thickness: Q<Length>, flange_thickness: Q<Length> },
+    /// Channel: a web of `height` and `webThickness` at local y = 0 with two flanges of
+    /// `width` and `flangeThickness` reaching out along +y. Its centroid is offset from the
+    /// web, which the properties account for; its shear centre is not modelled.
+    #[serde(rename_all = "camelCase")]
+    Channel { height: Q<Length>, width: Q<Length>, web_thickness: Q<Length>, flange_thickness: Q<Length> },
+    /// The properties given directly, which is how a published benchmark section is entered.
+    /// `kY`/`kZ` default to 5/6; `cY`/`cZ` default to zero, and a section without them reports
+    /// no bending stress rather than a wrong one.
+    Generic {
+        a: Q<Area>,
+        #[serde(rename = "iY")]
+        i_y: Q<SecondMoment>,
+        #[serde(rename = "iZ")]
+        i_z: Q<SecondMoment>,
+        j: Q<SecondMoment>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "kY")]
+        k_y: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "kZ")]
+        k_z: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "cY")]
+        c_y: Option<Q<Length>>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "cZ")]
+        c_z: Option<Q<Length>>,
+    },
+}
+
+/// One shell ply. The angle is measured about the positive director, from the
+/// midsurface's first parametric direction or section.assign's projected reference
+/// axis. The Material's orientation is composed in this ply frame, not global axes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellPlySpec {
+    pub material: String,
+    pub thickness: Q<Length>,
+    /// Rotation from the reference direction, e.g. "45 deg"; omitted means zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<Q<Dimensionless>>,
 }
 
 /// Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -245,13 +638,46 @@ pub enum SweepSpec {
     },
 }
 
+/// Radial projection of a bilinear shell patch. Geometry and derivatives are projected
+/// together; the resulting unit normals become the MITC4 corner directors.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SurfaceProjectionSpec {
+    Sphere { center: [Q<Length>; 3], radius: Q<Length> },
+    Cylinder { center: [Q<Length>; 3], axis: [f64; 3], radius: Q<Length> },
+}
+
+/// Oriented 3D quadrilateral shell patch. Corners 0,1,2,3 follow the positive
+/// normal's right-hand rule. `n` counts cells along 0–1 and 0–3. Optional edge tags
+/// name node Sets in edge order 0–1,1–2,2–3,3–0; top and bottom are reserved face Sets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacePatchSpec {
+    pub corners: [[Q<Length>; 3]; 4],
+    pub n: [u32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<[Option<String>; 4]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<SurfaceProjectionSpec>,
+}
+
 /// The mesher and its settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSpec {
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
-    Lattice { size: LatticeSize },
+    Lattice {
+        size: LatticeSize,
+        /// Optional positive element lengths keyed by existing Body name. Each entry overrides
+        /// `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+        /// size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+        /// and cannot have size overrides. Names follow model.rename; remove an override before
+        /// removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+        /// them with the global size, preserving the refinement ratio.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        sizes: BTreeMap<String, Q<Length>>,
+    },
     /// Structured quadrilaterals on one or more mapped blocks, merged where they touch. The
     /// blocks *are* the geometry: no geometry.add is needed, and the Body they make is named by
     /// `body` (default "sheet"), so each block edge tag becomes the face Set `<body>.<tag>`.
@@ -268,6 +694,9 @@ pub enum MesherSpec {
     /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
     /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
     /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    /// Sheet translation, rotation about z and positive in-plane scaling are applied before
+    /// meshing. Size and refine boxes use world coordinates; curved boundaries are sampled
+    /// to one tenth of size in world space. Nested or out-of-plane transforms are unsupported.
     Free {
         of: String,
         size: Q<Length>,
@@ -281,6 +710,248 @@ pub enum MesherSpec {
     /// idealisation must be 3D, and the base must make quadrilaterals, so it is the mapped
     /// mesher: sweeping free triangles would need wedge elements, which the engine has not got.
     Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
+    /// Unstructured tetrahedra filling every 3D Body, at about `size`. The only mesher that
+    /// meshes curved CSG solids without stair-stepping: it cuts a body-centred lattice against
+    /// the exact solid, so boundary nodes lie on the true surface, a cylinder comes out round,
+    /// and every named CSG face becomes the face Set `<body>.<tag>` as it does for the lattice.
+    /// `order: 2` gives tet10 with the mid-edge nodes projected onto curved faces; order 1 gives
+    /// constant-strain tet4, which is stiff in bending. A sharp CSG edge that falls between two
+    /// lattice crossings is chamfered by up to `size`, so prefer the mapped or sweep mesher when
+    /// the geometry is prismatic, because those are exact. `maxElements` caps the background
+    /// lattice (500 000 by default) and is checked before anything is allocated.
+    Tet(TetSpec),
+    /// MITC4 shell midsurfaces in 3D: bilinear patches, optionally projected onto a
+    /// sphere or cylinder. The patches define the implicit Body (`body`, default
+    /// "shell"). Coincident patch nodes merge; shared edges need matching divisions.
+    /// Each patch retains its own directors at a crease. `<body>.top` and
+    /// `<body>.bottom` are face Sets; tagged edges are node Sets for constraints,
+    /// forces and moments. Requires order 1, no simplex split, 3D idealisation and
+    /// a shell thickness Section assigned with section.assign.
+    Surface {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        patches: Vec<SurfacePatchSpec>,
+    },
+    /// An immutable authored finite-element mesh, with positive source labels and exact
+    /// memberships. Coordinates carry length units; connectivity is in source node labels,
+    /// never dense indices. Unused authored nodes and exact memberships survive in the Model,
+    /// with explicit unused-label reporting; only participating nodes have FE DOFs/Results.
+    /// Loads/supports including unused nodes are unsupported. Tet4, Tet10 and Hex20 use standard full integration. Hex8 uses full
+    /// integration or explicit mean-dilatation (B-bar). Requires solid3d,
+    /// unchanged authored interpolation (order 1), formulation full or mean-dilatation and no simplices/refinement; sweeping and size studies are
+    /// unsupported. Original cell maps and contacts require a conservative exact certificate;
+    /// uncertified geometry returns unsupported, without claiming invalidity or simplifying
+    /// warped faces. Pair proof is bounded to 12 dyadic subdivision levels/4096 boxes.
+    /// Coincident labelled nodes remain distinct. Replace the whole checked
+    /// source with mesh.set; named source Sets belong to the mesher and cannot be edited alone.
+    /// Input is bounded to 250000 nodes, 250000 elements and 1000000 supplied memberships
+    /// across Sets, surfaces and numeric node targets, before canonical deduplication.
+    Imported(ImportedMeshSpec),
+}
+
+/// An authored finite-element source; I/O and parsing belong to hosts/converters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedMeshSpec {
+    pub body: String,
+    pub nodes: Vec<ImportedNodeSpec>,
+    pub elements: Vec<ImportedElement>,
+    /// Disjoint named element regions. Keys are editable Body identities; memberships use
+    /// authored element labels. Elements outside regions belong to the source Body.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub regions: BTreeMap<String, Vec<u32>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub node_sets: BTreeMap<String, Vec<u32>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub element_sets: BTreeMap<String, Vec<u32>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub surfaces: BTreeMap<String, Vec<ImportedFace>>,
+    /// Allocate <body>.node_<label> targets only for requested numeric node references.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_targets: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Box<ImportedProvenance>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedNodeSpec {
+    /// Positive original node label, at most 999999999.
+    pub label: u32,
+    /// Global Cartesian x/y/z coordinates as length Quantities; converted to SI in the Model.
+    pub at: [Q<Length>; 3],
+}
+
+/// Authored 3D solid families; interpolation and source connectivity are retained.
+/// Hex8 uses the explicit mesh formulation; other kinds retain standard full integration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportedElementKind {
+    Tet4,
+    Hex8,
+    Tet10,
+    Hex20,
+}
+
+impl ImportedElementKind {
+    pub fn geometry(self) -> femlab_geometry::ElementKind {
+        match self {
+            Self::Tet4 => femlab_geometry::ElementKind::Tet4,
+            Self::Hex8 => femlab_geometry::ElementKind::Hex8,
+            Self::Tet10 => femlab_geometry::ElementKind::Tet10,
+            Self::Hex20 => femlab_geometry::ElementKind::Hex20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedElement {
+    /// Positive original element label, at most 999999999.
+    pub label: u32,
+    pub kind: ImportedElementKind,
+    /// Source node labels in Abaqus connectivity order, exactly 4, 8, 10 or 20 for the declared kind.
+    pub nodes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedFace {
+    /// Original element label.
+    pub element: u32,
+    /// Abaqus face number: 1..4 for tetrahedra, 1..6 for hexahedra.
+    pub face: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedProvenance {
+    /// SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.
+    pub sha256: String,
+    pub conversion_version: String,
+    /// Immutable supplied-file manifest; paths are relative names, never host file handles.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
+    /// Original assembly identities keyed by the persistent global source label.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "source_identities")]
+    pub node_identities: BTreeMap<u32, ImportedEntityIdentity>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "source_identities")]
+    pub element_identities: BTreeMap<u32, ImportedEntityIdentity>,
+}
+
+// Tagged Command deserialization buffers a serde Content value, whose map-key
+// deserializer does not perform serde_json's string-to-integer key conversion.
+fn source_identities<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<u32, ImportedEntityIdentity>, D::Error> {
+    let entries = BTreeMap::<String, ImportedEntityIdentity>::deserialize(deserializer)?;
+    entries
+        .into_iter()
+        .map(|(key, identity)| {
+            let label = key.parse::<u32>().map_err(serde::de::Error::custom)?;
+            if key != label.to_string() {
+                return Err(serde::de::Error::custom("identity map keys must be canonical decimal source labels"));
+            }
+            Ok((label, identity))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedEntityIdentity {
+    pub source_label: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
+}
+
+/// Local maximum edge lengths applied after the chosen mesher. Bounds are world
+/// coordinates; touching element boxes obey the finest overlapping size. Only
+/// linear triangles/tetrahedra are supported. Boundary edges are bisected without
+/// projection onto CAD, so this controls discretisation error on the base geometry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalRefinementSpec {
+    pub boxes: Vec<SizeBoxSpec>,
+    /// Maximum final element count, checked before refinement allocations grow past it.
+    pub max_elements: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SizeBoxSpec {
+    pub min: [Q<Length>; 3],
+    pub max: [Q<Length>; 3],
+    pub size: Q<Length>,
+}
+
+/// `MesherSpec::Tet`'s settings, deserialized by hand rather than derived.
+///
+/// A two-field struct variant of an internally tagged enum — one `Q<Length>` field (itself
+/// `#[serde(transparent)]` over an `#[serde(untagged)]` `Quantity`) followed by a trailing
+/// `#[serde(default)]` `Option` — hits a `serde_derive` limitation where the Content-buffered
+/// deserializer used for internally tagged struct variants silently treats the last field as
+/// absent, whatever the JSON says: `maxElements` came back `None` even when the JSON gave 5,
+/// verified with a minimal reproduction outside this crate and independent of `MesherSpec`'s
+/// other variants (which stay struct variants because none of them hits this shape: `Lattice`
+/// and `Sweep` have no trailing scalar Option, and `Free`'s `refine: Option<Vec<_>>` is not the
+/// pattern that triggers it). Wrapping the payload as a newtype variant over a type with its own
+/// `Deserialize` — a plain `MapAccess` loop, none of `serde_derive`'s struct-variant codegen —
+/// sidesteps it, confirmed against the same minimal reproduction.
+///
+/// `#[schemars(inline)]` keeps the schema shaped like the other variants: a newtype variant of
+/// an internally tagged enum otherwise comes out as a `$ref` to `TetSpec` beside the tag's
+/// `properties`/`required`, and both zod's `fromJSONSchema` and json-schema-to-typescript read
+/// a `$ref` with siblings as the `$ref` alone, so `mesh.set { mesher: tet }` would validate as
+/// a tag-less object and every other mesher would match the variant too.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[schemars(inline)]
+pub struct TetSpec {
+    pub size: Q<Length>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_elements: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for TetSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum Field {
+            Size,
+            MaxElements,
+        }
+        struct TetSpecVisitor;
+        impl<'de> serde::de::Visitor<'de> for TetSpecVisitor {
+            type Value = TetSpec;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a tet mesher spec with `size` and an optional `maxElements`")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<TetSpec, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut size = None;
+                let mut max_elements = None;
+                while let Some(key) = map.next_key::<Field>()? {
+                    match key {
+                        Field::Size => size = Some(map.next_value()?),
+                        Field::MaxElements => max_elements = map.next_value()?,
+                    }
+                }
+                Ok(TetSpec { size: size.ok_or_else(|| serde::de::Error::missing_field("size"))?, max_elements })
+            }
+        }
+        deserializer.deserialize_map(TetSpecVisitor)
+    }
 }
 
 /// A file format `mesh.export` writes.
@@ -562,6 +1233,24 @@ impl Placement {
     }
 }
 
+/// The geometry file formats geometry.import reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeshFormat {
+    /// STL, ASCII or binary: a triangle soup with no units, no colours and no face names.
+    Stl,
+}
+
+/// How a Command's inline file payload is encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DataEncoding {
+    /// The file's own text, verbatim. The default.
+    Utf8,
+    /// Standard base64, for a binary file.
+    Base64,
+}
+
 /// A shape with unit strings; the geometry crate's `Shape` is its SI form.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -670,58 +1359,112 @@ fn many(shapes: &[ShapeSpec], where_: &str) -> Result<Vec<Shape>, Error> {
 }
 
 /// Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
+///
+/// `step.add` is much the largest variant, and by design: it is the union of every procedure's
+/// arguments, so it grows with each new procedure while the rest stay put. Boxing it would put
+/// a heap indirection on the Journal's replay path — the one place a Command is actually read
+/// in bulk — to save a few hundred kilobytes across a Journal of a few hundred entries.
+// ponytail: unboxed union variant, ~600 bytes. Box the `step.add` payload behind a
+// `#[serde(flatten)]` struct if a Journal ever gets large enough for the memory to show up.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "cmd")]
+#[schemars(transform = command_tag_description)]
 pub enum Command {
     /// Start a new, empty Model and Journal with this name. Discards the current Model, its
     /// Results and the undo history; it is the first entry of every Journal, so call it once
     /// at the start, never to "reset" mid-way (use journal.undo for that).
     #[serde(rename = "model.new", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "replacement"))]
     ModelNew {
+        /// Display name of the new empty Model.
         name: String,
+        /// Optional Model description or modelling assumptions retained with the Model.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
 
     /// Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
     /// stays SI and every input may still use any unit of the right dimension; this only
-    /// changes how values are reported back.
+    /// changes how values are reported back. A scalar that cannot fit in the selected unit
+    /// produces `unit.display` when queried or reported, without altering its stored SI data.
+    /// Choose larger or SI display units to read it; formatting never silently changes units.
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
-    ModelSetUnits { units: UnitSet },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ModelSetUnits {
+        /// Display units used by Queries and the UI; physical inputs still carry their own units and storage stays SI.
+        units: UnitSet,
+    },
+
+    /// Change the Model's display name without resetting geometry, history or solved Results.
+    /// A name-only edit is undoable and changes the full Model/Journal identity, but does not
+    /// change the Result-validity fingerprint. Whitespace-only names are rejected.
+    #[serde(rename = "model.setName", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ModelSetName {
+        /// New nonblank display name; preserves geometry and current Results.
+        name: String,
+    },
 
     /// Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
     /// or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
     /// solid bodies; mixing them makes the Model ill-posed.
     #[serde(rename = "model.setIdealisation", rename_all = "camelCase")]
-    ModelSetIdealisation { idealisation: IdealisationSpec },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ModelSetIdealisation {
+        /// Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible
+        /// with the Bodies.
+        idealisation: IdealisationSpec,
+    },
 
     /// Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
     /// rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-    /// already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+    /// already exists in that kind. Bodies and Sets also share the geometry namespace with
+    /// cuts and point masses, so their new name cannot shadow any geometry owner.
+    /// Mapped and swept mapped Bodies also rename their mesher
     /// geometry, named Face/Body-region selectors and material association.
     #[serde(rename = "model.rename", rename_all = "camelCase")]
-    ModelRename { kind: ObjectKind, name: String, to: String },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ModelRename {
+        /// Kind of existing object to rename, such as Body, Material, Constraint, Load or Step.
+        kind: ObjectKind,
+        /// Current name of the object of this kind.
+        name: String,
+        /// Unused new name; references to the object are updated together.
+        to: String,
+    },
 
     /// Copy an object under a new name. A Body copy shares nothing with the original; a Step
     /// copy references the same Constraints and Loads. Useful for "the same load case but
     /// twice the pressure": duplicate, then re-issue the create Command with the new value.
     /// A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
     /// slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
+    /// A Body or Set copy cannot reuse a Body, cut, named Set or point-mass name.
     #[serde(rename = "model.duplicate", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ModelDuplicate {
+        /// Kind of existing object to copy.
         kind: ObjectKind,
+        /// Existing object to copy, identified within its kind.
         name: String,
+        /// Unused name for the copy; a copied Step keeps references to the original Constraints and Loads.
         #[serde(rename = "as")]
         as_: String,
     },
 
     /// Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its
     /// six faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used
-    /// directly in constraints and loads. Re-issuing with an existing name replaces the body.
+    /// directly in constraints and loads. Re-issuing with an existing name replaces the Body
+    /// while preserving its material, section and cuts; incompatible or consuming cuts reject
+    /// the replacement without changing the Model.
     #[serde(rename = "geometry.addBox", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAddBox {
+        /// Body name; reusing it replaces the box while preserving compatible assignments and cuts.
         name: String,
+        /// Positive x/y/z side lengths, each with length units.
         size: [Q<Length>; 3],
+        /// Global x/y/z coordinates of the minimum corner; omitted means the origin.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<[Q<Length>; 3]>,
     },
@@ -731,30 +1474,133 @@ pub enum Command {
     /// on `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.
     /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtractBox", rename_all = "camelCase")]
-    GeometrySubtractBox { name: String, from: String, size: [Q<Length>; 3], at: [Q<Length>; 3] },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometrySubtractBox {
+        /// Cut name, also the prefix of the resulting hole face Sets.
+        name: String,
+        /// Existing solid Body from which the box is removed.
+        from: String,
+        /// Positive x/y/z lengths of the cutting box, each with length units.
+        size: [Q<Length>; 3],
+        /// Global x/y/z coordinates of the cutting box minimum corner.
+        at: [Q<Length>; 3],
+    },
 
     /// Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a
     /// 2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape
     /// (`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.
+    /// Replacing an existing Body preserves its material, section and cuts, and validates the
+    /// resulting shape before changing the Model.
     #[serde(rename = "geometry.add", rename_all = "camelCase")]
-    GeometryAdd { name: String, shape: ShapeSpec },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometryAdd {
+        /// Body name; reusing it replaces the shape while preserving compatible assignments and cuts.
+        name: String,
+        /// Unit-bearing shape definition in global coordinates, compatible with the Model idealisation.
+        shape: ShapeSpec,
+    },
+
+    /// Add a Body made of straight line members: a truss or a frame. `points` are the joints,
+    /// in order, and `members` are index pairs into them; the default is a chain 0-1, 1-2, and
+    /// so on. Each member is cut into `divisions` elements of equal length (default 1). Joint
+    /// `i` becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force
+    /// targets, and joints of different line Bodies that sit at the same point are welded into
+    /// one node when the Mesh is built. `kind` is `truss` (the default: pin-jointed bars that
+    /// carry axial force only, so hold enough joints that none can drift sideways — an
+    /// under-braced truss is singular and fails in the solver, not here) or `beam` (Timoshenko
+    /// beams carrying axial force, shear, bending and torsion; every joint then has three
+    /// rotations rx, ry, rz as well as ux, uy, uz, so constraint.fix clamps it and
+    /// constraint.pin pins it, and load.moment can act on it). Either way give the Body a
+    /// Section with section.assign as well as a Material. Line Bodies need the 3D
+    /// idealisation and are not cut, meshed or previewed as solids. Replacing a Body that has
+    /// cuts therefore fails without changing the Model.
+    #[serde(rename = "geometry.addLine", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometryAddLine {
+        /// Line Body name; joint node Sets are named <name>.p0, <name>.p1 and so on.
+        name: String,
+        /// Ordered global x/y/z joint coordinates, each component with length units.
+        points: Vec<[Q<Length>; 3]>,
+        /// Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        members: Option<Vec<[u32; 2]>>,
+        /// Number of equal finite elements per member; omitted means one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        divisions: Option<u32>,
+        /// Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<LineKind>,
+    },
 
     /// Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
     /// cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
     /// is positioned in world coordinates, so use its `at` or a transform to place it.
     /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtract", rename_all = "camelCase")]
-    GeometrySubtract { name: String, from: String, shape: ShapeSpec },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometrySubtract {
+        /// Cut name, also the prefix of its generated face Sets.
+        name: String,
+        /// Existing solid Body from which the shape is removed.
+        from: String,
+        /// Unit-bearing cutting shape positioned in global coordinates.
+        shape: ShapeSpec,
+    },
+
+    /// Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command
+    /// as `data`, so a Journal replays with no external file, no network and no file system,
+    /// on any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`
+    /// for a part drawn in millimetres). The mesh is welded into a watertight solid, so
+    /// volume, mass, booleans and meshing all work on it; its faces are patches of triangles
+    /// that meet more smoothly than `featureAngle` (30 degrees by default), auto-named
+    /// `<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the
+    /// file changes, so for anything you will re-import, name the faces you need with
+    /// geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
+    /// remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
+    /// given length, which is the honest half of defeaturing; there is no fillet, chamfer or
+    /// shell. Re-import preserves the Body's material, section and cuts, and validates the
+    /// resulting shape before changing the Model. Give `sha256` to have the engine verify the
+    /// data is the file you meant.
+    #[serde(rename = "geometry.import", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometryImport {
+        /// Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts.
+        name: String,
+        /// Geometry file format of data; the supported format is STL.
+        format: MeshFormat,
+        /// The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+        /// what a binary STL needs.
+        data: String,
+        /// How data encodes the file; omitted means text, while binary STL requires base64.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<DataEncoding>,
+        /// Hex sha256 of the decoded file, checked before it is read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
+        /// What one unit in the file means, since the format records no units.
+        unit_length: Q<Length>,
+        /// Dihedral angle in degrees above which an edge splits two face patches.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_angle: Option<f64>,
+        /// Collapse mesh features smaller than this before use.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_below: Option<Q<Length>>,
+    },
 
     /// Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
     /// of those) so constraints and loads can target it. Rules are re-evaluated after every
     /// remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
     /// implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
     /// Body's actual mesh boundary. Prefer the auto face names when one fits.
+    /// Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
     #[serde(rename = "geometry.nameFace", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryNameFace {
+        /// Named face Set to create or replace, for use by Constraints and Loads.
         name: String,
+        /// Body whose actual mesh boundary is selected, including an implicit mapped or swept Body.
         of: String,
+        /// Geometric predicate selecting boundary faces; re-evaluated on each remesh.
         #[serde(rename = "where")]
         where_: FacePredicate,
     },
@@ -763,69 +1609,234 @@ pub enum Command {
     /// constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
     /// use a box slightly larger than the points you mean. A whole-Body rule also accepts
     /// the implicit Body defined by a mapped or swept mapped mesher.
+    /// Reissuing replaces an existing named Set; a Body, cut or point-mass name is reserved.
     #[serde(rename = "geometry.nameRegion", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryNameRegion {
+        /// Named region Set to create or replace, for Constraints, nodal Loads and probes.
         name: String,
+        /// Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds.
         #[serde(rename = "where")]
         where_: RegionPredicate,
     },
 
-    /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
+    /// Remove a Body, a cut, a named Set or a point mass from their shared geometry namespace.
+    /// Fails with in-use listing the constraints, loads
     /// (including temperature and volumetric heat sources), named selectors or free-mesher
     /// geometry references that still use a Body; remove or retarget those first. Removing
     /// a mapped or swept mapped Body clears its mesher and material association, preserving
     /// unrelated explicit geometry and Materials.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
-    GeometryRemove { name: String },
-
-    /// Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio
-    /// `nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for
-    /// thermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came
-    /// from. Re-issuing with an existing name edits the material in place.
-    #[serde(rename = "material.add", rename_all = "camelCase")]
-    MaterialAdd {
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometryRemove {
+        /// Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted
+        /// first.
         name: String,
-        #[serde(rename = "E")]
-        e: Q<Stress>,
-        nu: f64,
+    },
+
+    /// Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing
+    /// else. It contributes to the mass matrix (so it changes modal frequencies) and to gravity
+    /// (m·g at that point), and has no stiffness whatever, so it must be attached to the model
+    /// with constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.
+    /// The point is also a node Set of the same name, so constraint.couple, constraint.fix,
+    /// load.force and query.set target it by name. Re-issuing an existing point-mass name
+    /// replaces it; other Body, cut and named-Set names are reserved. geometry.remove deletes
+    /// it. It carries no rotary inertia — a node has no rotations —
+    /// so it models a compact mass, not a flywheel.
+    #[serde(rename = "geometry.addMass", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    GeometryAddMass {
+        /// Point-mass name and node Set name; reusing it replaces that point mass.
+        name: String,
+        /// Global x/y/z coordinates of the mass node, each with length units.
+        at: [Q<Length>; 3],
+        /// Positive lumped mass with mass units; attach the node with constraint.couple before solving.
+        mass: Q<Mass>,
+    },
+
+    /// Define a Material: elastic stiffness is either isotropic, by Young's modulus `E` and
+    /// Poisson's ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — never
+    /// both. A heat-only Material omits both stiffness forms and gives positive conductivity
+    /// `k`; `rho` and `cp`, when stated, must also be positive and are required by heat-transient.
+    /// Heat-only Materials may retain `alpha` and `yield` for later structural use; `plasticity`
+    /// requires isotropic stiffness, and mechanical Steps require elastic stiffness.
+    /// `orientation` turns the material axes (wood grain, fibre direction, rolling
+    /// direction) away from the global axes; without it they are the global axes. Density `rho`
+    /// is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
+    /// heat transfer; `source` records where the numbers came from. `yield` is the yield
+    /// stress the safety factor and the `plasticity` block read; `plasticity` makes the
+    /// material elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing
+    /// with an existing name edits the material in place, so an omitted `orientation` or
+    /// `plasticity` clears the previous one.
+    #[serde(rename = "material.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    MaterialAdd {
+        /// Unique Material name; reusing a name replaces its full definition.
+        #[schemars(extend("x-physics" = "common"))]
+        name: String,
+        /// Isotropic Young's modulus. Give E and nu together, or use orthotropic stiffness.
+        #[schemars(extend("x-physics" = "stiffness"))]
+        #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
+        e: Option<Q<Stress>>,
+        /// Isotropic Poisson ratio; dimensionless. Used with E for elastic stiffness.
+        #[schemars(extend("x-physics" = "stiffness"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nu: Option<f64>,
+        /// Material-axis stiffness, with optional directional expansion and conductivity. Required stiffness values belong to the same Material definition.
+        #[schemars(extend("x-physics" = "anisotropy"))]
+        // Boxed: the nine quantities are much larger than any other Command's payload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orthotropic: Option<Box<Orthotropic>>,
+        /// Rotation of the Material axes from global axes; omitted means the global axes.
+        #[schemars(extend("x-physics" = "anisotropy"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orientation: Option<Orientation>,
+        /// Mass density for gravity, inertia and transient heat capacity.
+        #[schemars(extend("x-physics" = "mass"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rho: Option<Q<Density>>,
+        /// Isotropic thermal expansion per temperature change; use this or orthotropic.alpha.
+        #[schemars(extend("x-physics" = "expansion"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alpha: Option<Q<ThermalExpansion>>,
+        /// Isotropic thermal conductivity for heat conduction; use this or orthotropic.k.
+        #[schemars(extend("x-physics" = "thermal"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         k: Option<Q<Conductivity>>,
+        /// Specific heat per unit mass for transient heat conduction; used with rho.
+        #[schemars(extend("x-physics" = "thermal"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cp: Option<Q<SpecificHeat>>,
+        /// Initial yield stress for plasticity and the reported safety factor.
+        #[schemars(extend("x-physics" = "plasticity"))]
         #[serde(default, skip_serializing_if = "Option::is_none", rename = "yield")]
         yield_: Option<Q<Stress>>,
+        /// J2 isotropic hardening law for static-nonlinear Steps; requires isotropic E and nu.
+        #[schemars(extend("x-physics" = "plasticity"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plasticity: Option<Plasticity>,
+        /// Source or reference for these property values, retained with the Material.
+        #[schemars(extend("x-physics" = "common"))]
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
 
-    /// Assign a Material to one or more Bodies. Every Body needs a Material before solving;
-    /// a Body without one is reported by query.model and blocks solve.run.
+    /// Assign a Material to one or more Bodies. Imported element regions are editable Bodies;
+    /// assigning the source owner supplies their default, while region assignments override it.
+    /// Every element-owning Body needs a Material before solving; a missing assignment is
+    /// reported by query.model and blocks solve.run.
     #[serde(rename = "material.assign", rename_all = "camelCase")]
-    MaterialAssign { material: String, bodies: Vec<String> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    MaterialAssign {
+        /// Existing Material name whose properties the target Bodies will use.
+        material: String,
+        /// Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher.
+        bodies: Vec<String>,
+    },
 
     /// Remove a Material that is not assigned to any Body. Fails with in-use listing the Bodies
     /// that still use it; assign them another Material first with material.assign.
     #[serde(rename = "material.remove", rename_all = "camelCase")]
-    MaterialRemove { name: String },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    MaterialRemove {
+        /// Existing unassigned Material to remove; retarget its Bodies first if it is in use.
+        name: String,
+    },
+
+    /// Define a section: homogeneous shell thickness, a bottom-to-top laminate stack
+    /// of 1–256 plies with named Materials and unit-bearing angles, or a line Body cross-section
+    /// (`geometry.addLine`): rectangle, circle, tube, I, channel, or properties given directly. A line member has no cross-section
+    /// geometry of its own, so the Section is where its area, second moments, torsion constant,
+    /// shear factors and extreme-fibre distances come from. Re-issuing with an existing name
+    /// edits the section in place. Assign it to Bodies with section.assign.
+    #[serde(rename = "section.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    SectionAdd {
+        /// Section name; reusing it replaces the cross-section or shell definition.
+        name: String,
+        /// Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies.
+        shape: SectionSpec,
+    },
+
+    /// Assign a Section to one or more Bodies, including imported element regions. A region
+    /// overrides the source owner Section; an unassigned region inherits that default.
+    /// Every line or shell Body needs a Section before solving;
+    /// one without it is reported by query.model warnings and blocks solve.run with
+    /// model.no-section. A shell needs a shell thickness section, a line member needs a
+    /// cross-section, and a solid gets its section from its geometry. `orientation` names the global
+    /// axis the section's local z (its `height` direction, the one `iY` resists bending along)
+    /// follows for the beams of these Bodies: local z is that axis made perpendicular to each
+    /// member, and local y completes the right-handed triad (y = z × x). It may not lie along
+    /// a member. Without it the rule is: local z follows global Z, so a horizontal beam has
+    /// its height vertical; a member within 1e-6 of vertical follows global X instead, so a
+    /// column's local z points along +X. `iZ` then resists bending along local y. Trusses
+    /// ignore it. For laminate shells, orientation instead selects the tangent projection
+    /// of that global axis as the zero-angle ply direction. A normal axis is rejected.
+    /// Without it ply angles use the midsurface's first parametric direction.
+    #[serde(rename = "section.assign", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    SectionAssign {
+        /// Existing Section name to assign.
+        section: String,
+        /// Line or shell Body names that will use this Section.
+        bodies: Vec<String>,
+        /// Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the
+        /// documented geometry-based convention.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orientation: Option<Axis>,
+    },
+
+    /// Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies
+    /// that still use it; assign them another Section first with section.assign.
+    #[serde(rename = "section.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    SectionRemove {
+        /// Existing unassigned Section to remove; retarget its Bodies first if it is in use.
+        name: String,
+    },
 
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
+    /// `formulation: mean-dilatation` gives small-strain Hex8 the volume-averaged B-bar
+    /// strain used by Abaqus C3D8; other kinds keep full integration. Existing full Journals
+    /// retain their original pointwise strain. Mean-dilatation Hex8 cannot run finite deformation.
     /// `formulation: full` is the textbook linear element that locks in bending: keep the
-    /// default incompatible modes or use order 2 when bending matters. Mapped geometry owns
-    /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
+    /// default incompatible modes or use order 2 when bending matters. Mesher-defined geometry
+    /// owns a Body name distinct from explicit Bodies, cuts, named Sets and point masses.
+    /// Keeping that name preserves its material;
     /// changing/removing it requires no remaining Body references and clears its material.
     /// Use model.rename to change an implicit Body name while preserving its references.
+    /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+    /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+    /// geometry: the selected mesher still determines the boundary approximation, and the `tet`
+    /// mesher is the one that meshes a curved solid freely. `formulation` has no effect when
+    /// `simplices` is true, or under the `tet` mesher, because simplex elements have no
+    /// incompatible modes. Imported sources retain authored labels/connectivity and exact Sets,
+    /// default to full integration, and require solid3d, no simplex split/refinement.
+    /// Their element kinds determine interpolation; order 1 means retain the authored source, including quadratic nodes.
+    /// Removing or emptying a referenced imported Set fails without mutation.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MeshSet {
+        /// Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and
+        /// Sets.
         mesher: MesherSpec,
+        /// Element interpolation order for generated meshes: 1 for linear or 2 for quadratic; omitted means 1.
+        /// Imported sources require 1 as the unchanged-source setting; actual element kinds retain their authored order.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         order: Option<u8>,
+        /// Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for
+        /// imported sources. Simplex elements ignore this setting.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+        /// Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and
+        /// imported sources require false.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplices: Option<bool>,
+        /// Optional local size field on the resulting linear simplex mesh. A new
+        /// mesh.set replaces this field; omit it to return to the base mesh.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refinement: Option<LocalRefinementSpec>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
@@ -835,67 +1846,271 @@ pub enum Command {
     /// Result fields require the Model state they were solved on; `result.stale` means run
     /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
+    /// `inp` preserves exact Set labels with Abaqus quoting; an unsupported label or heading
+    /// returns `export.unavailable`. It writes no Materials, Constraints, Loads or Steps.
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MeshExport {
+        /// Output format for the host to save, such as vtu, msh, inp, stl or report.
         format: ExportFormat,
+        /// Step whose current Result fields are included for vtu or whose calculation note is exported for report;
+        /// mesh-only formats ignore it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
     },
 
-    /// Fix displacement components to zero on a Set (default: all components, a clamped
-    /// support). For a roller give only the normal component. Fixing every node of a Body
-    /// makes the solve trivial; fix faces, not bodies.
+    /// Fix degrees of freedom to zero on a Set (default: all displacement components, a
+    /// clamped support). A fix that holds all three displacements and names no rotation is a
+    /// clamp: on a beam joint it holds the three rotations rx, ry, rz as well, so a beam's
+    /// fixed end is what `constraint.fix` without `dofs` means. For a pinned beam support use
+    /// constraint.pin; for a roller give only the normal component; name rx, ry or rz to hold
+    /// a rotation on its own. Rotations are inert on every node that is not a beam joint.
+    /// Fixing every node of a Body makes the solve trivial; fix faces, not bodies.
     #[serde(rename = "constraint.fix", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintFix {
+        /// Constraint name to create or replace, for listing in a Step.
         name: String,
+        /// Named Set whose degrees of freedom are restrained.
         on: SetRef,
+        /// Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components
+        /// for a roller or partial restraint.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dofs: Option<Vec<Dof>>,
+    },
+
+    /// Pin a Set: fix its three displacements and leave every rotation free. On a beam joint
+    /// this is the pinned support of a simply supported beam or a portal frame's base hinge;
+    /// the only difference from constraint.fix is the rotational restraint. On a solid's
+    /// nodes it is the same as constraint.fix, because those carry no rotation.
+    #[serde(rename = "constraint.pin", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintPin {
+        /// Constraint name to create or replace, for listing in a Step.
+        name: String,
+        /// Named Set whose translations are fixed while beam-joint rotations remain free.
+        on: SetRef,
     },
 
     /// Prescribe a non-zero displacement of one component on a Set, for example a settlement
     /// of "2 mm" in uy. Reactions on prescribed Sets are reported like any other constraint.
     #[serde(rename = "constraint.prescribe", rename_all = "camelCase")]
-    ConstraintPrescribe { name: String, on: SetRef, dof: Dof, value: Q<Length> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintPrescribe {
+        /// Constraint name to create or replace, for listing in a Step.
+        name: String,
+        /// Named Set receiving the prescribed displacement.
+        on: SetRef,
+        /// Translational component ux, uy or uz to prescribe.
+        dof: Dof,
+        /// Prescribed displacement with length units; sign follows the chosen global component.
+        value: Q<Length>,
+    },
 
     /// Symmetry plane: fixes the displacement component along `normal` on the Set (the cut
-    /// face of a half or quarter model). Model a half and say so in the report; loads on the
-    /// symmetry plane itself must be halved by you.
+    /// face of a half or quarter model), and on beam joints the two rotations about the axes
+    /// in the plane. Model a half and say so in the report; loads on the symmetry plane
+    /// itself must be halved by you.
     #[serde(rename = "constraint.symmetry", rename_all = "camelCase")]
-    ConstraintSymmetry { name: String, on: SetRef, normal: Axis },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintSymmetry {
+        /// Constraint name to create or replace, for listing in a Step.
+        name: String,
+        /// Named Set lying on the modelled symmetry plane.
+        on: SetRef,
+        /// Global axis normal to the symmetry plane; restrains normal translation and the corresponding beam rotations.
+        normal: Axis,
+    },
 
     /// Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).
     /// A heat Step needs either one of these or a convection boundary, or the temperature is
     /// only defined up to a constant and the solve is singular. In a transient Step the value is
     /// multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driven end.
     #[serde(rename = "constraint.temperature", rename_all = "camelCase")]
-    ConstraintTemperature { name: String, on: SetRef, value: Q<Temperature> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintTemperature {
+        /// Temperature Constraint name to create or replace, for listing in a heat Step.
+        name: String,
+        /// Named Set held at the prescribed temperature.
+        on: SetRef,
+        /// Boundary temperature with temperature units; a transient Step scales it by its amplitude.
+        value: Q<Temperature>,
+    },
+
+    /// Connect two face Sets. `bonded` ties them so the parts behave as one: every node of
+    /// `slave` is constrained to the point it projects onto in `master`, in every displacement
+    /// component. It is a linear constraint inside the same operator — no iteration, no gap
+    /// opening, no sliding — so a bonded assembly costs a static solve, not a contact search.
+    /// `tol` is then the largest gap that still pairs, defaulting to 1e-4 of the Mesh diagonal;
+    /// a node further from the master than that is `contact.unpaired`. In a heat Step a bonded
+    /// tie carries temperature, so the two parts are in perfect thermal contact.
+    /// `frictionless` lets the faces press, open and slide: `tol` is then the *search distance*
+    /// (same default), every slave node within it is paired and its initial gap along the master
+    /// normal recorded (positive when open, so faces may start apart and close under load), and
+    /// the solve keeps a node on the master surface only while the normal force there is
+    /// compressive. A node beyond `tol` is simply not a candidate. Hold each Body against the
+    /// motions the contact cannot stop: a frictionless face transmits no tangential force, so a
+    /// part held only by it can still slide. The Result carries a `contactPressure` field on the
+    /// slave nodes and query.result lists every frictionless pair with its active fraction and
+    /// the resultant it carries; a pair that ends fully open is a `contact.open` warning, a part
+    /// that lifts off entirely with nothing else holding it a `contact.open` error, and a set
+    /// that never settles a `contact.chatter` error naming the nodes. Put the *finer* mesh on
+    /// the slave side either way: a node-to-face constraint passes the patch test that way
+    /// round. A contact is listed in a Step's `constraints` like any other, and is removed with
+    /// constraint.remove. Contacts add stiffness between Bodies that share no element, which
+    /// query.cost does not count.
+    #[serde(rename = "contact.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ContactAdd {
+        /// Contact Constraint name to create or replace, for listing in a Step.
+        name: String,
+        /// Master face Set onto which slave nodes are projected; normally choose the coarser side.
+        master: SetRef,
+        /// Slave face Set whose nodes are paired to the master; normally choose the finer side.
+        slave: SetRef,
+        /// Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide.
+        kind: ContactKind,
+        /// Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units;
+        /// omitted means 1e-4 of the Mesh diagonal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<Q<Length>>,
+    },
+
+    /// Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of
+    /// `angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic
+    /// condition: a static solve is exact for loading that repeats sector by sector, and a modal
+    /// Step finds only the harmonic-index-0 family. Non-zero harmonics need a complex
+    /// eigenproblem and are not implemented. The two faces must mesh identically — use the
+    /// revolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is
+    /// for. The tie is node to node, not node to face, because a matching sector mesh is the
+    /// only case in scope. Because the coefficients are a rotation rather than a partition of
+    /// unity, a cyclic model's global reaction sum is not the applied load — read
+    /// query.result's per-Constraint reactions, never its balance, on a Step that lists this
+    /// Command. Refused in an explicit Step, like a bonded contact.
+    #[serde(rename = "constraint.cyclic", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintCyclic {
+        /// Cyclic Constraint name to create or replace, for listing in a Step.
+        name: String,
+        /// Source sector-face node Set; must match the rotated target mesh.
+        from: SetRef,
+        /// Target sector-face node Set reached by the specified rotation.
+        to: SetRef,
+        /// Global rotation axis relating from to to.
+        axis: Axis,
+        /// Signed right-handed rotation from the source to the target face, in degrees.
+        angle_deg: f64,
+        /// Global x/y/z point on the rotation axis, with length units; omitted means the origin.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<[Q<Length>; 3]>,
+        /// Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<Q<Length>>,
+    },
+    /// Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a
+    /// load introduction is idealised. `distributed` makes the point follow the face's weighted
+    /// mean displacement and adds no stiffness at all, so a force at the point spreads over the
+    /// face in exactly the weights a uniform traction would produce, and a mass at the point
+    /// loads the face the same way; that is the one to reach for. `rigid` is the opposite:
+    /// every node of the face takes the point's displacement, so the face cannot deform and the
+    /// part around it is stiffer than the real one. Nodes carry translations only, so **neither
+    /// kind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling
+    /// does not rotate its face — it translates it. It is a linear multipoint constraint inside
+    /// the same operator, needs no iteration, is listed in a Step's `constraints` like any
+    /// other Constraint, and is removed with constraint.remove.
+    #[serde(rename = "constraint.couple", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintCouple {
+        /// Coupling Constraint name to create or replace, for listing in a Step.
+        name: String,
+        /// Existing point-mass node Set created with geometry.addMass.
+        point: String,
+        /// Face Set coupled to the point displacement.
+        on: SetRef,
+        /// Distributed for the face weighted mean displacement or rigid for equal point and face translations; neither
+        /// transmits a moment.
+        kind: CoupleKind,
+    },
 
     /// Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
     /// it first. Removing a constraint makes existing Results of that Step stale.
     #[serde(rename = "constraint.remove", rename_all = "camelCase")]
-    ConstraintRemove { name: String },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ConstraintRemove {
+        /// Existing Constraint to remove; Steps must stop referencing it first.
+        name: String,
+    },
 
     /// Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-    /// The total force is the pressure times the face area and is reported by query.model.
+    /// Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+    /// force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
+    /// Shell pressureArea measures the original midsurface; physical curved shell face loads
+    /// include the Section's top/bottom offsets.
     #[serde(rename = "load.pressure", rename_all = "camelCase")]
-    LoadPressure { name: String, on: SetRef, value: Q<Stress> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadPressure {
+        /// Load name to create or replace, for listing in a Step.
+        name: String,
+        /// Face Set receiving the pressure.
+        on: SetRef,
+        /// Pressure with stress units; positive acts into the surface and negative pulls outward.
+        value: Q<Stress>,
+    },
 
     /// A total force vector spread uniformly over a face Set's area ("10 kN downward on this
     /// face"). Use this instead of nodal forces on solids: point loads give singular stresses.
     #[serde(rename = "load.traction", rename_all = "camelCase")]
-    LoadTraction { name: String, on: SetRef, total: [Q<Force>; 3] },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadTraction {
+        /// Load name to create or replace, for listing in a Step.
+        name: String,
+        /// Face Set over which the resultant is distributed by area.
+        on: SetRef,
+        /// Total global x/y/z force on the entire Set, each component with force units.
+        total: [Q<Force>; 3],
+    },
 
     /// A total force split equally over the nodes of a node Set. Point loads on solids give
     /// singular stresses near the node; prefer load.traction on a face unless you mean a point.
     #[serde(rename = "load.force", rename_all = "camelCase")]
-    LoadForce { name: String, on: SetRef, total: [Q<Force>; 3] },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadForce {
+        /// Load name to create or replace, for listing in a Step.
+        name: String,
+        /// Node Set over which the force is split equally.
+        on: SetRef,
+        /// Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units.
+        total: [Q<Force>; 3],
+    },
+
+    /// A concentrated moment, as a total vector about the global axes, split equally over the
+    /// nodes of a node Set. It acts on the rotational degrees of freedom, which only the
+    /// joints of beam Bodies have: on any other node it has nothing to act on and the Step
+    /// fails with model.ill-posed naming the Load. Right-handed about each axis, in the
+    /// Model's torque unit ("5 kN m").
+    #[serde(rename = "load.moment", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadMoment {
+        /// Load name to create or replace, for listing in a Step.
+        name: String,
+        /// Node Set of beam joints carrying rotational degrees of freedom.
+        on: SetRef,
+        /// Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.
+        total: [Q<Torque>; 3],
+    },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
     /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
     /// apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
     #[serde(rename = "load.gravity", rename_all = "camelCase")]
-    LoadGravity { name: String, g: [Q<Acceleration>; 3] },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadGravity {
+        /// Acceleration Load name to create or replace, for listing in a Step.
+        name: String,
+        /// Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires
+        /// Material density.
+        g: [Q<Acceleration>; 3],
+    },
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
@@ -906,10 +2121,16 @@ pub enum Command {
     /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
     /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadTemperature {
+        /// Thermal-strain Load name to create or replace, for listing in a structural Step.
         name: String,
+        /// Body names receiving the temperature/reference assignment, including implicit mesher Bodies.
         bodies: Vec<String>,
+        /// Uniform temperature with temperature units; inherited heat Results replace this value when the Step
+        /// continues a heat Step.
         value: Q<Temperature>,
+        /// Stress-free reference temperature with temperature units; omitted means 293.15 K.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reference: Option<Q<Temperature>>,
     },
@@ -918,112 +2139,456 @@ pub enum Command {
     /// is the usual "exposed to air" boundary and, unlike a flux, it also stiffens the system,
     /// so a heat Step with a convection face needs no fixed temperature to be well posed.
     #[serde(rename = "load.convection", rename_all = "camelCase")]
-    LoadConvection { name: String, on: SetRef, h: Q<HeatTransfer>, t_inf: Q<Temperature> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadConvection {
+        /// Convection Load name to create or replace, for listing in a heat Step.
+        name: String,
+        /// Face Set exchanging heat with its surroundings.
+        on: SetRef,
+        /// Positive heat-transfer coefficient with units such as W/(m^2 K).
+        h: Q<HeatTransfer>,
+        /// Surrounding fluid temperature with temperature units, used in h times the surface-to-fluid temperature
+        /// difference.
+        t_inf: Q<Temperature>,
+    },
 
     /// A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated
     /// face needs no Command at all: zero flux is what a face with no boundary condition does.
     #[serde(rename = "load.heatFlux", rename_all = "camelCase")]
-    LoadHeatFlux { name: String, on: SetRef, q: Q<HeatFlux> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadHeatFlux {
+        /// Heat-flux Load name to create or replace, for listing in a heat Step.
+        name: String,
+        /// Face Set receiving the prescribed heat flux.
+        on: SetRef,
+        /// Heat input per unit area with units such as W/m^2; negative removes heat.
+        q: Q<HeatFlux>,
+    },
+
+    /// Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
+    /// `sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant
+    /// sigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model
+    /// displayed in degC is converted to kelvin before the fourth power is taken. `emissivity`
+    /// is dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this
+    /// holds the temperature, so a heat Step whose only boundary is radiation is still well
+    /// posed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and
+    /// solution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A
+    /// heat-steady Result reports the number of passes as its solver iteration count, and a Step
+    /// that runs out of them fails with solve.diverged rather than returning a wrong answer.
+    #[serde(rename = "load.radiation", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadRadiation {
+        /// Radiation Load name to create or replace, for listing in a heat Step.
+        name: String,
+        /// Face Set radiating to the specified surroundings.
+        on: SetRef,
+        /// Dimensionless surface emissivity in (0, 1]; 1 is a black body.
+        emissivity: f64,
+        /// Surrounding absolute temperature with temperature units; converted to kelvin for the fourth-power radiation
+        /// law.
+        t_inf: Q<Temperature>,
+    },
 
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
     /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
     /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
     /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
-    LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadHeatSource {
+        /// Heat-source Load name to create or replace, for listing in a heat Step.
+        name: String,
+        /// Body names receiving the volumetric source, including implicit mesher Bodies.
+        bodies: Vec<String>,
+        /// Heat input per unit volume with units such as W/m^3; total power is this density times Body volume.
+        q: Q<HeatSource>,
+    },
+
+    /// A torsional load on a face Set of an axisymmetric Model with twist: a circumferential
+    /// traction `t_theta = c r` at every Gauss point, with `c` chosen so the net torque about
+    /// the axis equals `total` exactly, curved faces included. Outside the axisymmetric
+    /// idealisation with twist this is `unsupported`; enable it with model.setIdealisation.
+    #[serde(rename = "load.torque", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadTorque {
+        /// Torque Load name to create or replace, for listing in an axisymmetric Step with twist.
+        name: String,
+        /// Face Set receiving the circumferential traction.
+        on: SetRef,
+        /// Resultant torque about the symmetry axis, with torque units; the radial traction distribution preserves this
+        /// total.
+        total: Q<Torque>,
+    },
+
+    /// A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
+    /// interface per unit area, so the two sides are no longer at the same temperature.
+    /// Assembled into the heat operator exactly as load.convection is, except that it couples
+    /// two temperature fields instead of one field to tInf. Naming a contact here replaces its
+    /// perfect thermal tie; the mechanical tie is unaffected.
+    #[serde(rename = "contact.thermal", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    ContactThermal {
+        /// Thermal contact Load name to create or replace, for listing in a heat Step.
+        name: String,
+        /// Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance.
+        of: String,
+        /// Positive interface heat-transfer coefficient with units such as W/(m^2 K).
+        conductance: Q<HeatTransfer>,
+    },
 
     /// Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
     /// first. Removing a load makes existing Results of that Step stale.
     #[serde(rename = "load.remove", rename_all = "camelCase")]
-    LoadRemove { name: String },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    LoadRemove {
+        /// Existing Load to remove; Steps must stop referencing it first.
+        name: String,
+    },
 
     /// Define an analysis Step: the procedure, and which Constraints and Loads are active in
     /// it. `output` lists the fields to compute (default displacement, stress, von Mises and
     /// reactions). Steps run in the order given by step.reorder, and `after` names an earlier
     /// Step whose Result this one continues — a static Step after a heat Step picks up its
-    /// temperature field and turns it into thermal stress. The remaining fields belong to one
-    /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
+    /// temperature field and turns it into thermal stress, and a modal Step after a static one
+    /// picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
+    /// which is what a tensioned or preloaded member needs. The remaining fields belong to one
+    /// procedure each and are ignored by the others. Each field declares `x-procedures` in the
+    /// schema (`*` means common to every procedure), so hosts can present the selected procedure
+    /// without discarding values when it changes. The Procedure enum declares material inputs
+    /// and result outputs for humans and AI tools. Field ownership: `nModes` and `shift` to modal, `nModes`
+    /// alone (default 1) to buckling, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
-    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-    /// `theta` must lie in [0, 1].
+    /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+    /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+    /// implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,
+    /// `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
+    /// `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+    /// `amplitude` to static-nonlinear. An
+    /// implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+    /// (default 0, Newmark average acceleration: second order, unconditionally stable and
+    /// energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+    /// Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+    /// damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+    /// Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+    /// displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+    /// applied load is exactly that. Its reactions include the inertia and damping forces and
+    /// its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+    /// scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
+    /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
+    /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
+    /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
+    /// scaled, so its thermal strain is present in full at every increment. Without an
+    /// `amplitude` a static Step is the single solve it has always been and retains nothing.
+    /// A static-nonlinear Step always steps, over `increments` equal pieces of the same
+    /// pseudo-time, and keeps every converged one.
+    /// Heat-steady requires a finite positive material conductivity `k`; heat-transient also
+    /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
+    /// `query.model` checks each Step's active Constraints/Loads and assigned Materials:
+    /// static, static-nonlinear and buckling need mechanical supports; steady heat needs a
+    /// prescribed temperature or an ambient convection/radiation boundary. Free-free modal
+    /// and unconstrained dynamics are valid, and transient heat may be insulated. These
+    /// pre-mesh warnings identify missing inputs; only the resolved solve can establish that
+    /// every connected component is restrained and every selected Set contains nodes.
+    /// Step-specific warnings carry their exact `step` identity separately from the display
+    /// location in `where`, so hosts can scope blockers without parsing names or prose.
+    /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
+    /// on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+    /// Step that is linear.
+    /// Heat Results report net applied power, positive removed heat and stored-energy rate;
+    /// transient powers belong to the last θ-method integration stage (radiation uses weighted
+    /// endpoint fluxes), while temperature fields belong to its endpoint.
+    /// A modal Step's `after` is optional and means stress stiffening: naming a solved
+    /// `static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the
+    /// frequencies are those of the *preloaded* structure (tension up, compression down, zero
+    /// at the buckling load), and `prestressFrom` on the Result names the preload Step. Naming
+    /// a heat Step instead keeps the existing meaning, the temperature field alone, and
+    /// stiffens nothing.
+    /// A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
+    /// superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
+    /// bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and
+    /// answers a nodal amplitude and a phase lag per retained frequency; `displacement` is the
+    /// amplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero
+    /// — a moving support is base excitation, which this procedure does not do.
+
     #[serde(rename = "step.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     StepAdd {
+        /// Analysis Step name; reusing it replaces the Step definition.
+        #[schemars(extend("x-procedures" = ["*"]))]
         name: String,
+        /// Analysis procedure to execute; its schema metadata identifies supported settings, required material physics
+        /// and result fields.
+        #[schemars(extend("x-procedures" = ["*"]))]
         procedure: Procedure,
+        /// Names of Constraints and mechanical Contacts active in this Step; an empty list activates none.
+        #[schemars(extend("x-procedures" = ["*"]))]
         constraints: Vec<String>,
+        /// Names of Loads active in this Step; an empty list activates none.
+        #[schemars(extend("x-procedures" = ["*"]))]
         loads: Vec<String>,
+        /// Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and
+        /// reactions for static analysis.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["*"]))]
         output: Option<Vec<Field>>,
+        /// Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a
+        /// modal basis.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["*"]))]
         after: Option<String>,
+        /// Number of requested modes or buckling factors; omitted means six for modal or one for buckling.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["modal", "buckling"]))]
         n_modes: Option<u32>,
+        /// Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["modal"]))]
         shift: Option<f64>,
-        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
-        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
+        /// Maximum time increment of a heat-transient Step, or of a static Step with an
+        /// amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+        /// tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "heat-transient", "implicit"]))]
         dt: Option<Q<Time>>,
+        /// Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and
+        /// static-nonlinear nominal time defaults to 1 s.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "heat-transient", "explicit", "implicit"]))]
         t_end: Option<Q<Time>>,
+        /// Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward
+        /// Euler.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["heat-transient"]))]
         theta: Option<f64>,
+        /// Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is
+        /// retained.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "heat-transient", "explicit", "implicit", "harmonic"]))]
         output_every: Option<u32>,
         /// Maximum fraction of the explicit critical time step (usually 0.9). The increment
         /// may be reduced uniformly to finish exactly at tEnd.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["explicit"]))]
         dt_factor: Option<f64>,
+        /// Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static", "static-nonlinear", "heat-transient", "implicit"]))]
         amplitude: Option<AmplitudeSpec>,
+        /// Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["heat-transient"]))]
         initial: Option<Q<Temperature>>,
+        /// HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
+        /// average acceleration, no numerical damping); -0.05 is the usual choice when the
+        /// mesh-frequency ringing of a sudden load should die out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["implicit"]))]
+        alpha: Option<f64>,
+        /// Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step
+        /// (directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).
+        /// Default "0 Hz"; must be non-negative, e.g. "0.5 1/s".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["implicit", "harmonic", "randomVibration"]))]
+        rayleigh_alpha: Option<Q<Frequency>>,
+        /// Stiffness-proportional Rayleigh damping β of `C = αM + βK`, read by an implicit Step
+        /// (directly) and a harmonic one (as `ζ = βω / 2`, most of it at high frequency).
+        /// Default "0 s"; must be non-negative, e.g. "1e-5 s".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["implicit", "harmonic", "randomVibration"]))]
+        rayleigh_beta: Option<Q<Time>>,
+        /// Initial velocities of an explicit or implicit Step, one uniform vector per Set of
+        /// nodes; nodes in no entry start from rest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["explicit", "implicit"]))]
+        initial_velocity: Option<Vec<InitialVelocitySpec>>,
+        /// Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+        /// (default 10). More increments cost proportionally more but start each Newton solve
+        /// closer to equilibrium, which is what makes a stiffening or buckling model converge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear"]))]
+        increments: Option<u32>,
+        /// Halvings a static-nonlinear Step may use when an increment does not converge
+        /// (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear"]))]
+        max_cutbacks: Option<u32>,
+        /// Convergence tolerance for a Step that must iterate, relative in both cases: the
+        /// sup-norm change of the solution between two passes for a radiating heat Step
+        /// (default 1e-6), and the residual force and the displacement correction of one Newton
+        /// increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+        /// tolerance, which is `solve.run`'s.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear", "heat-steady", "heat-transient"]))]
+        nonlinear_tolerance: Option<f64>,
+        /// Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+        /// heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+        /// and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+        /// five iterations from a good starting point).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["static-nonlinear", "heat-steady", "heat-transient"]))]
+        nonlinear_max_iterations: Option<u32>,
+        /// First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
+        f_start: Option<Q<Frequency>>,
+        /// Last frequency of a harmonic sweep; must be above fStart.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
+        f_stop: Option<Q<Frequency>>,
+        /// How many frequencies the sweep evaluates, including both endpoints. At least 2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
+        points: Option<u32>,
+        /// Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+        /// logarithms of positive finite endpoints without forming their ratio. Both endpoints
+        /// remain exact; frequencies can repeat when spacing is below f64 resolution.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic"]))]
+        sweep: Option<SweepSpacing>,
+        /// Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+        /// for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused
+        /// together with `dampingRatios` on the same Step.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic", "randomVibration"]))]
+        damping_ratio: Option<f64>,
+        /// Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`
+        /// for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past
+        /// the end of the list holds the last entry, so a two-entry list on a five-mode basis
+        /// gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly
+        /// like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["harmonic", "randomVibration"]))]
+        damping_ratios: Option<Vec<f64>>,
+        /// One-sided PSD table for randomVibration. All Loads form one spatial pattern
+        /// multiplied by the same zero-mean stationary random process. Use density "1 s"
+        /// (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots,
+        /// `after` naming a solved modal Step, identical constraints, and positive damping.
+        /// Outputs are componentwise standard deviations, never a signed equilibrium state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-procedures" = ["randomVibration"]))]
+        psd: Option<Vec<PsdPoint>>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
     /// stay in the Model and can be reused by other Steps. Fails with `in-use` while another
     /// Step names it in `after`; re-issue that dependent Step without the reference first.
     #[serde(rename = "step.remove", rename_all = "camelCase")]
-    StepRemove { name: String },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    StepRemove {
+        /// Existing Step to remove; dependent Steps must stop referencing it in after first.
+        name: String,
+    },
 
-    /// Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-    /// this order and a later Step may inherit state (a temperature field) from an earlier one.
+    /// Set the run order of Steps; `order` must list every Step name exactly once and keep each
+    /// Step after the prerequisite named by its `after` field. Steps run in this order and a
+    /// later Step may inherit state (a temperature field) from an earlier one.
     #[serde(rename = "step.reorder", rename_all = "camelCase")]
-    StepReorder { order: Vec<String> },
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    StepReorder {
+        /// Every Step name exactly once in execution order, keeping each Step after its named prerequisite.
+        order: Vec<String>,
+    },
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
-    /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress. A Step
-    /// with `after` requires its predecessor's Result to match the current Model state;
-    /// after an edit, solve the predecessor again before continuing the chain.
+    /// element quality) and refuses with a suggested fix. Returns extremes, reactions and every
+    /// omitted optional material property the successful solver actually read as zero; always
+    /// check that reactions balance the applied loads before trusting a stress. A Step with
+    /// `after` requires its predecessor's Result to match the current Model state; after an edit,
+    /// solve the predecessor again before continuing the chain.
+    /// Direct linear solves verify their residual too: nonfinite or excessive residuals return
+    /// solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
+    /// (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+    /// direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+    /// Modal solves verify every requested eigenpair's normwise backward residual against
+    /// `tolerance` and return solve.stalled without storing a Result when `maxIterations`
+    /// subspace sweeps are exhausted. The reported residual is the largest requested-pair
+    /// residual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.
+    /// Resolved Ritz values must also stabilize to relative change 1e-10. Values unresolved
+    /// at the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency
+    /// warnings; their backward residual passed, but relative frequency convergence is not certified.
+    /// On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+    /// assembly and triangular solves retain the engine thread count.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     SolveRun {
+        /// Existing Step to solve; its procedure, active Constraints and Loads define the problem.
         step: String,
+        /// Linear solver implementation; omitted means auto, which selects an available compatible backend.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         solver: Option<Solver>,
+        /// Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum
+        /// normwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tolerance: Option<f64>,
+        /// Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.
+        /// A modal budget must be greater than zero.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_iterations: Option<u32>,
     },
 
     /// Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
     /// the observed convergence rate and a Richardson estimate of the converged value. Sizes
-    /// should halve each time (three or more). Restores the previous mesh settings afterwards
-    /// unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-    /// measure equilibrium fields; transient heat and explicit dynamics measure the final
-    /// field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-    /// unsupported because a mode amplitude is not a mesh-independent quantity; compare
-    /// frequencies with solve.run/query.result instead. Steps with after are unsupported:
-    /// solve their dependencies and target at each mesh explicitly.
+    /// may have unequal refinement ratios. Three distinct positive sizes are needed for a
+    /// finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+    /// are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+    /// Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+    /// transient heat and explicit dynamics measure the final field at the configured tEnd
+    /// with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+    /// amplitude is not a mesh-independent quantity; compare frequencies with
+    /// solve.run/query.result instead. Steps with after are unsupported: solve their
+    /// dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     StudyConverge {
+        /// Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency
+        /// solves instead.
         step: String,
+        /// Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and
+        /// convergence rate.
         sizes: Vec<Q<Length>>,
+        /// Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe
+        /// location.
         quantity: QuantityOfInterest,
+        /// Whether to restore the original mesh settings after the study; omitted means true, while false retains the
+        /// final solved mesh and Result.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         restore: Option<bool>,
+    },
+
+    /// Solve, estimate local spatial error with ZZ recovery, refine the largest
+    /// contributions, and repeat until targetError or maxIterations is reached.
+    /// Leaves the last solved mesh and Result installed. Supports planar tri3/solid
+    /// tet4 with static, heat-steady or heat-transient Steps without after. Transient
+    /// runs restart at the configured initial state and estimate the final field;
+    /// this does not estimate time error or adapt/coarsen within a time integration.
+    /// errorEstimate is a dimensionless element field; its squared sum is the squared
+    /// global relative estimate. Recovery is an indicator, not a certified error bound.
+    /// Refines the existing boundary approximation without CAD projection. Exceeding
+    /// maxElements or cancellation rolls back the entire Command.
+    #[serde(rename = "study.adapt", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
+    StudyAdapt {
+        /// Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after
+        /// dependency.
+        step: String,
+        /// Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a
+        /// certified bound.
+        target_error: f64,
+        /// Maximum adaptive solve passes in 1..=100; omitted means 8.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_iterations: Option<u32>,
+        /// Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the
+        /// Command.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_elements: Option<u32>,
+        /// Fraction of squared error selected by bulk marking; default 0.5.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        marking_fraction: Option<f64>,
+        /// Recorded refinement regions per iteration. Omit for a new study. The
+        /// engine fills this in its Journal so replay follows the original choices;
+        /// opening with skipped solves applies the same regions without solving.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refinements: Option<Vec<Vec<SizeBoxSpec>>>,
     },
 
     /// Undo the last `steps` Commands (default 1), restoring the Model and orphaning any
@@ -1031,9 +2596,13 @@ pub enum Command {
     /// supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
     /// nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
     #[serde(rename = "journal.undo", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     JournalUndo {
+        /// Number of latest Commands to undo; omitted means 1.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
+        /// Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches
+        /// it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_journal: Option<String>,
     },
@@ -1041,7 +2610,9 @@ pub enum Command {
     /// Redo the last `steps` undone Commands (default 1) by re-applying them; a redone solve
     /// re-solves. Not recorded in the Journal; any new Command after an undo clears the redo stack.
     #[serde(rename = "journal.redo", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     JournalRedo {
+        /// Number of undone Commands to reapply; omitted means 1.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
     },
@@ -1050,15 +2621,32 @@ pub enum Command {
     /// quantity, mesher or procedure) in TypeScript, WGSL or wasm; recorded in the Journal by
     /// content hash. Not available yet: returns unsupported until the plugin phase lands.
     #[serde(rename = "plugin.load", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     #[schemars(extend("x-status" = "stub"))]
     PluginLoad {
+        /// Plugin name under which the extension is registered.
         name: String,
+        /// Extension Point implemented by this Plugin, such as a Material law, Element or Mesher.
         kind: PluginKind,
+        /// Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm.
         language: PluginLanguage,
+        /// Inline Plugin code or a URL plus the required content hash, retained for reproducible loading.
         source: PluginSource,
+        /// Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported
+        /// stub.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         manifest: Option<serde_json::Value>,
     },
+}
+
+// Schemars synthesises the discriminator rather than reading it from a Rust field. Keep its
+// tool description at the same Command-owned boundary as the authored parameter comments.
+fn command_tag_description(schema: &mut schemars::Schema) {
+    for variant in schema.get_mut("oneOf").unwrap().as_array_mut().unwrap() {
+        let cmd = variant["properties"]["cmd"]["const"].as_str().unwrap();
+        let description = format!("Registered Command identifier; use `{cmd}` to select this operation.");
+        variant["properties"]["cmd"]["description"] = description.into();
+    }
 }
 
 impl Command {
@@ -1076,6 +2664,33 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_command_tags_are_documented_without_changing_deserialisation() {
+        let schema = serde_json::to_value(schemars::schema_for!(Command)).unwrap();
+        let variants = schema["oneOf"].as_array().unwrap();
+        assert!(!variants.is_empty());
+        for variant in variants {
+            let tag = &variant["properties"]["cmd"];
+            let name = tag["const"].as_str().unwrap();
+            assert_eq!(tag["type"], "string");
+            assert_eq!(
+                tag["description"],
+                format!("Registered Command identifier; use `{name}` to select this operation.")
+            );
+            assert!(variant["required"].as_array().unwrap().contains(&"cmd".into()));
+        }
+        let valid = r#"{"cmd":"model.new","name":"documented"}"#;
+        assert_eq!(serde_json::from_str::<Command>(valid).unwrap().name(), "model.new");
+        for invalid in [
+            r#"{"cmd":"model.unknown","name":"documented"}"#,
+            r#"{"cmd":"model.new"}"#,
+            r#"{"cmd":"model.new","name":123}"#,
+            r#"{"name":"documented"}"#,
+        ] {
+            assert!(serde_json::from_str::<Command>(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn names_and_journaled() {
@@ -1100,6 +2715,10 @@ mod tests {
         assert_eq!(Dof::Uz.index(), 2);
         assert_eq!(Dof::Uy.index(), 1);
         assert_eq!(Dof::Ux.index(), 0);
+        for (i, d) in Dof::ALL.iter().enumerate() {
+            assert_eq!(d.index(), i);
+        }
+        assert_eq!(LineKind::default(), LineKind::Truss);
         assert_eq!(Axis::X.index(), 0);
         assert_eq!(Axis::Y.index(), 1);
         assert_eq!(Axis::Z.index(), 2);

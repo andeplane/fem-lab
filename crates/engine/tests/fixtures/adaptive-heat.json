@@ -1,0 +1,124 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "adaptive heat"
+  },
+  {
+    "cmd": "model.setIdealisation",
+    "idealisation": {
+      "kind": "planeStrain"
+    }
+  },
+  {
+    "cmd": "geometry.add",
+    "name": "plate",
+    "shape": {
+      "kind": "sheet",
+      "sketch": {
+        "outer": [
+          {
+            "kind": "line",
+            "to": [
+              "1 m",
+              "0 m"
+            ],
+            "tag": "ymin"
+          },
+          {
+            "kind": "line",
+            "to": [
+              "1 m",
+              "1 m"
+            ],
+            "tag": "xmax"
+          },
+          {
+            "kind": "line",
+            "to": [
+              "0 m",
+              "1 m"
+            ],
+            "tag": "ymax"
+          },
+          {
+            "kind": "line",
+            "to": [
+              "0 m",
+              "0 m"
+            ],
+            "tag": "xmin"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "cmd": "material.add",
+    "name": "conductor",
+    "E": "1 Pa",
+    "nu": 0.3,
+    "k": "1 W/(m K)"
+  },
+  {
+    "cmd": "material.assign",
+    "material": "conductor",
+    "bodies": [
+      "plate"
+    ]
+  },
+  {
+    "cmd": "mesh.set",
+    "mesher": {
+      "kind": "lattice",
+      "size": {
+        "nx": 2,
+        "ny": 2,
+        "nz": 1
+      }
+    },
+    "simplices": true
+  },
+  {
+    "cmd": "constraint.temperature",
+    "name": "left",
+    "on": "plate.xmin",
+    "value": "300 K"
+  },
+  {
+    "cmd": "constraint.temperature",
+    "name": "right",
+    "on": "plate.xmax",
+    "value": "300 K"
+  },
+  {
+    "cmd": "load.heatSource",
+    "name": "source",
+    "bodies": [
+      "plate"
+    ],
+    "q": "2 W/m^3"
+  },
+  {
+    "cmd": "step.add",
+    "name": "heat",
+    "procedure": "heat-steady",
+    "constraints": [
+      "left",
+      "right"
+    ],
+    "loads": [
+      "source"
+    ],
+    "output": [
+      "temperature",
+      "errorEstimate"
+    ]
+  },
+  {
+    "cmd": "study.adapt",
+    "step": "heat",
+    "targetError": 0.01,
+    "maxIterations": 3,
+    "maxElements": 10000
+  }
+]

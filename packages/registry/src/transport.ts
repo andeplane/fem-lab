@@ -1,24 +1,50 @@
 import type { Ack, Command, EngineError, Field, ModelFile, Query, QueryResult } from './generated/engine';
 import { FemError } from './error';
 
+/** Import completion and its normalized Journal, captured atomically at the import boundary. */
+export interface ImportAck extends Ack { journal: ModelFile['journal'] }
+
 export interface Progress {
   phase: string;
   fraction?: number;
   message?: string;
 }
+/** The same optional selector accepted by query.surface and query.field. */
+export type ResultSelector = Pick<Extract<Query, { query: 'query.surface' }>, 'resultId' | 'step'>;
+
 export interface Surface {
+  /** Triangle-corner indices into unaveraged element-node fields. */
+  triElementNode?: Uint32Array;
+  /** Present for a selected retained solve; absent on current geometry/Mesh previews. */
+  resultId?: string;
+  step?: string;
   positions: Float32Array;
   indices: Uint32Array;
   triBody: Uint32Array;
+  /** Element id behind each retained surface triangle. Geometry previews may omit it. */
+  triElement?: Uint32Array;
   triFace: Uint32Array;
   /** Optional tagged Sheet boundary edges. Mesh edges index original nodes in `positions`. */
   edges?: Uint32Array;
+  /** Element id behind each retained boundary edge or line member. */
+  edgeElement?: Uint32Array;
+  /** Edge-endpoint indices into unaveraged element-node fields. */
+  edgeElementNode?: Uint32Array;
   edgeFace?: Uint32Array;
   edgeBody?: Uint32Array;
   faceNames: string[];
+  /** All face-Set memberships, CSR by original surface triangle; includes named predicate Sets. */
+  setNames?: string[];
+  triSetOffsets?: Uint32Array;
+  triSets?: Uint32Array;
   bodyNames: string[];
 }
 export interface FieldData {
+  /** Defaults to node for older hosts and test fakes. */
+  per?: string;
+  /** Immutable solve identity, carried by retained Result rendering routes. */
+  resultId?: string;
+  step?: string;
   values: Float32Array;
   min: number;
   max: number;
@@ -43,11 +69,15 @@ export interface EngineTransport {
   /** Rejects with a structured `EngineError`, never a bare string. */
   dispatch(cmd: Command, onProgress?: (p: Progress) => void): Promise<Ack>;
   query(q: Query): Promise<QueryResult>;
-  surface(): Promise<Surface>;
-  field(step: string, field: Field, component?: number): Promise<FieldData>;
+  /** Renderer staging: no selector keeps current geometry/mesh preview; a selector requests
+   * a retained solve ({} is the compatible default). Positions are f32; query.surface is f64. */
+  surface(selector?: ResultSelector): Promise<Surface>;
+  /** Renderer staging for a retained solve: values and min/max are f32, with immutable identity.
+   * Omit resultId for the compatible Step default. query.field preserves scientific f64 values. */
+  field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData>;
   export(spec: ExportSpec): Promise<ExportedFile>;
   exportFile(): Promise<ModelFile>;
-  importFile(file: ModelFile): Promise<Ack>;
+  importFile(file: ModelFile): Promise<ImportAck>;
   cancel(): Promise<void>;
 }
 

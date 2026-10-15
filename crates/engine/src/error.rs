@@ -23,12 +23,26 @@ pub struct Error {
 /// Error codes, serialised as dotted strings so TypeScript sees a closed union.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ErrorCode {
+    #[serde(rename = "session.expired")]
+    SessionExpired,
+    #[serde(rename = "session.conflict")]
+    SessionConflict,
+    #[serde(rename = "session.transitioning")]
+    SessionTransitioning,
+    #[serde(rename = "operation.reused")]
+    OperationReused,
+    #[serde(rename = "operation.unknown")]
+    OperationUnknown,
+
     #[serde(rename = "schema")]
     Schema,
     #[serde(rename = "unit.dimension")]
     UnitDimension,
     #[serde(rename = "unit.unknown")]
     UnitUnknown,
+    /// A reported SI quantity cannot be represented in the selected display unit.
+    #[serde(rename = "unit.display")]
+    UnitDisplay,
     #[serde(rename = "name.taken")]
     NameTaken,
     #[serde(rename = "not-found")]
@@ -57,6 +71,8 @@ pub enum ErrorCode {
     MeshFailed,
     #[serde(rename = "model.no-material")]
     ModelNoMaterial,
+    #[serde(rename = "model.no-section")]
+    ModelNoSection,
     #[serde(rename = "model.ill-posed")]
     ModelIllPosed,
     #[serde(rename = "result.stale")]
@@ -65,10 +81,20 @@ pub enum ErrorCode {
     ConstraintConflict,
     #[serde(rename = "constraint.rigid-modes")]
     ConstraintRigidModes,
+    #[serde(rename = "constraint.dependent")]
+    ConstraintDependent,
+    #[serde(rename = "contact.unpaired")]
+    ContactUnpaired,
+    #[serde(rename = "contact.chatter")]
+    ContactChatter,
+    #[serde(rename = "contact.open")]
+    ContactOpen,
     #[serde(rename = "solve.not-positive-definite")]
     SolveNotPositiveDefinite,
     #[serde(rename = "solve.stalled")]
     SolveStalled,
+    #[serde(rename = "solve.diverged")]
+    SolveDiverged,
     #[serde(rename = "solve.too-large")]
     SolveTooLarge,
     #[serde(rename = "gpu.shader")]
@@ -77,6 +103,8 @@ pub enum ErrorCode {
     GpuTooLarge,
     #[serde(rename = "explicit.unstable")]
     ExplicitUnstable,
+    #[serde(rename = "newton.diverged")]
+    NewtonDiverged,
 }
 
 impl std::fmt::Display for ErrorCode {
@@ -93,6 +121,10 @@ impl std::fmt::Display for ErrorCode {
 pub struct Warning {
     pub code: String,
     pub text: String,
+    /// Exact Step identity for a procedure-dependent warning. Omitted for global checks;
+    /// hosts must use this identity rather than parse names from display text or `where`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
     #[serde(rename = "where", default, skip_serializing_if = "Option::is_none")]
     pub where_: Option<String>,
 }
@@ -143,9 +175,15 @@ mod tests {
     #[test]
     fn codes_serialise_as_dotted_strings_and_round_trip() {
         let codes = [
+            ErrorCode::SessionExpired,
+            ErrorCode::SessionConflict,
+            ErrorCode::SessionTransitioning,
+            ErrorCode::OperationReused,
+            ErrorCode::OperationUnknown,
             ErrorCode::Schema,
             ErrorCode::UnitDimension,
             ErrorCode::UnitUnknown,
+            ErrorCode::UnitDisplay,
             ErrorCode::NameTaken,
             ErrorCode::NotFound,
             ErrorCode::InUse,
@@ -160,12 +198,16 @@ mod tests {
             ErrorCode::MeshInverted,
             ErrorCode::MeshFailed,
             ErrorCode::ModelNoMaterial,
+            ErrorCode::ModelNoSection,
             ErrorCode::ModelIllPosed,
             ErrorCode::ResultStale,
             ErrorCode::ConstraintConflict,
             ErrorCode::ConstraintRigidModes,
+            ErrorCode::ConstraintDependent,
+            ErrorCode::ContactUnpaired,
             ErrorCode::SolveNotPositiveDefinite,
             ErrorCode::SolveStalled,
+            ErrorCode::SolveDiverged,
             ErrorCode::SolveTooLarge,
             ErrorCode::GpuShader,
             ErrorCode::GpuTooLarge,
@@ -200,8 +242,14 @@ mod tests {
         assert_eq!(nf2.suggestion.as_deref(), Some("known bodys: none defined"));
         let se: Error = serde_json::from_str::<u32>("\"x\"").unwrap_err().into();
         assert_eq!(se.code, ErrorCode::Schema);
-        let w = Warning { code: "assumption".into(), text: "rho unset".into(), where_: None };
+        let w = Warning { code: "assumption".into(), text: "rho unset".into(), step: None, where_: None };
         let wj = serde_json::to_string(&w).unwrap();
         assert!(!wj.contains("where"));
+        assert!(!wj.contains("step"));
+        assert_eq!(serde_json::from_str::<Warning>(&wj).unwrap().step, None);
+        let scoped = Warning { step: Some("heat 'stage'".into()), where_: Some("material 'slab'".into()), ..w };
+        let sj = serde_json::to_value(&scoped).unwrap();
+        assert_eq!(sj["step"], "heat 'stage'");
+        assert_eq!(sj["where"], "material 'slab'");
     }
 }

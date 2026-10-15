@@ -51,7 +51,11 @@ jobs:
           key: playwright-${{ runner.os }}-${{ steps.thumbnail-pw.outputs.v }}
       - run: npx playwright install --with-deps chromium
         working-directory: packages/app
+      # Never let a picture stop the site from shipping. `copy-examples.mjs` already writes
+      # `thumbnail: null` for anything missing and the gallery renders a "preview pending" card,
+      # so a failed or slow software-rendered pass costs a thumbnail, not a deployment.
       - run: npm run thumbnails -w packages/app
+        continue-on-error: true
       # `prebuild` now sees the generated PNGs; `postbuild` still refuses to publish a key.
       - run: npm run build -w packages/app
       # Jekyll would drop the underscore-prefixed files GitHub Pages otherwise serves fine.
