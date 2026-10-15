@@ -3,6 +3,8 @@ import { ServiceFailure } from './errors';
 
 /** One public credit is 30 integer subcredits. Tariff v1 is fixed for every receipt. */
 export const CREDIT_SCALE = 30n;
+/** Approximately $5 at tariff v1; legacy one-time invitations remain 200,000 credits. */
+export const FREE_MONTHLY_CREDITS = 6_666_666;
 export const TARIFF_VERSION = '2026-10-14.v1';
 export const PLANS = {
   free: { priceUsd: 0, credits: 200_000, models: ['gpt-5.4-mini'], maxOutput: 4096 },
