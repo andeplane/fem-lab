@@ -169,6 +169,7 @@ jobs:
       - run: node tools/test-quadratic-measures-replay.mjs
       - run: node tools/test-random-vibration-replay.mjs
       - run: node tools/test-harmonic-reciprocal-replay.mjs
+      - run: node tools/test-log-sweep-replay.mjs
       - name: replay every fixture natively and in wasm
         run: |
           mkdir -p hashes/native hashes/wasm

@@ -7523,6 +7523,113 @@ fn a_harmonic_sweep_strides_and_logs_like_the_schema_says() {
     assert!(s.sweep.iter().all(|r| r.amplitude.value > 0.0));
 }
 
+fn retained_harmonic_mode(e: &mut Engine, result_id: &str) -> serde_json::Value {
+    serde_json::to_value(
+        e.query(Query::Field { step: None, result_id: Some(result_id.into()), field: "mode:1".into() }).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_extreme_log_sweep_keeps_its_finite_grid_and_retained_modal_result_on_replay() {
+    for (points, every) in [(3, 1), (9, 4)] {
+        let mut threaded_snapshot = None;
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            harmonic_bar(
+                &mut e,
+                &format!(
+                    r#","fStart":"1e-300 Hz","fStop":"1e100 Hz","points":{points},"outputEvery":{every},"dampingRatio":0,"sweep":"log""#
+                ),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+            let modal_before = summary(&mut e, "modes");
+            let mode_before = retained_harmonic_mode(&mut e, &modal_before.result_id);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+            let response = summary(&mut e, "sweep");
+            let frequencies: Vec<f64> = response.sweep.iter().map(|row| row.frequency.value).collect();
+            assert_eq!(frequencies.len(), 3);
+            assert_eq!((frequencies[0], frequencies[2]), (1e-300, 1e100));
+            assert!((frequencies[1] / 1e-100 - 1.0).abs() < 4e-13);
+            assert!(frequencies.iter().all(|f| f.is_finite() && *f > 0.0));
+            assert!(frequencies.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(response.sweep.iter().all(|row| row.frequency.unit == "Hz"));
+            assert_eq!(summary(&mut e, "modes"), modal_before);
+            assert_eq!(retained_harmonic_mode(&mut e, &modal_before.result_id), mode_before);
+            let catalogue = serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap();
+            assert_eq!(catalogue["records"].as_array().unwrap().len(), 2);
+            let saved = e.export_file();
+            let hash = e.model_hash();
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            let hashes = pollster::block_on(replayed.replay(&saved.journal.entries, false, true)).unwrap();
+            assert_eq!(hashes.last(), Some(&hash));
+            assert_eq!(replayed.export_file().model, saved.model);
+            let replay_response = summary(&mut replayed, "sweep");
+            assert_eq!(replay_response.sweep.iter().map(|row| row.frequency.value).collect::<Vec<_>>(), frequencies);
+            let replay_modal = summary(&mut replayed, "modes");
+            assert_eq!(replay_modal.frequencies, modal_before.frequencies);
+            let replay_mode = retained_harmonic_mode(&mut replayed, &replay_modal.result_id);
+            assert_eq!(replay_mode["values"], mode_before["values"]);
+            // This case proves the grid, retained modal basis and replay. The separate
+            // high-frequency complex-reciprocal concern is not a zero-response oracle.
+            let snapshot = serde_json::json!({
+                "hash":hash,"frequencies":frequencies,"modalFrequencies":modal_before.frequencies,
+                "mode":mode_before["values"]
+            });
+            if let Some(previous) = &threaded_snapshot {
+                assert_eq!(previous, &snapshot);
+            } else {
+                threaded_snapshot = Some(snapshot);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_ratio_overflowing_log_sweep_matches_the_guided_bar_response_under_grid_refinement() {
+    // Uniform axial displacement of the four guided tip nodes is an exact FE mode.
+    // Integrating its linear x/L shape gives M=rho*A*L/3; constrained transverse
+    // strain gives K=C11*A/L. The complete four-mode basis must give F/(K-M*w^2).
+    let (young, poisson, density, area, force) = (210e9, 0.3, 7800.0, 0.01, 10_000.0);
+    let stiffness = young * (1.0 - poisson) / ((1.0 + poisson) * (1.0 - 2.0 * poisson)) * area;
+    let mass = density * area / 3.0;
+    for threads in [1, 4] {
+        let mut previous_frequencies = Vec::new();
+        for points in [3, 5, 9, 17] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            harmonic_bar(
+                &mut e,
+                &format!(r#","fStart":"1e-300 Hz","fStop":"1e20 Hz","points":{points},"dampingRatio":0,"sweep":"log""#),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+            let result = summary(&mut e, "sweep");
+            assert_eq!(result.sweep.len(), points);
+            for (i, row) in result.sweep.iter().enumerate() {
+                let expected_frequency = 10.0f64.powi(-300 + (320 * i / (points - 1)) as i32);
+                assert!((row.frequency.value / expected_frequency - 1.0).abs() < 4e-13);
+                let omega = 2.0 * std::f64::consts::PI * row.frequency.value;
+                let dynamic_stiffness = stiffness - mass * omega * omega;
+                let expected_amplitude = force / dynamic_stiffness.abs();
+                assert!(
+                    (row.amplitude.value / expected_amplitude - 1.0).abs() < 1e-10,
+                    "{} Hz: {} versus {expected_amplitude}",
+                    row.frequency.value,
+                    row.amplitude.value
+                );
+                let phase = if dynamic_stiffness > 0.0 { 0.0 } else { std::f64::consts::PI };
+                assert!((row.phase.value.abs() - phase).abs() < 1e-12);
+            }
+            let frequencies: Vec<f64> = result.sweep.iter().map(|row| row.frequency.value).collect();
+            assert_eq!((frequencies[0], frequencies[points - 1]), (1e-300, 1e20));
+            for (i, previous) in previous_frequencies.iter().enumerate() {
+                assert_eq!(frequencies[2 * i], *previous);
+            }
+            previous_frequencies = frequencies;
+        }
+    }
+}
+
 #[test]
 fn harmonic_reciprocals_preserve_extreme_finite_response_phase_and_replay_under_refinement() {
     // One guided full-integration hex has an exact uniform axial mode. Its complete
