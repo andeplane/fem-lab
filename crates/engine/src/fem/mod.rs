@@ -8,11 +8,18 @@
 //! built-in route.
 
 pub mod assembly;
+pub mod beam;
 pub mod checks;
+pub mod contact;
 pub mod element;
 pub mod heat;
 pub mod loads;
 pub mod material;
+pub mod mpc;
 pub mod problem;
 pub mod quadrature;
+pub mod section;
 pub mod shape;
+pub mod shell;
+pub mod state;
+pub mod truss;

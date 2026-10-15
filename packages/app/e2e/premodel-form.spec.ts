@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('@cpu model.new can be reviewed and edited from the palette before the first Model', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1800, height: 1000 });
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
   const drawer = page.locator('.assistant');
   await expect(drawer).toBeVisible();

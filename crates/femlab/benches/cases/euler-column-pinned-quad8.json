@@ -1,0 +1,147 @@
+{
+  "name": "euler-column-pinned-quad8",
+  "reference": "Benchmark B5: Euler buckling of a pinned-pinned column, E = 210 GPa, nu = 0.3, 20 x 1000 mm with a plane-stress thickness of 10 mm. I = t b^3 / 12 = 6.6667e-9 m^4, so P_cr = pi^2 EI / L^2 = 13817.45 N against the 1 MPa reference pressure on the 20 x 10 mm end (P_ref = 200 N): lambda = 69.0872, gated at 1 %. Plane stress rather than a solid on purpose: a solid column pinned on a line is free to spin about its own axis, which is a rigid mode, not a buckling mode. Modelled as the lower half by symmetry, 20 x 500 mm: the pinned end is ux = 0 across the y = 0 edge, which holds the section laterally while leaving it free to rotate, and the mid-height plane is uy = 0, which is the symmetry condition of the sin(pi y / L) fundamental mode. Fixing uy on the end edge instead would clamp the section and give the fixed-pinned load. The closed form neglects shear: with L/b = 50 the Timoshenko correction puts pi^2 EI / L^2 about 0.10 % above the exact critical load, so the computed value is expected to sit just below the reference.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "euler-column-pinned"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "10 mm"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "column",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 mm",
+                "0 mm"
+              ],
+              [
+                "20 mm",
+                "0 mm"
+              ],
+              [
+                "20 mm",
+                "500 mm"
+              ],
+              [
+                "0 mm",
+                "500 mm"
+              ]
+            ],
+            "n": [
+              2,
+              40
+            ],
+            "tags": [
+              "bottom",
+              "right",
+              "top",
+              "left"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "column"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "pin",
+      "on": "column.bottom",
+      "dofs": [
+        "ux"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "midheight",
+      "on": "column.top",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "squeeze",
+      "on": "column.bottom",
+      "value": "1 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "buckle",
+      "procedure": "buckling",
+      "constraints": [
+        "pin",
+        "midheight"
+      ],
+      "loads": [
+        "squeeze"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "buckle"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/bucklingFactors/0",
+      "expect": 69.0872,
+      "tol": 0.01,
+      "rel": true,
+      "note": "P_cr = pi^2 EI / L^2 over the 200 N reference load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "the pre-buckling static state balances its applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

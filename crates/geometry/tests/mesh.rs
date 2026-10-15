@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, extrude, free, mapped, perturb_interior, revolve, split_to_simplices, Curve,
-    ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment, Structured,
+    annulus, elliptic_annulus, extrude, free, line as line_mesher, mapped, merge_coincident, perturb_interior, revolve,
+    split_to_simplices, Curve, ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment,
+    Structured,
 };
 use proptest::prelude::*;
 
@@ -1727,6 +1728,216 @@ fn any_segment() -> impl Strategy<Value = Segment> {
     ]
 }
 
+// ---- line members ----------------------------------------------------------------------------
+
+fn truss(points: &[[f64; 3]], members: &[[u32; 2]], divisions: u32) -> Mesh {
+    line_mesher(points, members, divisions, ElementKind::Truss2).expect("a valid line body")
+}
+
+#[test]
+fn truss2_and_beam2_tables_describe_a_two_node_line_member() {
+    for (k, name) in [(ElementKind::Truss2, "\"truss2\""), (ElementKind::Beam2, "\"beam2\"")] {
+        assert_eq!((k.n_nodes(), k.n_corners(), k.dim(), k.n_faces()), (2, 2, 1, 0));
+        assert_eq!(k.edges(), &[[0, 1]]);
+        // A member has no face, so no face table entry and no face load can name one.
+        assert!(k.face_nodes(0).is_empty());
+        assert_eq!(k.face_kind(), FaceKind::Line2);
+        assert_eq!(serde_json::to_string(&k).unwrap(), name);
+        assert_eq!(serde_json::from_str::<ElementKind>(name).unwrap(), k);
+    }
+    // The line mesher builds a beam block exactly as it builds a truss block: only the kind differs.
+    let pts = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]];
+    let beam = line_mesher(&pts, &[[0, 1]], 2, ElementKind::Beam2).expect("a valid line body");
+    beam.validate().unwrap();
+    assert_eq!(beam.blocks[0].kind, ElementKind::Beam2);
+    assert_eq!(beam.blocks[0].conn, truss(&pts, &[[0, 1]], 2).blocks[0].conn);
+}
+
+#[test]
+fn the_line_mesher_divides_every_member_and_names_every_joint() {
+    // A two-bar planar truss: joints 0, 1, 2 with members 0-2 and 1-2.
+    let pts = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+    let m = truss(&pts, &[[0, 2], [1, 2]], 1);
+    m.validate().unwrap();
+    assert_eq!((m.dim, m.n_nodes(), m.n_elems()), (3, 3, 2));
+    assert_eq!(m.blocks[0].conn, [0, 2, 1, 2]);
+    assert_eq!(m.node_sets.keys().collect::<Vec<_>>(), ["p0", "p1", "p2"]);
+    assert_eq!(m.node_sets["p2"], [2]);
+    // A member has no boundary face and no skin triangle: the segments are all it draws.
+    assert!(m.boundary_faces().is_empty());
+    let s = m.surface();
+    assert!(s.triangles.is_empty() && s.edges.is_empty());
+    assert_eq!(s.lines, [[0, 2], [1, 2]]);
+    assert_eq!(s.line_elem, [0, 1]);
+
+    // Subdivision adds interior nodes after the joints, in member order, evenly spaced.
+    let m = truss(&pts, &[[0, 1]], 4);
+    m.validate().unwrap();
+    assert_eq!((m.n_nodes(), m.n_elems()), (6, 4));
+    assert_eq!(m.blocks[0].conn, [0, 3, 3, 4, 4, 5, 5, 1]);
+    assert_eq!(m.node(4), [1.0, 0.0, 0.0]);
+    assert_eq!(m.node_sets.len(), 3);
+    // Total member length is preserved exactly by the subdivision.
+    let total: f64 = (0..m.n_elems() as u32)
+        .map(|e| {
+            let c = corners(&m, e);
+            dot(sub(c[1], c[0]), sub(c[1], c[0])).sqrt()
+        })
+        .sum();
+    assert!((total - 2.0).abs() < 1e-15, "{total}");
+}
+
+#[test]
+fn the_line_mesher_rejects_every_ill_formed_body() {
+    let ok = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+    /// Points, members, divisions and the cause the mesher should name.
+    type BadLine<'a> = (&'a [[f64; 3]], &'a [[u32; 2]], u32, &'a str);
+    let cases: [BadLine<'_>; 6] = [
+        (&ok[..1], &[[0, 1]], 1, "at least 2 points"),
+        (&[[0.0, 0.0, 0.0], [f64::NAN, 0.0, 0.0]], &[[0, 1]], 1, "non-finite point"),
+        (&ok[..2], &[], 1, "at least one member"),
+        (&ok[..2], &[[0, 1]], 0, "divisions must be at least 1"),
+        (&ok[..2], &[[0, 2]], 1, "references point 2 but there are 2 points"),
+        (&ok, &[[1, 2]], 1, "zero length"),
+    ];
+    for (points, members, divisions, want) in cases {
+        let e = line_mesher(points, members, divisions, ElementKind::Truss2).unwrap_err();
+        assert!(e.0.contains(want), "got '{}', wanted '{want}'", e.0);
+    }
+    let e = line_mesher(&ok[..2], &[[1, 1]], 1, ElementKind::Truss2).unwrap_err();
+    assert!(e.0.contains("joins point 1 to itself"), "{}", e.0);
+}
+
+#[test]
+fn a_polyline_shape_has_no_interior_and_no_solid() {
+    let shape = Shape::Polyline {
+        points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        members: vec![[0, 1]],
+        divisions: 2,
+        beam: false,
+    };
+    assert_eq!(shape.dim(), 1);
+    shape.validate().expect("a straight member");
+    // A curve has no volume for a point to be inside of, not even a point on it.
+    assert!(!shape.contains([0.5, 0.0, 0.0]).unwrap());
+    // And it never becomes a Solid: the line mesher is its own geometry.
+    let e = Solid::evaluate(&shape).unwrap_err();
+    assert!(e.0.contains("no volume"), "{}", e.0);
+    // Its validation is the line mesher's, so the Shape and the mesher agree on the cause.
+    let bad = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1, beam: false };
+    assert!(bad.validate().unwrap_err().0.contains("at least 2 points"));
+    // A boolean cannot mix dimensions, and the message says all three.
+    let mixed = Shape::Union { shapes: vec![shape.clone(), Shape::Box { size: [1.0; 3] }] };
+    assert!(mixed.validate().unwrap_err().0.contains("1D line members"));
+}
+
+#[test]
+fn a_line_block_is_accepted_in_a_3d_mesh_and_refused_in_a_2d_one() {
+    let mut m = truss(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1);
+    m.validate().unwrap();
+    m.dim = 2;
+    assert!(m.validate().unwrap_err().0.contains("Truss2 in a 2D mesh"));
+}
+
+#[test]
+fn quality_of_a_straight_member_is_perfect_whatever_its_direction() {
+    let m = truss(&[[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [2.0, 2.0, 3.0]], &[[0, 1], [1, 2]], 2);
+    let q = quality(&m, 4);
+    assert_eq!(q.min_det_j_ratio, 1.0);
+    assert!((q.max_aspect - 1.0).abs() < 1e-12, "{q:?}");
+    // A segment has no corner to measure an angle at, so nothing lowers the mesh minimum.
+    assert_eq!(q.min_angle_deg, 180.0);
+    assert_eq!(q.worst.len(), 4);
+}
+
+#[test]
+fn merge_coincident_welds_joints_keeps_the_lowest_id_and_leaves_a_clean_mesh_alone() {
+    // Two Bodies meeting at one joint: node 1 of the first and node 2 of the second coincide.
+    let a = truss(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1);
+    let mut m = a.clone();
+    m.coords.extend([1.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
+    m.blocks.push(ElementBlock { kind: ElementKind::Truss2, conn: vec![2, 3], first_elem: 1 });
+    m.node_sets.insert("b.p0".into(), vec![2]);
+    m.node_sets.insert("b.p1".into(), vec![3]);
+    merge_coincident(&mut m, 1e-9);
+    m.validate().unwrap();
+    assert_eq!(m.n_nodes(), 3);
+    assert_eq!(m.blocks[0].conn, [0, 1]);
+    // The survivor is the lower id, so the second body's first joint became node 1.
+    assert_eq!(m.blocks[1].conn, [1, 2]);
+    assert_eq!(m.node_sets["p1"], [1]);
+    assert_eq!(m.node_sets["b.p0"], [1]);
+    assert_eq!(m.node_sets["b.p1"], [2]);
+
+    // Nothing coincident: the mesh comes back untouched, node ids included.
+    let mut clean = a.clone();
+    merge_coincident(&mut clean, 1e-9);
+    assert_eq!(clean, a);
+
+    // Three coincident nodes collapse to one, and a set naming all three becomes one node.
+    let mut triple = a.clone();
+    triple.coords.extend([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    triple.node_sets.insert("z".into(), vec![1, 2, 3]);
+    merge_coincident(&mut triple, 1e-9);
+    assert_eq!(triple.n_nodes(), 2);
+    assert_eq!(triple.node_sets["z"], [1]);
+
+    // A node within tolerance of two survivors that sit in different grid cells joins the
+    // lower-numbered one, whichever cell the scan reaches first.
+    let mut spanning = Mesh {
+        dim: 3,
+        coords: vec![0.6e-9, 0.0, 0.0, -0.6e-9, 0.0, 0.0, 0.0, 0.0, 0.0],
+        blocks: vec![ElementBlock { kind: ElementKind::Truss2, conn: vec![0, 1], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    merge_coincident(&mut spanning, 1e-9);
+    assert_eq!(spanning.n_nodes(), 2);
+    assert_eq!(spanning.blocks[0].conn, [0, 1]);
+}
+
+#[test]
+fn merge_coincident_clamps_extreme_grid_neighbours_without_changing_weld_decisions() {
+    let tol = 1e-9;
+    for axis in 0..3 {
+        for translation in [f64::MAX, -f64::MAX] {
+            for direction in [-1.0, 1.0] {
+                // The first two points are 1.2 tol apart and remain distinct. Point 2 lies
+                // within 0.6 tol of both; point 0 must win even if point 1's cell is visited first.
+                let points: Vec<_> = [0.6 * tol, -0.6 * tol, 0.0, 3.0 * tol, 0.6 * tol]
+                    .into_iter()
+                    .map(|along| {
+                        let mut p = [0.0; 3];
+                        p[axis] = translation;
+                        p[(axis + 1) % 3] = along * direction;
+                        p
+                    })
+                    .collect();
+                let mut mesh = truss(&points, &[[0, 1], [1, 3], [2, 3], [4, 3]], 1);
+                mesh.node_sets.insert("all".into(), vec![0, 1, 2, 3, 4]);
+                mesh.node_sets.insert("cluster".into(), vec![0, 2, 4]);
+                mesh.elem_sets.insert("members".into(), vec![1, 3]);
+                let element_sets = mesh.elem_sets.clone();
+                let faces = mesh.face_sets.clone();
+                merge_coincident(&mut mesh, tol);
+                mesh.validate().unwrap();
+                assert_eq!(mesh.coords, [points[0], points[1], points[3]].concat());
+                assert_eq!(mesh.blocks[0].conn, [0, 1, 1, 2, 0, 2, 0, 2]);
+                assert_eq!(mesh.node_sets["all"], [0, 1, 2]);
+                assert_eq!(mesh.node_sets["cluster"], [0]);
+                assert_eq!(mesh.node_sets["p2"], [0]);
+                assert_eq!(mesh.node_sets["p3"], [2]);
+                assert_eq!(mesh.elem_sets, element_sets);
+                assert_eq!(mesh.face_sets, faces);
+                let welded = mesh.clone();
+                merge_coincident(&mut mesh, tol);
+                assert_eq!(mesh, welded, "border scans are deterministic and idempotent");
+            }
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
     /// Finite inputs can overflow when multiplied or added. No such point may reach weka.
@@ -1747,3 +1958,1301 @@ proptest! {
         }
     }
 }
+
+// ---- imported triangle-mesh geometry (#350) ---------------------------------------------------
+
+use femlab_geometry::{Affine3, MAX_TRIANGLES};
+
+/// The tagged boundary of an evaluated Solid, back as a raw soup: what an STL round trip gives.
+fn resample(shape: &Shape) -> Shape {
+    let s = Solid::evaluate(shape).unwrap();
+    let t = s.triangles();
+    Shape::Mesh {
+        positions: t.positions.clone(),
+        triangles: t.triangles.clone(),
+        feature_angle: None,
+        simplify_below: None,
+    }
+}
+
+fn predicate_kind(predicate: &FacePredicate) -> &'static str {
+    match predicate {
+        FacePredicate::Plane { .. } => "plane",
+        FacePredicate::Normal { .. } => "normal",
+        FacePredicate::Bbox { .. } => "bbox",
+        FacePredicate::Cylinder { .. } => "cylinder",
+        FacePredicate::Any { .. } => "any",
+    }
+}
+
+/// The unit cube [0,1]^3 as a soup, wound counter-clockwise seen from outside.
+fn cube_soup() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+    let positions = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    let quads: [[u32; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+    let triangles = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
+    (positions, triangles)
+}
+
+fn mesh_shape(positions: Vec<[f64; 3]>, triangles: Vec<[u32; 3]>) -> Shape {
+    Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: None }
+}
+
+fn patch_areas(s: &Solid) -> BTreeMap<String, f64> {
+    let m = s.triangles();
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for (t, tri) in m.triangles.iter().enumerate() {
+        let (p, q, r) = (m.positions[tri[0] as usize], m.positions[tri[1] as usize], m.positions[tri[2] as usize]);
+        let n = cross(sub(q, p), sub(r, p));
+        *out.entry(m.tag_of(t).to_string()).or_default() += 0.5 * libm::sqrt(dot(n, n));
+    }
+    out
+}
+
+#[test]
+fn an_imported_cube_is_exact_with_six_named_patches() {
+    let (positions, triangles) = cube_soup();
+    let s = Solid::evaluate(&mesh_shape(positions, triangles)).unwrap();
+    assert_eq!(s.dim(), 3);
+    assert!((s.volume() - 1.0).abs() < 1e-12, "{}", s.volume());
+    assert!((s.area() - 6.0).abs() < 1e-12);
+    assert_eq!(s.bbox(), ([0.0; 3], [1.0; 3]));
+    assert_eq!(s.genus(), 0);
+    assert_eq!(s.tags(), ["face0", "face1", "face2", "face3", "face4", "face5"]);
+    for (_, a) in patch_areas(&s) {
+        assert!((a - 1.0).abs() < 1e-12);
+    }
+    assert!(s.contains([0.5, 0.5, 0.5]));
+    assert!(!s.contains([1.5, 0.5, 0.5]));
+    assert!(!s.contains([-0.5, 0.5, 0.5]));
+    assert!(s.contains([0.125, 0.125, 0.125]));
+    assert!(format!("{s:?}").contains("MeshIndex(12 triangles)"));
+}
+
+/// Patch measurements use triangle area and first moments, while the predicate classification
+/// is checked against analytic planes and a circular cylinder after a world-space transform.
+#[test]
+fn imported_patch_summaries_have_independent_geometric_oracles() {
+    let (positions, triangles) = cube_soup();
+    let cube = Solid::evaluate(&mesh_shape(positions, triangles)).unwrap();
+    let patches = cube.triangles().face_patches();
+    assert_eq!(patches.len(), 6);
+    for p in &patches {
+        assert_eq!(p.triangle_count, 2);
+        assert!((p.area - 1.0).abs() < 1e-12);
+        assert!((dot(p.mean_normal, p.mean_normal) - 1.0).abs() < 1e-12);
+        let FacePredicate::Plane { normal, offset, tol } = &p.suggested_predicate else {
+            panic!("cube patch is not planar: {p:?}")
+        };
+        assert!((dot(*normal, p.centroid) - offset).abs() <= tol.expect("explicit tolerance"));
+    }
+
+    let at = Affine3 { translate: [3.0, -2.0, 5.0], rotate: [23.0, 37.0, -19.0], scale: [2.0; 3] };
+    let cylinder = Shape::Transform {
+        shape: Box::new(Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(32) }),
+        at: at.clone(),
+    };
+    let imported = Solid::evaluate(&resample(&cylinder)).unwrap();
+    let patches = imported.triangles().face_patches();
+    assert_eq!(patches.len(), 3);
+    assert_eq!(patches.iter().filter(|p| predicate_kind(&p.suggested_predicate) == "plane").count(), 2);
+    let side =
+        patches.iter().find(|p| predicate_kind(&p.suggested_predicate) == "cylinder").expect("one cylindrical side");
+    let FacePredicate::Cylinder { point, axis, radius, tol } = side.suggested_predicate else { panic!() };
+    let p0 = at.apply([0.0, 0.0, 0.0]);
+    let p1 = at.apply([0.0, 0.0, 1.0]);
+    let expected_axis = sub(p1, p0);
+    assert!((radius - 2.0).abs() < 1e-9, "radius {radius}");
+    assert!((dot(axis, expected_axis).abs() - 2.0).abs() < 1e-9, "axis {axis:?}");
+    assert!(tol.expect("faceting tolerance") > 0.0);
+    assert!(libm::sqrt(dot(side.mean_normal, side.mean_normal)) < 1e-12, "{:?}", side.mean_normal);
+    let d = sub(point, p0);
+    let axial = dot(d, axis);
+    let radial = sub(d, [axis[0] * axial, axis[1] * axial, axis[2] * axial]);
+    assert!(libm::sqrt(dot(radial, radial)) < 1e-9, "axis point {point:?}");
+
+    let imported_shape = resample(&cylinder);
+    assert!(imported_shape.is_imported());
+    assert!(Shape::Transform { shape: Box::new(imported_shape), at: at.clone() }.is_imported());
+    assert!(Shape::Named { name: "part".into(), shape: Box::new(resample(&cylinder)) }.is_imported());
+    assert!(!cylinder.is_imported());
+
+    let along_x = Shape::Transform {
+        shape: Box::new(Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(16) }),
+        at: Affine3 { rotate: [0.0, 90.0, 0.0], ..Default::default() },
+    };
+    let along_x = Solid::evaluate(&resample(&along_x)).unwrap();
+    assert!(along_x.triangles().face_patches().iter().any(|p| predicate_kind(&p.suggested_predicate) == "cylinder"));
+
+    let sphere = Solid::evaluate(&resample(&Shape::Sphere { radius: 1.0, segments: Some(16) })).unwrap();
+    let sphere_patches = sphere.triangles().face_patches();
+    assert_eq!(sphere_patches.len(), 1);
+    assert_eq!(predicate_kind(&sphere_patches[0].suggested_predicate), "bbox");
+
+    let shallow = femlab_geometry::TriMesh {
+        positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.1]],
+        triangles: vec![[0, 1, 2], [0, 1, 3]],
+        tags: vec![0, 0],
+        tag_names: vec!["shallow".into()],
+    };
+    assert_eq!(predicate_kind(&shallow.face_patches()[0].suggested_predicate), "bbox");
+
+    let n = 16;
+    let mut positions = Vec::new();
+    for z in [0.0, 1.0] {
+        for i in 0..n {
+            let angle = 2.0 * PI * i as f64 / n as f64;
+            positions.push([2.0 * libm::cos(angle), libm::sin(angle), z]);
+        }
+    }
+    let mut triangles = Vec::new();
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        triangles.extend([[i, j, n as u32 + j], [i, n as u32 + j, n as u32 + i]]);
+    }
+    let ellipse = femlab_geometry::TriMesh {
+        tags: vec![0; triangles.len()],
+        tag_names: vec!["ellipse".into()],
+        positions,
+        triangles,
+    };
+    assert_eq!(predicate_kind(&ellipse.face_patches()[0].suggested_predicate), "bbox");
+}
+
+#[test]
+fn every_primitive_survives_a_round_trip_through_its_own_triangles() {
+    let cases: [(Shape, usize, f64); 4] = [
+        (Shape::Box { size: [1.0, 2.0, 3.0] }, 6, 6.0),
+        (Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(64) }, 3, 32.0 * libm::sin(2.0 * PI / 64.0) * 2.0),
+        (Shape::Sphere { radius: 1.0, segments: Some(32) }, 1, f64::NAN),
+        (
+            Shape::Revolve { sketch: Sketch::rect(1.0, 2.0), angle: 360.0, segments: Some(64) },
+            3,
+            32.0 * libm::sin(2.0 * PI / 64.0) * 2.0,
+        ),
+    ];
+    for (shape, patches, volume) in cases {
+        let direct = Solid::evaluate(&shape).unwrap();
+        let back = Solid::evaluate(&resample(&shape)).unwrap();
+        assert!((back.volume() - direct.volume()).abs() < 1e-9, "{shape:?}");
+        assert!((back.area() - direct.area()).abs() < 1e-9, "{shape:?}");
+        assert_eq!(back.bbox(), direct.bbox(), "{shape:?}");
+        assert_eq!(back.genus(), 0, "{shape:?}");
+        assert_eq!(back.tags().len(), patches, "{shape:?} gave {:?}", back.tags());
+        if volume.is_finite() {
+            assert!((back.volume() - volume).abs() < 1e-9, "{shape:?}");
+        }
+        let c = direct.centroid();
+        assert!(back.contains(c), "{shape:?}");
+        let (_, hi) = direct.bbox();
+        assert!(!back.contains([hi[0] + 1.0, hi[1] + 1.0, hi[2] + 1.0]), "{shape:?}");
+    }
+}
+
+#[test]
+fn a_torus_keeps_its_hole_and_a_bore_keeps_one_patch_per_wall() {
+    let ring = Sketch::circle([1.0, 0.0], 0.25, "tube");
+    let torus = Shape::Revolve { sketch: Sketch { outer: ring, holes: vec![] }, angle: 360.0, segments: Some(48) };
+    let direct = Solid::evaluate(&torus).unwrap();
+    assert_eq!(direct.genus(), 1);
+    let back = Solid::evaluate(&resample(&torus)).unwrap();
+    assert_eq!(back.genus(), 1, "an imported torus is still a torus");
+    assert!((back.volume() - direct.volume()).abs() < 1e-9);
+
+    let plate = Shape::Subtract {
+        from: Box::new(Shape::Box { size: [10.0, 10.0, 2.0] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Cylinder { radius: 2.0, height: 10.0, segments: Some(64) }),
+            at: Affine3::translation([5.0, 5.0, -4.0]),
+        }],
+    };
+    let s = Solid::evaluate(&resample(&plate)).unwrap();
+    assert_eq!(s.genus(), 1);
+    assert_eq!(s.tags().len(), 7, "{:?}", s.tags());
+    // the bore wall is one smooth patch of its own; the two faces it pierces stay whole
+    let areas = patch_areas(&s);
+    let bore = 64.0 * 2.0 * libm::sin(PI / 64.0) * 2.0 * 2.0;
+    let pierced = 100.0 - 64.0 * 0.5 * 4.0 * libm::sin(2.0 * PI / 64.0);
+    assert_eq!(areas.values().filter(|a| (**a - bore).abs() < 1e-9).count(), 1, "{areas:?}");
+    assert_eq!(areas.values().filter(|a| (**a - pierced).abs() < 1e-9).count(), 2, "{areas:?}");
+    assert_eq!(areas.values().filter(|a| (**a - 20.0).abs() < 1e-9).count(), 4, "{areas:?}");
+}
+
+#[test]
+fn the_feature_angle_chooses_how_coarse_the_patches_are() {
+    let cyl = resample(&Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(8) });
+    let with = |angle: f64| {
+        let Shape::Mesh { positions, triangles, .. } = &cyl else { unreachable!() };
+        let shape = Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: Some(angle),
+            simplify_below: None,
+        };
+        Solid::evaluate(&shape).unwrap().tags().len()
+    };
+    assert_eq!(with(30.0), 8 + 2);
+    assert_eq!(with(50.0), 3);
+    assert_eq!(with(91.0), 1);
+}
+
+#[test]
+fn simplify_below_removes_a_sliver_the_import_did_not_want() {
+    let shaved = Shape::Subtract {
+        from: Box::new(Shape::Box { size: [1.0; 3] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Box { size: [1.0; 3] }),
+            at: Affine3::translation([0.9999999, 0.9999999, 0.9999999]),
+        }],
+    };
+    let Shape::Mesh { positions, triangles, .. } = resample(&shaved) else { unreachable!() };
+    let raw = Solid::evaluate(&mesh_shape(positions.clone(), triangles.clone())).unwrap();
+    let clean = Solid::evaluate(&Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: Some(1e-3) })
+        .unwrap();
+    assert!(clean.triangles().triangles.len() < raw.triangles().triangles.len());
+    assert_eq!(clean.tags().len(), 6, "back to a plain box: {:?}", clean.tags());
+    assert!((clean.volume() - 1.0).abs() < 1e-6, "{}", clean.volume());
+}
+
+#[test]
+fn a_lattice_meshes_an_imported_cube_and_every_face_set_resolves() {
+    let (positions, triangles) = cube_soup();
+    let named = Shape::Named { name: "part".into(), shape: Box::new(mesh_shape(positions, triangles)) };
+    let s = Solid::evaluate(&named).unwrap();
+    assert_eq!(s.tags(), ["part.face0", "part.face1", "part.face2", "part.face3", "part.face4", "part.face5"]);
+    let m = lattice(&s, None, Some([4, 4, 4]), false).unwrap();
+    assert_eq!(m.n_elems(), 64);
+    assert!((measure(&m) - 1.0).abs() < 1e-12);
+    // every boundary face of a cube lies on a bounding-box plane, so the lattice names them
+    // `xmin … zmax` as it does for any body; the durable name for a patch is a predicate.
+    assert_eq!(m.face_sets.len(), 6);
+    for (tag, faces) in &m.face_sets {
+        assert_eq!(faces.len(), 16, "{tag}");
+    }
+    let top = resolve_face_set(&m, &FacePredicate::Plane { normal: [0.0, 0.0, 1.0], offset: 1.0, tol: None }, None);
+    assert_eq!(top.len(), 16);
+}
+
+#[test]
+fn imported_meshes_are_validated_before_they_reach_the_kernel() {
+    let (positions, triangles) = cube_soup();
+    let err = |s: Shape| Solid::evaluate(&s).unwrap_err().0;
+    assert!(err(mesh_shape(positions.clone(), triangles[..3].to_vec())).contains("at least 4 triangles"));
+    assert!(err(mesh_shape(positions.clone(), vec![[0, 1, 2]; MAX_TRIANGLES + 1])).contains("limited to 500000"));
+    let mut nan = positions.clone();
+    nan[2][1] = f64::NAN;
+    assert!(err(mesh_shape(nan, triangles.clone())).contains("vertex 2 has a non-finite coordinate"));
+    let mut oob = triangles.clone();
+    oob[5][2] = 99;
+    assert!(err(mesh_shape(positions.clone(), oob)).contains("triangle 5 refers to vertex 99"));
+    let mut flat = triangles.clone();
+    flat[7] = [1, 1, 2];
+    assert!(err(mesh_shape(positions.clone(), flat)).contains("triangle 7 has zero or non-finite area"));
+    let huge = vec![[0.0; 3], [1e300, 0.0, 0.0], [0.0, 1e300, 0.0], [0.0, 0.0, 1.0]];
+    let big = vec![[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]];
+    assert!(err(mesh_shape(huge, big)).contains("triangle 0 has zero or non-finite area"));
+    let bad_angle = Shape::Mesh {
+        positions: positions.clone(),
+        triangles: triangles.clone(),
+        feature_angle: Some(180.0),
+        simplify_below: None,
+    };
+    assert!(err(bad_angle).contains("featureAngle must be in (0, 180)"));
+    let bad_simplify = Shape::Mesh {
+        positions: positions.clone(),
+        triangles: triangles.clone(),
+        feature_angle: None,
+        simplify_below: Some(-1.0),
+    };
+    assert!(err(bad_simplify).contains("simplifyBelow must be zero or positive"));
+    let open: Vec<[u32; 3]> = triangles.iter().copied().filter(|t| !t.contains(&6)).collect();
+    assert!(err(mesh_shape(positions.clone(), open)).contains("Not Closed"));
+    let gone = Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: Some(100.0) };
+    assert!(err(gone).contains("simplifies away to nothing"));
+    let (positions, triangles) = cube_soup();
+    assert!(mesh_shape(positions, triangles).contains([0.5; 3]).unwrap_err().0.contains("evaluated Solid"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    /// A random triangle soup must be rejected or evaluated, never panic the kernel: the same
+    /// rule the free mesher's sketches live under (AGENTS.md, issue #5).
+    #[test]
+    fn a_random_triangle_soup_never_panics_the_kernel(
+        coords in prop::collection::vec(-2.0f64..2.0, 12..30),
+        indices in prop::collection::vec(0u32..12, 12..30),
+    ) {
+        let positions: Vec<[f64; 3]> = coords.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let triangles: Vec<[u32; 3]> = indices.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let shape = Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: None };
+        // The property is that these return at all. Any `Err` is a pass.
+        if let Ok(s) = Solid::evaluate(&shape) {
+            let _ = s.contains([0.1, 0.2, 0.3]);
+            let _ = lattice(&s, None, Some([2, 2, 2]), false);
+        }
+    }
+}
+
+// ---- the free tet mesher (isosurface stuffing) ------------------------------------------------
+
+use femlab_geometry::tet;
+
+/// The four bodies the dihedral gate is measured on, with the **closed-form** volume of each.
+///
+/// The reference is the analytic volume, never `Solid::volume()`: the mesher cuts against
+/// `Shape::contains`, which is an exact circle, while the Solid's own volume comes from its
+/// 32-segment facets and is 0.6 % (cylinder) to 2.2 % (sphere) short of it.
+fn tet_bodies() -> Vec<(&'static str, Solid, f64)> {
+    vec![
+        ("box", solid(Shape::Box { size: [1.0, 0.8, 0.6] }), 1.0 * 0.8 * 0.6),
+        ("cylinder", solid(Shape::Cylinder { radius: 0.4, height: 1.0, segments: Some(32) }), PI * 0.16),
+        ("sphere", solid(Shape::Sphere { radius: 0.5, segments: Some(32) }), 4.0 / 3.0 * PI * 0.125),
+        (
+            "box-minus-cylinder",
+            solid(Shape::Subtract {
+                from: Box::new(Shape::Box { size: [1.0, 1.0, 1.0] }),
+                cut: vec![Shape::Named {
+                    name: "bore".into(),
+                    shape: Box::new(Shape::Transform {
+                        shape: Box::new(Shape::Cylinder { radius: 0.25, height: 3.0, segments: Some(32) }),
+                        at: femlab_geometry::Affine3 { translate: [0.5, 0.5, -1.0], ..Default::default() },
+                    }),
+                }],
+            }),
+            1.0 - PI * 0.0625,
+        ),
+    ]
+}
+
+/// A closed surface's oriented face areas cancel. A tet mesh that did not conform — a
+/// quadrilateral split one way by one element and the other way by its neighbour — leaves a
+/// crack whose rim shows up here, so this is the conformity check.
+fn boundary_is_closed(m: &Mesh) -> f64 {
+    let mut sum = [0.0; 3];
+    for f in m.boundary_faces() {
+        let c: Vec<[f64; 3]> = m.face_nodes(f).take(3).map(|n| m.node(n)).collect();
+        let a = cross(sub(c[1], c[0]), sub(c[2], c[0]));
+        for k in 0..3 {
+            sum[k] += 0.5 * a[k];
+        }
+    }
+    libm::sqrt(dot(sum, sum))
+}
+
+#[test]
+fn tet_meshes_hold_their_dihedral_angles_volume_and_sets_at_two_sizes() {
+    for (name, body, exact) in tet_bodies() {
+        let mut previous = f64::INFINITY;
+        for (size, tol) in [(0.25, 0.07), (0.125, 0.02)] {
+            let m = tet(&body, size, false, 2_000_000).unwrap();
+            m.validate().unwrap();
+            assert_eq!(m.kind_of(0), ElementKind::Tet4, "{name}");
+            assert_eq!(m.elem_sets["all"].len(), m.n_elems());
+            // The isosurface-stuffing angle bound, measured rather than claimed.
+            let q = quality(&m, 1);
+            let lo = q.min_dihedral_deg.unwrap_or_default();
+            let hi = q.max_dihedral_deg.unwrap_or_default();
+            assert!(lo >= 10.7 && hi <= 164.8, "{name} at {size}: dihedral angles {lo}..{hi} degrees");
+            assert!(q.min_det_j_ratio > 0.0, "{name} at {size}: an element is inverted or degenerate");
+            // Conforming, so the skin closes.
+            assert!(boundary_is_closed(&m) < 1e-9, "{name} at {size}: the boundary is not closed");
+            // Volume against the closed form, and closer at the finer size.
+            let error = (measure(&m) - exact).abs() / exact;
+            assert!(error < tol, "{name} at {size}: volume error {error} against {exact}");
+            assert!(error < previous, "{name} at {size}: refining did not reduce the volume error");
+            previous = error;
+            // Every named CSG face resolves to a non-empty face Set at both sizes.
+            assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), body.tags(), "{name} at {size}");
+            for tag in body.tags() {
+                assert!(set_len(&m, &tag) > 0, "{name} at {size}: face set '{tag}' is empty");
+            }
+        }
+    }
+}
+
+#[test]
+fn tet_meshes_are_exact_on_a_lattice_aligned_box_and_reproducible() {
+    let box_ = solid(Shape::Box { size: [1.0, 1.0, 1.0] });
+    let m = tet(&box_, 0.25, false, 100_000).unwrap();
+    // The lattice lands on every face of an aligned box, so the twelve tetrahedra per cell
+    // survive whole: 4 x 4 x 4 cells x 12, and the volume is exact.
+    assert_eq!(m.n_elems(), 960);
+    assert!((measure(&m) - 1.0).abs() < 1e-12, "{}", measure(&m));
+    let q = quality(&m, 1);
+    assert!((q.min_dihedral_deg.unwrap_or_default() - 45.0).abs() < 1e-9);
+    assert!((q.max_dihedral_deg.unwrap_or_default() - 90.0).abs() < 1e-9);
+    assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), ["xmax", "xmin", "ymax", "ymin", "zmax", "zmin"]);
+    // Nothing in the mesher reads a clock, a thread count or a hash order.
+    assert_eq!(tet(&box_, 0.25, false, 100_000).unwrap(), m);
+}
+
+#[test]
+fn tet10_puts_its_mid_edge_nodes_on_the_curved_face() {
+    let r = 0.5;
+    let ball = solid(Shape::Sphere { radius: r, segments: Some(32) });
+    let m = tet(&ball, 0.2, true, 500_000).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.kind_of(0), ElementKind::Tet10);
+    assert!(quality(&m, 1).min_det_j_ratio > 0.0);
+    // On a boundary face the corners lie on the exact sphere and so, after projection, do the
+    // mid-edge nodes; the straight chord midpoint would sit a sagitta inside it.
+    let mut worst_node = 0.0f64;
+    let mut worst_chord = 0.0f64;
+    for f in m.boundary_faces() {
+        let n: Vec<u32> = m.face_nodes(f).collect();
+        for k in 0..3 {
+            let mid = m.node(n[3 + k]);
+            worst_node = worst_node.max((radius3(mid) - r).abs());
+            let chord = mean(&[m.node(n[k]), m.node(n[(k + 1) % 3])]);
+            worst_chord = worst_chord.max((radius3(chord) - r).abs());
+        }
+    }
+    assert!(worst_node < 1e-9, "mid-edge node off the sphere by {worst_node}");
+    assert!(worst_chord > 1e-3, "the chord midpoints were already on the sphere ({worst_chord})");
+    // Interior mid-edge nodes stay at the straight midpoint.
+    let e = m.elem_nodes(0);
+    let straight = mean(&[m.node(e[0]), m.node(e[1])]);
+    let moved = (0..3).map(|k| (m.node(e[4])[k] - straight[k]).abs()).fold(0.0f64, f64::max);
+    assert!(moved < 0.2 * 0.25, "a mid-edge node moved more than a quarter of its edge");
+}
+
+fn radius3(p: [f64; 3]) -> f64 {
+    libm::sqrt(dot(p, p))
+}
+
+#[test]
+fn the_tet_mesher_refuses_what_it_cannot_mesh_and_says_why() {
+    let ball = solid(Shape::Sphere { radius: 0.5, segments: Some(16) });
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(tet(&ball, bad, false, 100_000).unwrap_err().0.contains("positive, finite element size"));
+    }
+    // A denormal size is positive and finite, and is caught by the element-count estimate
+    // instead of overflowing the lattice.
+    assert!(tet(&ball, f64::MIN_POSITIVE / 2.0, false, 100_000).unwrap_err().0.contains("above the limit"));
+    assert!(tet(&annulus_sheet(), 0.1, false, 100_000).unwrap_err().0.contains("meshes 3D solids"));
+    assert!(tet(&ball, 0.01, false, 1_000).unwrap_err().0.contains("above the limit of 1000"));
+    // At an element size far larger than the body no lattice vertex lands inside it.
+    assert!(tet(&ball, 10.0, false, 100_000).unwrap_err().0.contains("no lattice vertex"));
+    // A body one element size across is seen, but too coarsely to keep its volume.
+    let bore = solid(Shape::Subtract {
+        from: Box::new(Shape::Box { size: [1.0, 1.0, 0.2] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Cylinder { radius: 0.45, height: 1.0, segments: Some(32) }),
+            at: femlab_geometry::Affine3 { translate: [0.5, 0.5, -0.4], ..Default::default() },
+        }],
+    });
+    assert!(tet(&bore, 0.34, false, 100_000).unwrap_err().0.contains("differs from the body's own"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    /// A mesher takes free-form geometry, so whatever the CSG tree and the element size say,
+    /// the tet mesher returns. Any `Err` is a pass here; a panic is the failure.
+    #[test]
+    fn a_random_csg_tree_never_panics_the_tet_mesher(
+        shape in any_shape(3),
+        size in prop_oneof![Just(0.0), Just(-1.0), Just(f64::NAN), Just(f64::INFINITY), Just(1e-300), 0.05f64..2.0],
+        quadratic in any::<bool>(),
+    ) {
+        // The property is that these calls return at all.
+        if let Ok(s) = Solid::evaluate(&shape) {
+            let _ = tet(&s, size, quadratic, 200_000);
+        }
+    }
+}
+
+/// Random CSG to `depth`: leaves that are degenerate as often as they are valid, transforms
+/// that collapse an axis, and all three booleans over them.
+fn any_shape(depth: u32) -> BoxedStrategy<Shape> {
+    let leaf = prop_oneof![
+        (-1.0f64..2.0, -1.0f64..2.0, -1.0f64..2.0).prop_map(|(x, y, z)| Shape::Box { size: [x, y, z] }),
+        (-1.0f64..2.0, -1.0f64..2.0).prop_map(|(r, h)| Shape::Cylinder { radius: r, height: h, segments: Some(8) }),
+        (-1.0f64..2.0).prop_map(|r| Shape::Sphere { radius: r, segments: Some(8) }),
+        (-1.0f64..2.0).prop_map(|h| Shape::Extrude { sketch: Sketch::rect(1.0, 0.5), height: h }),
+    ];
+    if depth == 0 {
+        return leaf.boxed();
+    }
+    let inner = any_shape(depth - 1);
+    prop_oneof![
+        leaf,
+        (inner.clone(), -1.0f64..2.0).prop_map(|(s, k)| Shape::Transform {
+            shape: Box::new(s),
+            at: femlab_geometry::Affine3 { scale: [k, 1.0, 1.0], translate: [0.2, 0.0, 0.0], ..Default::default() },
+        }),
+        inner.clone().prop_map(|s| Shape::Named { name: "part".into(), shape: Box::new(s) }),
+        prop::collection::vec(inner.clone(), 0..3).prop_map(|shapes| Shape::Union { shapes }),
+        prop::collection::vec(inner.clone(), 0..3).prop_map(|shapes| Shape::Intersect { shapes }),
+        (inner.clone(), prop::collection::vec(inner, 0..2))
+            .prop_map(|(from, cut)| Shape::Subtract { from: Box::new(from), cut }),
+    ]
+    .boxed()
+}
+
+#[test]
+fn structured_shells_keep_both_sides_and_embed_the_quad_in_space() {
+    assert!(mapped(&[], ElementKind::Shell4).is_err());
+    let mesh = Structured { kind: ElementKind::Shell4, n: [3, 2, 1] }.build(|p| [p[0], p[1], 0.3 * p[0] * p[1]]);
+    assert_eq!(mesh.dim, 3);
+    assert_eq!(mesh.n_nodes(), 12);
+    assert_eq!(mesh.n_elems(), 6);
+    assert_eq!(mesh.blocks[0].kind, ElementKind::Shell4);
+    assert_eq!(mesh.boundary_faces().len(), 12);
+    assert_eq!(mesh.face_sets["top"].len(), 6);
+    assert_eq!(mesh.face_sets["bottom"].len(), 6);
+    assert_eq!(mesh.node_sets["xmin"].len(), 3);
+    assert_eq!(mesh.node_sets["ymax"].len(), 4);
+    assert_eq!(mesh.node_sets["top"].len(), 12);
+    let surface = mesh.surface();
+    assert_eq!(surface.triangles.len(), 24);
+    assert_eq!(surface.faces.len(), 12);
+    for face in mesh.face_sets["top"].iter().chain(&mesh.face_sets["bottom"]) {
+        let nodes: Vec<_> = mesh.face_nodes(*face).collect();
+        assert_eq!(nodes.len(), 4);
+    }
+    assert_eq!(ElementKind::Shell4.n_nodes(), 4);
+    assert_eq!(ElementKind::Shell4.n_corners(), 4);
+    assert_eq!(ElementKind::Shell4.edges().len(), 4);
+}
+
+fn surface_patch(corners: [[f64; 3]; 4]) -> femlab_geometry::SurfacePatch {
+    femlab_geometry::SurfacePatch {
+        corners,
+        n: [2, 2],
+        tags: [Some("a".into()), Some("b".into()), Some("c".into()), Some("d".into())],
+        projection: None,
+    }
+}
+
+#[test]
+fn shell_surface_projection_supplies_exact_curved_normals() {
+    use femlab_geometry::{surface, Projection};
+    let mut p = surface_patch([[1.0, -1.0, -1.0], [1.0, 1.0, -1.0], [1.0, 1.0, 1.0], [1.0, -1.0, 1.0]]);
+    p.projection = Some(Projection::Sphere { center: [0.0; 3], radius: 2.0 });
+    let s = surface(&[p.clone()]).unwrap();
+    assert_eq!(s.mesh.n_elems(), 4);
+    for e in 0..4 {
+        for (i, &node) in s.mesh.elem_nodes(e).iter().enumerate() {
+            let x = s.mesh.node(node);
+            assert!((dot(x, x) - 4.0).abs() < 1e-12);
+            for (k, v) in x.into_iter().enumerate() {
+                assert!((s.directors[e as usize][i][k] - v / 2.0).abs() < 1e-12);
+            }
+        }
+    }
+    p.projection = Some(Projection::Cylinder { center: [0.0; 3], axis: [0.0, 0.0, 2.0], radius: 2.0 });
+    let s = surface(&[p]).unwrap();
+    for e in 0..4 {
+        for (i, &node) in s.mesh.elem_nodes(e).iter().enumerate() {
+            let x = s.mesh.node(node);
+            assert!((x[0] * x[0] + x[1] * x[1] - 4.0).abs() < 1e-12);
+            assert!((s.directors[e as usize][i][0] - x[0] / 2.0).abs() < 1e-12);
+            assert!((s.directors[e as usize][i][1] - x[1] / 2.0).abs() < 1e-12);
+            assert!(s.directors[e as usize][i][2].abs() < 1e-12);
+        }
+    }
+}
+
+#[test]
+fn shell_surface_patches_merge_shared_edges_and_keep_creases() {
+    use femlab_geometry::surface;
+    let a = surface_patch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]);
+    let mut b = surface_patch([[1.0, 0.0, 0.0], [2.0, 0.0, 1.0], [2.0, 1.0, 1.0], [1.0, 1.0, 0.0]]);
+    let joined = surface(&[a.clone(), b.clone()]).unwrap();
+    assert_eq!(joined.mesh.n_nodes(), 15);
+    assert_eq!(joined.mesh.n_elems(), 8);
+    assert_eq!(joined.mesh.face_sets["top"].len(), 8);
+    assert_eq!(joined.mesh.node_sets["a"].len(), 5);
+    assert_eq!(joined.directors[0][0], [0.0, 0.0, 1.0]);
+    assert!(joined.directors[4][0][0] < -0.7);
+    assert!(surface(&[a.clone(), a.clone()]).is_err());
+    let mut partial = b.clone();
+    partial.corners[2][1] = 0.5;
+    partial.corners[3][1] = 0.5;
+    assert!(surface(&[a.clone(), partial]).is_err());
+    b.n = [2, 3];
+    assert!(surface(&[a, b]).is_err());
+}
+
+#[test]
+fn untagged_shell_edges_leave_no_temporary_sets() {
+    let mut patch = surface_patch([[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]]);
+    patch.tags = [None, None, None, None];
+    let result = femlab_geometry::surface(&[patch]).unwrap();
+    assert_eq!(result.mesh.n_nodes(), 9);
+    assert_eq!(result.mesh.n_elems(), 4);
+    assert!(result.mesh.node_sets.is_empty());
+    assert_eq!(result.mesh.face_sets["top"].len(), 4);
+    assert!(result.directors.iter().flatten().all(|normal| *normal == [0., 0., 1.]));
+}
+
+proptest! {
+    #[test]
+    fn random_shell_surface_patches_never_panic(corners in prop::array::uniform4(prop::array::uniform3(-10.0f64..10.0)),n in prop::array::uniform2(0usize..5)) {
+        let mut p=surface_patch(corners);
+        p.n=n;
+        let _=femlab_geometry::surface(&[p]);
+    }
+}
+
+#[test]
+fn shell_surface_rejects_invalid_counts_tags_and_projections() {
+    use femlab_geometry::{surface, Projection};
+    let base = surface_patch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]]);
+    assert!(surface(&[]).is_err());
+    assert!(surface(&vec![base.clone(); 1025]).is_err());
+    for n in [[0, 1], [500_001, 1], [usize::MAX, 2]] {
+        let mut p = base.clone();
+        p.n = n;
+        assert!(surface(&[p]).is_err());
+    }
+    for tag in ["", "top", "bottom"] {
+        let mut p = base.clone();
+        p.tags[0] = Some(tag.into());
+        assert!(surface(&[p]).is_err());
+    }
+    for projection in [
+        Projection::Sphere { center: [0.0, 0.0, -1.0], radius: 0.0 },
+        Projection::Sphere { center: [0.0, 0.0, -1.0], radius: f64::NAN },
+        Projection::Sphere { center: [0.5, 0.5, 0.0], radius: 1.0 },
+        Projection::Cylinder { center: [0.0; 3], axis: [0.0; 3], radius: 1.0 },
+    ] {
+        let mut p = base.clone();
+        p.projection = Some(projection);
+        assert!(surface(&[p]).is_err());
+    }
+    let mut singular = base.clone();
+    singular.corners = [[0.0; 3]; 4];
+    assert!(surface(&[singular]).is_err());
+    let mut nonfinite = base;
+    nonfinite.corners[0][0] = f64::INFINITY;
+    assert!(surface(&[nonfinite]).is_err());
+}
+
+#[test]
+fn shell_surface_rejects_a_collapsed_corner_and_unrepresentable_extents() {
+    let collapsed = surface_patch([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 0.0]]);
+    let error = femlab_geometry::surface(&[collapsed]).err().unwrap();
+    assert!(error.0.contains("folded or degenerate"));
+    let overflow = surface_patch([[-1e308, 0.0, 0.0], [1e308, 0.0, 0.0], [1e308, 0.0, 0.0], [-1e308, 0.0, 0.0]]);
+    let error = femlab_geometry::surface(&[overflow]).err().unwrap();
+    assert!(error.0.contains("singular or non-finite"));
+    let planes: Vec<_> = [-1e308, 1e308]
+        .into_iter()
+        .map(|z| surface_patch([[0.0, 0.0, z], [1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]]))
+        .collect();
+    let error = femlab_geometry::surface(&planes).err().unwrap();
+    assert!(error.0.contains("extent is not representable"));
+}
+
+#[test]
+fn local_refinement_preserves_measure_conformity_and_named_sets() {
+    use femlab_geometry::{refine, SizeBox};
+    for kind in [ElementKind::Tri3, ElementKind::Tet4] {
+        let dim = kind.dim();
+        let original =
+            Structured { kind, n: [4, 2, if dim == 3 { 2 } else { 1 }] }.box_([2., 1., if dim == 3 { 1. } else { 0. }]);
+        for size in [0.4, 0.2] {
+            let boxes = vec![SizeBox { min: [0.; 3], max: [0.3, 1., 1.], size }];
+            let refined = refine(&original, &boxes, 10000).unwrap();
+            assert_eq!(refined, refine(&original, &boxes, 10000).unwrap());
+            assert!(refined.n_elems() > original.n_elems());
+            assert!((measure(&refined) - measure(&original)).abs() < 1e-12);
+            assert!(min_element_measure(&refined) > 0.);
+            assert_eq!(refined.blocks.len(), original.blocks.len());
+            assert_eq!(refined.face_sets.keys().collect::<Vec<_>>(), original.face_sets.keys().collect::<Vec<_>>());
+            // Every unpaired face lies on the original box boundary. An internal hanging
+            // face would appear here, with a centroid strictly inside the box.
+            for face in refined.boundary_faces() {
+                let points: Vec<_> = refined.face_nodes(face).map(|n| refined.node(n)).collect();
+                assert!((0..dim).any(|a| {
+                    points.iter().all(|x| x[a] == 0.) || points.iter().all(|x| x[a] == if a == 0 { 2. } else { 1. })
+                }));
+            }
+            for (name, faces) in &refined.face_sets {
+                assert!(!faces.is_empty(), "lost {name}");
+                let prior_points: Vec<_> = original.face_sets[name]
+                    .iter()
+                    .flat_map(|&f| original.face_nodes(f))
+                    .map(|n| original.node(n))
+                    .collect();
+                let axis = (0..dim).find(|&a| prior_points.iter().all(|p| p[a] == prior_points[0][a])).unwrap();
+                for &face in faces {
+                    assert!(refined.face_nodes(face).all(|n| refined.node(n)[axis] == prior_points[0][axis]));
+                }
+            }
+            for e in 0..refined.n_elems() as u32 {
+                let nodes = refined.elem_nodes(e);
+                if nodes.iter().any(|&n| refined.node(n)[0] <= 0.3) {
+                    for &[a, b] in kind.edges() {
+                        let delta = sub(refined.node(nodes[a as usize]), refined.node(nodes[b as usize]));
+                        assert!(dot(delta, delta).sqrt() <= size * (1.0 + 2e-12));
+                    }
+                }
+            }
+            assert_eq!(refine(&refined, &boxes, 10000).unwrap(), refined);
+            // The remote end keeps some coarse edges: this is local, not uniform refinement.
+            let remote = (0..refined.n_elems() as u32)
+                .filter(|&e| refined.elem_nodes(e).iter().all(|&n| refined.node(n)[0] >= 1.5))
+                .count();
+            assert!(remote > 0);
+            let max_remote = (0..refined.n_elems() as u32)
+                .filter(|&e| refined.elem_nodes(e).iter().all(|&n| refined.node(n)[0] >= 1.5))
+                .map(|e| {
+                    let ps: Vec<_> = refined.elem_nodes(e).iter().map(|&n| refined.node(n)).collect();
+                    corner_measure(kind, &ps)
+                })
+                .fold(0.0_f64, f64::max);
+            assert!(max_remote > if dim == 2 { size * size / 2. } else { size.powi(3) / 6. });
+        }
+    }
+}
+
+#[test]
+fn local_refinement_rejects_bad_boxes_and_limits_without_changing_the_input() {
+    use femlab_geometry::{refine, SizeBox};
+    let mesh = Structured { kind: ElementKind::Tri3, n: [1, 1, 1] }.box_([1., 1., 0.]);
+    let before = mesh.clone();
+    let valid = SizeBox { min: [0.; 3], max: [1.; 3], size: 0.1 };
+    for bad in [
+        SizeBox { size: 0., ..valid.clone() },
+        SizeBox { size: f64::NAN, ..valid.clone() },
+        SizeBox { min: [2.; 3], ..valid.clone() },
+        SizeBox { max: [f64::INFINITY; 3], ..valid.clone() },
+    ] {
+        assert!(refine(&mesh, &[bad], 100).is_err());
+    }
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 1).is_err());
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 2).is_err());
+    // One shared edge splits both incident triangles: a three-element budget is
+    // insufficient even though it admits the initial edge-count lower bound.
+    assert!(refine(&mesh, std::slice::from_ref(&valid), 3).is_err());
+    let mut tiny = mesh.clone();
+    for x in &mut tiny.coords {
+        *x = 1. + *x * f64::EPSILON;
+    }
+    let microscopic = SizeBox { min: [1.; 3], max: [2.; 3], size: f64::MIN_POSITIVE };
+    let failure = refine(&tiny, &[microscopic], 100).unwrap_err();
+    assert!(failure.0.contains("floating-point coordinate resolution"));
+
+    let quad = Structured { kind: ElementKind::Quad4, n: [1, 1, 1] }.box_([1., 1., 0.]);
+    assert!(refine(&quad, &[valid], 100).is_err());
+    assert_eq!(refine(&quad, &[], 100).unwrap(), quad);
+    assert_eq!(mesh, before);
+}
+
+#[test]
+fn local_refinement_closes_multiple_marked_edges_of_one_triangle() {
+    use femlab_geometry::{refine, SizeBox};
+    // Each neighbour's longest edge is shared with the central triangle, whose
+    // own longest edge is different. All three central edges split in one pass.
+    let original = Mesh {
+        dim: 2,
+        coords: vec![0., 0., 0., 2., 0., 0., 0., 2., 0., 1., -0.1, 0., -0.1, 1., 0.],
+        blocks: vec![femlab_geometry::mesh::ElementBlock {
+            kind: ElementKind::Tri3,
+            conn: vec![0, 1, 2, 1, 0, 3, 0, 2, 4],
+            first_elem: 0,
+        }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let boxes = [SizeBox { min: [-1., -1., 0.], max: [2., 2., 0.], size: 1.5 }];
+    let refined = refine(&original, &boxes, 100).unwrap();
+    // A further interior split closes the long median left by ordered bisection.
+    // Euler's identity for a triangulated disk checks the resulting connectivity.
+    assert_eq!(refined.boundary_faces().len(), 6);
+    assert_eq!(refined.n_elems(), 2 * refined.n_nodes() - 2 - refined.boundary_faces().len());
+    for e in 0..refined.n_elems() as u32 {
+        let nodes = refined.elem_nodes(e);
+        for &[a, b] in ElementKind::Tri3.edges() {
+            let delta = sub(refined.node(nodes[a as usize]), refined.node(nodes[b as usize]));
+            assert!(dot(delta, delta).sqrt() <= 1.5 * (1. + 1e-12));
+        }
+    }
+    assert!((measure(&refined) - 2.2).abs() < 1e-13);
+    assert!(min_element_measure(&refined) > 0.);
+    assert_eq!(refine(&refined, &boxes, 100).unwrap(), refined);
+}
+
+// ---- exact authored Tet4 pair conformity (#501) -----------------------------------------------
+
+const PAIR_TET: [[f64; 3]; 4] = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.]];
+
+fn tet_pair_mesh(points: &[[f64; 3]], connectivity: &[u32]) -> Mesh {
+    Mesh {
+        dim: 3,
+        coords: points.iter().flatten().copied().collect(),
+        blocks: vec![ElementBlock { kind: ElementKind::Tet4, conn: connectivity.to_vec(), first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn authored_tetrahedra_allow_only_their_labelled_vertex_edge_or_face() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    // These are independently authored positive cells in the positive/negative octants.
+    // Contact is, respectively, exactly the origin, the x edge, and the xy face.
+    for (extra, second) in [
+        (vec![[-1., 0., 0.], [0., -1., 0.], [0., 0., -1.]], [0, 5, 4, 6]),
+        (vec![[0., -1., 0.], [0., 0., -1.]], [0, 1, 4, 5]),
+        (vec![[0., 0., -1.]], [0, 2, 1, 4]),
+    ] {
+        let mut points = PAIR_TET.to_vec();
+        points.extend(extra);
+        let mesh = tet_pair_mesh(&points, &[0, 1, 2, 3, second[0], second[1], second[2], second[3]]);
+        assert!(min_element_measure(&mesh) > 0.);
+        validate_tet_pairs(&mesh).unwrap();
+    }
+    let single = tet_pair_mesh(&PAIR_TET, &[0, 1, 2, 3]);
+    validate_tet_pairs(&single).unwrap();
+    let mut unused = PAIR_TET.to_vec();
+    unused.push(PAIR_TET[0]);
+    let untouched = tet_pair_mesh(&unused, &[0, 1, 2, 3]);
+    validate_tet_pairs(&untouched).unwrap();
+    assert_eq!(untouched.n_nodes(), 5, "unused coincident labelled nodes survive");
+}
+
+#[test]
+fn authored_tetrahedra_reject_crossing_containment_partial_faces_and_t_junctions() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    let fixtures = [
+        // Nested cell: no boundary intersection is needed to expose the overlap.
+        [[0.1, 0.1, 0.1], [0.2, 0.1, 0.1], [0.1, 0.2, 0.1], [0.1, 0.1, 0.2]],
+        // Crossing cells with no vertex contained in the other: x,y >= .3 and
+        // z >= -.3 intersects x+y+z <= 1 near (.4,.4,.1).
+        [[0.3, 0.3, -0.3], [1.3, 0.3, -0.3], [0.3, 1.3, -0.3], [0.3, 0.3, 0.7]],
+        // Opposite-side cells with overlapping coplanar faces, but no face vertex
+        // in the other triangle. The connectivity reverses the bottom triangle.
+        [[-0.1, 0.4, 0.], [0.8, 0.8, 0.], [0.4, -0.1, 0.], [0.4, 0.4, -1.]],
+        // Unlabelled vertex on the first cell's x edge is a T-junction.
+        [[0.5, 0., 0.], [0.5, -1., 0.], [0.5, 0., -1.], [1.5, 0., 0.]],
+    ];
+    for fixture in fixtures {
+        let mut points = PAIR_TET.to_vec();
+        points.extend(fixture);
+        let mesh = tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert!(min_element_measure(&mesh) > 0.);
+        let error = validate_tet_pairs(&mesh).unwrap_err();
+        assert!(error.0.contains("tetrahedra 0 and 1 overlap or meet"));
+    }
+    // Equal coordinates are not equal source identities: this otherwise matching
+    // opposite-side face has three independently labelled vertices.
+    let mut points = PAIR_TET.to_vec();
+    points.extend([[0., 0., 0.], [0., 1., 0.], [1., 0., 0.], [0., 0., -1.]]);
+    assert!(validate_tet_pairs(&tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7])).is_err());
+}
+
+#[test]
+fn matching_labelled_faces_do_not_hide_same_side_overlap_or_duplicate_cells() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    // Both cells are positive; the second apex lies outside the first cell, and
+    // the first apex lies outside the second. Their interiors still overlap near
+    // the shared base, so accepting that base must not skip the remaining faces.
+    let mut points = PAIR_TET.to_vec();
+    points.push([10., 10., 1.]);
+    let overlapping = tet_pair_mesh(&points, &[0, 1, 2, 3, 0, 1, 2, 4]);
+    assert!(min_element_measure(&overlapping) > 0.);
+    assert!(validate_tet_pairs(&overlapping).is_err());
+    assert!(validate_tet_pairs(&tet_pair_mesh(&PAIR_TET, &[0, 1, 2, 3, 0, 1, 2, 3])).is_err());
+    // Sharing a vertex or an edge likewise cannot authorize another crossing.
+    let mut vertex_crossing = PAIR_TET.to_vec();
+    vertex_crossing.extend([[2., -0.1, 0.2], [0.2, 2., -0.1], [-0.1, 0.2, 2.]]);
+    let mesh = tet_pair_mesh(&vertex_crossing, &[0, 1, 2, 3, 0, 4, 5, 6]);
+    assert!(min_element_measure(&mesh) > 0.);
+    assert!(validate_tet_pairs(&mesh).is_err());
+    let mut edge_crossing = PAIR_TET.to_vec();
+    edge_crossing.extend([[10., 2., -0.1], [10., -0.1, 2.]]);
+    let mesh = tet_pair_mesh(&edge_crossing, &[0, 1, 2, 3, 0, 1, 4, 5]);
+    assert!(min_element_measure(&mesh) > 0.);
+    assert!(validate_tet_pairs(&mesh).is_err());
+}
+
+#[test]
+fn tetrahedron_pair_broad_phase_handles_disjoint_boxes_and_disjoint_cells_with_overlapping_boxes() {
+    use femlab_geometry::mesh_validation::validate_tet_pairs;
+    for fixture in [
+        // Expire the first cell from the x sweep.
+        PAIR_TET.map(|p| [p[0] + 3., p[1], p[2]]),
+        // Keep x overlap but separate y, then z.
+        PAIR_TET.map(|p| [p[0], p[1] + 3., p[2]]),
+        PAIR_TET.map(|p| [p[0], p[1], p[2] + 3.]),
+        PAIR_TET.map(|p| [p[0], p[1] - 3., p[2]]),
+        PAIR_TET.map(|p| [p[0], p[1], p[2] - 3.]),
+        // Boxes overlap, but the first cell has x+y+z <= 1 and this cell
+        // has x+y+z >= 2.5. The second order is positively oriented.
+        [[1., 1., 1.], [1., 0.5, 1.], [0.5, 1., 1.], [1., 1., 0.5]],
+    ] {
+        let mut points = PAIR_TET.to_vec();
+        points.extend(fixture);
+        let mesh = tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert!(min_element_measure(&mesh) > 0.);
+        validate_tet_pairs(&mesh).unwrap();
+    }
+    // Reversed source order exercises the geometric sort independently of ids.
+    let mut points = PAIR_TET.map(|p| [p[0] + 3., p[1], p[2]]).to_vec();
+    points.extend(PAIR_TET);
+    validate_tet_pairs(&tet_pair_mesh(&points, &[0, 1, 2, 3, 4, 5, 6, 7])).unwrap();
+    let empty = Mesh { blocks: Vec::new(), ..tet_pair_mesh(&[], &[]) };
+    validate_tet_pairs(&empty).unwrap();
+    // This entry point intentionally makes no Hex8 claim, even for duplicate
+    // cubes. The imported-source caller must provide that separate certificate.
+    let mut hex = cube(ElementKind::Hex8, [1, 1, 1]);
+    let duplicate = hex.blocks[0].conn.clone();
+    hex.blocks[0].conn.extend(duplicate);
+    validate_tet_pairs(&hex).unwrap();
+}
+
+// ---- original warped Hex8 certificates (#517) -------------------------------------------------
+
+const SOURCE_HEX: [[f64; 3]; 8] =
+    [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.], [0., 0., 1.], [1., 0., 1.], [1., 1., 1.], [0., 1., 1.]];
+
+fn authored_hex(points: &[[f64; 3]], connectivity: &[u32]) -> Mesh {
+    let mut mesh = tet_pair_mesh(points, connectivity);
+    mesh.blocks[0].kind = ElementKind::Hex8;
+    mesh
+}
+
+fn append_source_hex(points: &mut Vec<[f64; 3]>, corners: &[[f64; 3]; 8], shared: bool) -> [u32; 8] {
+    // The fixture author explicitly assigns equal positions the same source label
+    // when requested. The production importer never runs this fixture construction.
+    corners.map(|point| {
+        let existing = points.iter().position(|p| *p == point).filter(|_| shared);
+        if let Some(node) = existing {
+            node as u32
+        } else {
+            let node = points.len() as u32;
+            points.push(point);
+            node
+        }
+    })
+}
+
+#[test]
+fn certificate_accepts_true_bilinear_warped_shared_faces_and_si_scalings() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // Left F=(s*(1+t*r/4),t,r); right F=(1+t*r/4+s*(1-t*r/4),t,r).
+    // Determinants are 1+t*r/4 and 1-t*r/4, at least 3/4. The shared
+    // nonplanar face is exactly x=1+y*z/4, and divides the two interiors.
+    let points = [
+        [0., 0., 0.],
+        [0., 1., 0.],
+        [0., 1., 1.],
+        [0., 0., 1.],
+        [1., 0., 0.],
+        [1., 1., 0.],
+        [1.25, 1., 1.],
+        [1., 0., 1.],
+        [2., 0., 0.],
+        [2., 1., 0.],
+        [2., 1., 1.],
+        [2., 0., 1.],
+    ];
+    let connectivity = [0, 4, 5, 1, 3, 7, 6, 2, 4, 8, 9, 5, 7, 11, 10, 6];
+    for scale in [1.0, 1.0 / 1024.0, 1024.0] {
+        let scaled = points.map(|p| p.map(|v| v * scale));
+        certify_imported_geometry(&authored_hex(&scaled, &connectivity)).unwrap();
+    }
+    // An orientation-preserving, rotated/sheared affine transform retains the
+    // actual warped geometry. It must not require axis-aligned face equations.
+    let transformed = points.map(|[x, y, z]| [-2. * y + z / 4., x + z / 2., 4. * z]);
+    certify_imported_geometry(&authored_hex(&transformed, &connectivity)).unwrap();
+}
+
+#[test]
+fn certificate_subdivides_curved_separators_and_rejects_undeclared_warped_tangency() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // A's boundary is q=x-1-y*z/4=0. B=(1+c+r/8,s,1-s+t/8) is
+    // affine, detJ=1/64. q(B)=c+r/8-s*(1-s+t/8)/4. Its minimum
+    // is c-81/1024 at (s,t,r)=(9/16,1,0). The positive case has
+    // margin1/1024, despite negative initial Bernstein middle coefficients.
+    let left = SOURCE_HEX.map(|[s, t, r]| [s * (1. + t * r / 4.), t, r]);
+    for (c, succeeds) in [(41. / 512., true), (81. / 1024., false)] {
+        let right = SOURCE_HEX.map(|[s, t, r]| [1. + c + r / 8., s, 1. - s + t / 8.]);
+        let mut points = left.to_vec();
+        let second = append_source_hex(&mut points, &right, false);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        let outcome = certify_imported_geometry(&authored_hex(&points, &connectivity));
+        assert_eq!(outcome.is_ok(), succeeds);
+    }
+}
+
+#[test]
+fn certificate_requires_an_identically_zero_interface_not_just_zero_corners() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // A's warped face is x=1+y*z/8 on -1<=y,z<=1. B's planar
+    // diamond has all four face corners on that quadric (y*z=0), but its
+    // interior crosses it. The exact restriction has a nonzero remainder.
+    let left = SOURCE_HEX.map(|[s, t, r]| {
+        let y = 2. * t - 1.;
+        let z = 2. * r - 1.;
+        [s * (1. + y * z / 8.), y, z]
+    });
+    let right = SOURCE_HEX.map(|[s, t, r]| [1. + s / 4., r - t, 1. - t - r]);
+    let mut points = left.to_vec();
+    let second = append_source_hex(&mut points, &right, false);
+    let mut connectivity: Vec<_> = (0..8).collect();
+    connectivity.extend(second);
+    assert!(certify_imported_geometry(&authored_hex(&points, &connectivity)).is_err());
+}
+
+#[test]
+fn certificate_rejects_mixed_tet_edge_crossing_a_warped_face_between_positive_vertices() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // A's face is q=x-1-y*z/4. All four Tet vertices have q>0, but
+    // the edge from (33/32,0,1) to (33/32,1,0) has midpoint
+    // q=1/32-1/16=-1/32, strictly inside A. Its exact detJ is 1/8.
+    // Vertex-only classification would silently accept this volume overlap.
+    let left = SOURCE_HEX.map(|[s, t, r]| [s * (1. + t * r / 4.), t, r]);
+    let mut mixed = authored_hex(&left, &(0..8).collect::<Vec<_>>());
+    let tet = [[33. / 32., 0., 1.], [33. / 32., 0., 0.], [33. / 32., 1., 0.], [37. / 32., 0., 0.]];
+    for [x, y, z] in tet {
+        assert!(x - 1. - y * z / 4. > 0.);
+    }
+    assert_eq!(33. / 32. - 1. - 0.5 * 0.5 / 4., -1. / 32.);
+    mixed.coords.extend(tet.into_iter().flatten());
+    mixed.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![8, 9, 10, 11], first_elem: 1 });
+    assert_eq!(
+        certify_imported_geometry(&mixed).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0, 1],
+            cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact"
+                .into(),
+        }
+    );
+}
+
+#[test]
+fn certificate_rejects_nonplanar_quadric_corner_hull_and_noncartesian_zero_contact() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    let left = SOURCE_HEX.map(|[s, t, r]| [s * (1. + t * r / 4.), t, r]);
+    // Four noncoplanar corners of q=x-1-y*z/4 form a positive Tet,
+    // detJ=1/4, but every vertex is zero. Its edge from (1,1,0) to
+    // (1,0,1) has q=-1/16 at the midpoint and crosses inside A.
+    let mut mixed = authored_hex(&left, &(0..8).collect::<Vec<_>>());
+    let tet = [[1., 0., 0.], [1., 1., 0.], [1., 0., 1.], [1.25, 1., 1.]];
+    for [x, y, z] in tet {
+        assert_eq!(x - 1. - y * z / 4., 0.);
+    }
+    assert_eq!(1. - 1. - 0.5 * 0.5 / 4., -1. / 16.);
+    mixed.coords.extend(tet.into_iter().flatten());
+    mixed.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![8, 9, 10, 11], first_elem: 1 });
+    let expected = ImportedCertificateError::Inconclusive {
+        elements: vec![0, 1],
+        cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact".into(),
+    };
+    assert_eq!(certify_imported_geometry(&mixed).unwrap_err(), expected);
+
+    // B=(1+5*s*t/4+r,s,t), detJ=1, has q(B)=s*t+r.
+    // Its zero corners form an L, not a single reference entity. With
+    // distinct source labels, both boundary ruling-edge contacts are undeclared.
+    let right = SOURCE_HEX.map(|[s, t, r]| [1. + 5. * s * t / 4. + r, s, t]);
+    let mut points = left.to_vec();
+    let second = append_source_hex(&mut points, &right, false);
+    let mut connectivity: Vec<_> = (0..8).collect();
+    connectivity.extend(second);
+    assert_eq!(certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap_err(), expected);
+}
+
+#[test]
+fn certificate_reports_nonstrict_zero_entity_quotients_as_inconclusive() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // B=(1+s/4+(t+r-t*r)/16,t,r) has detJ=1/4 and explicit
+    // inverse s=4*(x-1)-(y+z-y*z)/4. Its only contact with A is
+    // the labelled vertex s=t=r=0. All normalized corner matrices
+    // are SPD (minors 1/4,255/4096,127/8192), so this is a valid cell.
+    // On x=1 the factor quotients are 1/4,(1-r)/16,1/16.
+    // The second vanishes at r=1: this sufficient proof fails closed
+    // even though q>0 away from the shared vertex.
+    let right = SOURCE_HEX.map(|[s, t, r]| [1. + s / 4. + (t + r - t * r) / 16., t, r]);
+    let mut points = SOURCE_HEX.to_vec();
+    let second = append_source_hex(&mut points, &right, true);
+    let mut connectivity: Vec<_> = (0..8).collect();
+    connectivity.extend(second);
+    assert_eq!(
+        certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0, 1],
+            cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact"
+                .into(),
+        }
+    );
+}
+
+#[test]
+fn certificate_accepts_labelled_hex_face_edge_vertex_and_separated_cells() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    for offset in [
+        [1., 0., 0.],
+        [1., 1., 0.],
+        [1., 1., 1.],
+        [3., 0., 0.],
+        [0., 3., 0.],
+        [0., 0., 3.],
+        [0., -3., 0.],
+        [0., 0., -3.],
+    ] {
+        let mut points = SOURCE_HEX.to_vec();
+        let next = SOURCE_HEX.map(|p| std::array::from_fn(|k| p[k] + offset[k]));
+        let second = append_source_hex(&mut points, &next, true);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap();
+    }
+    certify_imported_geometry(&authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>())).unwrap();
+    certify_imported_geometry(&Mesh { blocks: Vec::new(), ..authored_hex(&[], &[]) }).unwrap();
+}
+
+#[test]
+fn certificate_separates_rotated_affine_cells_with_overlapping_boxes() {
+    use femlab_geometry::imported_certificate::certify_imported_geometry;
+    // A has x+y<=2. B=(5/4+(s-t)/2,7/8+(s+t)/2,r) has
+    // x+y=17/8+s>=17/8 and detJ=1/2. Their AABBs overlap in
+    // every coordinate, but their interiors/closures have a strict 1/8 gap.
+    // The separator comes from B and leaves A's zero entity empty; source
+    // record order cannot affect the geometric sweep or sign orientation.
+    let next = SOURCE_HEX.map(|[s, t, r]| [1.25 + (s - t) / 2., 0.875 + (s + t) / 2., r]);
+    for reversed in [false, true] {
+        let mut points = if reversed { next.to_vec() } else { SOURCE_HEX.to_vec() };
+        let second = append_source_hex(&mut points, if reversed { &SOURCE_HEX } else { &next }, false);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap();
+    }
+}
+
+#[test]
+fn certificate_rejects_overlap_undeclared_tangency_and_hanging_hex_faces() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    for (next, shared) in [
+        // Volume overlap has no supporting separator.
+        (SOURCE_HEX.map(|[x, y, z]| [x + 0.5, y, z]), true),
+        // Whole matching face and point contacts with distinct source identities.
+        (SOURCE_HEX.map(|[x, y, z]| [x + 1., y, z]), false),
+        (SOURCE_HEX.map(|[x, y, z]| [x + 1., y + 1., z + 1.]), false),
+        // Only the y=0 edge uses the same labels; the y=.5 nodes hang in the
+        // first cube's full x=1 face. Geometry meets over a half-face.
+        (SOURCE_HEX.map(|[x, y, z]| [x + 1., y / 2., z]), true),
+    ] {
+        let mut points = SOURCE_HEX.to_vec();
+        let second = append_source_hex(&mut points, &next, shared);
+        let mut connectivity: Vec<_> = (0..8).collect();
+        connectivity.extend(second);
+        assert_eq!(
+            certify_imported_geometry(&authored_hex(&points, &connectivity)).unwrap_err(),
+            ImportedCertificateError::Inconclusive {
+                elements: vec![0, 1],
+                cause: "bounded exact original-face separators could not prove disjoint interiors and labelled contact"
+                    .into(),
+            }
+        );
+    }
+}
+
+#[test]
+fn certificate_rejects_negative_jacobian_pockets_even_when_corners_gauss_and_center_pass() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // F=(s,(s-a)*t+b*r,b*t+(s-a)*r), det=(s-a)^2-b^2. All values
+    // are dyadic rationals. Both cells fool the eight corners and Gauss rule;
+    // a=3/8,b=1/32 also fools all 27 half-grid samples, including the center.
+    for (a, b) in [(0.5, 0.125), (0.375, 0.03125)] {
+        let points = SOURCE_HEX.map(|[s, t, r]| [s, (s - a) * t + b * r, b * t + (s - a) * r]);
+        for s in [0., 1., (1. - 1. / 3f64.sqrt()) / 2., (1. + 1. / 3f64.sqrt()) / 2.] {
+            assert!((s - a) * (s - a) - b * b > 0.);
+        }
+        assert_eq!((a - a) * (a - a) - b * b, -b * b);
+        let error = certify_imported_geometry(&authored_hex(&points, &(0..8).collect::<Vec<_>>())).unwrap_err();
+        if a == 0.5 {
+            assert_eq!(
+                error,
+                ImportedCertificateError::Invalid {
+                    elements: vec![0],
+                    cause: "Hex8 has a nonpositive exact Jacobian at reference [1/2,0/2,0/2]".into(),
+                }
+            );
+        } else {
+            assert!((0.5 - a) * (0.5 - a) - b * b > 0.);
+            assert_eq!(
+                error,
+                ImportedCertificateError::Inconclusive {
+                    elements: vec![0],
+                    cause: "exact normalized-Jacobian matrix certificate could not prove Hex8 global injectivity"
+                        .into(),
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn certificate_reports_valid_but_unproved_warp_as_inconclusive() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // F=(s+10*t*r,t,r) is bijective with explicit inverse (x-10*y*z,y,z)
+    // and detJ=1. Large shear violates the sufficient normalized SPD condition.
+    let points = SOURCE_HEX.map(|[s, t, r]| [s + 10. * t * r, t, r]);
+    assert_eq!(
+        certify_imported_geometry(&authored_hex(&points, &(0..8).collect::<Vec<_>>())).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0],
+            cause: "exact normalized-Jacobian matrix certificate could not prove Hex8 global injectivity".into(),
+        }
+    );
+}
+
+#[test]
+fn certificate_covers_tet_pairs_and_supported_mixed_contacts_without_skin_substitution() {
+    use femlab_geometry::imported_certificate::{certify_imported_geometry, ImportedCertificateError};
+    // Tet4/Tet4 uses its complete original simplex certificate.
+    let mut points = PAIR_TET.to_vec();
+    points.push([0., 0., -1.]);
+    certify_imported_geometry(&tet_pair_mesh(&points, &[0, 1, 2, 3, 0, 2, 1, 4])).unwrap();
+    assert_eq!(
+        certify_imported_geometry(&tet_pair_mesh(&PAIR_TET, &[0, 1, 2, 3, 0, 1, 2, 3])).unwrap_err(),
+        ImportedCertificateError::Invalid {
+            elements: vec![0, 1],
+            cause: "tetrahedra overlap or meet outside their shared labelled entity".into(),
+        }
+    );
+    assert_eq!(
+        certify_imported_geometry(&tet_pair_mesh(&PAIR_TET, &[0, 2, 1, 3])).unwrap_err(),
+        ImportedCertificateError::Invalid {
+            elements: vec![0],
+            cause: "tetrahedron has a nonpositive exact Jacobian".into()
+        }
+    );
+    // The negative-octant tetrahedron shares only the labelled cube origin.
+    let mut mixed = authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>());
+    mixed.coords.extend([-1., 0., 0., 0., -1., 0., 0., 0., -1.]);
+    mixed.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![0, 9, 8, 10], first_elem: 1 });
+    certify_imported_geometry(&mixed).unwrap();
+    // A tetrahedral triangular face covering half a Hex8 quad is not a matching
+    // full labelled face; mixed-element conformity cannot silently triangulate it.
+    let mut partial = authored_hex(&SOURCE_HEX, &(0..8).collect::<Vec<_>>());
+    partial.coords.extend([2., 0., 0.]);
+    partial.blocks.push(ElementBlock { kind: ElementKind::Tet4, conn: vec![1, 2, 5, 8], first_elem: 1 });
+    assert!(certify_imported_geometry(&partial).is_err());
+    let unsupported = cube(ElementKind::Quad4, [1, 1, 1]);
+    assert_eq!(
+        certify_imported_geometry(&unsupported).unwrap_err(),
+        ImportedCertificateError::Inconclusive {
+            elements: vec![0],
+            cause: "original-geometry certificate supports only Tet4, Tet10, Hex8 and Hex20".into(),
+        }
+    );
+}
+
+#[path = "mesh/imported_quadratic.rs"]
+mod imported_quadratic;

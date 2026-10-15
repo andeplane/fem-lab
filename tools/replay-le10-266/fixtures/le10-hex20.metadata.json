@@ -1,0 +1,29 @@
+{
+  "format": "FEM266K1",
+  "model_hash": "b799257c60890a1d5c0a7b66e4de153053fb8d7dda6e732eb6cb99f775501a0c",
+  "n": 15432,
+  "nnz": 2285936,
+  "uncompressed_bytes": 27739900,
+  "relative_residual": 1.1916143010006138e-12,
+  "guard_reported_residual": 1.191614301000613e-12,
+  "relative_symmetry_error": 1.1173964134890026e-16,
+  "sigma_yy_mpa": -5.23413734781146,
+  "immutable_cli_sigma_yy_mpa": -5.23413734781146,
+  "independent_reference_mpa": -5.25,
+  "reaction_balance": 2.321650805538699e-14,
+  "applied_force": [
+    5.466265081568864e-10,
+    7.222628655234792e-10,
+    -5448696.427492658
+  ],
+  "free_displacements_bit_identical_to_engine_result": true,
+  "python_fsum_relative_residual": 8.355774443418118e-13,
+  "raw_bytes": 27739900,
+  "sha256_raw": "676daedcc4c2be0c6f5c9b5519e2c9bc619eaa8ae78f5b2baf1282982d198cad",
+  "xz_bytes": 3540920,
+  "sha256_xz": "5a836ad5efb74bfc5089775a5e4fcd928543784b2616713ac9467232c5d1227b",
+  "source_commit": "11666890a1dbc9ec628e45bff03d6a3deb375642",
+  "baseline_cli_commit": "dab97bca748f3ff72527a60ae80737ff3d546d93",
+  "case_path": "crates/engine/benches/cases/nafems-le10-hex20.json",
+  "case_sha256": "01ec0f9e4cad4897fce33b0aad0080f52fd9e90dde925dfa83f1bcd465cdcdc7"
+}

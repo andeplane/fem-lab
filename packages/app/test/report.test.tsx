@@ -6,7 +6,7 @@ import { makeHostContext } from '../src/host';
 import { initialState, Store, type UiState } from '../src/store';
 import { renderReportMarkdown, Report, splitForFigure } from '../src/ui/Report';
 import type { Dispatch } from '../src/ui/cmd';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import { waitFor } from './wait-for';
 
 const MARKDOWN = `# Calculation note: cantilever

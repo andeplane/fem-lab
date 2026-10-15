@@ -4,24 +4,24 @@ import type { FieldData, FrameResult, FramesResult, Query, QueryResult, ResultSu
 import { ResultsView } from '../src/results';
 import { Store } from '../src/store';
 import type { Viewer } from '../src/viewer/viewer';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const metres = (value: number): Valued => ({ value, unit: 'm' });
 const origin: [Valued, Valued, Valued] = [metres(0), metres(0), metres(0)];
 const catalogue: FramesResult = {
-  step: 'motion', modelHash: 'solved', stale: false, field: 'displacement',
+  resultId: 'result-1', step: 'motion', modelHash: 'solved', stale: false, field: 'displacement',
   components: 3, storedComponents: 3, nodeCount: 1, retainedBytes: 96,
   frames: [0, 0.2, 1].map((timeSi, index) => ({ index, timeSi, time: { value: timeSi, unit: 's' } })),
 };
 const summary: ResultSummary = {
-  step: 'motion', revision: 1, stale: false, solver: 'explicit', iterations: 5, residual: 0, timeMs: 1,
-  reactionQuantity: 'force',
+  modeCount: 0,
+  resultId: 'result-1', reactionQuantity: 'force', step: 'motion', revision: 1, stale: false, solver: 'explicit', iterations: 5, residual: 0, timeMs: 1,
   extremes: [{ field: 'displacement', component: 1, min: metres(10), max: metres(10), minAt: origin, maxAt: origin }],
   reactions: [], appliedTotal: [{ value: 0, unit: 'N' }, { value: 0, unit: 'N' }, { value: 0, unit: 'N' }], balance: 0,
   history: catalogue.frames.map(frame => ({ time: frame.time, min: metres(10 * frame.timeSi), max: metres(10 * frame.timeSi) })),
 };
 const frameOf = (index: number): FrameResult => ({
-  sample: { step: 'motion', modelHash: 'solved', frame: catalogue.frames[index]! },
+  sample: { resultId: catalogue.resultId, step: 'motion', modelHash: 'solved', frame: catalogue.frames[index]! },
   field: 'displacement', components: 3, nodeCount: 1, unit: 'm', values: [0, 10 * catalogue.frames[index]!.timeSi, 0],
 });
 
@@ -30,10 +30,11 @@ function setup() {
   store.set({ fieldKey: 'umag', result: summary });
   const drawing = {
     hasSurface: true,
+    setSurface: vi.fn<Viewer['setSurface']>(),
     setField: vi.fn<Viewer['setField']>(), setDeformed: vi.fn<Viewer['setDeformed']>(),
     setMode: vi.fn<Viewer['setMode']>(), setDim: vi.fn<Viewer['setDim']>(),
     animate: vi.fn<Viewer['animate']>(), autoScale: vi.fn<Viewer['autoScale']>(() => 1),
-  } satisfies Pick<Viewer, 'hasSurface' | 'setField' | 'setDeformed' | 'setMode' | 'setDim' | 'animate' | 'autoScale'>;
+  } satisfies Pick<Viewer, 'hasSurface' | 'setSurface' | 'setField' | 'setDeformed' | 'setMode' | 'setDim' | 'animate' | 'autoScale'>;
   const query = vi.fn(async (q: Query): Promise<QueryResult> => {
     if (q.query === 'query.frames') return catalogue;
     if (q.query === 'query.frame') return frameOf(q.index ?? (q.sample?.kind === 'frame' ? q.sample.index : 1));
@@ -41,7 +42,8 @@ function setup() {
     throw new Error(`unexpected Query ${q.query}`);
   });
   const field = vi.fn(async (): Promise<FieldData> => ({ values: new Float32Array([0, 10, 0]), min: 0, max: 10, unit: 'm' }));
-  const transport = { query, field } satisfies Pick<WorkerTransport, 'query' | 'field'>;
+  const surface = vi.fn(async () => ({ positions: new Float32Array([0, 0, 0]), indices: new Uint32Array(), triFace: new Uint32Array(), triBody: new Uint32Array(), faceNames: [], bodyNames: [], source: 'mesh' as const }));
+  const transport = { query, field, surface } satisfies Pick<WorkerTransport, 'query' | 'field' | 'surface'>;
   const results = new ResultsView(store, transport as unknown as WorkerTransport, { current: drawing as unknown as Viewer });
   return { store, drawing, query, field, results };
 }

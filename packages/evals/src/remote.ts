@@ -3,8 +3,8 @@ import { buildSystem, runTurn, type Message, type Provider, type ToolCall, type 
 import type { EvalCase, EvalEvidence, ToolTrace } from './types';
 
 export interface RemoteDefinitionSet {
-  commands: CommandDef[];
-  queries: QueryDef[];
+  commands: Omit<CommandDef, 'execution'>[];
+  queries: Omit<QueryDef, 'execution'>[];
   defs: Record<string, unknown>;
   tools?: ToolDefinition[];
 }
@@ -18,7 +18,7 @@ export interface RemoteEngine {
 /** Registry's read/dispatch surface over an actual browser or MCP connection. */
 class RemoteRegistry {
   readonly defs: Record<string, unknown>;
-  private readonly byName: Map<string, CommandDef | QueryDef>;
+  private readonly byName: Map<string, Omit<CommandDef | QueryDef, 'execution'>>;
   readonly validation: { before: string; after: string }[] = [];
 
   constructor(private readonly remote: RemoteEngine, private readonly definitions_: RemoteDefinitionSet) {
@@ -26,11 +26,11 @@ class RemoteRegistry {
     this.byName = new Map([...definitions_.commands, ...definitions_.queries].map((definition) => [definition.name, definition]));
   }
 
-  list(): { commands: CommandDef[]; queries: QueryDef[] } {
+  list(): Pick<RemoteDefinitionSet, 'commands' | 'queries'> {
     return { commands: this.definitions_.commands, queries: this.definitions_.queries };
   }
 
-  describe(name: string): CommandDef | QueryDef {
+  describe(name: string): Omit<CommandDef | QueryDef, 'execution'> {
     const definition = this.byName.get(name);
     if (definition === undefined) throw new FemError('not-found', `the evaluation host has no '${name}' capability`, name);
     return definition;
@@ -111,19 +111,21 @@ export async function evaluateCase(remote: RemoteEngine, provider: Provider, mod
     const modelResult = await optional(remote, 'query.model', {});
     const journal = await optional(remote, 'query.journal', {});
     const result = await optional(remote, 'query.result', {});
-    const probe = spec.measure.kind === 'probe'
-      ? await optional(remote, 'query.probe', { field: spec.measure.field, ...(spec.measure.component === undefined ? {} : { component: spec.measure.component }), at: spec.measure.atM.map((n) => `${n} m`) })
+    const resultId = result !== null && typeof result === 'object' && 'resultId' in result
+      && typeof result.resultId === 'string' && result.resultId.length > 0 ? result.resultId : undefined;
+    const probe = spec.measure.kind === 'probe' && resultId !== undefined
+      ? await optional(remote, 'query.probe', { resultId, field: spec.measure.field, ...(spec.measure.component === undefined ? {} : { component: spec.measure.component }), at: spec.measure.atM.map((n) => `${n} m`) })
       : undefined;
     let frames: unknown[] | undefined;
     let framesCatalogue: unknown;
-    if (spec.measure.kind === 'frames') {
-      const catalogue = await optional(remote, 'query.frames', {}) as { frames?: { index?: number }[] } | undefined;
+    if (spec.measure.kind === 'frames' && resultId !== undefined) {
+      const catalogue = await optional(remote, 'query.frames', { resultId }) as { frames?: { index?: number }[] } | undefined;
       framesCatalogue = catalogue;
       frames = [];
       for (const stamp of catalogue?.frames ?? []) {
         if (typeof stamp.index !== 'number') continue;
         try {
-          frames.push(await remote.invoke('query.frame', { index: stamp.index }));
+          frames.push(await remote.invoke('query.frame', { resultId, index: stamp.index }));
         } catch (error) {
           frames.push({ requested: stamp, error: error instanceof Error ? error.message : String(error) });
         }

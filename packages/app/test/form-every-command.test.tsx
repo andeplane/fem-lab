@@ -9,7 +9,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { Store } from '../src/store';
 import { exampleFor, validCommand } from './command-schema';
 import { SchemaForm } from '../src/ui/SchemaForm';
-import { fieldsOf, type Defs, type Field } from '../src/ui/schema';
+import { MATERIAL_PHYSICS, fieldsOf, type Defs, type Field } from '../src/ui/schema';
 
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
@@ -27,7 +27,7 @@ function wrongValues(fields: Field[]): Record<string, unknown> {
 
 function mount(cmd: string, values: Record<string, unknown>): HTMLElement {
   const store = new Store();
-  store.openForm(cmd, values);
+  store.openForm(cmd, values, false, undefined, cmd === 'material.add' ? [...MATERIAL_PHYSICS] : undefined);
   const root = document.createElement('div');
   document.body.append(root);
   render(<SchemaForm s={store.state} store={store} dispatch={async () => undefined} query={query} defs={DEFS} variants={VARIANTS} />, root);
@@ -62,9 +62,9 @@ describe('the generated Properties form, for every Command in the schema', () =>
     // Derive the expected properties directly from the source schema, independently
     // of fieldsOf, so a dropped required field cannot validate its own omission.
     const properties = VARIANTS.get(cmd)!['properties'] as Record<string, JsonSchema>;
-    expect(drawn).toEqual(Object.entries(properties)
+    expect(drawn.sort()).toEqual(Object.entries(properties)
       .filter(([name, property]) => !(['cmd', 'query', 'kind'].includes(name) && property['const'] !== undefined))
-      .map(([name]) => name));
+      .map(([name]) => name).sort());
 
     document.body.innerHTML = '';
     const wrong = mount(cmd, wrongValues(fields));

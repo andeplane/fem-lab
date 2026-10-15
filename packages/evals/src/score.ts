@@ -96,8 +96,9 @@ function geometryAndProcedure(spec: EvalCase, evidence: EvalEvidence, entries: R
   const dimensionsOk = extents.length === 3 && extents.every((n, i) => close(n, spec.dimensionsM[i]!, 1e-8));
   const steps = array(model?.['steps']).map(object).filter((row): row is Record<string, unknown> => row !== null);
   const solvedSteps = steps.filter((step) => step['procedure'] === spec.procedure && step['solved'] === true);
-  const solved = solvedSteps.length === 1 && object(evidence.result)?.['step'] === solvedSteps[0]?.['name']
-    && object(evidence.result)?.['stale'] !== true;
+  const result = object(evidence.result);
+  const solved = solvedSteps.length === 1 && result?.['step'] === solvedSteps[0]?.['name']
+    && result?.['stale'] === false && typeof result['resultId'] === 'string' && result['resultId'].length > 0;
   const materials = array(model?.['materials']).map(object).filter((row): row is Record<string, unknown> => row !== null);
   const material = materials[0];
   const e = valuedSi(material?.['E']);
@@ -228,9 +229,12 @@ function explicitInvariant(spec: EvalCase, evidence: EvalEvidence): CheckResult 
   const nodeCount = finite(catalogue?.['nodeCount']);
   const expectedValues = nodeCount === null ? -1 : nodeCount * 3;
   const modelHash = typeof object(evidence.model)?.['hash'] === 'string' ? object(evidence.model)!['hash'] : null;
+  const resultId = object(evidence.result)?.['resultId'];
   let ok = stamps.length > 1 && frames.length === stamps.length && nodeCount !== null && nodeCount > 0
     && catalogue?.['field'] === 'displacement' && catalogue?.['components'] === 3 && catalogue?.['storedComponents'] === 3
-    && catalogue?.['stale'] === false && typeof catalogue?.['modelHash'] === 'string' && catalogue['modelHash'] === modelHash;
+    && catalogue?.['stale'] === false && typeof catalogue?.['modelHash'] === 'string' && catalogue['modelHash'] === modelHash
+    && typeof resultId === 'string' && resultId.length > 0 && catalogue?.['resultId'] === resultId
+    && catalogue?.['step'] === object(evidence.result)?.['step'];
   for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
     const stamp = stamps[frameIndex];
     const frame = object(frames[frameIndex]);
@@ -241,6 +245,7 @@ function explicitInvariant(spec: EvalCase, evidence: EvalEvidence): CheckResult 
     if (stamp === null || time === null || frame?.['field'] !== 'displacement' || frame?.['components'] !== 3
       || frame?.['nodeCount'] !== nodeCount || frame?.['unit'] !== 'm'
       || resolved?.['modelHash'] !== catalogue?.['modelHash'] || resolved?.['step'] !== catalogue?.['step']
+      || resolved?.['resultId'] !== resultId
       || resolvedStamp?.['index'] !== stamp?.['index'] || time !== stamp?.['timeSi']
       || values.length !== expectedValues || values.some((v) => v === null)) {
       ok = false;
@@ -267,12 +272,14 @@ function explicitInvariant(spec: EvalCase, evidence: EvalEvidence): CheckResult 
 function traceRequirement(spec: EvalCase, evidence: EvalEvidence, entries: Record<string, unknown>[]): CheckResult {
   if (spec.requires === undefined) return check('trace', true, 'no extra trace requirement');
   if (spec.requires === 'material-library') {
-    const lookup = evidence.trace.find((call) => call.name.replaceAll('_', '.') === 'query.materialLibrary');
+    const requestedId: Record<string, string> = { N1: 's355j2', N2: '6061-t6-sheet' };
     const material = object(array(object(evidence.model)?.['materials'])[0]);
     const command = lastCommand(entries, 'material.add', typeof material?.['name'] === 'string' ? material['name'] : undefined);
     const source = command?.['source'];
-    const output = object(lookup?.output);
-    const selected = array(output?.['entries']).map(object).find((entry) => entry?.['materialAddSource'] === source);
+    const selected = evidence.trace
+      .filter((call) => (call.command ?? call.name.replaceAll('_', '.')) === 'query.materialLibrary' && call.ok === true)
+      .flatMap((call) => array(object(call.output)?.['entries']).map(object))
+      .find((entry) => entry?.['id'] === requestedId[spec.id] && entry?.['materialAddSource'] === source);
     const properties = ['E', 'nu', 'rho', 'alpha', 'k', 'cp', 'yield'];
     const copied = selected !== undefined && properties.every((property) => {
       const sourced = object(selected?.[property]);
@@ -283,24 +290,28 @@ function traceRequirement(spec: EvalCase, evidence: EvalEvidence, entries: Recor
       const b = quantity(expected);
       return a !== null && b !== null && close(a, b, 1e-10);
     });
-    return check('trace', lookup !== undefined && typeof source === 'string' && source.length > 0 && copied,
+    return check('trace', typeof source === 'string' && source.length > 0 && copied,
       copied ? 'all reported catalogue values and provenance were copied exactly' : 'catalogue values, lookup or exact provenance differ');
   }
   const calls = evidence.trace;
   const isValidation = (call: ToolTrace) => call.command === 'query.validateScript' || call.name === 'validate_script';
   const sourceOf = (call: ToolTrace): string => typeof object(call.input)?.['code'] === 'string' ? object(call.input)!['code'] as string : '';
   const badIndex = calls.findIndex((call) => isValidation(call) && object(call.output)?.['ok'] === false && sourceOf(call).includes(spec.invalidScript ?? '\0'));
-  const goodIndex = calls.findIndex((call, index) => index > badIndex && isValidation(call) && object(call.output)?.['ok'] === true
-    && !sourceOf(call).includes(spec.invalidScript ?? '\0'));
   const executionIndex = calls.findIndex((call) => {
     const command = call.command ?? call.name.replaceAll('_', '.');
     return command === 'script.run' || !['query.', 'view.', 'selection.', 'panel.', 'export.', 'skill.'].some((prefix) => command.startsWith(prefix));
   });
+  const execution = calls[executionIndex];
+  const executedSource = execution === undefined ? '' : sourceOf(execution);
+  const goodIndex = calls.findIndex((call, index) => index > badIndex && index < executionIndex
+    && isValidation(call) && object(call.output)?.['ok'] === true && sourceOf(call) === executedSource
+    && !sourceOf(call).includes(spec.invalidScript ?? '\0'));
   const stable = [calls[badIndex], calls[goodIndex]].every((call) => typeof call?.journalBefore === 'string'
     && call.journalBefore.length > 0 && call.journalBefore === call.journalAfter);
-  const ordered = badIndex >= 0 && goodIndex > badIndex && executionIndex > goodIndex;
+  const ordered = badIndex >= 0 && goodIndex > badIndex && executionIndex > goodIndex
+    && (execution?.command ?? execution?.name.replaceAll('_', '.')) === 'script.run' && executedSource.trim().length > 0;
   return check('trace', stable && ordered,
-    stable && ordered ? 'supplied invalid source and correction validated before execution without mutation' : 'validation source, hash stability or invalid→corrected→execution order failed');
+    stable && ordered ? 'supplied invalid source and executed correction validated before execution without mutation' : 'validation source, executed correction, hash stability or invalid→corrected→execution order failed');
 }
 
 function replayCheck(evidence: EvalEvidence): CheckResult {

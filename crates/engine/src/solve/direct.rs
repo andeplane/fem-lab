@@ -38,11 +38,12 @@ pub struct Direct {
 impl Direct {
     /// Factorise `k` using per-call parallelism, never faer's process-global setting.
     /// Windows numeric LLT is sequential because faer 0.24.4's parallel factorization
-    /// can silently corrupt the factor (#266, ADR0019). Assembly and triangular solves
-    /// keep the caller's pool parallelism; other native platforms also factor in parallel.
+    /// can silently corrupt the factor (#266, ADR0019). Triangular solves and other
+    /// native platforms' factorization use a fixed arithmetic partition budget,
+    /// scheduled in the caller's pool (ADR0031).
     pub fn factor(k: &Csr) -> Result<Direct, Error> {
         let a = k.as_faer();
-        let solve_par = solve_parallelism();
+        let solve_par = arithmetic_parallelism();
         let par = factor_parallelism(solve_par);
         // Keep faer's fallible stages in one Result chain: all allocation and pivot errors
         // share the same engine boundary conversion, without a separate allocation arm.
@@ -148,14 +149,16 @@ fn numeric_values(len: usize) -> Result<Vec<f64>, LltError> {
     Ok(values)
 }
 
-/// Per-call policy: never modify the process-global faer setting shared by other Engines.
+/// A fixed logical partition budget keeps faer's reduction order independent of workers.
+/// This creates no threads: the caller's existing Rayon pool schedules the work (ADR0031).
+/// Per-call only; never modify the process-global faer setting shared by other Engines.
 #[cfg(not(target_arch = "wasm32"))]
-fn solve_parallelism() -> Par {
-    Par::rayon(rayon::current_num_threads())
+fn arithmetic_parallelism() -> Par {
+    Par::rayon(64)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn solve_parallelism() -> Par {
+fn arithmetic_parallelism() -> Par {
     Par::Seq
 }
 

@@ -1,0 +1,222 @@
+{
+  "name": "truss-two-bar-planar",
+  "reference": "Benchmark B9: the textbook symmetric two-bar truss. Two pinned bars of length L = 1 m meet at an apex 30 degrees below the horizontal and carry a vertical load P = 10 kN. Statics gives the member force N = P / (2 sin 30) = P = 10 kN in tension, so sigma = N / A = 10 MPa; unit-load virtual work gives the apex deflection delta = P L / (2 E A sin^2 30) = 2 P L / (E A) = 0.1 mm, and each support carries P / 2 vertically and N cos 30 horizontally.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "truss-two-bar-planar"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "truss",
+      "points": [
+        [
+          "-866.025403784439 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "866.025403784439 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "0 mm",
+          "-500 mm",
+          "0 mm"
+        ]
+      ],
+      "members": [
+        [
+          0,
+          2
+        ],
+        [
+          1,
+          2
+        ]
+      ],
+      "divisions": 1
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "truss"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "rod",
+      "shape": {
+        "kind": "generic",
+        "a": "1000 mm^2",
+        "iY": "1 mm^4",
+        "iZ": "1 mm^4",
+        "j": "1 mm^4"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "rod",
+      "bodies": [
+        "truss"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "everything",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-900 mm",
+          "-600 mm",
+          "-10 mm"
+        ],
+        "max": [
+          "900 mm",
+          "10 mm",
+          "10 mm"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "outofplane",
+      "on": "everything",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "left",
+      "on": "truss.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "right",
+      "on": "truss.p1"
+    },
+    {
+      "cmd": "load.force",
+      "name": "apex",
+      "on": "truss.p2",
+      "total": [
+        "0 kN",
+        "-10 kN",
+        "0 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "outofplane",
+        "left",
+        "right"
+      ],
+      "loads": [
+        "apex"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 1,
+        "at": [
+          "0 mm",
+          "-500 mm",
+          "0 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.1,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "delta = 2 P L / (E A) downward"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0 mm",
+          "-500 mm",
+          "0 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "symmetry: the apex does not move sideways"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "-433.012701892219 mm",
+          "-250 mm",
+          "0 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 10.0,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "N / A with N = P / (2 sin 30) = P"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the two supports carry the apex load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

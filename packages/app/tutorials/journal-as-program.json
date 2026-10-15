@@ -1,0 +1,102 @@
+{
+  "id": "journal-as-program",
+  "title": "The Journal is a program",
+  "minutes": 8,
+  "summary": "The Model you just built is also a script: export it, edit one line by hand, replay it, and get the study you meant instead of the one you happened to click.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "Every Command lands in the Journal the instant it runs, whether you clicked it, typed it, or asked the Assistant. `model.new` is the first one, same as always.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "cantilever" }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres and kilonewtons.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "The beam",
+      "explain": "The same 1 m steel beam as the `cantilever` tutorial. You already know these Commands; what this page is about is what they add up to once they're all in the Journal together.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "beam" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] }
+    },
+    {
+      "title": "Material",
+      "explain": "Steel.",
+      "expect": { "cmd": "material.add" },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material on the one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] }
+    },
+    {
+      "title": "Mesh",
+      "explain": "25 mm elements, order 1.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 1 }
+    },
+    {
+      "title": "Fix the root",
+      "explain": "Clamped at one end.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" }
+    },
+    {
+      "title": "Load the tip",
+      "explain": "1 kN down at the free end.",
+      "expect": { "cmd": "load.traction", "match": { "name": "tip" } },
+      "highlight": "load.traction",
+      "doIt": { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] }
+    },
+    {
+      "title": "One Step",
+      "explain": "An ordinary static Step.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] }
+    },
+    {
+      "title": "Solve it",
+      "explain": "Ten Commands, in order — and that list is not a log of what you did, it is the Model. Replay it from empty and you get this exact Model back, every time, on any host.",
+      "expect": { "cmd": "solve.run" },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static" }
+    },
+    {
+      "title": "Export it as a script",
+      "explain": "Open the Script tab — `query.script` — and the ten Commands you just ran come back as a small TypeScript program against the `fem` API, one line per Command: `await fem.geometry.addBox({ name: \"beam\", size: [\"1 m\", \"100 mm\", \"100 mm\"] });`, on down to `await fem.solve.run({ step: \"static\" });`. This is not a summary of the Model. It is the Model — every argument you typed, byte for byte.",
+      "expect": null,
+      "highlight": "[title=\"panel.toggle script\"]"
+    },
+    {
+      "title": "Edit one line",
+      "explain": "Press \"edit this script\" and the same text becomes an editable draft. Change the beam's `size` from `[\"1 m\", \"100 mm\", \"100 mm\"]` to `[\"2 m\", \"100 mm\", \"100 mm\"]` — one keystroke, no palette, no form — and nothing else in the script has to change: every later line still just refers to whatever `beam` turns out to be.",
+      "expect": null,
+      "highlight": "script.setEditing"
+    },
+    {
+      "title": "Replay it",
+      "explain": "Press ▶ Run script. The engine dispatches every line from the top — a fresh `model.new`, the edited `geometry.addBox`, and on down to `solve.run` — exactly as if you had clicked each one in order. The Journal ends up ten Commands long again, this time for a 2 m beam, and the Results tab opens on its answer. You changed one character and re-ran the whole study.",
+      "expect": null,
+      "highlight": "script.run"
+    },
+    {
+      "title": "What a doubled length should do, and what makes any of this trustworthy",
+      "explain": "The arithmetic first, then the property that matters more than the arithmetic.",
+      "expect": null,
+      "theory": "Euler–Bernoulli deflection scales with the cube of the length: double $L$ and $\\delta$ should scale by $2^3 = 8$. The original beam solved to $\\delta = 0.1901\\,\\mathrm{mm}$; the edited script's 2 m beam solves to $\\delta = 1.5196\\,\\mathrm{mm}$, against a predicted $8 \\times 0.1901 = 1.5208\\,\\mathrm{mm}$ — 0.08 % low, an even better match than the 1 m beam's own 0.2 % gap to beam theory, which is what a more slender beam ($L/h = 20$ instead of $10$) should do to the shear-deflection term the formula leaves out.\n\n**What makes this trustworthy rather than merely convenient.** A macro recorder gives you a click-path that repeats what a particular GUI happened to do; nothing checks that the replay is *correct*, only that it ran. A FEM Lab Journal is checked against itself: every entry carries `hashAfter`, a hash of the whole Model after that Command, and replaying the Journal anywhere recomputes it. That is exactly what the CLI's `--verify` flag does — and the ten Commands you built by hand in this tutorial are, Command for Command, the committed fixture at `crates/engine/benches/journals/cantilever.json`. From a terminal:\n```\ncargo run --release -p femlab -- run crates/engine/benches/journals/cantilever.json --verify --cpu\n```\nreplays that exact file on the native engine — a different host from the wasm build this page runs on — and it fails loudly if even one recomputed hash disagrees with what is committed. `packages/app/test/tutorial-fixtures.test.ts` replays the same ten Commands through the wasm build on every CI run. A browser, the CLI and a server all read the same Journal the same way; that is not a claim about this codebase, it is one of the things CI checks on every push."
+    }
+  ]
+}

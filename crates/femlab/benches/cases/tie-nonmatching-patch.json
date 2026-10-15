@@ -1,0 +1,83 @@
+{
+  "name": "tie-nonmatching-patch",
+  "reference": "Benchmark F4b, the bonded-contact patch test. The master uses 500 mm elements and the slave 250 mm elements, a nested nonmatching interface. Two 1 m cubes meeting at x = 1 m are meshed as separate Bodies with no shared node and joined by contact.add; the assembly is pulled by 1 MN over its 1 m^2 end face, so the exact answer is the uniform state sigma_xx = 1 MPa with u_x = sigma x / E everywhere. A tie that reproduces a constant stress state exactly is a tie that adds no spurious stiffness: u_x at the free end is 2 MPa*m/210 GPa = 0.0095238095 mm, the von Mises stress is 1 MPa on both sides of the interface, and the reactions balance the applied load. The elimination is exact, so the tolerances are roundoff, not physics.",
+  "journal": [
+    { "cmd": "model.new", "name": "tie-patch" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "a", "size": ["1 m", "1 m", "1 m"] },
+    { "cmd": "geometry.addBox", "name": "b", "size": ["1 m", "1 m", "1 m"], "at": ["1 m", "0 m", "0 m"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["a", "b"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": "500 mm", "sizes": { "b": "250 mm" } },
+      "order": 1,
+      "formulation": "full"
+    },
+    { "cmd": "constraint.fix", "name": "root", "on": "a.xmin", "dofs": ["ux"] },
+    { "cmd": "constraint.fix", "name": "symy", "on": "a.ymin", "dofs": ["uy"] },
+    { "cmd": "constraint.fix", "name": "symz", "on": "a.zmin", "dofs": ["uz"] },
+    { "cmd": "contact.add", "name": "weld", "master": "a.xmax", "slave": "b.xmin", "kind": "bonded" },
+    { "cmd": "load.traction", "name": "pull", "on": "b.xmax", "total": ["1 MN", "0 N", "0 N"] },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["root", "symy", "symz", "weld"],
+      "loads": ["pull"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    { "query": { "query": "query.set", "name": "a.xmax" }, "path": "/count", "expect": 4, "tol": 0 },
+    { "query": { "query": "query.set", "name": "b.xmin" }, "path": "/count", "expect": 16, "tol": 0 },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "at": ["2 m", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 0.009523809523809525,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "u_x = sigma L / E at the free end, in mm; the tie is exact so this is roundoff"
+    },
+    {
+      "query": { "query": "query.probe", "field": "vonMises", "at": ["500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "1 MPa on the master side of the tie"
+    },
+    {
+      "query": { "query": "query.probe", "field": "vonMises", "at": ["1500 mm", "500 mm", "500 mm"] },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "and the same 1 MPa on the slave side: the stress is continuous across the tie"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the reactions balance the applied load, with no tie force leaking into them"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/appliedTotal/0/value",
+      "expect": 1000.0,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "1 MN, in the model's kN"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/0/value",
+      "expect": -1000.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "and the held end carries all of it"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false }
+  ]
+}

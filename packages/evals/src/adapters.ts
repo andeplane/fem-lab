@@ -36,6 +36,7 @@ class BrowserRemote implements RemoteEngine {
         description: definition.description,
         schema: definition.schema,
         provider: definition.provider,
+        execution: definition.execution,
         tool: definition.tool,
       });
       const listed = fem.registry.list();
@@ -124,8 +125,8 @@ class McpRemote implements RemoteEngine {
     if (this.definitions_ !== null) return this.definitions_;
     const listed = await this.client.listTools();
     const tools: ToolDefinition[] = listed.tools.map((tool) => ({ name: tool.name, description: tool.description ?? '', input_schema: tool.inputSchema as Record<string, unknown> }));
-    const commands: CommandDef[] = [];
-    const queries: QueryDef[] = [];
+    const commands: RemoteDefinitionSet['commands'] = [];
+    const queries: RemoteDefinitionSet['queries'] = [];
     for (const tool of tools) {
       const name = commandFor(tool.name);
       const base = { name, description: tool.description, schema: tool.input_schema, provider: 'engine' as const, tool: true };

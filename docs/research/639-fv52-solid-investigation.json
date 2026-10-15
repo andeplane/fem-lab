@@ -1,0 +1,1241 @@
+{
+  "issue": 639,
+  "parent": 7,
+  "status": "bounded six solves complete; exact thread verification failed and is tracked by #640; D3 reference remains unresolved",
+  "fixtureSource": "d2de7bea",
+  "acceptedRuntimeSource": "735831a716c022469e1b8b70821f985961496648",
+  "acceptedMainProtectedSourceEquivalent": "b11e691bc03f085fd8e8697d84e6f0de3a5bb056",
+  "cliSha256": "f42631058100d22f0554f6f35d4d89030505c2a13dac854c443573066fa40e62",
+  "schemaSha256": "a3cd0146f5eb21f93a8b57d10ac5d34b7f2b0945e82bb0d2c9a489bf4bd42e25",
+  "references": {
+    "Abaqus_NAFEMS_1990": [
+      44.092,
+      106.66,
+      106.66,
+      156.23,
+      193.58,
+      200.13,
+      200.13
+    ],
+    "Ansys_targets_1987": [
+      45.897,
+      109.44,
+      109.44,
+      167.89,
+      193.59,
+      206.19,
+      206.19
+    ]
+  },
+  "referenceTolerancePercent_DIAGNOSTIC_ONLY": 3,
+  "archive": {
+    "archive": "/Users/anderhaf/Documents/Codex/FEM-Lab-worktree-archives/2026-10-15/current-validation/639/native-study-d2de7bea",
+    "files": 31,
+    "manifestSha256": "09a61e7d7579fe5068b2cfc101d198bcffcdec30f86d89b6be014279a2b7886d"
+  },
+  "cases": [
+    {
+      "label": "4x4x1-threads1",
+      "exitCode": 0,
+      "elapsedSeconds": 0.2656557080335915,
+      "peakRssBytes": 23150592,
+      "stdoutSha256": "c4d0269409e4b4571aab6828340ea92595ccbc7439eb006c93665cd994d270ec",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixtureSha256": "19919bc052df20fd71c0b0f42efc283296f70f39c7c9e9a68339eab6eb2bb6c5",
+      "threadExactExceptHostTimeMs": null,
+      "verificationFailure": null,
+      "summary": {
+        "grid": [
+          4,
+          4,
+          1
+        ],
+        "elements": 16,
+        "nodes": 155,
+        "supportedUzNodes": 32,
+        "freeDofs": 433,
+        "frequenciesHz": [
+          0.0,
+          0.0,
+          9.063726993373529e-06,
+          44.796272087842105,
+          110.54268081057198,
+          110.54268081057393,
+          169.09546149855234,
+          193.92465705935163,
+          206.63780918543654,
+          206.63780918543696
+        ],
+        "measuredMaxBackwardResidual": 4.8813556910714495e-11,
+        "sweeps": 18,
+        "warnings": [
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 1 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:1"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 2 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:2"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 3 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:3"
+          }
+        ],
+        "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": [
+          9.403147691666561e-15,
+          2.239669741259092e-14,
+          1.0850100959583645e-14
+        ],
+        "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": 2.0233217120389494e-07,
+        "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": [
+          [
+            0.46114502233080673,
+            -0.44118258069691435,
+            0.7698721964515478
+          ],
+          [
+            -0.8228872152632938,
+            -0.49033523598688267,
+            0.2871027469494325
+          ],
+          [
+            0.22112815398863347,
+            -0.6752168840245194,
+            -0.7036934695176573
+          ]
+        ],
+        "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": 3,
+        "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": 0.9872112477501561,
+        "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": [
+          44.796,
+          110.54,
+          110.54,
+          169.1,
+          193.92,
+          206.64,
+          206.64
+        ],
+        "references_DIAGNOSTIC_ONLY": {
+          "Abaqus_NAFEMS_1990": {
+            "referenceHz": [
+              44.092,
+              106.66,
+              106.66,
+              156.23,
+              193.58,
+              200.13,
+              200.13
+            ],
+            "signedRelativeDifference": [
+              0.015972786170781694,
+              0.036402407749596695,
+              0.03640240774961495,
+              0.08234949432600877,
+              0.0017804373352186098,
+              0.032517909286146715,
+              0.032517909286148845
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              false,
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          },
+          "Ansys_targets_1987": {
+            "referenceHz": [
+              45.897,
+              109.44,
+              109.44,
+              167.89,
+              193.59,
+              206.19,
+              206.19
+            ],
+            "signedRelativeDifference": [
+              -0.02398256775296628,
+              0.010075665301279079,
+              0.010075665301296869,
+              0.0071800672973515575,
+              0.0017286898050086657,
+              0.0021718278550683363,
+              0.0021718278550704037
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ]
+          }
+        },
+        "fieldSha256": [
+          "d0e3d066790517c846156e3d86813abcf7bfe15a6d6c45aa160ea581232e56e9",
+          "c9eb4118118d22d4eb537757f12d79823d6962ac60c65620df074e9610cdca35",
+          "659d253de0f2f5bcad64f8599a5fd39b4c0c9d5978f22c09f00e26e2a61f5ce8",
+          "6aab4b29ab9269bada5ec4a18ddd15f2e559bedf1535fc6074e85c70c9919893",
+          "b8c2753839b25777b3dab82f4ac84f26bfe0276479952e006b72fa681b665d27",
+          "b8042913f1b1c5a45b06f6b9bfa40b220c600ca6d68c4bd3ad36ba581b571595",
+          "8009b427cf3b357f90988f54d5497a1311324e846d842ce177c43e834f840cc0",
+          "8c441e47be51860f28c3e6159bafa9fa26528f38ad45794e4cac0b2777eff2b6",
+          "84afae197da00cbf717062b901dee29456a353f0d10471410ff32760d631590e",
+          "25e4db392a10dbe87ce28f1f1e75917d2f800bcda41a77049441db6d5563575c"
+        ],
+        "uzSquaredFraction_DIAGNOSTIC_ONLY": [
+          5.856264221420699e-29,
+          4.32755473223894e-28,
+          9.327765681869958e-29,
+          0.9487254368382761,
+          0.8871290062796955,
+          0.8871290062796955,
+          0.8383421724607081,
+          0.0008354991112667379,
+          0.0019593300983149317,
+          0.001959330037742308
+        ]
+      }
+    },
+    {
+      "label": "4x4x1-threads4",
+      "exitCode": 0,
+      "elapsedSeconds": 0.2634604580234736,
+      "peakRssBytes": 23527424,
+      "stdoutSha256": "0cc9a52f72e794e308df79e1f36df01a114463707b0a7e7eb20a14e6e6516f9a",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixtureSha256": "19919bc052df20fd71c0b0f42efc283296f70f39c7c9e9a68339eab6eb2bb6c5",
+      "threadExactExceptHostTimeMs": true,
+      "verificationFailure": null,
+      "summary": {
+        "grid": [
+          4,
+          4,
+          1
+        ],
+        "elements": 16,
+        "nodes": 155,
+        "supportedUzNodes": 32,
+        "freeDofs": 433,
+        "frequenciesHz": [
+          0.0,
+          0.0,
+          9.063726993373529e-06,
+          44.796272087842105,
+          110.54268081057198,
+          110.54268081057393,
+          169.09546149855234,
+          193.92465705935163,
+          206.63780918543654,
+          206.63780918543696
+        ],
+        "measuredMaxBackwardResidual": 4.8813556910714495e-11,
+        "sweeps": 18,
+        "warnings": [
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 1 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:1"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 2 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:2"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 3 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:3"
+          }
+        ],
+        "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": [
+          9.403147691666561e-15,
+          2.239669741259092e-14,
+          1.0850100959583645e-14
+        ],
+        "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": 2.0233217120389494e-07,
+        "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": [
+          [
+            0.46114502233080673,
+            -0.44118258069691435,
+            0.7698721964515478
+          ],
+          [
+            -0.8228872152632938,
+            -0.49033523598688267,
+            0.2871027469494325
+          ],
+          [
+            0.22112815398863347,
+            -0.6752168840245194,
+            -0.7036934695176573
+          ]
+        ],
+        "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": 3,
+        "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": 0.9872112477501561,
+        "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": [
+          44.796,
+          110.54,
+          110.54,
+          169.1,
+          193.92,
+          206.64,
+          206.64
+        ],
+        "references_DIAGNOSTIC_ONLY": {
+          "Abaqus_NAFEMS_1990": {
+            "referenceHz": [
+              44.092,
+              106.66,
+              106.66,
+              156.23,
+              193.58,
+              200.13,
+              200.13
+            ],
+            "signedRelativeDifference": [
+              0.015972786170781694,
+              0.036402407749596695,
+              0.03640240774961495,
+              0.08234949432600877,
+              0.0017804373352186098,
+              0.032517909286146715,
+              0.032517909286148845
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              false,
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          },
+          "Ansys_targets_1987": {
+            "referenceHz": [
+              45.897,
+              109.44,
+              109.44,
+              167.89,
+              193.59,
+              206.19,
+              206.19
+            ],
+            "signedRelativeDifference": [
+              -0.02398256775296628,
+              0.010075665301279079,
+              0.010075665301296869,
+              0.0071800672973515575,
+              0.0017286898050086657,
+              0.0021718278550683363,
+              0.0021718278550704037
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ]
+          }
+        },
+        "fieldSha256": [
+          "d0e3d066790517c846156e3d86813abcf7bfe15a6d6c45aa160ea581232e56e9",
+          "c9eb4118118d22d4eb537757f12d79823d6962ac60c65620df074e9610cdca35",
+          "659d253de0f2f5bcad64f8599a5fd39b4c0c9d5978f22c09f00e26e2a61f5ce8",
+          "6aab4b29ab9269bada5ec4a18ddd15f2e559bedf1535fc6074e85c70c9919893",
+          "b8c2753839b25777b3dab82f4ac84f26bfe0276479952e006b72fa681b665d27",
+          "b8042913f1b1c5a45b06f6b9bfa40b220c600ca6d68c4bd3ad36ba581b571595",
+          "8009b427cf3b357f90988f54d5497a1311324e846d842ce177c43e834f840cc0",
+          "8c441e47be51860f28c3e6159bafa9fa26528f38ad45794e4cac0b2777eff2b6",
+          "84afae197da00cbf717062b901dee29456a353f0d10471410ff32760d631590e",
+          "25e4db392a10dbe87ce28f1f1e75917d2f800bcda41a77049441db6d5563575c"
+        ],
+        "uzSquaredFraction_DIAGNOSTIC_ONLY": [
+          5.856264221420699e-29,
+          4.32755473223894e-28,
+          9.327765681869958e-29,
+          0.9487254368382761,
+          0.8871290062796955,
+          0.8871290062796955,
+          0.8383421724607081,
+          0.0008354991112667379,
+          0.0019593300983149317,
+          0.001959330037742308
+        ]
+      }
+    },
+    {
+      "label": "8x8x2-threads1",
+      "exitCode": 0,
+      "elapsedSeconds": 1.064180125016719,
+      "peakRssBytes": 67551232,
+      "stdoutSha256": "e8f123f6bed8053ef3a1dce8c9962bf69757e83dfa516672724f1e320f2e244d",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixtureSha256": "a218aa6faf72b79d85aed054e730e547a1e7e84ebd9169718c30e56c0403824b",
+      "threadExactExceptHostTimeMs": null,
+      "verificationFailure": null,
+      "summary": {
+        "grid": [
+          8,
+          8,
+          2
+        ],
+        "elements": 128,
+        "nodes": 837,
+        "supportedUzNodes": 64,
+        "freeDofs": 2447,
+        "frequenciesHz": [
+          0.0,
+          0.0,
+          1.4486503645651429e-05,
+          43.71618935166146,
+          105.46003522906356,
+          105.4600352290717,
+          158.27742553161312,
+          193.61534547680031,
+          198.37494073419194,
+          198.89850270073512
+        ],
+        "measuredMaxBackwardResidual": 6.707152785460067e-11,
+        "sweeps": 21,
+        "warnings": [
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 1 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:1"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 2 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:2"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 3 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:3"
+          }
+        ],
+        "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": [
+          1.820574932811646e-14,
+          3.3042701368821185e-14,
+          1.407384785696388e-14
+        ],
+        "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": 3.3137617574851273e-07,
+        "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": [
+          [
+            -0.1762867260869133,
+            0.66579085771746,
+            -0.725014154334525
+          ],
+          [
+            -0.9707972905652039,
+            -0.23911084182026765,
+            0.019458313268680225
+          ],
+          [
+            -0.14718832950331628,
+            0.6490016524350869,
+            0.7464130564202035
+          ]
+        ],
+        "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": 3,
+        "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": 0.9965356541108663,
+        "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": [
+          44.796,
+          110.54,
+          110.54,
+          169.1,
+          193.92,
+          206.64,
+          206.64
+        ],
+        "references_DIAGNOSTIC_ONLY": {
+          "Abaqus_NAFEMS_1990": {
+            "referenceHz": [
+              44.092,
+              106.66,
+              106.66,
+              156.23,
+              193.58,
+              200.13,
+              200.13
+            ],
+            "signedRelativeDifference": [
+              -0.008523329591275882,
+              -0.011250372875833794,
+              -0.01125037287575745,
+              0.013105200868035136,
+              0.00018258847401747013,
+              -0.00876959609158076,
+              -0.0061534867299499
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ]
+          },
+          "Ansys_targets_1987": {
+            "referenceHz": [
+              45.897,
+              109.44,
+              109.44,
+              167.89,
+              193.59,
+              206.19,
+              206.19
+            ],
+            "signedRelativeDifference": [
+              -0.047515320137231976,
+              -0.03636663716133437,
+              -0.03636663716125997,
+              -0.057255193688646545,
+              0.0001309234815863989,
+              -0.03790222254138445,
+              -0.03536300159690031
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              false,
+              false,
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        "fieldSha256": [
+          "ea85a75c403661ffdc946ad420dfa5cf10c8602fcf6e1e6f732c38b3776d3b0e",
+          "4349df5969197812d85f66f9b14e631299988b9fb222b5538d8799248e3f1f31",
+          "28e07d6f5eeb5b4b0f2ae4c9c72c43a929c9224f6be988a96f01913f4e54f9cd",
+          "6e089324dca5af640bed3d5d450cc73cb2fa1389aacd6757162a0d0167e32fbd",
+          "3af31ed99fa5228c9648fbe7369ebd65c0b0c2cd7d2683d9f39cf2868d9ab39b",
+          "287eb098e9d127bdf47d183fa3503c54572c43aefe1bbd0bf682a528c2e98d9f",
+          "05335c8d65bdbef5f08cfb8f400eebbb4d1e67e7ab2a6cb025971594258448e4",
+          "231513ec6b652cc813b7268460acf068c343b7d0d3d3633bee4bbeefb946b75f",
+          "f143f106a06ba6c4714efcad36d97dc9c7dd90c4196c0f8893122939e13665ef",
+          "3d3dd8547b395c72bb1295ba58a6714059aa0daadd721e42dffcfc9ca64e6384"
+        ],
+        "uzSquaredFraction_DIAGNOSTIC_ONLY": [
+          2.5641612989021636e-28,
+          9.791831278436499e-28,
+          1.2751325238071793e-28,
+          0.969594905113857,
+          0.9355704065434629,
+          0.9355704065434631,
+          0.9080267262642406,
+          0.0004135702736350862,
+          0.8948827621932217,
+          0.8982046429543112
+        ]
+      }
+    },
+    {
+      "label": "8x8x2-threads4",
+      "exitCode": 0,
+      "elapsedSeconds": 0.7982639169786125,
+      "peakRssBytes": 70696960,
+      "stdoutSha256": "a6204b437b8e26b43bdd6567923a94e1932d41b24fc97ba724907ebd519b850e",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixtureSha256": "a218aa6faf72b79d85aed054e730e547a1e7e84ebd9169718c30e56c0403824b",
+      "threadExactExceptHostTimeMs": true,
+      "verificationFailure": null,
+      "summary": {
+        "grid": [
+          8,
+          8,
+          2
+        ],
+        "elements": 128,
+        "nodes": 837,
+        "supportedUzNodes": 64,
+        "freeDofs": 2447,
+        "frequenciesHz": [
+          0.0,
+          0.0,
+          1.4486503645651429e-05,
+          43.71618935166146,
+          105.46003522906356,
+          105.4600352290717,
+          158.27742553161312,
+          193.61534547680031,
+          198.37494073419194,
+          198.89850270073512
+        ],
+        "measuredMaxBackwardResidual": 6.707152785460067e-11,
+        "sweeps": 21,
+        "warnings": [
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 1 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:1"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 2 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:2"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 3 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:3"
+          }
+        ],
+        "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": [
+          1.820574932811646e-14,
+          3.3042701368821185e-14,
+          1.407384785696388e-14
+        ],
+        "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": 3.3137617574851273e-07,
+        "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": [
+          [
+            -0.1762867260869133,
+            0.66579085771746,
+            -0.725014154334525
+          ],
+          [
+            -0.9707972905652039,
+            -0.23911084182026765,
+            0.019458313268680225
+          ],
+          [
+            -0.14718832950331628,
+            0.6490016524350869,
+            0.7464130564202035
+          ]
+        ],
+        "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": 3,
+        "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": 0.9965356541108663,
+        "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": [
+          44.796,
+          110.54,
+          110.54,
+          169.1,
+          193.92,
+          206.64,
+          206.64
+        ],
+        "references_DIAGNOSTIC_ONLY": {
+          "Abaqus_NAFEMS_1990": {
+            "referenceHz": [
+              44.092,
+              106.66,
+              106.66,
+              156.23,
+              193.58,
+              200.13,
+              200.13
+            ],
+            "signedRelativeDifference": [
+              -0.008523329591275882,
+              -0.011250372875833794,
+              -0.01125037287575745,
+              0.013105200868035136,
+              0.00018258847401747013,
+              -0.00876959609158076,
+              -0.0061534867299499
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              true,
+              true
+            ]
+          },
+          "Ansys_targets_1987": {
+            "referenceHz": [
+              45.897,
+              109.44,
+              109.44,
+              167.89,
+              193.59,
+              206.19,
+              206.19
+            ],
+            "signedRelativeDifference": [
+              -0.047515320137231976,
+              -0.03636663716133437,
+              -0.03636663716125997,
+              -0.057255193688646545,
+              0.0001309234815863989,
+              -0.03790222254138445,
+              -0.03536300159690031
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              false,
+              false,
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        "fieldSha256": [
+          "ea85a75c403661ffdc946ad420dfa5cf10c8602fcf6e1e6f732c38b3776d3b0e",
+          "4349df5969197812d85f66f9b14e631299988b9fb222b5538d8799248e3f1f31",
+          "28e07d6f5eeb5b4b0f2ae4c9c72c43a929c9224f6be988a96f01913f4e54f9cd",
+          "6e089324dca5af640bed3d5d450cc73cb2fa1389aacd6757162a0d0167e32fbd",
+          "3af31ed99fa5228c9648fbe7369ebd65c0b0c2cd7d2683d9f39cf2868d9ab39b",
+          "287eb098e9d127bdf47d183fa3503c54572c43aefe1bbd0bf682a528c2e98d9f",
+          "05335c8d65bdbef5f08cfb8f400eebbb4d1e67e7ab2a6cb025971594258448e4",
+          "231513ec6b652cc813b7268460acf068c343b7d0d3d3633bee4bbeefb946b75f",
+          "f143f106a06ba6c4714efcad36d97dc9c7dd90c4196c0f8893122939e13665ef",
+          "3d3dd8547b395c72bb1295ba58a6714059aa0daadd721e42dffcfc9ca64e6384"
+        ],
+        "uzSquaredFraction_DIAGNOSTIC_ONLY": [
+          2.5641612989021636e-28,
+          9.791831278436499e-28,
+          1.2751325238071793e-28,
+          0.969594905113857,
+          0.9355704065434629,
+          0.9355704065434631,
+          0.9080267262642406,
+          0.0004135702736350862,
+          0.8948827621932217,
+          0.8982046429543112
+        ]
+      }
+    },
+    {
+      "label": "16x16x4-threads1",
+      "exitCode": 0,
+      "elapsedSeconds": 7.901761209010147,
+      "peakRssBytes": 453853184,
+      "stdoutSha256": "c4617224af6c108f0e084b208f2f998b7dce73bb99acd8ae8cf9a2cb0eae4a3b",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixtureSha256": "a5bb708a9c8ead150660da9b1ecedcbc8640513fd9dad29019520cfab732218c",
+      "threadExactExceptHostTimeMs": null,
+      "verificationFailure": null,
+      "summary": {
+        "grid": [
+          16,
+          16,
+          4
+        ],
+        "elements": 1024,
+        "nodes": 5321,
+        "supportedUzNodes": 128,
+        "freeDofs": 15835,
+        "frequenciesHz": [
+          0.0,
+          0.0,
+          2.5195037830538657e-05,
+          43.2410285297337,
+          103.73418513643853,
+          103.73418513644528,
+          154.48326929292693,
+          193.02965211600645,
+          193.5920197788899,
+          193.86507657071752
+        ],
+        "measuredMaxBackwardResidual": 5.615787284622413e-11,
+        "sweeps": 20,
+        "warnings": [
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 1 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:1"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 2 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:2"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 3 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:3"
+          }
+        ],
+        "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": [
+          5.83407687759249e-14,
+          2.1644973449610598e-14,
+          8.266909005079356e-14
+        ],
+        "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": 5.826650911694635e-07,
+        "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": [
+          [
+            -0.44725306522105496,
+            0.6047241747856875,
+            -0.6589942094435579
+          ],
+          [
+            0.8853414897220089,
+            0.30226411764489625,
+            -0.35328012930416297
+          ],
+          [
+            -0.013861563850953704,
+            -0.7114083481238721,
+            -0.7026421701458497
+          ]
+        ],
+        "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": 3,
+        "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": 0.9988421853072578,
+        "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": [
+          44.796,
+          110.54,
+          110.54,
+          169.1,
+          193.92,
+          206.64,
+          206.64
+        ],
+        "references_DIAGNOSTIC_ONLY": {
+          "Abaqus_NAFEMS_1990": {
+            "referenceHz": [
+              44.092,
+              106.66,
+              106.66,
+              156.23,
+              193.58,
+              200.13,
+              200.13
+            ],
+            "signedRelativeDifference": [
+              -0.019299906338254146,
+              -0.02743122879768864,
+              -0.027431228797625353,
+              -0.011180507630244228,
+              -0.0028429997106806833,
+              -0.0326686664723435,
+              -0.03130426937132102
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          "Ansys_targets_1987": {
+            "referenceHz": [
+              45.897,
+              109.44,
+              109.44,
+              167.89,
+              193.59,
+              206.19,
+              206.19
+            ],
+            "signedRelativeDifference": [
+              -0.05786808441219037,
+              -0.052136466224063156,
+              -0.052136466224001476,
+              -0.07985425401794659,
+              -0.002894508414657563,
+              -0.06109889044623942,
+              -0.05977459347826024
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              false,
+              false,
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        "fieldSha256": [
+          "e26a5600740880b4a8318eebd5feca6817f04e742b72a8bc00904f4f6ce7fd69",
+          "0825cdbb749022a1bbe404308acd642882568be0d9bc8ea2adca67829327bbcf",
+          "414815f6bcd0d5bf3927d00411a0fb26026d523859cf714e79855acf4fb56616",
+          "e9bc8bc2bb046ad7d93191d68e07951a1e4abba6c27bd5080a2ff3fe2e88b3f0",
+          "04ae279b20da6340bc51662ff091e8ab2e9e35a6afa7985ba7ed10d4358e7c74",
+          "64f5a0b65068c9ae832c990e78a1b8f263f617c88a13e07c38ca5bd9abc8c75b",
+          "f76b5b7dc0fb383e56bfced4d349e15ceef119ab4ff73b8ed8163e7bd164849b",
+          "3dad3a7dbc8fcba4e063889f85ffe4f1c9bdc4f2156700e5d672a49e2e587315",
+          "22b525e326f3fb60108983021e26b1f5917d6c390b9f314fc2e5b7a50fe3b0cb",
+          "8b1c70d2a6dbe18194883fc73478f1e337d4f0685217c8a9ce4963117e04cb1c"
+        ],
+        "uzSquaredFraction_DIAGNOSTIC_ONLY": [
+          2.7805878556367196e-27,
+          9.527015934110517e-29,
+          6.070412817722241e-27,
+          0.978526020424702,
+          0.9557206678743677,
+          0.9557206678743675,
+          0.9383611816097595,
+          0.9307189005330437,
+          0.00031155346307091224,
+          0.9328631992969282
+        ]
+      }
+    },
+    {
+      "label": "16x16x4-threads4",
+      "exitCode": 0,
+      "elapsedSeconds": 10.353328666999005,
+      "peakRssBytes": 459882496,
+      "stdoutSha256": "e1ed5daef604f03a09932728a5bc08787213cbd50b5f520b851a65e65562befe",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "fixtureSha256": "a5bb708a9c8ead150660da9b1ecedcbc8640513fd9dad29019520cfab732218c",
+      "threadExactExceptHostTimeMs": null,
+      "verificationFailure": "AssertionError('native1/4 metadata, Journal and all shapes must agree exactly')",
+      "summary": {
+        "grid": [
+          16,
+          16,
+          4
+        ],
+        "elements": 1024,
+        "nodes": 5321,
+        "supportedUzNodes": 128,
+        "freeDofs": 15835,
+        "frequenciesHz": [
+          0.0,
+          0.0,
+          2.8366736224385132e-05,
+          43.2410285297257,
+          103.73418513643345,
+          103.73418513644117,
+          154.48326929292742,
+          193.02965211600605,
+          193.59201977889035,
+          193.86507657071735
+        ],
+        "measuredMaxBackwardResidual": 5.615787252297869e-11,
+        "sweeps": 20,
+        "warnings": [
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 1 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:1"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 2 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:2"
+          },
+          {
+            "code": "modal.unresolved-frequency",
+            "text": "mode 3 is unresolved at the Rayleigh stiffness-contraction arithmetic cancellation scale; its backward residual passed, but relative frequency convergence is not certified. Inspect the mode shape and mesh.set a better-conditioned mesh before interpreting a near-zero frequency",
+            "step": "modes",
+            "where": "mode:3"
+          }
+        ],
+        "firstThreeRigidSubspaceRelativeMisfit_DIAGNOSTIC_ONLY": [
+          5.1156972510858815e-14,
+          2.2469362717548017e-14,
+          1.0067971536991384e-13
+        ],
+        "lowThreeToFirstDeformationalRatio_DIAGNOSTIC_ONLY": 6.560143731290907e-07,
+        "rigidTxTyRzNormalizedCoefficients_DIAGNOSTIC_ONLY": [
+          [
+            -0.3897588206867318,
+            0.6280511896455634,
+            -0.6735278501158514
+          ],
+          [
+            0.907932204458162,
+            0.20381308648800953,
+            -0.36622307120657144
+          ],
+          [
+            0.08919737253478396,
+            0.7254984410862972,
+            0.6824191092827366
+          ]
+        ],
+        "rigidCoefficientRankAtThreshold1e_8_DIAGNOSTIC_ONLY": 3,
+        "rigidCoefficientDeterminant_DIAGNOSTIC_ONLY": -0.9988277026858747,
+        "Abaqus_C3D20_computed_Hz_CONTEXT_NOT_REFERENCE": [
+          44.796,
+          110.54,
+          110.54,
+          169.1,
+          193.92,
+          206.64,
+          206.64
+        ],
+        "references_DIAGNOSTIC_ONLY": {
+          "Abaqus_NAFEMS_1990": {
+            "referenceHz": [
+              44.092,
+              106.66,
+              106.66,
+              156.23,
+              193.58,
+              200.13,
+              200.13
+            ],
+            "signedRelativeDifference": [
+              -0.01929990633843544,
+              -0.027431228797736205,
+              -0.027431228797663857,
+              -0.011180507630241135,
+              -0.002842999710682739,
+              -0.03266866647234122,
+              -0.03130426937132187
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ]
+          },
+          "Ansys_targets_1987": {
+            "referenceHz": [
+              45.897,
+              109.44,
+              109.44,
+              167.89,
+              193.59,
+              206.19,
+              206.19
+            ],
+            "signedRelativeDifference": [
+              -0.05786808441236454,
+              -0.05213646622410951,
+              -0.052136466224039,
+              -0.07985425401794372,
+              -0.0028945084146596183,
+              -0.06109889044623722,
+              -0.059774593478261064
+            ],
+            "withinThreePercent_DIAGNOSTIC_ONLY": [
+              false,
+              false,
+              false,
+              false,
+              true,
+              false,
+              false
+            ]
+          }
+        },
+        "fieldSha256": [
+          "0624c6b003214dab6ffa0d2ecb53d0723e461fe1ac2efc7fcfad60d4ce06f576",
+          "aa7ea5722601373e93d3efd4f808397cd8dc17eef62a464bd44a2777de216369",
+          "88bfc2c17d18a6b6b30528941dab3be85158971891e5ff20366270ca2f183fc3",
+          "f184b57f393e788c9f75cbaa9de743ddb3fe392d60e6bc3cbd8abc46c00361e4",
+          "23e2af20cf6870b22ca9f2bd749403aed648c06d7c032eec3781051a6e2171f9",
+          "b9f4c5b2c28f85b233cde55018000efa279d8f36a9f9c293ccf7dcac556aea16",
+          "e1cfc5d3c706c9036049ec0332ec19e568af4d5d30f400659abc8ecc703eba4a",
+          "f215e006d91ceccc41ed5ae151d77d1ab38ab2dcec125604d1dd76a1fb63ec81",
+          "0b8466b30fd71125ab53b34cd78b0aed4b6e7063e6b0248f4b00ea05986658cc",
+          "7ad255e9f6c3376dc2f9bce1dfd79fdb463c8681861a39e5e83a738bf290cf2e"
+        ],
+        "uzSquaredFraction_DIAGNOSTIC_ONLY": [
+          1.827844217213531e-27,
+          1.6223305058853592e-28,
+          9.20884407651953e-27,
+          0.978526020424702,
+          0.9557206678743676,
+          0.9557206678743676,
+          0.9383611816097596,
+          0.9307189005330436,
+          0.0003115534630708084,
+          0.9328631992969275
+        ]
+      }
+    }
+  ],
+  "threadFailure": {
+    "differentLeafCountExcludingTimeMs": 158368,
+    "firstDifferences": [
+      [
+        "/2/residual",
+        5.615787284622413e-11,
+        5.615787252297869e-11
+      ],
+      [
+        "/2/frequencies/2/value",
+        2.5195037830538657e-05,
+        2.8366736224385132e-05
+      ],
+      [
+        "/2/frequencies/3/value",
+        43.2410285297337,
+        43.2410285297257
+      ],
+      [
+        "/2/frequencies/4/value",
+        103.73418513643853,
+        103.73418513643345
+      ],
+      [
+        "/2/frequencies/5/value",
+        103.73418513644528,
+        103.73418513644117
+      ],
+      [
+        "/2/frequencies/6/value",
+        154.48326929292693,
+        154.48326929292742
+      ],
+      [
+        "/2/frequencies/7/value",
+        193.02965211600645,
+        193.02965211600605
+      ],
+      [
+        "/2/frequencies/8/value",
+        193.5920197788899,
+        193.59201977889035
+      ],
+      [
+        "/2/frequencies/9/value",
+        193.86507657071752,
+        193.86507657071735
+      ],
+      [
+        "/2/extremes/0/max/value",
+        0.0003702927932033462,
+        0.00045557152980815665
+      ],
+      [
+        "/2/extremes/0/maxAt/0/value",
+        0.625,
+        8.4375
+      ],
+      [
+        "/2/extremes/0/maxAt/2/value",
+        0.5,
+        -0.5
+      ],
+      [
+        "/2/extremes/0/min/value",
+        -0.0013892042223727528,
+        -0.0013442554574250344
+      ],
+      [
+        "/2/extremes/1/max/value",
+        0.0015685759536990963,
+        0.0016159190954594053
+      ],
+      [
+        "/2/extremes/1/minAt/1/value",
+        3.125,
+        9.6875
+      ],
+      [
+        "/2/extremes/1/minAt/2/value",
+        -0.375,
+        0.5
+      ],
+      [
+        "/2/extremes/1/min/value",
+        -0.00019092106187705164,
+        -0.00018390789177385295
+      ],
+      [
+        "/2/extremes/2/max/value",
+        8.62862118037892e-18,
+        8.728841745510286e-18
+      ],
+      [
+        "/2/extremes/2/minAt/0/value",
+        5.0,
+        4.375
+      ],
+      [
+        "/2/extremes/2/minAt/1/value",
+        5.9375,
+        6.25
+      ],
+      [
+        "/2/extremes/2/minAt/2/value",
+        -0.25,
+        0.125
+      ],
+      [
+        "/2/extremes/2/min/value",
+        -1.280132231609187e-16,
+        -1.0642009688922356e-16
+      ],
+      [
+        "/8/values/0",
+        -0.0013892042223727415,
+        -0.0013442554574250292
+      ],
+      [
+        "/8/values/1",
+        0.0015685759536990913,
+        0.0016159190954593981
+      ],
+      [
+        "/8/values/3",
+        -0.0013892042223727355,
+        -0.0013442554574250225
+      ],
+      [
+        "/8/values/4",
+        0.0015135916719623177,
+        0.001559674502108339
+      ],
+      [
+        "/8/values/6",
+        -0.001389204222372732,
+        -0.0013442554574250175
+      ],
+      [
+        "/8/values/7",
+        0.0014586073902255535,
+        0.001503429908757289
+      ],
+      [
+        "/8/values/9",
+        -0.0013892042223727324,
+        -0.001344255457425018
+      ],
+      [
+        "/8/values/10",
+        0.0014036231084887912,
+        0.0014471853154062414
+      ]
+    ],
+    "documentExact": true,
+    "meshExact": true,
+    "surfaceExact": true,
+    "setSummariesExact": true
+  }
+}

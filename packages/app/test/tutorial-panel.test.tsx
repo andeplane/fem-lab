@@ -8,9 +8,11 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Store } from '../src/store';
+import { bindRegistryProducer } from '../src/producer-registry';
 import { afterEffects, waitFor, waitForGone, waitForText } from './wait-for';
 import { Tour } from '../src/tutorial/Tour';
 import { TutorialPanel } from '../src/tutorial/TutorialPanel';
+import { tutorialById } from '../src/tutorial/tutorials';
 
 const click = async (el: Element | null): Promise<void> => {
   el!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -22,12 +24,15 @@ function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query:
   const journal: JournalDump = { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false };
   const model: ModelSummary = { name: 'm', revision: 0 } as unknown as ModelSummary;
   const dispatch = vi.fn(async (cmd: { cmd: string } & Record<string, unknown>) => {
+    if (cmd.cmd === 'model.new') journal.entries = [];
     journal.entries = [...journal.entries, { seq: journal.entries.length, cmd, hashAfter: `h${journal.entries.length}` } as never];
     journal.revision = journal.entries.length;
     return { seq: journal.entries.length - 1 };
   });
   const query = vi.fn(async (q: { query: string }) => (q.query === 'query.journal' ? journal : model));
-  return { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
+  const registry = { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
+  bindRegistryProducer(registry, async () => ({ registry, signal: new AbortController().signal, store: () => undefined, release: async () => undefined }));
+  return registry;
 }
 
 /**
@@ -52,6 +57,12 @@ function storeDispatch(store: Store, hold?: () => Promise<void>) {
 /** Put a Journal on the Store the way a refresh would, with no dispatch involved. */
 const journalOf = (store: Store, cmds: ({ cmd: string } & Record<string, unknown>)[]): void =>
   store.set({ journal: { entries: cmds.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })), revision: cmds.length, canUndo: true, canRedo: false } as never });
+
+function withProducer(store: Store, registry = fakeRegistry()): Registry {
+  bindRegistryProducer(registry, async () => ({ registry: { ...registry, dispatch: store.dispatch! } as unknown as Registry,
+    signal: new AbortController().signal, store: () => store, release: async () => undefined }));
+  return registry;
+}
 
 let root: HTMLElement;
 
@@ -112,6 +123,23 @@ describe('TutorialPanel', () => {
     expect(store.state.journal?.entries.length).toBe(1);
   });
 
+  it.each([1, 16])('starts a second tutorial over a %i-entry Model and advances after one replacement', async (count) => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    journalOf(store, Array.from({ length: count }, (_, i) => i === 0 ? { cmd: 'model.new', name: 'previous' } : { cmd: 'model.setUnits' }));
+    const registry = fakeRegistry();
+    render(<TutorialPanel registry={registry} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Column buckling')), 'the column tutorial'));
+    await waitForText(progress, 'step 1 of');
+    expect(registry.dispatch).not.toHaveBeenCalled();
+    await click(root.querySelector('.tutorial-btn.primary'));
+    await waitForText(progress, 'step 2 of');
+    expect(registry.dispatch).toHaveBeenCalledExactlyOnceWith({ cmd: 'model.new', name: 'column-buckling' });
+    expect(store.state.journal?.entries).toHaveLength(1);
+    expect(store.state.journal?.entries[0]?.cmd).toEqual({ cmd: 'model.new', name: 'column-buckling' });
+  });
+
   it('highlights the control the step names, via data-tutorial-target', async () => {
     const target = document.createElement('button');
     target.setAttribute('data-cmd', 'model.new');
@@ -126,11 +154,12 @@ describe('TutorialPanel', () => {
     target.remove();
   });
 
-  it('goes through the app\'s own dispatch when the Store carries one, and advances on its Journal', async () => {
+  it('uses its captured producer dispatch and advances on the published Journal', async () => {
     const store = new Store();
     store.togglePanel('tutorial', true);
     const registry = fakeRegistry();
     const calls = storeDispatch(store);
+    withProducer(store, registry);
     render(<TutorialPanel registry={registry} store={store} />, root);
     await afterEffects();
     await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
@@ -138,7 +167,7 @@ describe('TutorialPanel', () => {
     await waitForText(progress, 'step 2 of');
     expect(calls.map((c) => c.cmd)).toEqual(['model.new']);
     expect(registry.dispatch).not.toHaveBeenCalled(); // issue #12: never the bare registry
-    expect(registry.query).not.toHaveBeenCalled(); // the app's dispatch already refreshed
+    expect(registry.query).toHaveBeenCalledWith({ query: 'query.journal' }); // explicit observation before writing
   });
 
   it('disables "Do it for me" while the Command is in the air, and re-enables it after', async () => {
@@ -146,7 +175,7 @@ describe('TutorialPanel', () => {
     store.togglePanel('tutorial', true);
     let release = (): void => undefined;
     storeDispatch(store, () => new Promise<void>((r) => (release = r)));
-    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    render(<TutorialPanel registry={withProducer(store)} store={store} />, root);
     await afterEffects();
     await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
     const doIt = (): HTMLButtonElement | null => root.querySelector<HTMLButtonElement>('.tutorial-btn.primary');
@@ -287,6 +316,51 @@ describe('TutorialPanel', () => {
     expect(document.activeElement).toBe(typing); // the person was mid-edit: leave them alone
     props.remove();
     target.remove();
+  });
+
+  it('renders the concrete slab closing theory as paragraphs, maths, bold, code and bullets', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Concrete floor slab')), 'the concrete slab tutorial'));
+    const tutorial = tutorialById('concrete-floor-slab')!;
+    for (let i = 0; i < tutorial.steps.length - 1; i++) {
+      await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    }
+    const theory = await waitFor(() => root.querySelector('.tutorial-theory'), 'the closing theory');
+    expect(theory.querySelectorAll('.katex').length).toBeGreaterThan(10);
+    expect(theory.querySelector('.katex-display')).not.toBeNull();
+    expect(theory.querySelector('strong')?.textContent).toBe('The load.');
+    expect(theory.querySelector('code')?.textContent).toBe('bearing-a');
+    expect(theory.querySelectorAll('li')).toHaveLength(3);
+    expect(theory.querySelectorAll('.theory-copy > p').length).toBeGreaterThan(5);
+    expect(theory.textContent).not.toContain('$');
+    expect(theory.textContent).not.toContain('**');
+    expect(theory.tagName).not.toBe('PRE');
+  });
+
+  it('keeps the truss step actions outside its scroll region and dispatches all joints and members', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    const registry = fakeRegistry();
+    render(<TutorialPanel registry={registry} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Steel roof truss')), 'the truss tutorial'));
+    for (let i = 0; i < 2; i++) await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    await waitForText(() => root.querySelector('.tutorial-step-title'), 'The truss, as lines');
+    const content = root.querySelector('.tutorial-content')!;
+    const actions = root.querySelector('.tutorial-actions')!;
+    expect(content.contains(actions)).toBe(false);
+    expect(content.nextElementSibling).toBe(actions);
+    expect([...content.querySelectorAll('dt')].map(el => el.textContent)).toEqual(['points', 'members', 'divisions']);
+    expect([...content.querySelectorAll('dd')].map(el => el.textContent)).toEqual(['12 joints', '21 members', '1']);
+    await click(root.querySelector('.tutorial-btn.primary'));
+    await waitForText(progress, 'step 4 of');
+    const command = tutorialById('steel-roof-truss')!.steps[2]!.doIt!;
+    expect(registry.dispatch).toHaveBeenCalledExactlyOnceWith(command);
+    expect(command['points']).toHaveLength(12);
+    expect(command['members']).toHaveLength(21);
   });
 
   it('Skip moves past a step without the Command ever appearing', async () => {

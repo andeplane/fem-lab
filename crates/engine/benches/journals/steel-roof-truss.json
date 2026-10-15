@@ -1,0 +1,361 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "steel-roof-truss"
+    },
+    "hashAfter": "e5864bfcb544681af67a8be54f6412871914bb53e5e349cb84eb26493c0771fc"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "kN",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "a9f596fa421bca363d8ab9d44c703eae03ad69676c4b7ba8d972a57eb215d267"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addLine",
+      "name": "truss",
+      "points": [
+        [
+          "0 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "2000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "4000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "6000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "8000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "10000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "12000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "2000 mm",
+          "2000 mm",
+          "0 mm"
+        ],
+        [
+          "4000 mm",
+          "2000 mm",
+          "0 mm"
+        ],
+        [
+          "6000 mm",
+          "2000 mm",
+          "0 mm"
+        ],
+        [
+          "8000 mm",
+          "2000 mm",
+          "0 mm"
+        ],
+        [
+          "10000 mm",
+          "2000 mm",
+          "0 mm"
+        ]
+      ],
+      "members": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          4
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          5,
+          6
+        ],
+        [
+          7,
+          8
+        ],
+        [
+          8,
+          9
+        ],
+        [
+          9,
+          10
+        ],
+        [
+          10,
+          11
+        ],
+        [
+          7,
+          1
+        ],
+        [
+          8,
+          2
+        ],
+        [
+          9,
+          3
+        ],
+        [
+          10,
+          4
+        ],
+        [
+          11,
+          5
+        ],
+        [
+          0,
+          7
+        ],
+        [
+          7,
+          2
+        ],
+        [
+          8,
+          3
+        ],
+        [
+          10,
+          3
+        ],
+        [
+          11,
+          4
+        ],
+        [
+          6,
+          11
+        ]
+      ],
+      "divisions": 1
+    },
+    "hashAfter": "f077174cbb754ac91fc151fd614df1f2f847b95700c66af9028b72a50ffb26e1"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "S355",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025-2 S355J2"
+    },
+    "hashAfter": "30b0f5d46635208cc983310875fec564465302f2aaf47888bd06556d551b2b1e"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "S355",
+      "bodies": [
+        "truss"
+      ]
+    },
+    "hashAfter": "8fd76cf5d21582fdff5555ccb19dc63909f266c0cee77c32b290867e9fea70d5"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "section.add",
+      "name": "chs-88x5",
+      "shape": {
+        "kind": "tube",
+        "radius": "44.45 mm",
+        "thickness": "5 mm"
+      }
+    },
+    "hashAfter": "2974c63896ef2b21f66ddd50b32a839d3089225599cf6d39ea42cab478281d26"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "section.assign",
+      "section": "chs-88x5",
+      "bodies": [
+        "truss"
+      ]
+    },
+    "hashAfter": "8fd897487102828fb3967a68770f9dd44b95f4288895795cc5cec457183f1c39"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    "hashAfter": "6d88551a22e7bc63ff17086ce83f0b6b8f42f45a30b2ff14ce8e75d13ee3c68b"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "geometry.nameRegion",
+      "name": "all-joints",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-100 mm",
+          "-100 mm",
+          "-10 mm"
+        ],
+        "max": [
+          "12100 mm",
+          "2100 mm",
+          "10 mm"
+        ]
+      }
+    },
+    "hashAfter": "a58bb502b2d5b599954134aff7f1d4b76bf2455e9a5fbecc51273b1e600de574"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "geometry.nameRegion",
+      "name": "top-joints",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "1900 mm",
+          "1900 mm",
+          "-10 mm"
+        ],
+        "max": [
+          "10100 mm",
+          "2100 mm",
+          "10 mm"
+        ]
+      }
+    },
+    "hashAfter": "5b1656084ed6fa5f7901bb5ae561c23dcd5100f6bc17e30bf4b316c0573e523d"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "bracing",
+      "on": "all-joints",
+      "dofs": [
+        "uz"
+      ]
+    },
+    "hashAfter": "51ee03c73264fb2a9cc3cfe838cfedabff086d5c8e7cb9929594b3b72342bbd1"
+  },
+  {
+    "seq": 11,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "pin",
+      "on": "truss.p0",
+      "dofs": [
+        "ux",
+        "uy"
+      ]
+    },
+    "hashAfter": "0bbaeffa97052dec6ca8cf02c40f5ac59c3107e96cf6637c6f786a1ac8962bd8"
+  },
+  {
+    "seq": 12,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "roller",
+      "on": "truss.p6",
+      "dofs": [
+        "uy"
+      ]
+    },
+    "hashAfter": "a83ae08f57093b174f25c78ba60f1516f00b3d9b76de2224bd39842fd885a761"
+  },
+  {
+    "seq": 13,
+    "cmd": {
+      "cmd": "load.force",
+      "name": "purlins",
+      "on": "top-joints",
+      "total": [
+        "0 kN",
+        "-100 kN",
+        "0 kN"
+      ]
+    },
+    "hashAfter": "cb579a509e8caf56f15bf4ec35c362ae0202b0a38e6019629ecc7cfe76291c69"
+  },
+  {
+    "seq": 14,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "gravity-case",
+      "procedure": "static",
+      "constraints": [
+        "bracing",
+        "pin",
+        "roller"
+      ],
+      "loads": [
+        "purlins"
+      ],
+      "output": [
+        "displacement",
+        "stress",
+        "stressUnaveraged",
+        "reaction"
+      ]
+    },
+    "hashAfter": "aef2f9a203532f1595b40ea5907cf8e896707ab41455659e8759e3a619fabf24"
+  },
+  {
+    "seq": 15,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "gravity-case"
+    },
+    "hashAfter": "aef2f9a203532f1595b40ea5907cf8e896707ab41455659e8759e3a619fabf24"
+  }
+]

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { batchModule } from './checked-batch.mjs';
 // Replay a Journal fixture in the wasm build (Node) and print one Model hash per line,
 // exactly like `femlab run <journal> --hashes`. Usage: node tools/replay-wasm.mjs <journal.json> [--skip-solves] [--query <Query JSON>]
 import { readFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import { createRequire } from "node:module";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const wasm = require(path.join(root, "tools", "wasm-node", "femlab_engine_wasm.js"));
+const wasm = batchModule(require(path.join(root, "tools", "wasm-node", "femlab_engine_wasm.js")));
 
 const file = process.argv[2];
 if (!file) {

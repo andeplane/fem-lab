@@ -1,0 +1,6 @@
+{
+  "name": "femlab-step-converter",
+  "version": "0.0.23+femlab.1",
+  "private": true,
+  "type": "module"
+}

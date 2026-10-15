@@ -1,25 +1,32 @@
+import { AccountPanel } from './Account';
 // The shell of docs/design/README.md: top bar, blocker banner, Model tree, viewer, Properties,
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
 // Playwright smoke can hold the DOM against `registry.list()`.
-import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/registry';
+import type { CommandDef, EngineSchema, JsonSchema, Registry, Valued } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import schema from '../../../registry/src/generated/engine.schema.json';
+import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
-import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
+import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
+import type { ResultComparison } from '../result-comparison';
 import { lazy } from '../lazy';
-import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, type ResizablePanel, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
-import type { Viewer } from '../viewer/viewer';
+import type { Pick as ViewerPick, Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
+import { ComparisonControls, ComparisonPaneChrome } from './ResultComparison';
+import { ComparisonPlaybackControls } from './ComparisonPlayback';
 import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
+import { ImportAbaqus, AbaqusImportReport } from './ImportAbaqus';
+import { ImportStep, StepImportReport, STEP_IMPORT_DRAFT } from './ImportStep';
 import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
+import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
-import { blockers, type Defs, shapeKinds } from './schema';
+import { type Defs, shapeKinds, solveBlockers } from './schema';
 
 export type { Dispatch } from './cmd';
 
@@ -32,8 +39,11 @@ const Report = lazy(() => import('./Report').then((m) => m.Report));
 
 export interface AppProps {
   store: Store;
+  sessionKey?: string;
   dispatch: Dispatch;
   viewer: ViewerRef;
+  rightViewer?: ViewerRef;
+  comparison?: ResultComparison;
   /** Reads for the live parts of the form (`query.convert`); defaults to a no-op for tests. */
   query?: Query;
   /** `registry.list().commands`, which is what the ⌘K palette is a view of. */
@@ -77,7 +87,7 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   else if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
   else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
   else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
-  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects', 'abaqus', 'abaqusReport', 'step', 'stepReport', 'account']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
 }
 
 const doc = schema as unknown as EngineSchema;
@@ -90,8 +100,9 @@ const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
 
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
+  const dirty = useMemo(() => unsaved(s), [s.journal, s.savedJournal]);
   const step = s.model?.steps[0]?.name ?? '';
+  const list = solveBlockers(s.model, step);
   // Design state 7: while an error card stands, Solve is disabled and carries the same code.
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
@@ -103,7 +114,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <ProjectName s={s} dispatch={dispatch} />
+      <ModelName name={s.model?.name ?? 'no model'} dirty={dirty} dispatch={dispatch} />
+      <ProjectSaved s={s} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -139,11 +151,20 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.open" class="tbutton" args={{ picker: true }} title="Open a femlab/1 file">
         Open
       </Cmd>
+      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton file-action" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp" label="Import Abaqus .inp">
+        <span class="file-action-label" aria-hidden="true">Import .inp</span><span class="file-action-icon" aria-hidden="true">⇥</span>
+      </Cmd>
+      {s.abaqusReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'abaqusReport', open: true }} title="View this import’s source units, counts and Set mappings" label="Abaqus report"><span class="file-action-label" aria-hidden="true">Abaqus report</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
+      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton file-action" args={{ command: 'geometry.importStep', args: STEP_IMPORT_DRAFT }} title="Import STEP geometry" label="Import STEP geometry"><span class="file-action-label" aria-hidden="true">Import STEP</span><span class="file-action-icon" aria-hidden="true">◇</span></Cmd>
+      {s.stepReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'stepReport', open: true }} title="Last successful STEP conversion receipt" label="STEP receipt"><span class="file-action-label" aria-hidden="true">STEP receipt</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
       <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
-        Save as file
+      <Cmd dispatch={dispatch} cmd="file.compare" class="tbutton" args={{ picker: true }} title="Compare a saved femlab/1 file without opening it">
+        Compare
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton file-action" title="Download the Model and its Journal as a femlab/1 file" label="Save as file">
+        <span class="file-action-label" aria-hidden="true">Save as file</span><span class="file-action-icon" aria-hidden="true">↓</span>
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share
@@ -157,6 +178,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'tutorial' }} pressed={s.panels['tutorial'] === true} title="Guided tutorials">
         Tutorials
       </Cmd>
+      <Cmd dispatch={dispatch} cmd="account.open" class="tbutton account-button" title="Login, AI allowance and subscription" label={s.account.uid ? 'Account' : 'Sign in'}><span class="account-button-label">{s.account.uid ? 'Account' : 'Sign in'}</span><span class="account-button-icon" aria-hidden="true">◉</span></Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton outline" args={{ panel: 'assistant' }} pressed={s.panels['assistant'] === true}>
         ✳ Assistant
       </Cmd>
@@ -164,41 +186,16 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-/**
- * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
- * next to it. There is no "unsaved" dot: the Journal is written into the open project after
- * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
- */
-function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const [draft, setDraft] = useState<string | null>(null);
+/** Browser autosave status is separate from the document's explicit-save baseline. */
+function ProjectSaved({ s }: { s: UiState }) {
   const p = s.project;
-  const rename = (name: string): void => {
-    setDraft(null);
-    if (p && name.trim() && name.trim() !== p.name) void dispatch({ cmd: 'project.rename', name: name.trim() }).catch(() => undefined);
-  };
-  const chip = !p ? '' : p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  const tone = !p || p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
-  const name = draft ?? p?.name ?? s.model?.name ?? 'no model';
+  if (!p) return null;
+  const chip = p.autosave === false ? 'autosave off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const tone = p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
   return (
-    <span class="project-chip">
-      <input
-        class="mono model-name"
-        aria-label="project name"
-        data-cmd="project.rename"
-        disabled={p === null}
-        title={name}
-        value={name}
-        onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-        onBlur={(e) => rename((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          if (e.key === 'Escape') setDraft(null);
-        }}
-      />
-      <span class={`saved-chip ${tone}`} title={p ? `${chip} — ${p.commands} Commands in this browser` : 'no project yet'}>
-        <span class="dot" />
-        <span class="saved-text">{chip}</span>
-      </span>
+    <span class={`saved-chip ${tone}`} title={`${p.name}: ${chip} — ${p.commands} Commands in this browser`}>
+      <span class="dot" />
+      <span class="saved-text">{chip}</span>
     </span>
   );
 }
@@ -214,7 +211,7 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       </div>
     );
   }
-  const b = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
+  const b = solveBlockers(s.model, s.model?.steps[0]?.name ?? '')[0];
   if (!b) return null;
   return (
     <div class="banner">
@@ -230,10 +227,12 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 }
 
 /** The design's bottom-left readout: the contoured value, the node, and where it is. */
-export function probeLine(p: { face: string | null; body: string | null; point: [number, number, number]; node: number | null; value: number | null } | null): string {
+export function probeLine(p: ViewerPick | null, length: Valued, field: { label: string; unit: string } | null): string {
   if (!p) return '';
-  const where = `x ${p.point[0].toFixed(3)} y ${p.point[1].toFixed(3)} z ${p.point[2].toFixed(3)} m`;
-  const who = p.value === null ? (p.face ?? p.body ?? '—') : `${formatNumber(p.value)}`;
+  const point = p.point.map(value => formatNumber(value * length.value));
+  const where = `x ${point[0]} y ${point[1]} z ${point[2]} ${length.unit}`;
+  // The renderer's scalar is already in the legend's display unit; only the SI point converts.
+  const who = p.value === null || field === null ? (p.face ?? p.body ?? '—') : `${field.label} ${formatNumber(p.value)} ${field.unit || '(1)'}`;
   return p.node === null ? `${who} · ${where}` : `${who} · node ${p.node} · ${where}`;
 }
 
@@ -320,15 +319,16 @@ export function exaggerationHelp(scale: number): string {
 function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const l = s.legend;
   if (!l) return null;
-  const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result?.frequencies?.length ?? 0, s.yieldStress !== null);
+  const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result, s.yieldStress !== null);
   const ticks = legendTicks(l.min, l.max);
+  const deforms = hasDeformation(s.result, s.fieldKey);
   return (
     <div class="legend">
       <div class="legend-head">
-        <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
+        <span class="legend-field mono">{choiceOf(s.fieldKey, s.result).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
-        <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
-          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{s.transient?.catalogue.field === 'temperature' ? '' : ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}`}
+        <span class="legend-sub mono" title={deforms ? exaggerationHelp(s.deformScale) : undefined}>
+          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{deforms ? ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}` : ''}
         </span>
       </div>
       <div class="legend-body">
@@ -416,6 +416,8 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     viewer.current?.previewDeformScale(scale);
   };
   const physical = mode === undefined && (s.result?.history?.length ?? 0) > 0;
+  const deforms = hasDeformation(s.result, s.fieldKey);
+  if (!deforms && !physical) return null;
   const sweeps = mode !== undefined;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
@@ -468,7 +470,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
-      {s.transient?.catalogue.field === 'temperature' ? null : <>
+      {deforms ? <>
       <span class="faint" title={exaggerationHelp(s.deformScale)}>
         exaggeration
       </span>
@@ -478,7 +480,8 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         // An auto scale of ×1000 has to be reachable, and the thumb must not sit pinned at the
         // end of a 0–400 track when it is: the track grows to whatever is drawn.
         max={String(Math.max(400, s.deformScale))}
-        step={String(Math.max(1, Math.round(Math.max(400, s.deformScale) / 100)))}
+        // Registry scales include ×1 and fractions; native step rounding must not change them.
+        step="any"
         aria-label="exaggeration"
         title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
@@ -493,7 +496,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
-      </Cmd></>}
+      </Cmd></> : null}
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
         screenshot
       </Cmd>
@@ -501,12 +504,17 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
   );
 }
 
-function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'left' }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef; query: Query; comparison?: ResultComparison; side?: 'left' | 'right' }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
+  const probeEpoch = useRef(0);
   const [broken, setBroken] = useState('');
-  useEffect(() => { setProbe(''); }, [s.transient?.generation, s.transient?.frame.index]);
-  const results = s.viewMode === 'results' && s.result !== null;
+  useEffect(() => { probeEpoch.current++; setProbe(''); }, [s.revision, s.fieldKey, s.legend, s.viewMode, s.result?.resultId, s.transient?.generation, s.transient?.frame.index]);
+  const comparing = s.viewMode === 'results' && s.resultComparison.configuration.mode !== 'single';
+  const paneName = s.resultComparison.configuration.mode === 'difference' ? 'difference' : side;
+  const pane = comparing ? s.resultComparison[paneName] : null;
+  const comparisonDeforms = paneName === 'difference' ? pane?.canDeform : s.resultComparison.left?.canDeform || s.resultComparison.right?.canDeform;
+  const results = s.viewMode === 'results' && s.result !== null && !comparing;
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
@@ -515,31 +523,67 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;
-    const onResize = () => v?.resize();
+    const onResize = () => { v?.resize(); comparison?.resize(); };
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
       try {
-        v = new Viewer(el);
+        v = new Viewer(el, () => viewer.onBounds?.(), () => {
+          // Read actual host chrome only for an explicit Fit; resizing keeps the person's pose.
+          const parent = el.parentElement;
+          const box = el.getBoundingClientRect();
+          if (!parent || parent.classList.contains('comparison-pane') || box.width === 0 || box.height === 0) return null;
+          let top = 12, right = box.width - 12, bottom = box.height - 36;
+          for (const selector of ['.viewer-chrome', '.stale-banner']) {
+            const overlay = parent.querySelector(selector)?.getBoundingClientRect();
+            if (overlay?.height) top = Math.max(top, overlay.bottom - box.top + 12);
+          }
+          const legend = parent.querySelector('.legend')?.getBoundingClientRect();
+          if (legend?.width) right = Math.min(right, legend.left - box.left - 12);
+          const deformation = parent.querySelector('.deform-bar')?.getBoundingClientRect();
+          if (deformation?.height) bottom = Math.min(bottom, deformation.top - box.top - 12);
+          return right > 24 && bottom > top + 12 ? { width: box.width, height: box.height, left: 12, right, top, bottom } : null;
+        });
       } catch (e) {
         // No WebGL2 is a fact about the browser, not a crash: say so and keep the rest usable.
         setBroken(`This browser could not open a WebGL2 context: ${(e as Error).message}`);
         return;
       }
       viewer.current = v;
-      v.setSelection(store.state.selection);
+      if (!comparison?.active) { v.setSelection(store.state.selection); v.setHover(store.state.hover); }
       viewer.onReady?.();
       v.onPick((p) => {
-        const frame = store.state.transient?.frame;
-        setProbe(`${probeLine(p)}${p && frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
+        if (comparison?.active) {
+          const configuration = store.state.resultComparison.configuration;
+          const name = configuration.mode === 'difference' ? 'difference' : side;
+          const metadata = store.state.resultComparison[name];
+          if (p && metadata) void dispatch({ cmd: 'view.pickComparison', pane: name, resultId: metadata.operand.resultId,
+            at: p.point.map(value => ({ value, unit: 'm' })), ...(p.body ? { body: p.body } : {}), ...(p.face ? { face: p.face } : {}) }).catch(() => undefined);
+          return;
+        }
+        const epoch = ++probeEpoch.current;
+        setProbe('');
+        if (p) {
+          const state = store.state;
+          const unit = state.model?.units.length ?? 'm';
+          const field = state.viewMode === 'results' && state.legend ? { label: choiceOf(state.fieldKey, state.result).label, unit: state.legend.unit } : null;
+          const frame = state.transient?.frame;
+          // Geometry-only picks need the same engine-owned conversion before any solve exists.
+          void query({ query: 'query.convert', quantity: { value: 1, unit: 'm' }, to: unit }).then(value => {
+            if (!gone && epoch === probeEpoch.current) setProbe(`${probeLine(p, value as Valued, field)}${frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
+          }).catch(error => { if (!gone && epoch === probeEpoch.current) store.fail(error); });
+        }
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
+      v.onCameraChange(() => comparison?.cameraChanged(side));
+      v.onCameraEnd(() => { if (v) void dispatch({ cmd: 'view.setCamera', ...v.getCamera() }).catch(() => undefined); });
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
-        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
-        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        // The layout box catches splitters; the canvas CSS size also changes when comparison
+        // reserves a legend column without changing that box. The fixed CSS dimensions keep
+        // backing-buffer writes from feeding the observer. Resize then reads the actual pane.
         observer.observe(el.parentElement ?? el);
+        observer.observe(el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
@@ -551,16 +595,18 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch, store]);
+  }, [viewer, dispatch, store, query, comparison, side]);
 
-  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
+  useEffect(() => { if (!comparing) viewer.current?.setSelection(s.selection); }, [viewer, s.selection, comparing]);
+  useEffect(() => { if (!comparing) viewer.current?.setHover(s.hover); }, [viewer, s.hover, comparing]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
+  const reSolveBlocker = solveBlockers(s.model, s.result?.step ?? '')[0];
   return (
-    <div class="viewer">
-      <canvas ref={canvas} />
-      <div class="viewer-chrome">
+    <div class={`viewer${comparing ? ' comparison-pane' : ''}`} data-comparison-pane={comparing ? paneName : undefined} data-result-id={pane?.operand.resultId}>
+      <canvas ref={canvas} aria-label={comparing ? `${paneName} retained Result` : 'Model viewer'} data-cmd={comparing ? 'view.pickComparison' : 'selection.set'} />
+      {side === 'left' ? <div class="viewer-chrome">
         <div class="viewer-toolbar">
           <div class="segmented" role="group" aria-label="display mode">
             {MODES.map((mode) => (
@@ -586,7 +632,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             fit
           </Cmd>
         </div>
-        {ref ? (
+        {ref && !comparing ? (
           <div class="selection-chip">
             <span>@{ref}</span>
             <Cmd dispatch={dispatch} cmd="clipboard.copy" class="key" args={{ what: { kind: 'selection' } }}>
@@ -594,24 +640,30 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             </Cmd>
           </div>
         ) : null}
-        {s.pickInto ? <div class="selection-chip armed">click a face in the viewer to fill {s.pickInto.join('.')}</div> : null}
-      </div>
-      {stale ? (
+        {s.pickInto && !comparing ? <div class="selection-chip armed">click a face in the viewer to fill {s.pickInto.join('.')}</div> : null}
+      </div> : null}
+      {stale && !comparing ? (
         <div class="stale-banner" role="status">
           <span>
             Result is stale — Model changed after revision {s.result!.revision}.
             {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
           </span>
-          <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
+          <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }} disabled={Boolean(reSolveBlocker) || !s.ready || s.solving !== null || s.lastError !== null} title={reSolveBlocker ? `${reSolveBlocker.code} ${reSolveBlocker.text}` : undefined}>
             Re-solve
           </Cmd>
         </div>
       ) : null}
       {results ? <Legend s={s} dispatch={dispatch} /> : null}
       {results ? <DeformBar s={s} store={store} dispatch={dispatch} viewer={viewer} /> : null}
-      <SolvingCard s={s} dispatch={dispatch} />
-      <ErrorCard s={s} dispatch={dispatch} />
-      <div class="probe mono">{probe}</div>
+      {pane ? <ComparisonPaneChrome pane={pane} name={paneName} s={s} dispatch={dispatch} /> : null}
+      {comparing && comparisonDeforms && side === 'left' ? <div class="deform-bar comparison-deform">
+        <span>Shared deformation ×{formatNumber(s.deformScale)}</span>
+        <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'true' }}>True</Cmd>
+        <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'auto' }}>Auto</Cmd>
+        <input type="number" step="any" min="0" aria-label="comparison deformation scale" data-cmd="view.setDeformScale" value={s.deformScale} onChange={e => { const scale = Number(e.currentTarget.value); if (Number.isFinite(scale) && scale >= 0) void dispatch({ cmd: 'view.setDeformScale', scale }).catch(() => undefined); }} />
+      </div> : null}
+      {side === 'left' ? <><SolvingCard s={s} dispatch={dispatch} /><ErrorCard s={s} dispatch={dispatch} /></> : null}
+      {!comparing ? <div class="probe mono">{probe}</div> : null}
       {broken ? (
         <div class="hint">{broken}</div>
       ) : (s.model?.bodies.length ?? 0) === 0 ? (
@@ -693,11 +745,8 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
   );
 }
 
-export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
+function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, commands = [] }: AppProps) {
   const s = useStore(store);
-  // Collapse hides the drawer, but keeps the conversation and any running turn alive.
-  const assistantOpened = useRef(false);
-  assistantOpened.current ||= s.panels['assistant'] === true;
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
 
@@ -726,11 +775,18 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
               <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
-                <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
+                <div class="result-workspace">
+                  <ComparisonControls s={s} dispatch={dispatch} query={read} />
+                  <ComparisonPlaybackControls s={s} store={store} dispatch={dispatch} query={read} preview={comparison} />
+                  <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>
+                    <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} query={read} comparison={comparison} />
+                    {rightViewer && s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? <ViewerPane s={s} store={store} dispatch={dispatch} viewer={rightViewer} query={read} comparison={comparison} side="right" /> : null}
+                  </div>
+                </div>
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
                 <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
-              <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <SchemaForm s={s.form && ['file.importAbaqus', 'geometry.importStep'].includes(s.form.cmd) ? { ...s, form: null } : s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
               <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
@@ -738,24 +794,36 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       ) : (
         <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <Start s={s} dispatch={dispatch} />
-          {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+          {s.form && !['file.importAbaqus', 'geometry.importStep'].includes(s.form.cmd) ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
         </div>
       )}
       <Examples s={s} dispatch={dispatch} />
       <Projects s={s} dispatch={dispatch} />
+      <AccountPanel s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
+      <ImportAbaqus s={s} dispatch={dispatch} />
+      <ImportStep s={s} dispatch={dispatch} />
+      <StepImportReport s={s} dispatch={dispatch} />
+      <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
-      {registry ? <TutorialPanel registry={registry} store={store} /> : null}
-      {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
-          opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
-          layout of the design while the top bar stays full-width. Collapsing only hides the
-          drawer, preserving the conversation and any running turn. */}
-      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
-      {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>
   );
+}
+
+/** Conversations and tutorial runs outlive their model's presentation subtree. Their producer
+ * lease, rather than mounting/unmounting a component, decides whether execution may continue. */
+export function App(props: AppProps) {
+  const { store, registry, dispatch } = props;
+  const s = useStore(store);
+  const assistantOpened = useRef(false);
+  assistantOpened.current ||= s.panels['assistant'] === true;
+  return <>
+    <DocumentApp key={props.sessionKey} {...props} />
+    {registry ? <TutorialPanel registry={registry} store={store} /> : null}
+    {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+    {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
+  </>;
 }

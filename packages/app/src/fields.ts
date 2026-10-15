@@ -3,10 +3,10 @@
 // of two that drift. The dimensions mirror `field_dimension` in crates/engine/src/solve_run.rs.
 //
 // A "field" here is the wire name `Engine::field_named` takes: a `Field` spelling
-// (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal Step. Two
+// (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal or buckling Step. Two
 // more names never reach the engine at all — `safety` and `utilisation` are computed in the
 // app from von Mises and the Material's yield, which is why they carry a `derived` tag.
-import type { Field, UnitSet } from '@femlab/registry';
+import type { Field, ResultSummary, UnitSet } from '@femlab/registry';
 
 /** SI unit per dimension, the same strings `query.convert` normalises to. */
 export const SI_UNIT: Record<string, string> = {
@@ -15,6 +15,7 @@ export const SI_UNIT: Record<string, string> = {
   power: 'W',
   stress: 'Pa',
   temperature: 'K',
+  torque: 'N m',
   dimensionless: '',
 };
 
@@ -23,16 +24,26 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   reaction: 'force',
   stress: 'stress',
   stressUnaveraged: 'stress',
+  stressTop: 'stress',
+  stressBottom: 'stress',
+  shellMoment: 'force',
   vonMises: 'stress',
   principal: 'stress',
   strain: 'dimensionless',
+  errorEstimate: 'dimensionless',
+  plasticStrain: 'dimensionless',
   temperature: 'temperature',
+  rotation: 'dimensionless',
+  sectionForce: 'force',
+  sectionMoment: 'torque',
+  contactPressure: 'stress',
 };
 
 /** `mode:3` is a displacement; a safety factor and a utilisation are pure numbers. */
 export function dimensionOf(field: string, reactionQuantity: 'force' | 'power' = 'force'): keyof typeof SI_UNIT {
   if (field === 'reaction') return reactionQuantity;
   if (field.startsWith('mode:')) return 'length';
+  if (/^stressPly:[1-9]\d*:(bottom|top)$/.test(field)) return 'stress';
   if (field === 'safety' || field === 'utilisation') return 'dimensionless';
   return FIELD_DIMENSION[field as Field] ?? 'dimensionless';
 }
@@ -70,6 +81,14 @@ export interface FieldChoice {
 const VEC = ['x', 'y', 'z'];
 const VOIGT = ['xx', 'yy', 'zz', 'xy', 'xz', 'yz'];
 
+/** A retained laminate ply face has the same six global components as outer shell stress. */
+function plyChoices(field: string): FieldChoice[] {
+  const match = /^stressPly:([1-9]\d*):(bottom|top)$/.exec(field);
+  return match ? VOIGT.map((axis, component) => ({
+    key: `${field}:${axis}`, label: `σ${axis} ply ${match[1]} ${match[2]}`, field, component,
+  })) : [];
+}
+
 /**
  * Every scalar the viewer can contour, in the order the design's picker lists them: the one
  * number an engineer looks at first, then the displacement, then the stress components.
@@ -78,9 +97,16 @@ export const FIELD_CHOICES: FieldChoice[] = [
   { key: 'vonMises', label: 'σ_vM', field: 'vonMises', component: 0 },
   { key: 'umag', label: '|u|', field: 'displacement', component: null, magnitude: true },
   ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
+  ...VEC.map((a, i) => ({ key: `r${a}`, label: `θ${a}`, field: 'rotation', component: i })),
   ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
+  ...VOIGT.map((a, i) => ({ key: `sUnaveraged${a}`, label: `σ${a} unaveraged`, field: 'stressUnaveraged', component: i })),
+  ...['Top', 'Bottom'].flatMap((side) => VOIGT.map((a, i) => ({ key: `s${side}${a}`, label: `σ${a} ${side.toLowerCase()}`, field: `stress${side}`, component: i }))),
+  ...VOIGT.map((a, i) => ({ key: `shellM${a}`, label: `M${a} / width`, field: 'shellMoment', component: i })),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
+  { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
+  { key: 'contactPressure', label: 'p_c', field: 'contactPressure', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
+  { key: 'errorEstimate', label: 'Estimated spatial error', field: 'errorEstimate', component: 0 },
 ];
 
 /** `yield / σ_vM` and its reciprocal: the two numbers a check is actually written against. */
@@ -89,19 +115,35 @@ export const DERIVED_CHOICES: FieldChoice[] = [
   { key: 'utilisation', label: 'σ/f_y', field: 'vonMises', component: 0, derived: 'utilisation' },
 ];
 
+type ModeSpectrum = Pick<ResultSummary, 'modeCount' | 'frequencies' | 'bucklingFactors'>;
+
+/** Only shapes owned by this retained Result are fields; basis frequencies are metadata. */
+export function modeCount(result: ModeSpectrum | null | undefined): number {
+  return result?.modeCount ?? 0;
+}
+
+/** Contours move only when this retained solve has displacement or the selected mode shape. */
+export function hasDeformation(result: ResultSummary | null, fieldKey: string): boolean {
+  const mode = choiceOf(fieldKey).mode;
+  return result !== null && (result.extremes.some((e) => e.field === 'displacement') || (mode !== undefined && mode <= modeCount(result)));
+}
+
 /** The k-th mode shape, contoured by its magnitude and swept by the deformation bar. */
-export function modeChoice(k: number): FieldChoice {
-  return { key: `mode:${k}`, label: `mode ${k}`, field: `mode:${k}`, component: null, magnitude: true, mode: k };
+export function modeChoice(k: number, result?: ModeSpectrum | null): FieldChoice {
+  const factor = result?.frequencies?.length ? undefined : result?.bucklingFactors?.[k - 1];
+  const label = factor === undefined ? `mode ${k}` : `Mode ${k} · λ ${formatNumber(factor)}`;
+  return { key: `mode:${k}`, label, field: `mode:${k}`, component: null, magnitude: true, mode: k };
 }
 
 /**
  * The picker's rows for a Result: the fields the Step computed, then one row per mode shape
  * it found, then the two derived rows once a Material names a yield.
  */
-export function fieldChoices(fields: string[], modes = 0, hasYield = false): FieldChoice[] {
+export function fieldChoices(fields: string[], modes: number | ModeSpectrum | null = 0, hasYield = false): FieldChoice[] {
   return [
     ...FIELD_CHOICES.filter((c) => fields.includes(c.field)),
-    ...Array.from({ length: modes }, (_, i) => modeChoice(i + 1)),
+    ...[...new Set(fields)].flatMap(plyChoices),
+    ...Array.from({ length: typeof modes === 'number' ? modes : modeCount(modes) }, (_, i) => modeChoice(i + 1, typeof modes === 'number' ? undefined : modes)),
     ...(hasYield && fields.includes('vonMises') ? DERIVED_CHOICES : []),
   ];
 }
@@ -115,11 +157,13 @@ export function showFieldArgs(c: FieldChoice): { field: string; component?: numb
   return { field: c.field, ...(c.component === null ? {} : { component: c.component }) };
 }
 
-export function choiceOf(key: string): FieldChoice {
+export function choiceOf(key: string, result?: ModeSpectrum | null): FieldChoice {
   const known = [...FIELD_CHOICES, ...DERIVED_CHOICES].find((c) => c.key === key);
   if (known) return known;
+  const ply = plyChoices(key.slice(0, key.lastIndexOf(':'))).find((c) => c.key === key);
+  if (ply) return ply;
   const k = /^mode:(\d+)$/.exec(key);
-  return k ? modeChoice(Number(k[1])) : FIELD_CHOICES[0]!;
+  return k ? modeChoice(Number(k[1]), result) : FIELD_CHOICES[0]!;
 }
 
 /**

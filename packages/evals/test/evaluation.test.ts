@@ -17,6 +17,7 @@ const entry = (cmd: Record<string, unknown>, seq: number) => ({ seq, hashAfter: 
 function complete(spec: EvalCase): EvalEvidence {
   const source = 'catalogue provenance';
   const catalogue = {
+    id: spec.id === 'N1' ? 's355j2' : '6061-t6-sheet',
     materialAddSource: source,
     E: { value: valued(spec.materialE, 'Pa') },
     nu: { value: valued(spec.materialNu, '1') },
@@ -74,6 +75,7 @@ function complete(spec: EvalCase): EvalEvidence {
     warnings: [],
   };
   const result: Record<string, unknown> = {
+    resultId: `result-${spec.id}`,
     step: 'step',
     stale: false,
     balance: 1e-12,
@@ -95,20 +97,20 @@ function complete(spec: EvalCase): EvalEvidence {
       const displacement = 0.5 * measure.acceleration * timeSi * timeSi;
       const node = [0, 0, 0];
       node[measure.component] = displacement;
-      return { sample: { step: 'step', modelHash: 'model-hash', frame: { index, timeSi } }, field: 'displacement', components: 3, nodeCount: 2, unit: 'm', values: [...node, ...node] };
+      return { sample: { resultId: result['resultId'], step: 'step', modelHash: 'model-hash', frame: { index, timeSi } }, field: 'displacement', components: 3, nodeCount: 2, unit: 'm', values: [...node, ...node] };
     };
     frames = [frame(0, 0), frame(1, end / 2), frame(2, end)];
-    framesCatalogue = { step: 'step', modelHash: 'model-hash', stale: false, nodeCount: 2, field: 'displacement', components: 3, storedComponents: 3,
+    framesCatalogue = { resultId: result['resultId'], step: 'step', modelHash: 'model-hash', stale: false, nodeCount: 2, field: 'displacement', components: 3, storedComponents: 3,
       frames: [{ index: 0, timeSi: 0 }, { index: 1, timeSi: end / 2 }, { index: 2, timeSi: end }] };
   }
 
   const trace: ToolTrace[] = [];
-  if (spec.requires === 'material-library') trace.push({ name: 'query_materialLibrary', command: 'query.materialLibrary', input: {}, output: { entries: [catalogue] } });
+  if (spec.requires === 'material-library') trace.push({ name: 'query_materialLibrary', command: 'query.materialLibrary', input: {}, output: { entries: [catalogue] }, ok: true });
   if (spec.requires === 'script-validation') {
     trace.push(
       { name: 'validate_script', command: 'query.validateScript', input: { code: spec.invalidScript }, output: { ok: false }, journalBefore: 'empty-hash', journalAfter: 'empty-hash' },
       { name: 'validate_script', command: 'query.validateScript', input: { code: 'await fem.model.new({name: "corrected"});' }, output: { ok: true }, journalBefore: 'empty-hash', journalAfter: 'empty-hash' },
-      { name: 'run_script', command: 'script.run', input: { code: 'corrected' }, output: {} },
+      { name: 'run_script', command: 'script.run', input: { code: 'await fem.model.new({name: "corrected"});' }, output: {} },
     );
   }
   return { status: 'completed', model, result, probe, framesCatalogue, frames, journal: { entries: commands.map(entry) }, trace };
@@ -222,6 +224,21 @@ describe('independent scoring', () => {
     expect(failed(scoreCase(drop, wrongGravity), 'physics')).toBe(true);
   });
 
+  it('rejects missing or mixed immutable solve identities even when all Model hashes and values agree', () => {
+    const drop = EVAL_CASES.find((spec) => spec.id === 'D1')!;
+    const mixedFrame = complete(drop);
+    (mixedFrame.frames![1] as { sample: { resultId: string } }).sample.resultId = 'another-equal-input-solve';
+    expect(failed(scoreCase(drop, mixedFrame), 'balance')).toBe(true);
+
+    const mixedCatalogue = complete(drop);
+    (mixedCatalogue.framesCatalogue as { resultId: string }).resultId = 'another-equal-input-solve';
+    expect(failed(scoreCase(drop, mixedCatalogue), 'balance')).toBe(true);
+
+    const missing = complete(EVAL_CASES[0]!);
+    delete (missing.result as { resultId?: string }).resultId;
+    expect(failed(scoreCase(EVAL_CASES[0]!, missing), 'model')).toBe(true);
+  });
+
   it('requires exact catalogue provenance and nonmutating invalid-script validation', () => {
     const named = EVAL_CASES.find((spec) => spec.id === 'N1')!;
     const namedEvidence = complete(named);
@@ -250,6 +267,31 @@ describe('independent scoring', () => {
     emptyHash.trace[0]!.journalBefore = '';
     emptyHash.trace[0]!.journalAfter = '';
     expect(failed(scoreCase(validation, emptyHash), 'trace')).toBe(true);
+
+    const differentExecution = complete(validation);
+    (differentExecution.trace[2]!.input as { code: string }).code = 'await fem.model.new({name: "unvalidated"});';
+    expect(failed(scoreCase(validation, differentExecution), 'trace')).toBe(true);
+
+    const unvalidatedDirectExecution = complete(validation);
+    unvalidatedDirectExecution.trace[2] = { name: 'model_new', command: 'model.new', input: { name: 'unvalidated' }, output: {} };
+    expect(failed(scoreCase(validation, unvalidatedDirectExecution), 'trace')).toBe(true);
+  });
+
+  it('requires the named grade while allowing recovery from earlier unrelated or failed catalogue lookups', () => {
+    const named = EVAL_CASES.find((spec) => spec.id === 'N1')!;
+    const wrongGrade = complete(named);
+    const catalogue = (wrongGrade.trace[0]!.output as { entries: { id: string }[] }).entries[0]!;
+    // S235J2W has the same E, nu and density as S355J2, hence the same axial answer.
+    // Copying that entry's own provenance correctly must still fail the requested grade.
+    catalogue.id = 's235j2w';
+    expect(failed(scoreCase(named, wrongGrade), 'trace')).toBe(true);
+
+    const recovered = complete(named);
+    recovered.trace.unshift(
+      { name: 'query_materialLibrary', command: 'query.materialLibrary', input: { name: 'steel' }, error: { code: 'ambiguous' }, ok: false },
+      { name: 'query_materialLibrary', command: 'query.materialLibrary', input: { name: 'unrelated' }, output: { entries: [{ id: 's235j2w', materialAddSource: 'unrelated source' }] }, ok: true },
+    );
+    expect(scoreCase(named, recovered).passed).toBe(true);
   });
 
   it('rejects heat sources and unselected boundary conditions', () => {
@@ -274,12 +316,59 @@ function scriptedAdapter(host: HostKind, seen: string[], live = false): EvalAdap
 }
 
 describe('lane orchestration and artifacts', () => {
+  it('pins every independent probe, catalogue and frame read to the captured Result id', async () => {
+    for (const id of ['H1', 'D1']) {
+      const spec = EVAL_CASES.find((candidate) => candidate.id === id)!;
+      const reference = complete(spec);
+      const resultId = (reference.result as { resultId: string }).resultId;
+      const selectedReads: { command: string; input: Record<string, unknown> }[] = [];
+      const close = vi.fn(async () => undefined);
+      const remote: RemoteEngine = {
+        definitions: async () => ({ commands: [], queries: [], defs: {} }),
+        invoke: async (command, input) => {
+          if (command === 'query.capabilities') return {};
+          if (command === 'query.model') return reference.model;
+          if (command === 'query.journal') return reference.journal;
+          if (command === 'query.result') return reference.result;
+          selectedReads.push({ command, input });
+          // A latest-per-Step read could now resolve to a second solve with the SAME
+          // Model hash. The host refuses that ambiguity in this adversarial fixture.
+          expect(input['resultId']).toBe(resultId);
+          if (command === 'query.probe') return reference.probe;
+          if (command === 'query.frames') return reference.framesCatalogue;
+          if (command === 'query.frame') return reference.frames![Number(input['index'])];
+          throw new Error(`unexpected ${command}`);
+        },
+        close,
+      };
+      const provider: Provider = {
+        id: 'openai', models: ['scripted'],
+        async *chat() { yield { type: 'done', stopReason: 'stop' }; },
+      };
+      const evidence = await evaluateCase(remote, provider, 'scripted', spec, { maxTokens: 100, maxRounds: 1, timeoutMs: 1000 });
+      expect(evidence.result).toEqual(reference.result);
+      if (spec.measure.kind === 'probe') {
+        expect(selectedReads).toEqual([{ command: 'query.probe', input: { resultId, field: 'temperature', at: ['0.1 m', '0.01 m', '0.01 m'] } }]);
+        expect(evidence.probe).toEqual(reference.probe);
+      } else {
+        expect(selectedReads).toEqual([
+          { command: 'query.frames', input: { resultId } },
+          ...[0, 1, 2].map(index => ({ command: 'query.frame', input: { resultId, index } })),
+        ]);
+        expect(evidence.framesCatalogue).toEqual(reference.framesCatalogue);
+        expect(evidence.frames).toEqual(reference.frames);
+      }
+      expect(close).toHaveBeenCalledOnce();
+    }
+  });
+
   it('records nonmutating validation calls through the real Assistant tool loop', async () => {
     const queries = ['query.validateScript', 'query.journal', 'query.capabilities', 'query.model', 'query.result'].map((name): QueryDef => ({
       name,
       description: `${name} evaluation query. It provides enough detail for the scripted Assistant harness test.`,
       schema: { type: 'object', properties: { query: { const: name }, code: { type: 'string' } }, required: ['query'] },
       provider: 'engine',
+      execution: 'modelRead',
       tool: name === 'query.validateScript',
     }));
     let round = 0;

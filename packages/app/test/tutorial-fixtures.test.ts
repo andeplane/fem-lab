@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // A Node-only check (no DOM): every bundled `tutorials/*.json` and every example
 // `benches/journals/*.json` parses, every tutorial has the shape `types.ts` promises, and each
 // tutorial's `doIt` Commands, replayed in order through the wasm build, actually run — the same
@@ -16,7 +17,7 @@ const tutorialsDir = path.resolve(here, '..', 'tutorials');
 const journalsDir = path.join(root, 'crates', 'engine', 'benches', 'journals');
 
 const require = createRequire(import.meta.url);
-const wasm = require(path.join(root, 'tools', 'wasm-node', 'femlab_engine_wasm.js')) as {
+const wasm = batchModule(require(path.join(root, 'tools', 'wasm-node', 'femlab_engine_wasm.js'))) as {
   Engine: new (threads: number) => { replay_hashes(json: string, skipSolves: boolean, verify: boolean): Promise<string> };
 };
 
@@ -32,9 +33,9 @@ describe('tutorials/*.json', () => {
   const files = readdirSync(tutorialsDir).filter((f) => f.endsWith('.json'));
 
   it('bundles the four built-ins the PLAN promises plus one per procedure', () => {
-    expect(files.length).toBeGreaterThanOrEqual(9);
+    expect(files.length).toBeGreaterThanOrEqual(11);
     expect(TUTORIALS.map((t) => t.id).sort()).toEqual(
-      ['cantilever', 'heat-conduction', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat'].sort(),
+      ['cantilever', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'free-free-modal', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat', 'composite-block-shear', 'solve-cost-and-solvers', 'thermal-stress-chaining', 'steel-roof-truss', 'column-buckling', 'concrete-floor-slab'].sort(),
     );
     // every file in the folder is registered: adding one and forgetting the import fails here
     expect(files.map((f) => path.basename(f, '.json')).sort()).toEqual(TUTORIALS.map((t) => t.id).sort());

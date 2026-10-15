@@ -1,7 +1,7 @@
 // The Properties panel is generated from `engine.schema.json`, so this file is the reading of
 // that schema: one Command variant in, a list of typed fields out (design §Properties, brief
 // §5.3). Everything here is pure so `test/schema.test.ts` can walk every Command in the schema.
-import type { JsonSchema } from '@femlab/registry';
+import type { JsonSchema, ModelSummary } from '@femlab/registry';
 
 export type Defs = Record<string, unknown>;
 
@@ -15,6 +15,7 @@ const DIMENSIONS: Record<string, { si: string; exp: [number, number, number, num
   stress: { si: 'Pa', exp: [-1, 1, -2, 0] },
   density: { si: 'kg/m^3', exp: [-3, 1, 0, 0] },
   acceleration: { si: 'm/s^2', exp: [1, 0, -2, 0] },
+  velocity: { si: 'm/s', exp: [1, 0, -1, 0] },
   thermal_expansion: { si: '1/K', exp: [0, 0, 0, -1] },
   conductivity: { si: 'W/(m K)', exp: [1, 1, -3, -1] },
   specific_heat: { si: 'J/(kg K)', exp: [2, 0, -2, -1] },
@@ -22,6 +23,8 @@ const DIMENSIONS: Record<string, { si: string; exp: [number, number, number, num
   heat_flux: { si: 'W/m^2', exp: [0, 1, -3, 0] },
   heat_source: { si: 'W/m^3', exp: [-1, 1, -3, 0] },
   frequency: { si: 'Hz', exp: [0, 0, -1, 0] },
+  area: { si: 'm^2', exp: [2, 0, 0, 0] },
+  second_moment: { si: 'm^4', exp: [4, 0, 0, 0] },
   dimensionless: { si: '', exp: [0, 0, 0, 0] },
 };
 
@@ -71,6 +74,7 @@ function denull(node: JsonSchema, defs: Defs): JsonSchema {
     const keep = {
       ...(node['description'] === undefined ? {} : { description: node['description'] }),
       ...(node['x-dimension'] === undefined ? {} : { 'x-dimension': node['x-dimension'] }),
+      ...(node['x-physics'] === undefined ? {} : { 'x-physics': node['x-physics'] }),
     };
     if (live[0]) return resolve({ ...live[0], ...keep }, defs);
   }
@@ -78,6 +82,9 @@ function denull(node: JsonSchema, defs: Defs): JsonSchema {
   if (Array.isArray(type)) return { ...node, type: type.filter((t) => t !== 'null')[0] };
   return node;
 }
+
+export const MATERIAL_PHYSICS = ['stiffness', 'mass', 'thermal', 'expansion', 'plasticity', 'anisotropy'] as const;
+export type MaterialPhysics = typeof MATERIAL_PHYSICS[number];
 
 export interface FieldBase {
   /** Where the value lives in the Command object, e.g. `['mesher', 'size']`. */
@@ -87,6 +94,8 @@ export interface FieldBase {
   required: boolean;
   /** The right-aligned tag the design puts opposite the label. */
   tag: string;
+  /** Physics presentation group from the engine schema; common fields stay visible. */
+  physics?: MaterialPhysics | 'common';
 }
 export type Field = FieldBase &
   (
@@ -128,8 +137,12 @@ export function humanise(name: string): string {
 
 const enumOf = (node: JsonSchema): string[] | null => {
   if (Array.isArray(node['enum'])) return node['enum'] as string[];
+  if (typeof node['const'] === 'string') return [node['const']];
   const one = node['oneOf'] as JsonSchema[] | undefined;
-  if (one && one.every((v) => typeof v['const'] === 'string')) return one.map((v) => v['const'] as string);
+  if (one) {
+    const options = one.map(v => typeof v['const'] === 'string' ? [v['const'] as string] : enumOf(v));
+    if (options.every((v): v is string[] => v !== null)) return options.flat();
+  }
   return null;
 };
 
@@ -149,7 +162,7 @@ function field(name: string, raw: JsonSchema, defs: Defs, required: boolean, pat
     return { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: 'sketch', kind: 'sketch' };
   }
   const node = denull(resolve(raw, defs), defs);
-  const base: FieldBase = { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: '' };
+  const base: FieldBase = { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: '', ...(node['x-physics'] === undefined ? {} : { physics: node['x-physics'] as FieldBase['physics'] }) };
   const dimension = node['x-dimension'] as string | undefined;
   if (dimension) return { ...base, tag: dimensionTag(dimension), kind: 'quantity', dimension, parts: 1 };
 
@@ -382,25 +395,51 @@ export interface Blocker {
 const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.empty': { code: 'W-1000', text: 'Nothing to analyse yet. Add the first body.', fix: 'geometry.addBox' },
   'model.ill-posed': { code: 'W-1002', text: 'A Body and the idealisation disagree on dimension.', fix: 'model.setIdealisation' },
-  'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
-  'model.unconstrained': { code: 'W-1300', text: 'Nothing holds the body — six rigid body modes.', fix: 'constraint.fix' },
-  'model.unloaded': { code: 'W-1400', text: 'No load. A solve would return zeros.', fix: 'load.pressure' },
+  'model.no-material': { code: 'W-1101', text: 'A Body has no material assignment.', fix: 'material.assign' },
+  'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
+  'model.unconstrained': { code: 'W-1300', text: 'No active mechanical support.', fix: 'constraint.fix' },
+  'model.no-temperature-reference': { code: 'W-1301', text: 'Steady heat needs a temperature reference.', fix: 'constraint.temperature' },
+  'material.missing-property': { code: 'W-1103', text: 'An assigned material lacks a property needed by this Step.', fix: 'material.add' },
+  'model.unloaded': { code: 'W-1400', text: 'No driving load or prescribed value.', fix: 'load.pressure' },
   'model.no-step': { code: 'W-1500', text: 'No Step. A Step says what to solve.', fix: 'step.add' },
   'load.no-density': { code: 'W-2210', text: 'Gravity skips a body whose material has no density.', fix: 'material.add' },
 };
 const MESH: Blocker = { code: 'W-1200', text: 'No mesh. Pick a size and element; counts and cost show before you solve.', fixLabel: 'mesh.set', fixCmd: 'mesh.set', where: null };
 
+type ModelWarning = ModelSummary['warnings'][number];
+type SolveStep = Pick<ModelSummary['steps'][number], 'name' | 'procedure' | 'after'>;
+
 /**
  * Engine warnings → the design's blockers, in W-code order so the banner always names the next
  * missing thing. An engine warning with no mapping keeps its own code rather than disappearing.
  */
-export function blockers(warnings: { code: string; text: string; where?: string | null }[], hasMesh: boolean, hasBodies: boolean): Blocker[] {
+export function blockers(warnings: readonly ModelWarning[], hasMesh: boolean, hasBodies: boolean, steps: readonly SolveStep[] = []): Blocker[] {
   const mapped = warnings.map((w) => {
     const m = WCODES[w.code];
+    if (w.code === 'model.unloaded') {
+      const affected = steps.filter(s => w.step === s.name);
+      const active = affected.length > 0 ? affected : steps;
+      const heat = active.length > 0 && active.every(s => s.procedure === 'heat-steady' || s.procedure === 'heat-transient');
+      const fix = heat ? 'load.heatFlux' : m!.fix;
+      return { code: m!.code, text: w.text, fixLabel: fix, fixCmd: fix, where: w.where ?? null };
+    }
     return m
-      ? { code: m.code, text: m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
+      ? { code: m.code, text: ['model.no-material', 'model.unconstrained', 'model.no-temperature-reference', 'material.missing-property'].includes(w.code) ? w.text : m.text, fixLabel: m.fix, fixCmd: m.fix, where: w.where ?? null }
       : { code: w.code, text: w.text, fixLabel: '', fixCmd: '', where: w.where ?? null };
   });
   if (hasBodies && !hasMesh) mapped.push(MESH);
   return mapped.sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/** Solve only uses its target and predecessor chain; unscoped/unknown warnings stay global. */
+export function solveBlockers(model: (Pick<ModelSummary, 'meshSettings' | 'bodies'> & { warnings: readonly ModelWarning[]; steps: readonly SolveStep[] }) | null, target: string): Blocker[] {
+  const steps = model?.steps ?? [];
+  const required = new Set<string>();
+  for (let name: string | null | undefined = target; name && !required.has(name);) {
+    required.add(name);
+    name = steps.find(step => step.name === name)?.after;
+  }
+  const warnings = (model?.warnings ?? []).filter((warning: ModelWarning) =>
+    !warning.step || !steps.some(step => step.name === warning.step) || required.has(warning.step));
+  return blockers(warnings, Boolean(model?.meshSettings), (model?.bodies.length ?? 0) > 0, steps);
 }

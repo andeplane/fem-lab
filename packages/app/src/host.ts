@@ -1,21 +1,30 @@
+import type { AccountServices } from '@femlab/registry';
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, refOf, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
+
 import { z } from 'zod';
+import type { Command } from '@femlab/registry';
+import { loadTargets } from './loadTargets';
+import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
-import { choiceOf } from './fields';
-import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
+import { choiceOf, modeCount } from './fields';
+import type { Projects } from './projects';
 import type { ResultsView } from './results';
+import type { ResultComparison } from './result-comparison';
 import type { ScriptHost } from './script-host';
-import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
+import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
+import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
+import type { AbaqusIo } from '@femlab/registry';
+import { browserAbaqusIo } from './abaqus-files';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -26,6 +35,8 @@ import type { TransientInput } from './transient';
 export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
+  /** A nonempty surface has installed its actual bounds in this session's viewer. */
+  onBounds?: () => void;
   /** A scrub preview; only the final gesture is dispatched as a host Command. */
   previewTransient?: (input: TransientInput) => Promise<void>;
 }
@@ -40,12 +51,15 @@ async function fetchExample(name: string): Promise<string> {
   return res.text();
 }
 
-/**
- * The projects of this browser. Built by `makeHostContext`, because `project.open` replays a
- * Journal through the transport and `project.save` shoots the viewer, and neither exists at
- * import time; the three hooks below are what `main.tsx` needs and are safe to call before it.
- */
-let projects: Projects | null = null;
+async function fetchExampleMetadata(name: string): Promise<ActiveBenchmark> {
+  const res = await fetch(`${import.meta.env.BASE_URL}examples/index.json`);
+  if (!res.ok) throw new FemError('file.not-found', 'the bundled example index could not be read', name, 'reload the app and open Examples again');
+  const entry = ((await res.json()) as { examples?: ExampleEntry[] }).examples?.find((example) => example.name === name);
+  if (!entry || typeof entry.theory !== 'string' || typeof entry.expected?.reference !== 'string') {
+    throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
+  }
+  return attachComparison(entry);
+}
 
 export const autosave: Autosave = makeAutosave({
   // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
@@ -92,42 +106,20 @@ export function autosaveHistory(): AutosaveVersion[] {
 }
 
 
-/** A viewer screenshot cut down to a Recent card. `view.screenshot` renders at the canvas size
- *  and ignores `width`/`height`, so the downscale is a canvas draw here, not a screenshot option. */
-async function thumbnailOf(viewer: ViewerRef, width = 320, height = 180): Promise<string | null> {
-  const png = viewer.current?.screenshot();
-  if (!png || typeof document === 'undefined') return null;
-  const image = new Image();
-  image.src = png;
-  await image.decode();
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  ctx.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL('image/webp', 0.7);
+export interface SessionHostServices {
+  projects: Projects;
+  active(): Promise<void>;
+  replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
+  captureImport(): Omit<ReturnType<HostContext['abaqus']['capture']>, 'io'>;
 }
 
-/** `await primeProjects();` at boot, before the start screen needs its Recent list. */
-export async function primeProjects(): Promise<ProjectMeta[]> {
-  return (await projects?.prime()) ?? [];
-}
-
-/**
- * The boot hook proper: one line at the end of `main.tsx`'s `refresh()`, which already runs
- * after every journaled Command and has just re-read the Model and the Journal. With no project
- * open and a non-empty Journal this is what creates one (issue #41).
- */
-export function noteProject(name: string, entries: JournalEntry[], hash: string | null): void {
-  // Boot refreshes before any Command; an empty Journal is not a project yet (issue #48).
-  projects?.note(name, { entries }, hash);
-}
-
-/** Called before every Command that replaces the whole Model, so the next one forks a project. */
-export function forkProject(): void {
-  projects?.fork();
-}
+const missingSession = (): never => { throw new FemError('session.expired', 'this host has no captured project session'); };
+const unboundSession: SessionHostServices = {
+  active: missingSession, replay: missingSession, captureImport: missingSession,
+  projects: { prime: missingSession, list: missingSession, current: missingSession, new: missingSession,
+    open: missingSession, rename: missingSession, delete: missingSession, save: missingSession,
+    setEnabled: missingSession, enabled: missingSession, flush: missingSession },
+};
 
 export function makeHostContext(
   store: Store,
@@ -139,46 +131,38 @@ export function makeHostContext(
   save: Autosave = autosave,
   printPage: () => void = () => window.print(),
   captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment(),
+  _refresh: () => Promise<void> = async () => undefined,
+  session: SessionHostServices = unboundSession,
+  capture: AnimationCapture = new AnimationCapture(captureEnvironment),
+  abaqusIo?: AbaqusIo,
+  account?: AccountServices,
+  comparison?: ResultComparison,
 ): HostContext {
-  // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
-  // that ends on a solve comes back solved on screen rather than as a Model with no Result.
-  const replay = async (cmds: ShareCommand[]): Promise<void> => {
-    let solved: unknown = null;
-    for (const cmd of cmds) {
-      const ack = await transport.dispatch(cmd as never);
-      if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
-    }
-    if (solved) await results?.onAck(solved);
-  };
-  const own = makeProjects({
-    // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
-    // projects are then per-session, the start screen says so, and file.save is still there.
-    store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
-    replay,
-    reset: async (name) => void (await transport.dispatch({ cmd: 'model.new', name } as never)),
-    thumbnail: () => thumbnailOf(viewer),
-    initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
-    onError: (e) => console.warn('the project save failed', e),
-    onChange: () => store.set({ projects: own.list(), project: own.current() }),
-  });
-  projects = own;
-  const capture = new AnimationCapture(captureEnvironment);
+  const own = session.projects;
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
   };
   return {
+    account,
     transport,
+    ...(comparison ? { resultComparison: comparison } : {}),
+    abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {
-      fit: () => v().fit(),
-      setCamera: (c) => v().setCamera(c as CameraState),
-      preset: (p) => v().preset(p),
-      setProjection: (p) => v().setProjection(p),
-      showField: (f) => {
+      fit: () => comparison?.active ? comparison.preset('iso') : v().fit(),
+      setCamera: (c) => {
+        const viewer = v();
+        if (comparison) comparison.setCamera(c as CameraState); else viewer.setCamera(c as CameraState);
+      },
+      preset: (p) => comparison?.active ? comparison.preset(p) : v().preset(p),
+      setProjection: (p) => comparison?.active ? comparison.setProjection(p) : v().setProjection(p),
+      showField: async (f) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         return results?.showField(f as { field: string | null; component?: number | null });
       },
       setLegend: (l) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison legends require an explicit pane and Result', 'view.setLegend', 'view.setComparisonLegend');
         if (!results) {
           if (!l.colormap) return;
           store.set({ colormap: l.colormap as ColormapName });
@@ -188,40 +172,59 @@ export function makeHostContext(
         return results.setLegend(l as { colormap?: string; range?: [number, number] | 'auto' });
       },
       setDeformScale: (s) => {
+        if (comparison?.active) return comparison.setDeformScale(s);
         if (!results) return store.set({ deformScale: typeof s === 'number' ? s : 1 });
         v();
         results.setDeformScale(s);
       },
       setClip: (p) => {
         store.set({ clipOn: p !== null });
+        if (comparison?.active) return comparison.setClip(p ? { normal: p.normal, offset: p.offset } : null);
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
       toggle: (layer, on) => {
         const visible = v().setLayer(layer, on);
+        if (comparison?.active) comparison.viewers.right.current?.setLayer(layer, visible);
         store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
       },
       setVisible: (bodies, on) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison visibility requires an explicit pane and Result', 'view.setVisible', 'view.setComparisonVisible');
         v().setVisible(bodies, on);
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
-      highlight: (s) => viewer.current?.setHighlight(s),
+      highlight: (s) => { if (!comparison?.active) viewer.current?.setHighlight(s); },
+      hover: async (s) => {
+        const commit = store.beginHover();
+        const target = s.load
+          ? loadTargets((await transport.query({ query: 'query.definition', kind: 'load', name: s.load }) as { command: DefinitionCommand }).command, store.state.model)
+          : s;
+        commit({ bodies: target.bodies ?? [], faces: target.faces ?? [], sets: target.sets ?? [] });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
+        if (comparison?.active) comparison.viewers.right.current?.setTheme(t);
       },
-      animate: (a) => {
+      animate: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
         return results.animate(a);
       },
-      playTransient: (a) => {
+      playTransient: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
         return results.playTransient(a);
       },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
+        if (comparison?.active) {
+          const guard = comparison.captureGuard(), png = await composePaneImages(comparison.capture(o));
+          guard();
+          return { png };
+        }
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
@@ -229,9 +232,9 @@ export function makeHostContext(
         capture.run(async (record) => {
           const s = store.state;
           const mode = choiceOf(s.fieldKey).mode;
-          const modes = s.result?.frequencies?.length ?? 0;
+          const modes = modeCount(s.result);
           if (mode === undefined || mode < 1 || mode > modes) {
-            throw new FemError('export.unavailable', 'the selected field is not a mode in the current modal Result', 'file.export', 'solve a modal Step and select one of its mode fields');
+            throw new FemError('export.unavailable', 'the selected field is not a mode in the current Result', 'file.export', 'solve a modal or buckling Step and select one of its mode fields');
           }
           const target = v();
           const before = target.animationState();
@@ -251,10 +254,14 @@ export function makeHostContext(
     selection: {
       set: async (s) => {
         invalidateDefinition(store);
-        store.select(s);
-        const ref = s.refs?.[0];
-        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => `${candidate.kind}:${candidate.name}` === ref) : undefined;
-        if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
+        const { load, ...targets } = s;
+        store.select(targets);
+        const ref = load ? refOf('load', load) : s.refs?.[0];
+        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => candidate.ref === ref) : undefined;
+        if (item?.cmd === 'form.edit') {
+          const definition = await editDefinition(store, transport, item.args as DefinitionTarget);
+          if (definition && load) store.select({ ...targets, ...loadTargets(definition, store.state.model) });
+        }
         else if (item && !item.run) store.openForm(item.cmd, item.args);
       },
       clear: () => {
@@ -296,21 +303,39 @@ export function makeHostContext(
         }
       },
       stop: () => scripts?.stop(),
-      setSource: (code, append) => store.set({ scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code, tab: 'script' }),
+      setSource: (code, append) =>
+        store.set({
+          scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code,
+          scriptEditing: true,
+          tab: 'script',
+        }),
+      setEditing: (scriptEditing) =>
+        store.set({
+          scriptDraft: scriptEditing ? (store.state.scriptDraft ?? store.state.script) : store.state.scriptDraft,
+          scriptEditing,
+          tab: 'script',
+        }),
     },
-    // The drawer rebinds these the moment it mounts; until then they are no-ops, so a
-    // `chat.send` from a script or the palette never throws at a person. The `import()` keeps
+    // The drawer rebinds the bridge when it mounts; until then it buffers sends and references.
+    // Open it before inserting a reference so a first-use tree click mounts the consumer.
+    // The `import()` keeps
     // the two AI SDKs off the boot path: a static `chatBridge` import would drag `src/ai/**`,
     // and with it @anthropic-ai/sdk and openai, into the landing chunk.
     chat: {
-      send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
-      insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
-      setDraft: (text) => import('./ai').then((m) => m.chatBridge.setDraft(text)),
-      clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
+      send: (text) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.send(text); }),
+      insertMention: (ref) => import('./ai').then(async (m) => {
+        await session.active();
+        store.togglePanel('assistant', true);
+        return m.chatBridge.insertMention(ref);
+      }),
+      setDraft: (text) => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.setDraft(text); }),
+      clear: () => import('./ai').then(async (m) => { await session.active(); return m.chatBridge.clear(); }),
     },
     skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
+      beginSave: () => store.beginSave(),
+      markSaved: (journal) => store.markOpened(journal),
       pick: () =>
         new Promise<string>((resolve, reject) => {
           const input = document.createElement('input');
@@ -321,6 +346,19 @@ export function makeHostContext(
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
             if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
+          };
+          input.click();
+        }),
+      pickBytes: (accept) =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = accept;
+          input.onchange = () => {
+            const file = input.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_GEOMETRY_FILE_BYTES) return reject(new FemError('schema', 'the geometry file exceeds the 32 MiB import limit', 'picker', 'decimate the mesh in the tool that wrote it'));
+            file.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
           };
           input.click();
         }),
@@ -356,20 +394,7 @@ export function makeHostContext(
           throw new FemError('not-found', `autosave revision '${id}' was not found`, 'file.restore.id', 'query.autosaveHistory to choose an available revision, then call file.restore with its id');
         }
         if (!saved) return null;
-        // As with an example: a restored Journal that ends on a solve comes back solved on screen.
-        own.fork();
-        let solved: unknown = null;
-        await applyShared(
-          {
-            dispatch: async (cmd) => {
-              const ack = await transport.dispatch(cmd as never);
-              if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
-              return ack;
-            },
-          },
-          saved.cmds,
-        );
-        if (solved) await results?.onAck(solved);
+        await session.replay(saved.cmds);
         return { name: saved.name, at: saved.at, commands: saved.cmds.length };
       },
       autosave: () => ({ enabled: save.enabled(), saved: save.history()[0] ? summary(save.history()[0]!) : null }),
@@ -398,10 +423,13 @@ export function makeHostContext(
 
       info: () => null,
       readText: soon('the folder on disk', 'use file.open for now'),
+      readBytes: soon('the folder on disk', 'use geometry.importFile with the picker for now'),
       writeText: soon('the folder on disk', 'use file.save for now'),
       writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
-    examples: { fetch: fetchExample },
+    examples: { open: async (name) => {
+      return openExample(name, session);
+    } },
     ai: {
       setKey: (key, provider: AiProvider) => {
         storeKey(provider, key);
@@ -415,7 +443,37 @@ export function makeHostContext(
   };
 }
 
+/** Browser I/O stays in the host; the comparison controller supplies already-rendered panes. */
+async function composePaneImages(pngs: string[]): Promise<string> {
+  if (pngs.length === 1) return pngs[0]!;
+  const images = await Promise.all(pngs.map(png => new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = document.createElement('img');
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new FemError('internal', 'a captured comparison pane could not be decoded', 'query.screenshot'));
+    image.src = png;
+  })));
+  const canvas = document.createElement('canvas');
+  canvas.width = images.reduce((width, image) => width + image.naturalWidth, 0);
+  canvas.height = Math.max(...images.map(image => image.naturalHeight));
+  const context = canvas.getContext('2d');
+  if (!context) throw new FemError('unsupported', 'a 2D canvas is required to join comparison panes', 'query.screenshot');
+  context.fillStyle = '#0d0f13'; context.fillRect(0, 0, canvas.width, canvas.height);
+  let left = 0;
+  for (const image of images) { context.drawImage(image, left, 0); left += image.naturalWidth; }
+  return canvas.toDataURL('image/png');
+}
+
+/** Metadata and inputs are prepared before the session owner attempts activation. */
+export async function openExample(name: string, session: SessionHostServices) {
+  const benchmark = await fetchExampleMetadata(name);
+  const entries = JSON.parse(await fetchExample(name)) as { cmd: ShareCommand }[];
+  await session.replay(entries.map(entry => entry.cmd), benchmark);
+  return { name, commands: entries.length };
+}
+
 type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+type DefinitionCommand = Command;
+
 const definitionRequests = new WeakMap<Store, number>();
 
 function invalidateDefinition(store: Store): number {
@@ -425,28 +483,29 @@ function invalidateDefinition(store: Store): number {
 }
 
 /** Journal selection and form.edit share one request fence and the complete engine definition. */
-async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<void> {
+async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<DefinitionCommand | undefined> {
   const request = invalidateDefinition(store);
   const previousForm = store.state.form;
   const revision = store.state.revision;
-  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: DefinitionCommand };
   if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
   const { cmd, ...args } = command;
-  store.openForm(cmd, args);
+  store.openForm(cmd, args, false, target);
+  return command;
 }
 
 /**
- * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
- * mode segmented control, opening a bundled example that is a Journal rather than a saved
- * `femlab/1` file, and putting a Command into the Properties form without running it (every
+ * Shell Commands outside the shared registry include display controls, an example-open alias,
+ * and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
     {
       name: 'palette.resolve',
+      execution: 'sessionView',
       description: 'Prepare natural-language intent as editable engine Command previews using the configured Assistant provider. Never executes the proposed Commands. Ambiguity and missing parameters are shown for clarification before opening Properties.',
       schema: z.object({ text: z.string().min(1) }),
       tool: false,
@@ -470,24 +529,33 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'view.setMode',
-      description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Display only — the Model and the Journal are untouched and the mode survives every solve.',
+      execution: 'sessionView',
+      description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Geometry and Mesh show the current model; Results shows the selected retained Result mesh and its matching fields. Display only — the Model and the Journal are untouched.',
       schema: z.object({ mode: z.enum(['geometry', 'mesh', 'results']) }),
       tool: true,
-      run: (input) => {
+      run: async (input) => {
         const { mode } = input as { mode: ViewMode };
+        if (results) {
+          if (comparison && mode !== 'results') comparison.suspend();
+          await results.setMode(mode);
+          comparison?.resume();
+          return;
+        }
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
       },
     },
     {
       name: 'form.edit',
-      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      execution: 'sessionView',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities, optional parameters and object identity for chat references; Apply dispatches the returned upsert Command. Returns that Command only when this request opened the form; a superseded request returns no value. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
       run: (input) => editDefinition(store, transport, input as DefinitionTarget),
     },
     {
       name: 'chat.setDraft',
+      execution: 'sessionView',
       description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
       schema: z.object({ text: z.string() }),
       tool: true,
@@ -499,6 +567,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'form.pick',
+      execution: 'sessionView',
       description: 'Arm the next viewer face click to fill the explicit field path of an open Command form. `command` must name the currently open form; `field` names its argument path. This sets both the picking target and the form destination, without editing the Model or Journal.',
       schema: z.object({ command: z.string(), field: z.array(z.string().min(1)).min(1) }),
       tool: true,
@@ -510,16 +579,20 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'form.open',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
-      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
+      execution: 'sessionView',
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
       tool: true,
       run: (input) => {
-        const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
-        store.openForm(command, args ?? {}, keepInitial === true);
+        const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
+        store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);
+        if (command === 'file.importAbaqus') store.togglePanel('abaqus', true);
+        if (command === 'geometry.importStep') { store.togglePanel('stepReport', false); store.togglePanel('step', true); }
       },
     },
     {
       name: 'example.filter',
+      execution: 'workspace',
       description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
       schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
       tool: true,
@@ -530,25 +603,62 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'file.openExample',
-      description: "Open a bundled example by name (see the Examples panel). Its Journal is dispatched Command by Command onto the current Model, so you end up with the example's own Journal rather than an opaque file. Use query.model afterwards to see what it built.",
+      execution: 'replacement',
+      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, fit the viewer after the real bounds arrive, and establish the saved baseline only after a complete open. A camera pose adjustment made while loading is preserved.",
       schema: z.object({ name: z.string() }),
       tool: true,
-      run: async (input) => {
+      run: async (input, ctx) => {
         const { name } = input as { name: string };
-        const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
-        // An example that ends on solve.run opens solved, and a solved Model is shown as one:
-        // the last solve's Ack goes where the Solve button's would (results tab, contours).
-        let solved: unknown = null;
-        for (const e of entries) {
-          const ack = await transport.dispatch(e.cmd as never);
-          if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+        return ctx.examples.open(name);
+      },
+    },
+    {
+      name: 'file.compare',
+      execution: 'sessionView',
+      description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open or new Model.',
+      schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
+      tool: true,
+      run: async (input) => {
+        const current = store.beginJournalComparison();
+        const how = input as { json?: string; picker?: true };
+        const text = how.json ?? await new Promise<string>((resolve, reject) => {
+          const picker = document.createElement('input');
+          picker.type = 'file';
+          picker.accept = '.json,application/json';
+          picker.onchange = () => {
+            const file = picker.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            file.text().then(resolve, reject);
+          };
+          picker.addEventListener('cancel', () => reject(new FemError('file.not-found', 'no file was chosen', 'picker')), { once: true });
+          picker.click();
+        });
+        let file: { format?: unknown; journal?: unknown } | null;
+        try {
+          file = JSON.parse(text) as { format?: unknown; journal?: unknown };
+        } catch (e) {
+          throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'use file.save to write a comparable Model file');
         }
-        // The gallery has done its job; leaving it up hides the Model it just opened.
-        store.togglePanel('examples', false);
-        await refresh();
-        if (solved) await results?.onAck(solved);
-        return { name, commands: entries.length };
+        if (!file || typeof file !== 'object' || file.format !== 'femlab/1' || !file.journal || typeof file.journal !== 'object' || !Array.isArray((file.journal as { entries?: unknown }).entries)) {
+          throw new FemError('schema', 'the comparison file is not a femlab/1 file with a Journal', 'file', 'use file.save to write a comparable Model file');
+        }
+        const importedJournal = file.journal as Journal;
+        const diff = (await transport.query({ query: 'query.journalDiff', base: importedJournal })) as JournalDiff;
+        if (current(diff)) store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: structuredClone(importedJournal.entries) });
+        return diff;
       },
     },
   ] as HostDef[];
+}
+
+/** The current causal Journal comparison, exposed to the AI without exposing Store internals. */
+export function appHostQueries(store: Store): HostDef[] {
+  return [{
+    name: 'query.journalComparison',
+      execution: 'modelRead',
+    description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline, and a new Model clears it. Autosave does not select a baseline.',
+    schema: z.object({}),
+    tool: true,
+    run: () => store.refreshJournalComparison(),
+  }];
 }

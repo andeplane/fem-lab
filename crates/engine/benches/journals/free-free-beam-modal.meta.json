@@ -1,0 +1,20 @@
+{
+  "title": "Free-free beam, modal",
+  "tag": "P1 · verify",
+  "tags": [
+    "modal",
+    "free-free",
+    "rigid-body"
+  ],
+  "difficulty": 3,
+  "sentence": "The same rectangular-section cantilever as cantilever-modal, this time with no constraints at all — six zero-frequency rigid-body modes, then the beam's own bending frequencies.",
+  "expected": {
+    "quantity": "f₇ (first elastic mode)",
+    "value": 133.34,
+    "unit": "Hz",
+    "reference": "f = (β₁²/2π)√(EI/ρAL⁴), β₁ = 4.730041 (free-free)"
+  },
+  "theory": "A free body has six rigid-body modes — three translations, three rotations — that cost no elastic energy and so sit at zero frequency to within the eigen solver's own tolerance, never at a clean, repeated zero. `procedure: \"modal\"` is one of only two Steps (`explicit` is the other) that skips the rigid-mode well-posedness check a `static` Step enforces, because an unconstrained body is a legitimate model, not a mistake. The first real mode bends the beam: for a free-free prismatic beam $f_n = \\frac{\\beta_n^2}{2\\pi}\\sqrt{EI/(\\rho A L^4)}$ with $\\beta_1 = 4.730041$, a different constant from the clamped-free beam's $1.8751$ because the boundary conditions differ, not the formula.",
+  "tutorial": "free-free-modal",
+  "thumbnail": null
+}

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  define: { __DEV_API_KEYS__: 'null' },
+  define: { __DEV_API_KEYS__: 'null', __FIREBASE_CONFIG__: 'null', __AI_API_ORIGIN__: 'null', __GOOGLE_SIGN_IN__: 'false', __HOSTED_AI__: 'false' },
   test: {
     environment: 'happy-dom',
     include: ['test/**/*.test.{ts,tsx}'],
@@ -14,7 +14,7 @@ export default defineConfig({
       exclude: ['**/*.d.ts'],
       reporter: ['text', 'json-summary', 'html'],
       // #44: the measured baseline. Raise these with coverage gains; never lower them.
-      thresholds: { lines: 68.31, statements: 67.19, functions: 61.96, branches: 67.03 },
+      thresholds: { lines: 82.5, statements: 79.76, functions: 74.7, branches: 76.43 },
     },
   },
 });

@@ -111,7 +111,7 @@ landing pages render. Cornell SimCafe lives under the Confluence space key `SIMU
 | 49 | [In-Plane and Space Truss](https://www.comsol.com/model/in-plane-truss-8526) | Truss elements (axial force only), linear static, 2D and 3D | **cannot** — no truss elements |
 | 50 | [Pratt Truss Bridge](https://www.comsol.com/model/pratt-truss-bridge-8511) | 3D beam elements for the members, shell deck, linear static, distributed load | **cannot** — no beam elements, no shells |
 | 51 | [Necking of an Elastoplastic Metal Bar](https://www.comsol.com/model/necking-of-an-elastoplastic-metal-bar-12607) | Large-strain plasticity with nonlinear isotropic hardening, axisymmetric bar, tension to necking | **cannot** — no plasticity, no geometric nonlinearity |
-| 52 | [Pressurized Orthotropic Container](https://www.comsol.com/model/pressurized-orthotropic-container-12669) | Thin-walled vessel, internal pressure, Hill orthotropic plasticity | **cannot** — no orthotropic material, no plasticity |
+| 52 | [Pressurized Orthotropic Container](https://www.comsol.com/model/pressurized-orthotropic-container-12669) | Thin-walled vessel, internal pressure, Hill orthotropic plasticity | **partly** — orthotropic elasticity shipped with #68; still needs Hill plasticity (#60) |
 | 53 | [Steady-State 2D Axisymmetric Heat Transfer with Conduction](https://www.comsol.com/model/steady-state-2d-axisymmetric-heat-transfer-with-conduction-453) | Pure steady conduction, axisymmetric, NAFEMS thermal benchmark | **can do** — `axisymmetric` + `mesh.set{mapped}` + `constraint.temperature` + `step.add{heat-steady}` |
 
 ### NAFEMS benchmark collections
@@ -149,10 +149,10 @@ against the official `FreeCAD/FreeCAD-documentation` markdown mirror of the same
 
 | # | Tutorial | Physics / features needed | FEM Lab status |
 |---|---|---|---|
-| 67 | [step-8: The Elasticity Equations](https://dealii.org/current/doxygen/deal.II/step_8.html) | Vector elasticity (FESystem), body force, adaptive refinement driven by a Kelly error estimator | **partial** — the elasticity and `load.gravity` are there; refinement is uniform (`study.converge`), not error-estimator-driven |
+| 67 | [step-8: The Elasticity Equations](https://dealii.org/current/doxygen/deal.II/step_8.html) | Vector elasticity (FESystem), body force, adaptive refinement driven by a Kelly error estimator | **can do** — linear-simplex elasticity and `load.gravity` with ZZ error-estimator-driven `study.adapt` (#83); the estimator differs from the tutorial’s Kelly indicator |
 | 68 | [step-18: The quasistatic elasticity equations with large deformations](https://dealii.org/current/doxygen/deal.II/step_18.html) | Quasistatic large-deformation elasticity, Lagrangian mesh update, incremental stress with rotation correction | **cannot** — no geometric nonlinearity |
 | 69 | [step-44: Nonlinear Solid Mechanics (three-field formulation)](https://dealii.org/current/doxygen/deal.II/step_44.html) | Compressible neo-Hookean, quasi-incompressible, three-field (u, p̃, J̃) mixed formulation, Newton–Raphson | **cannot** — no hyperelasticity, no geometric nonlinearity, no mixed u/p element |
-| 70 | [step-26: The heat equation](https://dealii.org/current/doxygen/deal.II/step_26.html) | Transient conduction by the θ-scheme, adaptive refinement and coarsening coupled to time stepping | **partial** — `step.add{heat-transient, theta}` is the same θ-scheme (and the `transient-heat` tutorial teaches it); the time-coupled adaptivity is missing |
+| 70 | [step-26: The heat equation](https://dealii.org/current/doxygen/deal.II/step_26.html) | Transient conduction by the θ-scheme, adaptive refinement and coarsening coupled to time stepping | **partial** — the θ-scheme and final-field spatial `study.adapt` are available (#83); refinement/coarsening coupled to individual time steps is tracked in #479 |
 | 71 | [Elasticity using algebraic multigrid](https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_elasticity.html) (DOLFINx demo) | 3D linear elasticity, near-nullspace rigid body modes, CG with an AMG preconditioner, von Mises post-processing | **can do** — `static` + `solve.run{solver: 'gpu-pcg' or 'cpu-pcg'}` + `query.cost`; the preconditioner is Jacobi rather than AMG (PLAN 2.2), so the stiffest cases converge more slowly |
 
 ### SimScale
@@ -173,7 +173,7 @@ CATI are SOLIDWORKS resellers and training centres publishing the equivalent wri
 | # | Tutorial | Physics / features needed | FEM Lab status |
 |---|---|---|---|
 | 77 | [Using Symmetry in SOLIDWORKS Simulation Studies](https://www.goengineer.com/blog/using-symmetry-solidworks-simulation-studies) | Planar symmetry fixtures for half / quarter / eighth models, cyclic symmetry, mirrored loads, reading the full model back from the reduced one | **partial** — `constraint.symmetry` covers the planar cases (the `symmetry-and-2d` tutorial teaches them); cyclic symmetry is missing |
-| 78 | [SOLIDWORKS Is Discontinuing Adaptive Meshing – What Does This Mean?](https://www.goengineer.com/blog/solidworks-discontinuing-adaptive-meshing) | h-adaptive vs p-adaptive convergence, migration to manual curvature-based meshing | **partial** — `study.converge` is the h-study and `mesh.set{order}` is the p-switch; there is no error-estimator-driven adaptive loop |
+| 78 | [SOLIDWORKS Is Discontinuing Adaptive Meshing – What Does This Mean?](https://www.goengineer.com/blog/solidworks-discontinuing-adaptive-meshing) | h-adaptive vs p-adaptive convergence, migration to manual curvature-based meshing | **can do** — `study.adapt` adds a ZZ-driven h-adaptive loop for linear simplices (#83); `study.converge` and `mesh.set{order}` retain the manual h-study and p-switch |
 | 79 | [How Do I Complete a Simulation Fatigue Analysis in SOLIDWORKS?](https://www.cati.com/blog/how-do-i-complete-a-simulation-fatigue-analysis-in-solidworks/) | Fatigue study linked to a base linear static study, S-N curve on the material, load-cycle definition (fully reversible / zero-based / load ratio), life and damage-percentage plots | **cannot** — no S-N material data, no load-cycle definition, no fatigue post-processing |
 
 ### Autodesk Fusion (Simulation)
@@ -235,13 +235,14 @@ temperature fields instead of one field to `tInf`. Small on its own, meaningless
 
 **4. Shell elements — 13 tutorials.**
 Tutorials 4, 6, 7, 10, 25, 34, 38, 41, 47, 50, 52, 56, 65.
-Scope: PLAN 8.1's MITC4 quadrilateral shell with a section carrying thickness, plus the
-geometry/mesher path to produce a surface mesh (the `mapped` mesher already emits quads; what is
-missing is placing them in 3D and giving nodes rotational DOFs). Adds three DOFs per node, a
-drilling-DOF decision, and a new output set (top and bottom surface stress, moments). The gates
-are already written: BENCHMARKS G1–G7 (simply-supported plate, Scordelis–Lo, LE3 hemisphere, LE2
-cylindrical patch, LE5 Z-section, FV12 modal, pinched cylinder). The largest single piece of work
-in this list, and the one that turns "solid parts" into "structures".
+Implemented in #64: `shell4` has six DOFs per node, flat/cylindrical/spherical surface
+patch meshing, homogeneous thickness and laminate sections, applied moments, and unaveraged
+top/bottom stress and bending moments. ADR 0024 records the director formulation and drilling
+penalty, including its sensitivity study. BENCHMARKS G1–G7 exercise the simply supported plate,
+Scordelis–Lo, LE3 hemisphere, LE2 cylindrical patch, LE5 Z-section, FV12 modal plate and pinched
+cylinder on multiple meshes. G8 adds laminate membrane/bending coupling, ply-face stress,
+thermal mismatch and modal convergence. These are small-strain shells; nonlinear shell collapse
+and shell-to-solid coupling remain separate capabilities.
 
 **5. Beam elements — 8 tutorials.**
 Tutorials 5, 11, 12, 20, 28, 35, 42, 50.
@@ -304,10 +305,19 @@ consumer-product engineers actually simulate.
 
 **12. Composites, orthotropic and layered materials — 4 tutorials.**
 Tutorials 34, 47, 52, 56.
-Scope: PLAN 8.5 (orthotropic elasticity with an orientation) plus, for laminates, a layered
-section on top of #4. Two separable issues: an orthotropic *solid* material with an orientation
-is self-contained and useful alone (wood, rolled steel, 3D-printed parts); layered-shell
-lamination theory needs shells first.
+The orthotropic *solid* half **shipped** with #68: `material.add` takes an `orthotropic` block of
+nine constants and an axis-and-angle `orientation`, with per-material-axis `alpha` and `k`, so
+wood, rolled steel, printed parts and a unidirectional lamina are analysable today (benchmarks
+A11–A15 and C10). Tutorial 52 additionally needs Hill orthotropic plasticity (#60).
+The shell laminate path is implemented in #64: `section.add` accepts a bottom-to-top list of
+plies with individual material, thickness and angle; `section.assign` supplies a reference
+axis. The section integrates each ply's rotated constitutive law, thermal strain and density,
+including extension–bending coupling and eccentric mass. Both faces of every ply are retained
+as `stressPly:<1-based index>:bottom` and `:top`, so an interface can carry distinct stresses.
+BENCHMARKS G8 checks these against classical laminate integrals and analytical solutions.
+This is an equivalent-single-layer MITC4 displacement field with per-ply integration, not
+independent layerwise displacement kinematics. Stacked solid laminates and independent
+layerwise kinematics remain outside this implementation (#347).
 
 **13. Temperature-dependent properties — 1 tutorial.**
 Tutorial 23.
@@ -449,11 +459,13 @@ stair-steps — which is why it is worth filing independently.
 
 **31. Error-estimator-driven adaptive refinement — 3 tutorials.**
 Tutorials 67, 70, 78.
-Scope: a Zienkiewicz–Zhu or Kelly estimator as a field, then a `study.adapt` that refines where
-the estimated error is large and iterates to a target. `study.converge` already owns the
-re-mesh / re-solve / report loop, so the new parts are the estimator field and a size-field-capable
-mesher (#30). It is also the honest answer to "is my mesh good enough *here*?", which
-`study.converge` currently answers only globally.
+Implemented by #83: `errorEstimate` is a per-element ZZ energy-error field and
+`study.adapt` uses bulk marking to add local size boxes, re-mesh, re-solve, and report progress
+toward a relative-error target. Linear tri3/tet4 planar/3D static and thermal Steps are supported;
+`mesh.set.refinement` exposes the same size field. Journal entries preserve the chosen regions
+for deterministic replay. The base mesh still controls curved-boundary geometry error.
+Transient heat adapts the final spatial field by repeating the complete Step, so tutorial 70’s
+within-time-step refinement/coarsening remains outside this capability and is tracked in #479.
 
 ### Post-processing and UX
 

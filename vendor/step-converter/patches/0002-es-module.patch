@@ -1,0 +1,12 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -315,6 +315,9 @@
+ 	target_compile_options (OcctImportJS PUBLIC -fwasm-exceptions)
+ 
+ 	target_link_options (OcctImportJS PUBLIC -sMODULARIZE=1)
++	# FEM Lab #351, 2026-10-15: independently replaceable ES module for Worker/Node.
++	target_link_options (OcctImportJS PUBLIC -sEXPORT_ES6=1)
++	target_link_options (OcctImportJS PUBLIC -sENVIRONMENT=web,worker,node)
+ 	target_link_options (OcctImportJS PUBLIC -sEXPORT_NAME='occtimportjs')
+ 	target_link_options (OcctImportJS PUBLIC -sSTACK_SIZE=10MB)
+ 	target_link_options (OcctImportJS PUBLIC -sALLOW_MEMORY_GROWTH=1 --no-heap-copy)

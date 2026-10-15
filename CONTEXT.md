@@ -5,6 +5,40 @@ named, typed command, so a script or an AI can do anything a person can. This gl
 the vocabulary the docs, the code and the AI's tool descriptions share. Definitions say what
 a thing *is*; how it is implemented lives in the ADRs and the plan.
 
+## Execution ownership
+
+**Session**:
+One activation of one Model in a runtime. New, open and import create a fresh identity even
+when the saved bytes or project name are identical. A producer is bound to that activation;
+its Commands cannot silently follow a later active Model. Ownership is checked by SessionOwner; see [the session host contract](docs/session-host-contract.md) and issues #380–#385.
+
+**StateVersion**:
+A monotonic counter of committed observable engine state within the runtime. It advances for
+undo, redo and repeated solves, independently of Journal length and Model/Result hashes.
+
+**Run**:
+One revocable producer of operations, such as a Script or Assistant turn, bound to a Session.
+Child operations inherit its identity. An intentional successful replacement may advance only
+the initiating Run to the new Session.
+
+**BackendEpoch**:
+The identity of one issuing runtime incarnation, supplied by its host. Restarted or replaced
+runtimes issue fresh epochs; reconnecting never rebinds an old operation automatically.
+
+**Operation**:
+One finite read, write or control request within a Run, carrying its own operation id. Replies,
+errors and progress retain the request’s execution identity.
+
+**Project binding**:
+A captured persistence destination and generation. Its immutable save jobs carry a Session,
+StateVersion and ModelFile; switching or deleting projects cannot redirect an old save.
+
+**Prepared candidate**:
+A private replacement whose replay, validation, first snapshot and complete saved-file
+UTF-8 byte bound have succeeded. Only its captured owner ticket can authorize publication.
+Its retained file bytes use the injected host's exact save formatter; see
+[ADR 0027](docs/adr/0027-prepared-model-file-byte-bound.md).
+
 ## The model
 
 **Model**:
@@ -13,14 +47,26 @@ sections, constraints, loads, steps and output requests. One document, one file.
 _Avoid_: project, scene, case, deck, job
 
 **Geometry**:
-The shapes being analysed, defined by a script of primitives and booleans and independent of
-any mesh.
+The shapes being analysed, defined by a script of primitives, sketches, booleans or imported
+triangles, independently of the finite-element Mesh. Solid evaluation produces a tagged
+triangle boundary; the Shape tree retains primitive and sketch parameters.
 _Avoid_: CAD, part file, solid model
+
+**B-rep**:
+A CAD boundary representation of surfaces, curves and their topology. The current analysis
+Model does not retain arbitrary imported B-rep or CAD feature history. General exact CAD
+editing is deferred under [ADR 0030](docs/adr/0030-exact-cad-editing-is-deferred-and-replay-stays-portable.md).
+
+**CAD hollowing**:
+Offsetting a solid's boundary and opening selected faces to form a wall of a chosen thickness;
+also called a CAD shell operation. It is distinct from the finite-element **Shell** below.
 
 **Body**:
 One connected region of the geometry, carrying a material and a name. Explicit Bodies own
-Shapes; mapped and swept mapped meshers own an implicit Body with the same rename and
+Shapes; mapped, swept mapped and shell surface meshers own an implicit Body with the same rename and
 guarded-removal lifecycle (ADR 0016). A free mesher references an explicit Body.
+Bodies, cuts, named Sets and point masses share a geometry namespace: a name has one owner,
+so removal is unambiguous. Reissuing a definition replaces only the same kind of owner.
 _Avoid_: part, instance, solid, volume
 
 **Face**:
@@ -39,20 +85,88 @@ derived object, never edited by hand.
 _Avoid_: grid, discretisation
 
 **Element**:
-One finite element: a connectivity and a type (hex8, tet4, tet10, ...).
+One finite element: a connectivity and a type (hex8, tet4, tet10, ...). A line Body's
+elements are members: a truss (`truss2`, axial force only) or a beam.
 _Avoid_: cell, zone
 
+**Beam**:
+A two-node Timoshenko member (`beam2`): axial force, shear, bending about two axes and St
+Venant torsion, so its joints carry three rotations `rx, ry, rz` as well as the three
+displacements. A Mesh with a beam Body has six unknowns per node; on nodes no beam reaches the
+rotations are *inert* (no stiffness, no mass, dropped from the free set) so a solid next to a
+beam answers exactly as it does alone. The section's local z (its height) follows the
+`orientation` axis of `section.assign` or the default rule (global Z, global X for a
+vertical member); local y closes the right-handed triad.
+_Avoid_: frame element, bar (that is a truss), B31
+
+**Shell**:
+A four-node MITC4 midsurface element (`shell4`) with three displacements and three
+rotations per node. A shell Section supplies its thickness; a director at each
+corner identifies the positive (top) side. Transverse shear uses mixed covariant
+interpolation so thin plates do not shear-lock. A small drilling penalty couples
+rotation about the normal to the surface's in-plane spin (ADR 0024). Top and bottom
+stress refer to offsets of plus and minus half the thickness from the midsurface.
+The `stressTop` and `stressBottom` fields retain global Cartesian stresses per
+element node. `shellMoment` is the stress first moment `∫ z σ dz`, in global
+tensor components and N (moment per unit width), positive for tension on the top
+side. It also remains per element node. The `surface` mesher owns an implicit Body and joins bilinear,
+cylindrical or spherical patches while preserving separate directors at creases.
+
+**Laminate section**:
+A perfectly bonded stack of shell plies, ordered bottom to top and centred on the
+meshed midsurface. Each ply references a Material and supplies a thickness and
+angle. Its material axes follow the shell surface, with an optional projected
+reference axis from `section.assign`. Ply materials replace the Body material.
+The common MITC4 displacement field integrates each ply separately, preserving
+extension–bending coupling, thermal mismatch and eccentric mass (ADR 0024).
+`stressPly:k:bottom` and `stressPly:k:top` retain separate global stresses on
+each ply face, with k counting from 1 at the bottom. The fields use the same
+unaveraged element-node layout as outer shell stresses and carry zeros on
+elements without that ply.
+
+**Section force**:
+The resultant a beam carries across a cut, per member end: `N, V_y, V_z` (the `sectionForce`
+field) and `T, M_y, M_z` (`sectionMoment`), in the member's local axes, positive as the far side
+of the cut acts on the near side, right-handed about the local axes. Per element node, never
+averaged across a joint.
+_Avoid_: internal force, stress resultant, BMD/SFD
+
 **Material**:
-A named constitutive description with SI properties (density, Young's modulus, ...).
+A named elastic or thermal description with SI properties (density, Young's modulus,
+conductivity, ...). Heat-only Materials need positive conductivity and omit elastic stiffness;
+transient heat also needs positive density and specific heat. Mechanical Steps require elastic
+stiffness on every assigned Material, including laminate plies.
 _Avoid_: mat, property card
 
+**Physics group**:
+A schema-declared group of Material properties shown together in Properties: stiffness,
+mass, thermal, expansion, plasticity or anisotropy. Common identity and provenance fields
+always show. A group changes the form's presentation, while its complete Material definition
+remains one Command and one Journal entry. Procedure metadata names the groups and properties
+an analysis can consume, including optional laws and alternative stiffness descriptions.
+See [ADR 0025](docs/adr/0025-schema-conditional-forms.md).
+_Avoid_: material type, separate thermal material
+
 **Constraint**:
-A prescribed kinematic condition on a Set: fixed, roller, prescribed displacement, tie.
-_Avoid_: BC, boundary condition, support, fixture, restraint
+A prescribed kinematic condition on a Set: fixed, roller, prescribed displacement, tie. On a
+beam joint a *clamp* (`constraint.fix` with no rotation named) holds all six DOFs and a *pin*
+(`constraint.pin`) the three displacements only; a symmetry plane holds its normal displacement
+and the two rotations in the plane.
+_Avoid_: BC, boundary condition, support, fixture, restraint, encastre
+
+**Contact**:
+A connection between two face Sets of different Bodies, made by `contact.add`: *bonded* ties every
+slave node to the master point it projects onto and behaves as one part; *frictionless* lets the
+faces press, open and slide — a slave node within the search distance is held on the master surface
+only while the normal force there is compressive, and transmits nothing along it. Both are applied
+by elimination, never by a penalty spring, and a contact is listed in a Step's constraints like a
+Constraint. The *active set* is the set of slave nodes currently held; the Result reports it as an
+active fraction and a `contactPressure` field.
+_Avoid_: interaction, glue, tie (that is the bonded kind), gap element
 
 **Load**:
-A prescribed force-like condition on a Set: pressure, traction, point force, body force,
-gravity, thermal load.
+A prescribed force-like condition on a Set: pressure, traction, point force, moment (on beam
+joints), body force, gravity, thermal load.
 _Avoid_: BC, forcing, excitation
 
 **Step**:
@@ -61,10 +175,24 @@ Constraints, Loads and output requests active in it. Steps run in order and may 
 state.
 _Avoid_: study, case, stage, load case, job
 
+**Damping ratio**:
+The fraction ζ of critical damping a mode carries, applied as Rayleigh damping
+`C = αM + βK` under the hood: an implicit Step's `rayleighAlpha`/`rayleighBeta` read directly
+as α and β, and a harmonic Step's `dampingRatio` (one value, every mode) or `dampingRatios`
+(one value per mode, the last held for any mode past the end) convert to `ζ_k = α/(2ω_k) +
+βω_k/2` and add to it. ζ = 1 is critical damping; the schema refuses ζ ≥ 1.
+_Avoid_: damping factor, loss factor, Q, viscosity
+
 **Result**:
 The fields (displacement, stress, temperature, mode shapes) a Step produced, tied to the
 Mesh it ran on and to the Model revision it came from.
 _Avoid_: output, odb, solution
+
+**Static equilibrium ledger**:
+Retained SI force and moment accounting for a linear Cartesian static Result.
+All moments include force lever arms and rotational couples about the first
+retained Mesh node. Force and moment residuals have separate dimensioned scales
+and report verdicts; a force pass alone does not prove angular equilibrium.
 
 **Frame**:
 One retained primary nodal field at a physical time in a transient Result. Frame indices count
@@ -92,6 +220,11 @@ _Avoid_: action, operator, mutation, method
 A named, schema-typed read of the Model, Mesh or Result that changes nothing. Queries are
 what let a script or an AI observe before deciding.
 _Avoid_: getter, probe, inspect
+
+**Result-validity fingerprint**:
+An internal hash of Model parameters with only the display name excluded. It determines
+whether a cached Result is stale. Full Model and Journal hashes still include the name for
+saved-file and replay identity ([ADR 0017](docs/adr/0017-result-validity-and-document-identity.md)).
 
 **Journal**:
 The ordered list of Commands applied to a Model since it was created. Replaying the Journal
@@ -149,3 +282,91 @@ _Avoid_: example, demo, validation case, verification case
 **Convergence study**:
 The same Benchmark run at several mesh sizes to show the error shrinks at the expected
 rate. A Benchmark that only passes at one mesh size is not a Benchmark.
+
+
+## Retained solve instances
+
+An immutable **Result record** owns one successful solve's Step, revision, Model identity,
+Result-input fingerprint, Model metadata, exact BuiltMesh and StepResult. Its opaque Result id
+is local to the Engine instance. Equal-input re-solves have different ids; ids are not recycled
+on Model new/import/replay. Those operations clear records. The eight most recent successful
+records are retained, oldest first; reads do not pin records and failures do not evict them.
+`query.results` reports the catalogue, limit and scoped payload accounting. Field/history and
+mesh numeric payload bytes and serialized Model metadata bytes are separate measurements,
+not a measured allocator or process peak.
+
+`resultId` on Result, field, probe, path and frame Queries selects that solved context, including
+its mesh and display units, even after edits. The default per-Step selection retains existing
+stale-field safeguards. A supplied Step must match the id. Missing/evicted ids are errors;
+old values are never attached to current geometry. The existing FrameSample time/index rules
+remain canonical. See ADR0018 and issue #280.
+
+**Adaptive refinement study**:
+`study.adapt` solves a Step, estimates local spatial error through ZZ recovery,
+and refines the largest contributions until a target or iteration limit. Its
+Journal entry records geometric refinement regions so replay reconstructs the
+same mesh without making new numerical decisions. `errorEstimate` contains one
+dimensionless contribution per element; the sum of their squares equals the
+squared global relative estimate. The viewer colours each element without nodal
+interpolation; `query.probe` returns the containing element’s constant value. The
+Results tab lists each adaptive solve and whether the requested target was reached.
+This is an error indicator, not a certified bound. See [ADR 0023](docs/adr/0023-adaptive-refinement-records-local-size-fields.md).
+
+**Random vibration**:
+A stationary, zero-mean response to a spatial Load pattern multiplied by one random process.
+A `randomVibration` Step consumes a current modal Result through `after`, with identical
+Constraints. Its `psd` knots carry frequency and the one-sided density of that dimensionless
+multiplier (1/Hz, equivalently seconds); physical force units and amplitudes belong to the
+Loads. Density is piecewise linear and zero outside the supplied band. Positive damping is
+required for every mode. The Result's displacement and stress components are 1σ standard
+deviations, not a signed equilibrium field. Beam stresses are the largest standard deviation
+among the four extreme fibres at each member end, with cross-modal correlation retained until
+after integration. Von Mises and principal stress are nonlinear quantities and are not
+reported as standard deviations of the componentwise RMS tensor.
+
+**Imported source** — Immutable, labelled finite-element connectivity and exact memberships
+owned by an imported Mesher in the Model. Command coordinates carry length units; stored
+coordinates are SI. Original labels distinguish coincident nodes; dense Mesh indices are
+only a deterministic mapping of participating nodes. Unused labels remain in the source
+and exact memberships, are explicitly reported, and have no FE DOFs or Result values. Replacing the source is `mesh.set`, never editing a
+mesh cache or individual generated Set. Optional disjoint element regions are editable Body
+identities over shared connectivity: their material/section overrides live on the Model and
+otherwise inherit the source owner assignment. The source owner retains aggregate identity
+and the qualified source Set namespace. Disconnected components retain distinct labels.
+Optional provenance maps global labels to original instance/part-local labels and records
+supplied-file hashes. See ADR 0026, ADR 0035 and issues #501/#652.
+
+**STEP geometry conversion** — A host-only, on-demand conversion of declared-unit STEP
+surfaces to one tessellated geometry Body at explicit physical deflections. The checked
+Journal stores an ordinary `geometry.import` carrying SI-scaled ASCII triangles; replay
+needs neither the original STEP file nor OCCT. The conversion receipt is transient host
+state, not a second model definition. This differs from **Imported source**, which is
+authored FE connectivity and exact membership owned by an imported Mesher. Exact B-rep,
+CAD history, original face identifiers and CAD material assignments are not retained by
+STEP conversion. Durable face targets use geometric predicates. See ADR 0029 and #351.
+
+## Hosted AI accounts
+
+**Account** — One verified Firebase identity mapped to service-owned status, entitlements
+and billing. It is not an engine Model, Session or Journal entry.
+
+**Merchant mode** — The explicit `pending`, `direct` or `managed` route for new paid
+purchases. It is independent of tax collection mode and does not convert an existing
+subscription. Pending cannot enable Checkout. See ADR 0032.
+
+**Purchase use** — An explicit personal/business choice for a new paid subscription,
+fixed for that subscription and preserved across tier changes. Catalog aliases map
+each use to the same tier allowance. It is independent of a tax ID. See ADR 0033.
+
+**AI token credit** — A versioned billing unit weighted by model and token category,
+separate from a raw LLM token or the browser's supplier-cost estimate.
+
+**Usage reservation** — An atomic hold against an Account's allowance and service
+supplier-cost budget before one provider round. It becomes a confirmed debit or
+pending reconciliation; losing the browser stream does not erase it. See ADR 0028.
+
+**Mean dilatation (`mean-dilatation`)** is the explicit small-strain Hex8 B-bar
+formulation: eight-point integration with physical-volume-averaged volumetric strain.
+It preserves deviatoric/shear strain and uses the ordinary material extension point.
+Abaqus C3D8 imports select it; other supported source kinds retain full integration.
+Existing `full` Journals keep pointwise full integration. See ADR 0034.

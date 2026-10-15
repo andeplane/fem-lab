@@ -1,5 +1,5 @@
-/** A ref is `<kind>:<name>`; `face` is a Set of kind face, kept as its own word because that is what people say. */
-export const MENTION_KINDS = ['body', 'face', 'set', 'material', 'constraint', 'load', 'step', 'result', 'journal', 'file'] as const;
+/** A ref is `<kind>:<name>`; quote names with JSON strings when they contain separators. */
+export const MENTION_KINDS = ['body', 'face', 'set', 'material', 'constraint', 'load', 'step', 'mesh', 'result', 'journal', 'file'] as const;
 export type MentionKind = (typeof MENTION_KINDS)[number];
 
 export interface Chip {
@@ -8,11 +8,25 @@ export interface Chip {
   name: string;
 }
 
-const KINDED = new RegExp(`@(${MENTION_KINDS.join('|')}):([^\\s,;)]+)`, 'g');
+const NAME = '("(?:\\\\.|[^"\\\\])*"|[^\\s,;()"\\\\]+)';
+const KINDED = new RegExp(`@(${MENTION_KINDS.join('|')}):${NAME}`, 'g');
+const SINGLE = new RegExp(`^(${MENTION_KINDS.join('|')}):${NAME}(?![\\s\\S])`);
 const SELECTION = /@selection\b/;
 
 export function refOf(kind: MentionKind, name: string): string {
-  return `${kind}:${name}`;
+  return `${kind}:${name === '' || /[\s,;()"\\]/.test(name) ? JSON.stringify(name) : name}`;
+}
+
+/** Decode one canonical target, including `result:id:<opaque-id>` and global `mesh:mesh`. */
+export function parseRef(ref: string): Chip | null {
+  const match = SINGLE.exec(ref);
+  if (!match) return null;
+  const kind = match[1] as MentionKind;
+  const encoded = match[2]!;
+  try {
+    const name: string = encoded.startsWith('"') ? JSON.parse(encoded) as string : encoded;
+    return { ref: refOf(kind, name), kind, name };
+  } catch { return null; }
 }
 
 /**
@@ -24,11 +38,11 @@ export function parseMentions(text: string): { text: string; chips: Chip[]; sele
   const chips: Chip[] = [];
   const seen = new Set<string>();
   for (const [, kind, name] of text.matchAll(KINDED)) {
-    const ref = refOf(kind as MentionKind, name!);
-    if (!seen.has(ref)) {
-      seen.add(ref);
-      chips.push({ ref, kind: kind as MentionKind, name: name! });
+    const chip = parseRef(`${kind}:${name}`);
+    if (chip && !seen.has(chip.ref)) {
+      seen.add(chip.ref);
+      chips.push(chip);
     }
   }
-  return { text, chips, selection: SELECTION.test(text) };
+  return { text, chips, selection: SELECTION.test(text.replace(KINDED, '')) };
 }

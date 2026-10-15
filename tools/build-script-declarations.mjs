@@ -25,7 +25,7 @@ const bundled = await build({
     import schema from './packages/registry/src/generated/engine.schema.json';
     import { createRegistry } from './packages/mcp/src/server.ts';
     const browser = new Registry({ schema, host: {} });
-    const mcp = createRegistry({ engine: { dispatch: async () => null, query: async () => null, modelFile: () => ({}) } });
+    const mcp = createRegistry({ engine: { acquire: async () => { throw new Error("declaration generation never executes tools"); } } });
     const names = new Set([...HOST_COMMANDS, ...HOST_QUERIES].map(d => d.name).concat('export.file'));
     const rows = registry => { const list = registry.list(); return [...list.commands, ...list.queries].filter(d => names.has(d.name)).map(d => [d.name, d.schema]); };
     export const hosts = { browser: rows(browser), mcp: rows(mcp) };

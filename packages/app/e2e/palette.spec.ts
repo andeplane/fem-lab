@@ -35,7 +35,7 @@ test('@cpu palette routes real objects and previews intent before an explicit Ap
     route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: previewResponse() }),
   );
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(async () => {
     await window.fem.model.new({ name: 'palette' });
     await window.fem.geometry.addBox({ name: 'bearing', size: ['1 m', '1 m', '1 m'] });
@@ -73,7 +73,7 @@ test('@cpu palette routes real objects and previews intent before an explicit Ap
 test('@cpu palette edits current definitions after target and object renames', async ({ page }) => {
   await page.setViewportSize({ width: 1800, height: 1000 });
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(async () => {
     for (const cmd of [
       { cmd: 'model.new', name: 'renamed-preview' },
@@ -91,9 +91,10 @@ test('@cpu palette edits current definitions after target and object renames', a
       await window.fem.dispatch(cmd);
     const observed = window as unknown as { paletteApplies: number };
     observed.paletteApplies = 0;
-    const dispatch = window.fem.registry.dispatch.bind(window.fem.registry);
-    window.fem.registry.dispatch = async (cmd) => {
-      const ack = await dispatch(cmd);
+    const registry = Object.getPrototypeOf(window.fem.registry) as typeof window.fem.registry;
+    const dispatch = registry.dispatch;
+    registry.dispatch = async function (cmd) {
+      const ack = await dispatch.call(this, cmd);
       if (['load.pressure', 'material.add', 'constraint.prescribe', 'step.add'].includes(cmd.cmd)) observed.paletteApplies++;
       return ack;
     };

@@ -1,7 +1,7 @@
 // Argument parsing and start-up, kept out of the entry point so both are testable with fakes.
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import path from 'node:path';
-import type { EngineHandle } from './engine';
+import type { EngineProvider } from './engine';
 import { createServer } from './server';
 
 /** `--project <dir>` as an absolute path, or nothing. The only flag this server takes. */
@@ -20,7 +20,7 @@ export function projectFrom(argv: string[]): string | undefined {
 export async function start(
   argv: string[],
   here: string,
-  load: (here: string) => EngineHandle,
+  load: (here: string) => EngineProvider,
   transport: () => Transport,
 ): Promise<void> {
   const { server } = createServer({ engine: load(here), project: projectFrom(argv) });

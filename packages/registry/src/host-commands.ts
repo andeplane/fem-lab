@@ -6,18 +6,26 @@
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
-import type { JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
+import type { AbaqusConversion, AbaqusConversionReport, ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, Query, ResultSummary } from './generated/engine';
+import { AbaqusImport, readAbaqusBundle, type AbaqusIo, type AbaqusDependencyQuery } from './abaqus-import';
+import { StepImport, type StepImportHost } from './step-import';
 import { FemError } from './error';
+import { csvRow as row } from './csv';
+import { exportNodalDisplacements } from './nodal-csv';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
 import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
+import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
+import {EMPTY_ACCOUNT,type AccountServices} from './account-types';
+import { ComparisonConfig, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, ComparisonPlaybackInput, RetainedFrameSample, type ResultComparisonHost } from './result-comparison';
+export { MAX_MODEL_FILE_BYTES } from './model-file';
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const int = z.number().int();
 const none = z.object({});
 
-export const CameraState = z.object({ position: vec3, target: vec3, up: vec3.optional() });
+export const CameraState = z.object({ position: vec3, target: vec3, up: vec3.optional(), zoom: z.number().positive().optional().describe('Dimensionless lens zoom, including orthographic orbit zoom. Omit to keep the current zoom.') });
 export const ViewPreset = z.enum(['iso', 'front', 'back', 'left', 'right', 'top', 'bottom']);
 export const Projection = z.enum(['perspective', 'orthographic']);
 export const FieldChoice = z.union([
@@ -34,22 +42,20 @@ export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
 export const Animation = z.object({ step: z.string().min(1), mode: int.positive().optional(), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
-const TimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
 export const TransientPlayback = z.object({
   step: z.string(), playing: z.boolean(), speed: z.number().positive().optional(),
-  sample: z.union([
-    z.object({ kind: z.literal('frame'), index: int.nonnegative() }),
-    z.object({ kind: z.literal('time'), time: TimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
-  ]).optional(),
+  sample: RetainedFrameSample.optional(),
 });
 export const SelectionInput = z.object({
+  load: z.string().min(1).optional(),
   refs: z.array(z.string()).optional(),
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
   sets: z.array(z.string()).optional(),
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
-export const HighlightInput = SelectionInput.omit({ refs: true, mode: true });
+export const HighlightInput = SelectionInput.omit({ load: true, refs: true, mode: true });
+export const HoverInput = HighlightInput.extend({ load: z.string().min(1).optional() });
 export const PickTarget = z.enum(['face', 'body', 'off']);
 /** Resizable shell panels. Their sizes are view state and never enter the Journal. */
 export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
@@ -137,6 +143,17 @@ export interface AutosaveVersion {
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
+  /** Optional host converter. Replay of its portable geometry Commands needs no converter. */
+  step?: StepImportHost;
+  /** Retained Result presentation is host-owned; headless hosts report unsupported explicitly. */
+  resultComparison?: ResultComparisonHost;
+  /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
+  abaqus: { capture(): {
+    io: AbaqusIo;
+    dependencies: AbaqusDependencyQuery;
+    convert(query: Extract<Query, { query: 'query.convertAbaqus' }>): Promise<AbaqusConversion>;
+    replace(commands: Command[], report: AbaqusConversionReport): Promise<void>;
+  } };
   view: {
     fit(): void;
     setCamera(c: z.output<typeof CameraState>): void;
@@ -150,6 +167,7 @@ export interface HostContext {
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
     highlight(s: z.output<typeof HighlightInput>): void;
+    hover(s: z.output<typeof HoverInput>): void | Promise<void>;
     setTheme(t: z.output<typeof Theme>): void;
     animate(a: z.output<typeof Animation>): void | Promise<void>;
     playTransient(a: z.output<typeof TransientPlayback>): void | Promise<void>;
@@ -174,6 +192,7 @@ export interface HostContext {
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
     stop(): void;
     setSource(code: string, append?: boolean): void;
+    setEditing(editing: boolean): void;
   };
   chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void | Promise<void>; clear(): void };
   skills(): Skill[];
@@ -181,7 +200,13 @@ export interface HostContext {
   files: {
     /** Open a file picker and return the chosen file's text. */
     pick(): Promise<string>;
+    /** Open a file picker filtered to `accept` and return the chosen file's bytes. */
+    pickBytes(accept: string): Promise<Uint8Array>;
     download(name: string, mime: string, data: string | Uint8Array): void;
+    /** Capture the current document before async I/O; completion affects only that document. */
+    beginSave(): (journal: ModelFile['journal']) => void;
+    /** Establish a successful explicit open's normalized baseline and invalidate older save completions. */
+    markSaved(journal: ModelFile['journal']): void;
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the background save into the open project on or off. The choice sticks in this browser. */
     setAutosave(on: boolean): void;
@@ -213,16 +238,21 @@ export interface HostContext {
     refresh(): Promise<void>;
     info(): FolderInfo | null;
     readText(path: string): Promise<string>;
+    /** Read a file from the open folder as bytes, for a format that is not text. */
+    readBytes(path: string): Promise<Uint8Array>;
     writeText(path: string, text: string): Promise<void>;
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   };
-  examples: { fetch(name: string): Promise<string> };
+  /** Hosts replay bundled example Journals and hydrate their presentation after a complete open. */
+  examples: { open(name: string): Promise<{ name: string; commands: number }> };
   ai: { setKey(key: string | null, provider: AiProvider): void; setModel(model: string): void };
+  account?:AccountServices;
   env: { webgpu: boolean; crossOriginIsolated: boolean; threads: number; userAgent: string; engine: 'local' | 'remote' };
 }
 
-const def = <S extends z.ZodType>(name: string, description: string, schema: S, run: (input: z.output<S>, ctx: HostContext) => unknown, tool = true): HostDef<S> => ({
+const def = <S extends z.ZodType>(name: string, execution: ExecutionPolicy, description: string, schema: S, run: (input: z.output<S>, ctx: HostContext) => unknown, tool = true): HostDef<S> => ({
   name,
+  execution,
   description,
   schema,
   tool,
@@ -230,6 +260,11 @@ const def = <S extends z.ZodType>(name: string, description: string, schema: S, 
 });
 
 const MAX_TEXT = 2 * 1024 * 1024;
+const account=(ctx:HostContext):AccountServices=>{
+  if(!ctx.account)throw new FemError('unsupported','Accounts are unavailable in this host','account','use the browser account control');
+  return ctx.account;
+};
+const paidPlan=z.enum(['plus','pro','studio']);
 
 /** Write a saved or exported file where the person asked, defaulting to the open folder. */
 async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, name: string, mime: string, data: string | Uint8Array): Promise<{ name: string; to: 'download' | 'folder' }> {
@@ -241,7 +276,17 @@ async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, 
 }
 
 /** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
-export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
+/** A geometry file large enough for the engine's 500 000 triangle ceiling in binary STL. */
+export const MAX_GEOMETRY_FILE_BYTES = 32 * 1024 * 1024;
+/** What the geometry picker offers. */
+const GEOMETRY_ACCEPT = '.stl,model/stl';
+
+/** Standard base64 of raw bytes, the encoding `geometry.import` reads. */
+function base64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
 
 async function importText(ctx: HostContext, text: string) {
   if (text.length > MAX_MODEL_FILE_BYTES || new TextEncoder().encode(text).byteLength > MAX_MODEL_FILE_BYTES) {
@@ -253,13 +298,17 @@ async function importText(ctx: HostContext, text: string) {
   } catch (e) {
     throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'open a file written by file.save or an example from the gallery');
   }
-  return ctx.transport.importFile(file);
+  const ack = await ctx.transport.importFile(file);
+  ctx.files.markSaved(ack.journal);
+  return ack;
 }
 
 /** One row of the Export dialog (design §Export modal), and what `file.export` accepts. */
 export interface ExportFormatRow {
   /** The `spec.format` that writes it. */
   format: string;
+  /** CSV tables share a format but remain independently selectable export rows. */
+  table?: 'extremes' | 'nodal-displacements';
   ext: string;
   name: string;
   note: string;
@@ -274,19 +323,13 @@ export const EXPORT_FORMATS: ExportFormatRow[] = [
   { format: 'stl', ext: 'stl', name: 'STL surface', note: 'The mesh boundary as triangles, for a 3D viewer or a printer.', group: 'Model & mesh', needs: 'mesh' },
   { format: 'vtu', ext: 'vtu', name: 'VTK unstructured grid', note: 'The mesh with every nodal field of the Step. Opens in ParaView.', group: 'Results', needs: 'mesh' },
   { format: 'csv', ext: 'csv', name: 'Result table (CSV)', note: 'One table: extremes, reactions, or a sampled path.', group: 'Results', needs: 'result' },
+  { format: 'csv', table: 'nodal-displacements', ext: 'csv', name: 'Nodal displacements (CSV)', note: 'Every solved node in metres, with original source labels, instances and parts; unused nodes are marked uncomputed.', group: 'Results', needs: 'result' },
   { format: 'png', ext: 'png', name: 'Viewer image', note: 'Exactly what the viewer shows, with the legend burned in.', group: 'Results', needs: 'none' },
   { format: 'webm', ext: 'webm', name: 'Viewer animation', note: 'One mode-shape sweep at an explicit resolution, encoded by Chromium as WebM.', group: 'Results', needs: 'animation' },
   { format: 'script', ext: 'ts', name: 'TypeScript script', note: 'The Journal, typed: run it back and the Model rebuilds.', group: 'Document & model file', needs: 'none' },
   { format: 'journal', ext: 'json', name: 'Model file (femlab/1)', note: 'The Model and its Journal, what file.open reads back.', group: 'Document & model file', needs: 'none' },
   { format: 'report', ext: 'md', name: 'Calculation note', note: 'Assumptions, mesh, loads, results and the Journal as Markdown.', group: 'Document & model file', needs: 'none' },
 ];
-
-/** A CSV cell: quoted only when it has to be, so a diff of two exports stays readable. */
-function cell(v: string | number): string {
-  const text = String(v);
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-const row = (cells: (string | number)[]): string => cells.map(cell).join(',');
 
 /** The Results tab's Extremes table, as a file. */
 export function extremesCsv(r: ResultSummary): string {
@@ -335,14 +378,19 @@ interface Built {
  * here from Queries it can.
  */
 async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | null> {
-  const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
-  if (spec.format === 'script') {
+  if (spec.format === 'journal' || spec.format === 'script') {
+    const file = await ctx.transport.exportFile();
+    if (spec.format === 'journal') {
+      return { filename: `${file.model.name}.femlab.json`, mime: 'application/json', data: boundedModelFileText(file) };
+    }
     const { text } = (await ctx.transport.query({ query: 'query.script' })) as { text: string };
-    return { filename: `${name}.ts`, mime: 'text/typescript', data: text };
+    return { filename: `${file.model.name}.ts`, mime: 'text/typescript', data: text };
   }
-  if (spec.format === 'journal') {
-    return { filename: `${name}.femlab.json`, mime: 'application/json', data: JSON.stringify(await ctx.transport.exportFile(), null, 2) };
+  if (spec.format === 'csv' && spec['table'] === 'nodal-displacements') {
+    const out = await exportNodalDisplacements(ctx.transport, spec['step'] as string | undefined, spec['resultId'] as string | undefined);
+    return { ...out, mime: 'text/csv' };
   }
+  const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
   if (spec.format === 'png') {
     const options = ScreenshotOptions.parse({
       legend: spec['legend'] !== false,
@@ -375,44 +423,56 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | 
   return { filename: out.filename, mime: out.mime, data: out.bytes };
 }
 
+function comparisonHost(ctx: HostContext): ResultComparisonHost {
+  if (!ctx.resultComparison) throw new FemError('unsupported', 'this host has no Result comparison workspace', 'view.compareResults', 'open the browser app to compare retained Results');
+  return ctx.resultComparison;
+}
+
 export const HOST_COMMANDS: HostDef[] = [
-  def('view.fit', 'Frame the camera on the whole mesh, or on the current selection when there is one. Use it after adding geometry or when the model has drifted out of view.', none, (_, ctx) => ctx.view.fit()),
-  def('view.setCamera', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
-  def('view.preset', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
-  def('view.setProjection', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
-  def('view.showField', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
-  def('view.setLegend', 'Set the contour legend: colormap (viridis or rainbow), number of discrete bands (null for continuous) and the value range as `[min, max]` or `"auto"`.', LegendSpec, (l, ctx) => ctx.view.setLegend(l)),
-  def('view.setDeformScale', 'Scale the displayed deformed shape: a number, `"auto"` (a visible exaggeration) or `"true"` (scale 1, the real displacement). Only the display changes; results do not.', z.object({ scale: DeformScale }), ({ scale }, ctx) => ctx.view.setDeformScale(scale)),
-  def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
-  def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
-  def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
-  def('view.highlight', 'Temporarily highlight named bodies, faces or Sets in the viewer. Pass an empty object to clear the highlight. This is transient hover state: it never changes the selection, Model or Journal.', HighlightInput, (s, ctx) => ctx.view.highlight(s)),
-  def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
-  def('view.animate', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
-  def('view.playTransient', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
-  def('selection.set', 'Select Model objects by stable `kind:name` refs, or select drawable bodies, faces and Sets by name. `mode` is replace (default), add or remove. The selection drives Properties, `view.fit` and `@selection` in chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
-  def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
-  def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
-  def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
-  def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
-  def('report.print', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
-  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
+  def('view.compareResults', 'sessionView', 'Configure two explicit immutable Result ids and fields, each optionally selecting its own retained primary frame by exact/nearest physical time or retained index. Actual resolved ids and times remain visible; historical derived fields are unavailable. sideBySide draws their own retained surfaces with shared cameras and independent legends; difference draws engine left minus right on the required target side and reports interpolation/coverage. Omit samples for final fields; single restores the normal Result workflow. No Model or Journal change.', ComparisonConfig, (input, ctx) => comparisonHost(ctx).configure(input)),
+  def('view.playComparison', 'sessionView', 'Play, pause, seek or change positive simulated seconds per wall second for explicitly pinned comparison Result ids. independent changes one pane; synchronized uses both ids and their overlapping physical interval. Index/time seeks use the existing exact/nearest primary-frame protocol. Playback then holds each schedule at the physical playhead, showing actual held times even when they differ; no temporal interpolation or historical derived field is implied. Synchronized playback stops at the shorter endpoint; independent mode can explore the remainder. Display only; no Model or Journal change.', ComparisonPlaybackInput, (input, ctx) => comparisonHost(ctx).play(input)),
+  def('view.setComparisonLegend', 'sessionView', 'Set one explicitly identified comparison pane’s colormap or physical range. Bounds carry units; auto follows available data. Difference ranges describe difference amounts, so temperature conversion removes origin offsets. An obsolete pane/result id is refused; other panes and scientific fields are unchanged.', ComparisonLegendInput, (input, ctx) => comparisonHost(ctx).legend(input)),
+  def('view.setComparisonVisible', 'sessionView', 'Show or hide named Bodies only in one comparison pane identified by its retained Result id. Names belong to that solved surface, including stale Results. Other panes, the current Model and the Journal are unchanged; scientific difference coverage continues to describe the full target Mesh.', ComparisonVisibilityInput, (input, ctx) => comparisonHost(ctx).visible(input)),
+  def('view.pickComparison', 'sessionView', 'Pick the nearest visible retained surface entity at a unit-bearing world point, explicitly scoped to a pane and Result id. The readout uses that solve’s scientific field (or engine difference) and reports missing coverage as null. This never selects an editable object or spends a Properties pick target in the current Model.', ComparisonPickInput, (input, ctx) => comparisonHost(ctx).pick(input)),
+  def('view.fit', 'sessionView', 'Frame the camera on the whole mesh, or on the current selection when there is one. Browser Fit keeps the shape clear of visible viewer controls; ordinary resizing preserves the current camera. Use it after adding geometry or when the model has drifted out of view.', none, (_, ctx) => ctx.view.fit()),
+  def('view.setCamera', 'sessionView', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up` and dimensionless lens `zoom`. Comparison panes share this camera. Use `view.preset` for the standard views; this is for a reproducible screenshot angle and scale.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
+  def('view.preset', 'sessionView', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
+  def('view.setProjection', 'sessionView', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
+  def('view.showField', 'sessionView', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
+  def('view.setLegend', 'sessionView', 'Set the contour legend: colormap (viridis or rainbow), number of discrete bands (null for continuous) and the value range as `[min, max]` or `"auto"`.', LegendSpec, (l, ctx) => ctx.view.setLegend(l)),
+  def('view.setDeformScale', 'sessionView', 'Scale the displayed deformed shape: a number, `"auto"` (a visible exaggeration) or `"true"` (scale 1, the real displacement). Only the display changes; results do not.', z.object({ scale: DeformScale }), ({ scale }, ctx) => ctx.view.setDeformScale(scale)),
+  def('view.setClip', 'sessionView', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
+  def('view.toggle', 'sessionView', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
+  def('view.setVisible', 'sessionView', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
+  def('view.highlight', 'sessionView', 'Temporarily highlight named bodies, faces or Sets in the viewer. Pass an empty object to clear the highlight. This is transient hover state: it never changes the selection, Model or Journal.', HighlightInput, (s, ctx) => ctx.view.highlight(s)),
+  def('view.hover', 'sessionView', 'Lightly preview named bodies, faces or Sets, or the targets of a saved Load named by load. Body loads use their current definition; global gravity covers all Bodies. Pass an empty object to clear this preview and restore the selected appearance. Selection, Properties, Model and Journal are unchanged.', HoverInput, (s, ctx) => ctx.view.hover(s)),
+  def('view.setTheme', 'workspace', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
+  def('view.animate', 'sessionView', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.playTransient', 'sessionView', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
+  def('selection.set', 'sessionView', 'Select Model objects by stable `kind:name` refs, or select drawable bodies, faces and Sets by name. To include a saved Load\'s drawable targets, explicitly name it with load; body loads use their current definition and global gravity covers all Bodies. Plain refs retain object selection without expanding targets. `mode` is replace (default), add or remove. The selection drives Properties, `view.fit` and `@selection` in chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
+  def('selection.clear', 'sessionView', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
+  def('selection.setPickTarget', 'sessionView', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
+  def('panel.toggle', 'sessionView', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
+  def('panel.resize', 'workspace', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
+  def('report.print', 'sessionView', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
+  def('script.run', 'producer', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
     return ctx.script.run(code, timeoutMs);
   }, false),
-  def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
-  def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
-  def('chat.send', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
-  def('chat.insertMention', 'Insert an `@kind:name` chip into the chat input, as a viewer or tree click does while the chat is focused. Not a tool; the AI receives chips, it does not type them.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
-  def('chat.clear', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
-  def('skill.invoke', 'Load a skill by name and return its instructions (`{ name, body, source }`) so they enter the conversation at the point they are needed; `args` is the rest of the person\'s `/name` line. Use query.skills to see what exists.', z.object({ name: z.string(), args: z.string().optional() }), ({ name, args }, ctx) => {
+  def('script.stop', 'control', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
+  def('script.setSource', 'sessionView', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
+  def('script.setEditing', 'sessionView', 'Show the editable Script draft or the live Script generated from the Journal. Leaving edit mode retains the draft so the person can compare it with the Journal and resume it later.', z.object({ editing: z.boolean() }), ({ editing }, ctx) => ctx.script.setEditing(editing)),
+  def('chat.send', 'producer', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
+  def('chat.insertMention', 'sessionView', 'Open the Assistant and insert a reference chip into its unsent input. Use kind:name, JSON-quote names containing spaces or separators, mesh:mesh for the current global Mesh, result:step for a latest Result or result:id:opaque-id for an exact retained solve in its owning Engine. Captions do not identify Results. Repeated targets produce one chip; no engine Command is recorded. Not a tool; the AI receives the resolved context.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
+  def('chat.clear', 'workspace', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
+  def('skill.invoke', 'workspace', 'Load a skill by name and return its instructions (`{ name, body, source }`) so they enter the conversation at the point they are needed; `args` is the rest of the person\'s `/name` line. Use query.skills to see what exists.', z.object({ name: z.string(), args: z.string().optional() }), ({ name, args }, ctx) => {
     const skills = ctx.skills();
     const skill = skills.find((s) => s.name === name);
     if (!skill) throw new FemError('not-found', `no skill named '${name}'`, `skill '${name}'`, `known skills: ${skills.map((s) => s.name).join(', ')}`);
     return { name: skill.name, body: skill.body, source: skill.source, args: args ?? '' };
   }),
-  def('clipboard.copy', 'Copy to the clipboard as plain text: the current selection as `@face:… @body:…` chips, one mention ref, the Journal as a script (optionally only `seqs`), or literal text. One Command for every copy affordance.', z.object({ what: CopyWhat }), async ({ what }, ctx) => {
+  def('clipboard.copy', 'sessionView', 'Copy to the clipboard as plain text: the current selection as `@face:… @body:…` chips, one mention ref, the Journal as a script (optionally only `seqs`), or literal text. One Command for every copy affordance.', z.object({ what: CopyWhat }), async ({ what }, ctx) => {
     let text: string;
     if (what.kind === 'selection') text = ctx.selection.get().refs.map((r) => `@${r}`).join(' ');
     else if (what.kind === 'mention') text = `@${what.ref}`;
@@ -421,19 +481,58 @@ export const HOST_COMMANDS: HostDef[] = [
     await ctx.clipboard.writeText(text);
     return { text };
   }),
-  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
+  def('file.open', 'replacement', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
     if ('json' in how) return importText(ctx, how.json);
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
   }),
-  def('file.save', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. `name` defaults to `<model name>.femlab.json`.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
-    const file = await ctx.transport.exportFile();
-    return deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
+  def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck and its include files (at most 16 MiB total) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity. Static additionally requires unitForce; supply unitTime when density is present. Mesh mode refuses force and time units. Source units are independent of display units. Parts, transformed instances, named Sets, material regions and full-integration C3D4/C3D8/C3D10/C3D20 solids are retained. Static mode translates supported isotropic elastic regions, translational constraints, nodal forces, face pressures and named linear-static load cases. Normal output requests are recorded in the report. Include contents are supplied explicitly or read by the host from the submission folder; the engine performs no file I/O. Binary .odb/.cae databases require a text .inp export. Unsupported physical behavior is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
+    const captured = ctx.abaqus.capture();
+    const source = await readAbaqusBundle(how, captured.io, captured.dependencies);
+    if (source === null) return { cancelled: true };
+    const { name, body, mode, unitLength, unitForce, unitTime } = how;
+    const conversion = await captured.convert({ query: 'query.convertAbaqus', ...source, name, body, mode, unitLength, ...(unitForce === undefined ? {} : { unitForce }), ...(unitTime === undefined ? {} : { unitTime }) });
+    await captured.replace(conversion.commands, conversion.report);
+    return { report: conversion.report };
   }),
-  def('file.export', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+  def('geometry.importStep', 'modelWrite', 'Import a STEP .step/.stp file (at most 16 MiB) as one named Body, or re-import that Body, using a lazy cancellable host converter. Omit path for a picker; paths are scoped to the open folder. Supply explicit linearDeflection (length, at least 0.0000001 m) and angularDeflection (positive angle, at most pi rad). STEP declared units become meters independently of display units. Every source mesh/face must convert completely; errors never silently drop geometry. Multiple meshes become one Body. Exact B-rep, CAD history, original face identities and CAD materials are not retained. The Journal stores one ordinary geometry.import with f64 ASCII triangles, replayable without the converter or source file. Captures session/state before I/O: a model edit or project switch rejects publication; view changes remain valid. A second pending STEP import conflicts. Use geometry.cancelStep with the same name before publication to terminate it. Returns the checked Ack and a conversion receipt. Name durable face targets with geometry.nameFace predicates before meshing.', StepImport, async (input, ctx) => {
+    if (!ctx.step) throw new FemError('unsupported', 'this host has no STEP converter', 'geometry.importStep', 'import in the browser, then replay its portable Journal on this host');
+    return ctx.step.import(input);
+  }),
+  def('geometry.cancelStep', 'control', 'Cancel the pending STEP conversion for the explicit Body name, terminating its dedicated Worker. Returns cancelled:false when that name has no pending conversion or publication has begun. No engine Command is recorded.', z.object({ name: z.string().min(1) }), ({ name }, ctx) => ({ cancelled: ctx.step?.cancel(name) ?? false })),
+  def('geometry.importFile', 'modelWrite', 'Import a geometry file from disk as a Body: with the file picker, or from a `path` relative to the open project folder. The file is read here and handed to the engine\'s geometry.import, which carries it inline, so the Journal replays on any host without the file. STL only for now, ASCII or binary, up to 32 MiB. `unitLength` says what one unit in the file means and defaults to `1 mm`, which is what most CAD tools export; check the reported bounding box if you are not sure. `featureAngle` (degrees) and `simplifyBelow` (a length) are passed straight through. Name the faces you will reuse with geometry.nameFace predicates rather than the auto `face0` numbers, which move when the file does.', z.object({
+    name: z.string(),
+    path: z.string().optional(),
+    unitLength: z.string().optional(),
+    featureAngle: z.number().optional(),
+    simplifyBelow: z.string().optional(),
+  }), async ({ name, path, unitLength, featureAngle, simplifyBelow }, ctx) => {
+    const bytes = path === undefined ? await ctx.files.pickBytes(GEOMETRY_ACCEPT) : await ctx.folder.readBytes(assertInside(path).join('/'));
+    if (bytes.byteLength > MAX_GEOMETRY_FILE_BYTES) throw new FemError('schema', `the geometry file is ${bytes.byteLength} bytes, over the 32 MiB import limit`, 'path', 'decimate the mesh in the tool that wrote it, or import a smaller part');
+    return ctx.transport.dispatch({
+      cmd: 'geometry.import',
+      name,
+      format: 'stl',
+      encoding: 'base64',
+      data: base64(bytes),
+      unitLength: unitLength ?? '1 mm',
+      ...(featureAngle === undefined ? {} : { featureAngle }),
+      ...(simplifyBelow === undefined ? {} : { simplifyBelow }),
+    } as Command);
+  }),
+  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. The complete saved pretty JSON must fit the 16 MiB UTF-8 file limit; refusal occurs before any file write or download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+    const completeSave = ctx.files.beginSave();
+
+    const file = await ctx.transport.exportFile();
+    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', boundedModelFileText(file));
+    completeSave(file.journal);
+    return receipt;
+  }),
+  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. CSV table is extremes (default), reactions, path or nodal-displacements; unknown tables fail. Nodal displacements export scientific f64 coordinates and three displacement components in metres, independent of display units, with original source label, instance and part plus the normalized label. Unused authored nodes have blank displacement cells and status unused. This table pins one Result id and requires its solved Model hash to match the current document; stale or changed source identities fail before delivery, including edits during scientific reads. CSV text cells retain exact source names with standard quoting for machine-readable interchange; consumers must interpret identity columns as text. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
     spec: z.union([
       AnimationCaptureOptions.extend({ format: z.literal('webm') }),
-      z.looseObject({ format: z.string().refine((format) => format !== 'webm') }),
+      z.looseObject({ format: z.literal('csv'), table: z.enum(['extremes', 'reactions', 'path', 'nodal-displacements']).optional(), step: z.string().optional(), resultId: z.string().optional() }),
+      z.looseObject({ format: z.string().refine((format) => format !== 'webm' && format !== 'csv') }),
     ]),
     name: z.string().optional(),
     to: Destination,
@@ -442,61 +541,78 @@ export const HOST_COMMANDS: HostDef[] = [
     if (out === null) return { cancelled: true };
     return deliver(ctx, to, name ?? out.filename, out.mime, out.data);
   }),
-  def('file.cancelAnimationCapture', 'Cancel the WebM animation recording in progress. The viewer returns to the exact phase and play state it had before recording; returns `{ cancelled: false }` when no recording is active.', none, (_, ctx) => ({ cancelled: ctx.view.cancelAnimationCapture() })),
-  def('file.shareLink', 'Make a URL that reopens the current Model: the Journal deflated into the URL fragment, so nothing is uploaded anywhere and the link works offline. Returns `{ url }` and copies it to the clipboard; paste it in a message or a report. Links replay validated engine Commands only. Refuses with `unsupported` over 32 kB encoded or 1 MiB uncompressed — use file.save and send the file for a big Model.', none, async (_, ctx) => ctx.files.shareLink(await ctx.transport.exportFile())),
-  def('file.autosave', 'Turn the background save on or off. When on (the default) the Journal is written into the open project after every Command, so a crash or a closed tab loses nothing, and nothing is uploaded anywhere. Turning it off stops writing; the projects already saved in this browser are kept.', z.object({ on: z.boolean() }), ({ on }, ctx) => {
+  def('file.cancelAnimationCapture', 'control', 'Cancel the WebM animation recording in progress. The viewer returns to the exact phase and play state it had before recording; returns `{ cancelled: false }` when no recording is active.', none, (_, ctx) => ({ cancelled: ctx.view.cancelAnimationCapture() })),
+  def('file.shareLink', 'modelRead', 'Make a URL that reopens the current Model: the Journal deflated into the URL fragment, so nothing is uploaded anywhere and the link works offline. Returns `{ url }` and copies it to the clipboard; paste it in a message or a report. Links replay validated engine Commands only. Refuses with `unsupported` over 32 kB encoded or 1 MiB uncompressed — use file.save and send the file for a big Model.', none, async (_, ctx) => ctx.files.shareLink(await ctx.transport.exportFile())),
+  def('file.autosave', 'workspace', 'Turn the background save on or off. When on (the default) the Journal is written into the open project after every Command, so a crash or a closed tab loses nothing, and nothing is uploaded anywhere. Turning it off stops writing; the projects already saved in this browser are kept.', z.object({ on: z.boolean() }), ({ on }, ctx) => {
     ctx.files.setAutosave(on);
     return { enabled: on };
   }),
-  def('file.restore', 'Reopen an autosaved Journal revision as a separate project without overwriting the currently saved project. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
-  def('file.read', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
+  def('file.restore', 'replacement', 'Reopen an autosaved Journal revision as a separate project without overwriting the currently saved project. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
+  def('file.read', 'workspace', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
     const text = await ctx.folder.readText(assertInside(path).join('/'));
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
     return { text };
   }),
-  def('file.write', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused.', z.object({ path: z.string(), text: z.string() }), ({ path, text }, ctx) => ctx.folder.writeText(assertInside(path).join('/'), text)),
-  def('folder.open', 'Open a folder on disk with the directory picker (needs a click) or from a stored handle; its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
-  def('folder.close', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules are dropped, saves go back to downloads.', none, (_, ctx) => ctx.folder.close()),
-  def('folder.refresh', 'Re-list the open folder on disk and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.folder.refresh()),
-  def('project.new',
+  def('file.write', 'workspace', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused.', z.object({ path: z.string(), text: z.string() }), ({ path, text }, ctx) => ctx.folder.writeText(assertInside(path).join('/'), text)),
+  def('folder.open', 'workspace', 'Open a folder on disk with the directory picker (needs a click) or from a stored handle; its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
+  def('folder.close', 'workspace', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules are dropped, saves go back to downloads.', none, (_, ctx) => ctx.folder.close()),
+  def('folder.refresh', 'workspace', 'Re-list the open folder on disk and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.folder.refresh()),
+  def('project.new', 'replacement',
     'Start a new project: an empty Model and Journal under `name`, kept in this browser and saved after every Command from now on. The project that was open is left exactly as it was and stays in Recent projects, so starting another one loses nothing.',
     z.object({ name: z.string().optional() }), (i, ctx) => ctx.projects.new(i.name)),
-  def('project.open',
+  def('project.open', 'replacement',
     'Open a saved project by id (query.projects lists them) and replay its Journal, so the Model, its history and its undo stack come back as they were left. Replaces whatever is open, which has already been saved under its own id.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.open(id)),
-  def('project.rename',
-    'Rename a saved project, by default the one that is open. The name is what the top bar and the Recent projects list show; the Journal is not rewritten, so a file saved from it keeps the name the Model was created with.',
+  def('project.rename', 'modelWrite',
+    'Rename a saved project, by default the one that is open. The name appears in the Projects dialog and Recent projects list. This changes browser-project metadata only; use model.setName to edit the Model name shown in the top bar and saved in its Journal.',
     z.object({ id: z.string().optional(), name: z.string() }), ({ id, name }, ctx) => ctx.projects.rename(id, name)),
-  def('project.delete',
+  def('project.delete', 'workspace',
     'Delete a saved project and its Journal from this browser for good. There is no undo and nothing was ever uploaded anywhere, so use file.save first if the model might be wanted again. Not a tool: deleting a person\u2019s work is theirs to do.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.delete(id), false),
-  def('project.save',
-    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
-    none, (_, ctx) => ctx.projects.save()),
-  def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
-  def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
-  def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
+  def('project.save', 'modelRead',
+    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. A late completion never changes the saved baseline of a replacement Model. Use file.save to write a `femlab/1` file instead.',
+    none, async (_, ctx) => {
+      const completeSave = ctx.files.beginSave();
+      const saved = await ctx.projects.save();
+      if (saved) completeSave(saved.journal);
+      return saved;
+    }),
+  def('example.open', 'replacement', 'Open a bundled example by name (see the examples gallery), replaying its Journal Commands. A complete open establishes the saved baseline. If replay fails partway through, the partial Model remains visible and the previous saved baseline is preserved.', z.object({ name: z.string() }), ({ name }, ctx) => ctx.examples.open(name)),
+  def('solve.cancel', 'control', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
+  def('ai.setKey', 'workspace', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
+  def('ai.setModel', 'workspace', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
+  def('account.open','control','Open the optional login, AI allowance and subscription panel. Host view state only; never journaled or exposed as an Assistant tool.',none,(_input,ctx)=>ctx.panels.toggle('account',true),false),
+  def('account.signIn','control','Sign in for hosted AI with Google redirect or an email link. Requires an explicit user action; no password, token or provider key is accepted.',z.strictObject({method:z.enum(['google','email']),email:z.email().optional()}),({method,email},ctx)=>account(ctx).signIn(method,email),false),
+  def('account.signOut','control','Sign out this tab session and stop its hosted Assistant access. Local models remain available anonymously.',none,(_input,ctx)=>account(ctx).signOut(),false),
+  def('account.refresh','control','Refresh the verified account allowance and billing status from the service. Cannot select another account.',none,(_input,ctx)=>account(ctx).refresh(),false),
+  def('account.checkout','control','Open hosted checkout for a supported monthly plan after the user declares personal or business use, fixed for this subscription. purchaseUse is required for Managed Checkout; omission is supported only for legacy direct billing. The server owns prices/customer identity; this Command does not grant credits or complete payment and is never an Assistant tool.',z.strictObject({plan:paidPlan,purchaseUse:z.enum(['personal','business']).optional()}),({plan,purchaseUse},ctx)=>account(ctx).checkout(plan,purchaseUse),false),
+  def('account.portal','control','Open cancellation/payment management for the signed-in account with an owned billing customer, including during a sales pause or financial review. Requires a configured service and an explicit user action; never an Assistant tool.',none,(_input,ctx)=>account(ctx).portal(),false),
+  def('account.changePlan','control','Schedule a supported paid plan for the next billing period. The subscription keeps its personal/business use. Current credits stay unchanged; the next paid invoice grants the new allowance.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).changePlan(plan),false),
+  def('account.export','control','Request a private export of account, allowance and billing records. Local models and chat are not uploaded or included.',none,(_input,ctx)=>account(ctx).exportData(),false),
+  def('account.delete','control','Request account deletion after explicit DELETE confirmation. Renewal must be canceled before identity removal; local model files remain in this browser.',z.strictObject({confirm:z.literal('DELETE')}),({confirm},ctx)=>account(ctx).deleteAccount(confirm),false),
+  def('ai.acceptDisclosure','control','Acknowledge that hosted Assistant messages, selected model/project context, tool results and images go through FEM Lab to the provider. This tab/account consent is never journaled.',none,(_input,ctx)=>account(ctx).acceptDisclosure(),false),
 ];
 
 export const HOST_QUERIES: HostDef[] = [
-  def('query.validateScript', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
-  def('query.screenshot', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. A single dimension preserves the current aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
-  def('query.view', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
-  def('query.capabilities', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
+  def('query.account','control','Read the current host account/login and allowance state, excluding credentials and payment customer IDs. Not exposed to Assistant tools or generated scripts.',none,(_input,ctx)=>ctx.account?.state()??EMPTY_ACCOUNT,false),
+  def('query.resultComparison', 'modelRead', 'Read comparison configuration, retained catalogue, independently selected Result summaries and actual frame ids/times, physical legends, pane visibility/picks, stale/current state, interpolation coverage, loading and structured errors. Playback reports independent or shared physical playheads, each held sample, speed/playing state and shared interval; unequal held times remain explicit. This is host view state; ordinary scientific fields and surfaces remain engine Queries. No Model or Journal mutation.', none, (_, ctx) => comparisonHost(ctx).state()),
+  def('query.validateScript', 'workspace', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
+  def('query.screenshot', 'modelRead', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. Comparison captures contain each visible retained pane with its own Result identity and legend; side-by-side divides the requested total width between panes. A single dimension preserves the viewport aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
+  def('query.view', 'modelRead', 'The current camera: position, target and up in metres, plus dimensionless zoom when changed from one. Comparison panes share this camera. Hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
+  def('query.capabilities', 'modelRead', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
     ...((await ctx.transport.query({ query: 'query.capabilities' })) as object),
     ...ctx.env,
   })),
-  def('query.selection', 'The current selection as bodies, faces and Sets plus the `refs` list (`face:beam.top`, …) that `@selection` expands to in the chat.', none, (_, ctx) => ctx.selection.get()),
-  def('query.skills', 'Every available skill with its name, description, when to use it and whether it is built in or from the project folder. Invoke one with skill.invoke.', none, (_, ctx) => ctx.skills().map(({ name, description, when, source }) => ({ name, description, when, source }))),
-  def('query.exportFormats', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `animation`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
-  def('query.folder', 'The open folder on disk: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the skills it carries; `null` when no folder is open.', none, (_, ctx) => ctx.folder.info()),
-  def('query.projects',
+  def('query.selection', 'modelRead', 'The current selection as bodies, faces and Sets plus the `refs` list (`face:beam.top`, …) that `@selection` expands to in the chat.', none, (_, ctx) => ctx.selection.get()),
+  def('query.skills', 'workspace', 'Every available skill with its name, description, when to use it and whether it is built in or from the project folder. Invoke one with skill.invoke.', none, (_, ctx) => ctx.skills().map(({ name, description, when, source }) => ({ name, description, when, source }))),
+  def('query.exportFormats', 'workspace', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `animation`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
+  def('query.folder', 'workspace', 'The open folder on disk: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the skills it carries; `null` when no folder is open.', none, (_, ctx) => ctx.folder.info()),
+  def('query.projects', 'workspace',
     'Every project saved in this browser, most recently edited first: id, name, when it was last written, how many Commands its Journal holds, and a small thumbnail. The start screen\u2019s Recent projects list is a view of this Query.',
     none, (_, ctx) => ({ projects: ctx.projects.list() })),
-  def('query.autosave', 'Whether background autosave is on, and the latest locally known revision (`{ name, at, commands }` or `null`), including pending writes; file.restore reopens it.', none, (_, ctx) => ctx.files.autosave()),
-  def('query.autosaveHistory', 'List up to 20 locally known Journal revisions, newest first, including pending writes and retryable storage failures. Each `id` stays restorable through file.restore until history eviction or autosave clearing, including when model names and times tie. Pending revisions are not durable until their write commits and are discarded when autosave is disabled. Saved revisions remain available while autosave is off.', none, (_, ctx) => ({ enabled: ctx.files.autosave().enabled, revisions: ctx.files.autosaves() })),
-  def('query.project',
+  def('query.autosave', 'modelRead', 'Whether background autosave is on, and the latest locally known revision (`{ name, at, commands }` or `null`), including pending writes; file.restore reopens it.', none, (_, ctx) => ctx.files.autosave()),
+  def('query.autosaveHistory', 'workspace', 'List up to 20 locally known Journal revisions, newest first, including pending writes and retryable storage failures. Each `id` stays restorable through file.restore until history eviction or autosave clearing, including when model names and times tie. Pending revisions are not durable until their write commits and are discarded when autosave is disabled. Saved revisions remain available while autosave is off.', none, (_, ctx) => ({ enabled: ctx.files.autosave().enabled, revisions: ctx.files.autosaves() })),
+  def('query.project', 'modelRead',
     'The open project \u2014 id, name, when it was last written, how many Commands it holds and whether a write is in flight \u2014 or `null` when the Model is still empty and no project has been made yet. The top bar reads this.',
     none, (_, ctx) => ctx.projects.current()),
 ];

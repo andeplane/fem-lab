@@ -1,0 +1,97 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "free-free-beam-modal"
+    },
+    "hashAfter": "590850a970846f8bea22a13edfe925009a200e1ad6bcfb4e3d57a6e109d9085e"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "kN",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "ad210ace4b52dc54cad29178e40b596d0dfa6cee36d23a0523ddf79b51943d54"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "50 mm",
+        "25 mm"
+      ]
+    },
+    "hashAfter": "9cf86ffe435335c27a16c5c4b2b70143d2362d4111a1bc6dc9105a4d1af80ddc"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3",
+      "source": "EN 10025"
+    },
+    "hashAfter": "8e7df4092cfa73ff87dc60090e1b32e704468ad092a6ff1e509f1ecc1d4bddd2"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    "hashAfter": "74bbe9a4686faf192807bd685161a2dc29887bc6152d07e411e78da01b290e20"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 2,
+          "nz": 2
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "a77df1f82b0b7692770d322a4edb27e1d688445b4b3f3eb47a91fc97d1d20771"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 8
+    },
+    "hashAfter": "58928f50df31b7b38c9023c8e95e489045f5e72bf78a2968b5cd4cd8a651a1ef"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "modes"
+    },
+    "hashAfter": "58928f50df31b7b38c9023c8e95e489045f5e72bf78a2968b5cd4cd8a651a1ef"
+  }
+]

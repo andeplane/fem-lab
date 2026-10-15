@@ -1,0 +1,118 @@
+{
+  "id": "solve-cost-and-solvers",
+  "title": "What a solve will cost, and choosing a solver",
+  "minutes": 8,
+  "summary": "Ask the engine what a solve will cost before you press it, then force the direct and iterative paths on the same model to see why the automatic choice switches at a degrees-of-freedom threshold.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "The vehicle for this one is the cantilever again, at three mesh sizes — the physics is not the point this time.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "solver-cantilever" }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres and kilonewtons.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "The beam",
+      "explain": "The familiar 1 m steel beam.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "beam" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] }
+    },
+    {
+      "title": "Material",
+      "explain": "Steel.",
+      "expect": { "cmd": "material.add" },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material on the one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] }
+    },
+    {
+      "title": "A coarse mesh to start",
+      "explain": "40 mm elements: a small system on purpose, so the first round of solves is instant.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "40 mm" }, "order": 1 }
+    },
+    {
+      "title": "Fix the root",
+      "explain": "Clamped at one end.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" }
+    },
+    {
+      "title": "Load the tip",
+      "explain": "1 kN down at the free end.",
+      "expect": { "cmd": "load.traction", "match": { "name": "tip" } },
+      "highlight": "load.traction",
+      "doIt": { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] }
+    },
+    {
+      "title": "One Step",
+      "explain": "An ordinary static Step.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] }
+    },
+    {
+      "title": "Ask what it will cost, before you ask it to run",
+      "explain": "`query.cost` — surfaced in the Checks tab — answers without solving anything: at 40 mm this Step has 1248 degrees of freedom, an exact non-zero count for the stiffness matrix, and an estimated peak memory well under the fixed 1.5 GiB planning budget. `feasible` reads `null` here, not `true`: the estimate is conservative but incomplete — solver fill-in and allocator overhead are not counted — so `null` means \"not ruled out,\" and only a size far past this one would come back `false`.",
+      "expect": null,
+      "highlight": "[title=\"panel.toggle checks\"]"
+    },
+    {
+      "title": "Force the exact solver",
+      "explain": "`solve.run` takes an optional `solver`. `cpu-direct` factorises the stiffness matrix exactly — one linear solve, no iteration, no tolerance to argue with beyond the residual check it does on itself.",
+      "expect": { "cmd": "solve.run", "match": { "solver": "cpu-direct" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static", "solver": "cpu-direct" }
+    },
+    {
+      "title": "Force the iterative solver on the same model",
+      "explain": "`cpu-pcg` is the CPU conjugate-gradient path: an approximate inner solve wrapped in an f64 refinement loop that keeps correcting until the residual is as good as the direct answer, or gives up. On this small a system it converges in two refinement steps and lands on the same tip deflection as `cpu-direct` to nine significant figures — solver choice is a speed decision here, not an accuracy one.",
+      "expect": { "cmd": "solve.run", "match": { "solver": "cpu-pcg" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static", "solver": "cpu-pcg" }
+    },
+    {
+      "title": "Refine the mesh and do it again",
+      "explain": "20 mm elements: still a small model, but more than four times the equations.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "20 mm" }, "order": 1 }
+    },
+    {
+      "title": "Exact again, at the new size",
+      "explain": "`query.cost` now reports 5508 degrees of freedom — 4.4× the coarse mesh. `cpu-direct` still needs exactly one solve; a direct factorisation does not care how the matrix got bigger, only that it did, and its cost grows faster than linearly with it.",
+      "expect": { "cmd": "solve.run", "match": { "solver": "cpu-direct" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static", "solver": "cpu-direct" }
+    },
+    {
+      "title": "Iterative again, at the new size",
+      "explain": "Still two refinement steps, still the same answer as `cpu-direct`. At these sizes neither path is under real pressure — the point of this exercise is the rule that decides for you once one of them is, not a stopwatch on a beam this small.",
+      "expect": { "cmd": "solve.run", "match": { "solver": "cpu-pcg" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static", "solver": "cpu-pcg" }
+    },
+    {
+      "title": "Where auto switches, and what to do when the fast path stalls",
+      "explain": "The rule, the reason it moves in the browser, and the honest failure mode.",
+      "expect": null,
+      "theory": "`solve.run` with no `solver` at all is `auto`, and `auto` is a fixed rule, not a measurement: it factorises directly up to **200 000 equations** on a native host and **100 000 in the browser**, where the heap is smaller, then switches to conjugate gradient — on the GPU when the host granted one, on the CPU otherwise. Both mesh sizes in this tutorial (1248 and 5508 dofs) sit far under either threshold, which is why `auto` would have picked `cpu-direct` for all four solves above without being asked; forcing `cpu-pcg` was the only way to see it run at all. The crossover is about **memory and factorisation cost, not raw speed** — direct's cost grows faster than linearly with the equation count, while an iterative solve's cost per step stays close to linear, so past some size direct stops being an option regardless of how fast either one is on a small beam like this.\n\n**When the iterative path itself gives up.** The f64 refinement loop wrapped around `cpu-pcg` and `gpu-pcg` stops after a fixed number of steps or once the residual stops improving, and if it never gets close to the requested tolerance it returns the error `solve.stalled` rather than a wrong answer, naming `cpu-direct` as the fix. This is not hypothetical: a `[100, 50, 50]` hex8 cantilever at 780 300 equations is recorded stalling exactly this way — the GPU conjugate gradient's residual *grows* to 1.5e4 instead of shrinking, because the system is too ill-conditioned for a plain Jacobi preconditioner at that size (issue #3, still open). Its 66 000-DOF sibling has no such trouble: 8 refinement steps to a residual of 4.8e-10. Iterative solvers trade a guarantee for a budget; when the budget runs out, the honest answer is `solve.stalled`, and the fix is the one solver here that never needs to iterate at all."
+    }
+  ]
+}

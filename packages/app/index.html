@@ -5,11 +5,42 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https://api.anthropic.com https://api.openai.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FEM Lab</title>
+    <style>
+      .boot{position:fixed;inset:0;display:grid;place-items:center;overflow:hidden;background:#080d12;color:#e5f2f4;font:14px system-ui,sans-serif}
+      .boot::before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 45%,#14394288,transparent 55%),linear-gradient(#66d9d908 1px,transparent 1px),linear-gradient(90deg,#66d9d908 1px,transparent 1px);background-size:auto,48px 48px,48px 48px;mask-image:linear-gradient(transparent,#000 25%,#000 75%,transparent)}
+      .boot-card{position:relative;width:min(420px,85vw);text-align:center}.boot-brand{font:500 12px ui-monospace,monospace;letter-spacing:.3em;color:#90a7ae}.boot-brand b{color:#6be9d0}
+      .boot svg{width:100%;height:230px;overflow:visible;filter:drop-shadow(0 0 12px #48e3c544)}
+      .boot-mesh{fill:#39d3b50a;stroke:#5cdec4;stroke-width:1;animation:boot-pulse 3s ease-in-out infinite}.boot-grid{stroke:#5cdec466;fill:none;stroke-width:.7}
+      .boot-scan{fill:#64ffe21a;stroke:#a1ffea;stroke-width:1.5;animation:boot-scan 2.8s ease-in-out infinite alternate}.boot-node{fill:#cafff4;filter:drop-shadow(0 0 5px #72ffda)}
+      .boot h1{font-size:26px;font-weight:500;letter-spacing:-.04em;margin:0 0 12px}.boot-status{color:#91abb4;min-height:22px;font:12px ui-monospace,monospace}.boot-track{height:3px;background:#20333d;margin:28px 0 18px;overflow:hidden;border-radius:3px}.boot-fill{height:100%;width:8%;background:#70f2ce;box-shadow:0 0 15px #70f2ce;transition:width .5s ease;position:relative}.boot-fill::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#fff,transparent);animation:boot-shine 1.5s linear infinite}.boot-caption{color:#607983;font:10px ui-monospace,monospace;letter-spacing:.13em}
+      @keyframes boot-scan{from{transform:translate(-95px,-24px)}to{transform:translate(95px,24px)}}@keyframes boot-pulse{50%{stroke:#b2ffea;filter:drop-shadow(0 0 6px #5cdec4)}}@keyframes boot-shine{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+      @media(prefers-reduced-motion:reduce){.boot *{animation:none!important;transition:none!important}}
+    </style>
     <script src="coi-bootstrap.js"></script>
     <script src="coi-serviceworker.min.js"></script>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="boot" aria-busy="true">
+        <div class="boot-card">
+          <div class="boot-brand">FEM <b>LAB</b> / ENGINEERING WORKSPACE</div>
+          <svg viewBox="0 0 420 230" aria-hidden="true">
+            <g class="boot-mesh">
+              <path d="M60 90 150 42 360 94 270 142Z M60 90V150L270 202V142 M270 202 360 154V94 M150 42V102L360 154 M60 150 150 102"/>
+              <g class="boot-grid">
+                <path d="m90 97 90-48m-60 55 90-48m-60 55 90-48m-60 55 90-48m-60 55 90-48m-60 55 90-48 M90 97v60m30-53v60m30-53v60m30-53v60m30-53v60m30-53v60 M90 74l210 52m-180-68 210 52 M60 110l210 52 90-48 M60 130l210 52 90-48"/>
+              </g>
+            </g>
+            <path class="boot-scan" d="M165 102 255 54V138L165 186Z"/>
+            <g class="boot-node"><circle cx="60" cy="90" r="3"/><circle cx="150" cy="42" r="3"/><circle cx="360" cy="94" r="3"/><circle cx="270" cy="142" r="3"/><circle cx="270" cy="202" r="3"/><circle cx="60" cy="150" r="3"/></g>
+          </svg>
+          <h1>Preparing your workspace</h1>
+          <div class="boot-status" role="status" aria-live="polite">Loading application…</div>
+          <div class="boot-track"><div class="boot-fill"></div></div>
+          <div class="boot-caption">GEOMETRY · MESH · SIMULATION</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

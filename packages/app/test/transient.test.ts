@@ -3,12 +3,12 @@ import type { FrameResult, FramesResult } from '@femlab/registry';
 import { TransientPlayback, type PlaybackClock, type TransientState } from '../src/transient';
 
 const catalogue: FramesResult = {
-  step: 'heat', modelHash: 'solved', stale: false, field: 'temperature', nodeCount: 1,
+  resultId: 'result-1', step: 'heat', modelHash: 'solved', stale: false, field: 'temperature', nodeCount: 1,
   components: 3, storedComponents: 1, retainedBytes: 64,
   frames: [0, 0.2, 0.7, 0.9].map((timeSi, index) => ({ index, timeSi, time: { value: timeSi * 1000, unit: 'ms' } })),
 };
 const frame = (index: number): FrameResult => ({
-  sample: { step: 'heat', modelHash: 'solved', frame: catalogue.frames[index]! },
+  sample: { resultId: catalogue.resultId, step: 'heat', modelHash: 'solved', frame: catalogue.frames[index]! },
   field: 'temperature', components: 3, nodeCount: 1, unit: 'K', values: [100 + catalogue.frames[index]!.timeSi, 0, 0],
 });
 const deferred = <T>() => {

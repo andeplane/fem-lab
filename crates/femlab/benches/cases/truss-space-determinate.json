@@ -1,0 +1,211 @@
+{
+  "name": "truss-space-determinate",
+  "reference": "Benchmark B10: a statically determinate three-legged space truss. Three legs of length L = 5 m run from an apex 4 m above the ground to feet on a 3 m circle at 0, 120 and 240 degrees, and the apex carries P = 30 kN downward. Vertical equilibrium at the apex gives N = -P L / (3 H) = -12.5 kN in every leg (compression), so sigma = -12.5 MPa, and unit-load virtual work gives the apex settlement delta = P L^3 / (3 H^2 E A) = 0.390625 mm. Every leg is skew to all three axes, so this is what gates the 3D direction cosines.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "truss-space-determinate"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "tripod",
+      "points": [
+        [
+          "0 mm",
+          "0 mm",
+          "4 m"
+        ],
+        [
+          "3000 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        [
+          "-1500 mm",
+          "2598.07621135332 mm",
+          "0 mm"
+        ],
+        [
+          "-1500 mm",
+          "-2598.07621135332 mm",
+          "0 mm"
+        ]
+      ],
+      "members": [
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ]
+      ],
+      "divisions": 1
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tripod"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "leg",
+      "shape": {
+        "kind": "generic",
+        "a": "1000 mm^2",
+        "iY": "1 mm^4",
+        "iZ": "1 mm^4",
+        "j": "1 mm^4"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "leg",
+      "bodies": [
+        "tripod"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "foot0",
+      "on": "tripod.p1"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "foot1",
+      "on": "tripod.p2"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "foot2",
+      "on": "tripod.p3"
+    },
+    {
+      "cmd": "load.force",
+      "name": "top",
+      "on": "tripod.p0",
+      "total": [
+        "0 kN",
+        "0 kN",
+        "-30 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "foot0",
+        "foot1",
+        "foot2"
+      ],
+      "loads": [
+        "top"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "0 mm",
+          "0 mm",
+          "4 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.390625,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "delta = P L^3 / (3 H^2 E A), downward"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0 mm",
+          "0 mm",
+          "4 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "three-fold symmetry: the apex drops straight down"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "1500 mm",
+          "0 mm",
+          "2 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -12.5,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "N / A with N = -P L / (3 H)"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the three feet carry the apex load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

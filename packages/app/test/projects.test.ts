@@ -2,22 +2,17 @@
 // `fake-indexeddb` is a full implementation of the spec, so the version-1 → version-2 upgrade is
 // exercised here rather than stood in for by a hand-rolled fake (AGENTS: ponytail applies to
 // code, never to verification).
-import { IDBFactory } from 'fake-indexeddb';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ModelFile } from '@femlab/registry';
 import { DB_NAME, HANDLES, JOURNALS, PROJECTS, REVISIONS, openDb, tx, type ProjectMeta } from '../src/db';
-import { indexedDbProjects, makeProjects, memoryProjects, type ProjectStore, type ProjectsOptions } from '../src/projects';
-import { forgetHandle, recallHandle, rememberHandle, type DirHandle } from '../src/ai/project';
+import { indexedDbAtomicProjects } from '../src/project-repository';
+import { RESTORING, forgetHandle, recallHandle, rememberHandle, rememberedFolder, reopenRemembered, type Breadcrumbs, type DirHandle } from '../src/ai/project';
 import { indexedDbStore, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
   { cmd: 'model.new', name: 'beam' },
   { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '100 mm', '100 mm'] },
 ];
-
-const journalOf = (cmds: ShareCommand[]): ModelFile['journal'] => ({
-  entries: cmds.map((cmd, seq) => ({ seq, cmd: structuredClone(cmd) as never, hashAfter: `hash-${seq}` })),
-});
 
 let factory: IDBFactory;
 beforeEach(() => {
@@ -64,8 +59,8 @@ describe('the femlab database', () => {
     await rememberHandle(handle, factory);
     expect(await recallHandle(factory)).toMatchObject({ name: 'corbel' });
     // …and the projects store is still there and still usable, which is the half that used to fail
-    await indexedDbProjects(factory).writeJournal({ id: 'a', name: 'a', at: 1, createdAt: 1, commands: 2, hash: null, thumbnail: null }, CMDS);
-    expect(await indexedDbProjects(factory).journal('a')).toEqual(CMDS);
+    await indexedDbAtomicProjects(factory).update('a', () => ({ id: 'a', generation: 'fixture', version: '0', meta: { id: 'a', name: 'a', at: 1, createdAt: 1, commands: 2, hash: null, thumbnail: null }, cmds: CMDS }));
+    expect((await indexedDbAtomicProjects(factory).read('a'))?.cmds).toEqual(CMDS);
     await forgetHandle(factory);
     expect(await recallHandle(factory)).toBeNull();
   });
@@ -76,34 +71,34 @@ describe('the femlab database', () => {
     expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS, REVISIONS]);
     db.close();
 
-    const store = indexedDbProjects(factory);
+    const store = indexedDbAtomicProjects(factory);
     const [meta, ...rest] = await store.list();
     expect(rest).toEqual([]);
     expect(meta).toMatchObject({ name: 'restored-beam', at: 1_700_000_000_000, commands: 2, hash: null, thumbnail: null });
-    expect(await store.journal(meta!.id)).toEqual(CMDS);
+    expect((await store.read(meta!.id))?.cmds).toEqual(CMDS);
 
     // A second open is a no-op: the record is there, and nothing is written over it.
-    await store.writeMeta({ ...meta!, name: 'renamed' });
+    await store.update(meta!.id, row => ({ ...row!, meta: { ...meta!, name: 'renamed' } }));
     (await openDb(factory)).close();
     expect((await store.list()).map((p) => p.name)).toEqual(['renamed']);
   });
 
   it('keeps revision history, projects and folder handles in one upgraded database', async () => {
-    const projects = indexedDbProjects(factory);
+    const projects = indexedDbAtomicProjects(factory);
     const meta: ProjectMeta = { id: 'kept', name: 'kept', at: 2, createdAt: 1, commands: 2, hash: null, thumbnail: null };
-    await projects.writeJournal(meta, CMDS);
+    await projects.update(meta.id, () => ({ id: meta.id, generation: 'fixture', version: '0', meta, cmds: CMDS }));
     const handle = { kind: 'directory', name: 'folder' } as unknown as DirHandle;
     await rememberHandle(handle, factory);
     const history = indexedDbStore(factory);
     const revision = { id: 'r1', name: 'earlier', at: 1, cmds: CMDS.slice(0, 1) };
     await history.write([revision]);
     expect(await history.read()).toEqual([revision]);
-    expect(await projects.journal('kept')).toEqual(CMDS);
+    expect((await projects.read('kept'))?.cmds).toEqual(CMDS);
     expect(await recallHandle(factory)).toMatchObject({ name: 'folder' });
     await history.clear();
     expect(await history.read()).toEqual([]);
     expect(await projects.list()).toEqual([meta]);
-    expect(await projects.journal('kept')).toEqual(CMDS);
+    expect((await projects.read('kept'))?.cmds).toEqual(CMDS);
     expect(await recallHandle(factory)).toMatchObject({ name: 'folder' });
   });
 
@@ -123,16 +118,16 @@ describe('the femlab database', () => {
     expect(db.version).toBe(3);
     expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS, REVISIONS]);
     db.close();
-    const projects = indexedDbProjects(factory);
+    const projects = indexedDbAtomicProjects(factory);
     expect(await projects.list()).toEqual([meta]);
-    expect(await projects.journal(meta.id)).toEqual(CMDS);
+    expect((await projects.read(meta.id))?.cmds).toEqual(CMDS);
     expect(await indexedDbStore(factory).read()).toEqual([]);
   });
 
   it('upgrades a version-1 database whose slot is empty without inventing a project', async () => {
     await legacyDb();
     (await openDb(factory)).close();
-    expect(await indexedDbProjects(factory).list()).toEqual([]);
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([]);
   });
 
   it('reports a blocked upgrade as a structured error rather than hanging', async () => {
@@ -147,258 +142,144 @@ describe('the femlab database', () => {
   });
 });
 
-/** A clock and a timer the test drives, so a debounce fires when the test says so. */
-function harness(store: ProjectStore, extra: Partial<ProjectsOptions> = {}) {
-  let pending: (() => void) | null = null;
-  let at = 1_000;
-  let n = 0;
-  const replayed: ShareCommand[][] = [];
-  const reset = vi.fn(async () => undefined);
-  const projects = makeProjects({
-    store,
-    replay: async (cmds) => void replayed.push(cmds),
-    reset,
-    now: () => (at += 1000),
-    newId: () => `id-${++n}`,
-    setTimer: (fn) => {
-      pending = fn;
-      return 1;
-    },
-    clearTimer: () => {
-      pending = null;
-    },
-    ...extra,
-  });
-  return { projects, reset, replayed, tick: () => pending?.() };
-}
-
-// The fake is type-checked against the real interface, and both satisfy the same table.
-describe.each([
-  ['in memory', () => memoryProjects()],
-  ['in IndexedDB', () => indexedDbProjects(factory)],
-])('projects %s', (_name, make) => {
-  it('creates a project the first time a Model becomes non-empty, and writes it once per burst', async () => {
-    const store = make();
-    const { projects, tick } = harness(store);
-    expect(projects.current()).toBeNull();
-
-    // Boot refreshes before any Command; an empty Journal is not a project yet.
-    projects.note('untitled', journalOf([]), null);
-    expect(projects.list()).toEqual([]);
-
-    projects.note('beam', journalOf(CMDS.slice(0, 1)), 'h1');
-    projects.note('beam', journalOf(CMDS), 'h2');
-    expect(projects.current()).toMatchObject({ id: 'id-1', name: 'beam', commands: 2, hash: 'h2', saving: true });
-    tick();
-    await projects.flush();
-    expect(projects.current()).toMatchObject({ saving: false });
-
-    expect((await store.list()).map((p) => p.name)).toEqual(['beam']);
-    expect(await store.journal('id-1')).toEqual(CMDS);
-  });
-
-  it('forks: a Model-replacing Command starts a second project and leaves the first alone', async () => {
-    const store = make();
-    const { projects, tick } = harness(store);
-    projects.note('beam', journalOf(CMDS), 'h');
-    tick();
-    await projects.flush();
-
-    projects.fork();
-    expect(projects.current()).toBeNull();
-    projects.note('plate', journalOf([CMDS[0]!]), 'h2');
-    tick();
-    await projects.flush();
-
-    expect(projects.list().map((p) => p.name)).toEqual(['plate', 'beam']);
-    expect(await store.journal('id-1')).toEqual(CMDS);
-    expect(await store.journal('id-2')).toEqual([CMDS[0]]);
-  });
-
-  it('new, open, rename, delete — and open replays the Journal it was given', async () => {
-    const store = make();
-    const { projects, reset, replayed, tick } = harness(store);
-    const first = await projects.new('corbel');
-    expect(reset).toHaveBeenCalledWith('corbel');
-    expect(projects.current()).toMatchObject({ id: first.id, name: 'corbel', commands: 0 });
-    projects.note('corbel', journalOf(CMDS), 'h');
-    tick();
-    await projects.flush();
-
-    await projects.new('plate');
-    expect(projects.list().map((p) => p.name)).toEqual(['plate', 'corbel']);
-
-    await projects.open(first.id);
-    expect(replayed).toEqual([CMDS]);
-    expect(projects.current()).toMatchObject({ name: 'corbel' });
-
-    // `id` defaults to the open project, which is what the top bar's inline field sends.
-    await projects.rename(undefined, 'corbel-ULS');
-    expect(projects.current()).toMatchObject({ name: 'corbel-ULS' });
-    expect((await store.list()).find((p) => p.id === first.id)!.name).toBe('corbel-ULS');
-
-    await projects.delete(first.id);
-    expect(projects.list().map((p) => p.name)).toEqual(['plate']);
-    expect(projects.current()).toBeNull();
-    // the Journal goes with it
-    expect(await store.journal(first.id)).toBeNull();
-  });
-
-  it('refuses an id it does not have, and a project whose Journal is gone', async () => {
-    const store = make();
-    const { projects } = harness(store);
-    await expect(projects.open('nope')).rejects.toMatchObject({ code: 'not-found' });
-    await expect(projects.rename('nope', 'x')).rejects.toMatchObject({ code: 'not-found' });
-    await expect(projects.delete('nope')).rejects.toMatchObject({ code: 'not-found' });
-
-    await store.writeMeta({ id: 'orphan', name: 'orphan', at: 1, createdAt: 1, commands: 3, hash: null, thumbnail: null });
-    await projects.prime();
-    await expect(projects.open('orphan')).rejects.toMatchObject({ code: 'not-found', where: "journal 'orphan'" });
-  });
-
-  it('primes from the store, newest first', async () => {
-    const store = make();
-    const meta = (id: string, at: number): ProjectMeta => ({ id, name: id, at, createdAt: at, commands: 1, hash: null, thumbnail: null });
-    await store.writeJournal(meta('old', 1000), CMDS);
-    await store.writeJournal(meta('new', 3000), CMDS);
-    const { projects } = harness(store);
-    expect(await projects.prime()).toHaveLength(2);
-    expect(projects.list().map((p) => p.id)).toEqual(['new', 'old']);
-  });
-
-  it('project.save flushes, takes a thumbnail and answers null when there is no project', async () => {
-    const store = make();
-    const thumbnail = vi.fn(async () => 'data:image/webp;base64,AA');
-    const { projects } = harness(store, { thumbnail });
-    expect(await projects.save()).toBeNull();
-    expect(thumbnail).not.toHaveBeenCalled();
-
-    projects.note('beam', journalOf(CMDS), 'h');
-    // No tick: `save` is the explicit flush, which is why the e2e can reload without a race.
-    const saved = await projects.save();
-    expect(saved).toMatchObject({ name: 'beam', commands: 2, thumbnail: 'data:image/webp;base64,AA', saving: false });
-    expect(await store.journal('id-1')).toEqual(CMDS);
-
-    // A viewer that cannot be shot keeps the thumbnail it had rather than losing it.
-    thumbnail.mockRejectedValueOnce(new Error('no canvas'));
-    expect(await projects.save()).toMatchObject({ thumbnail: 'data:image/webp;base64,AA' });
-  });
-
-  it('captures one exact save while later edits and a project switch continue', async () => {
-    const backing = make();
-    let finish!: () => void;
-    const calls: { meta: ProjectMeta; cmds: ShareCommand[] }[] = [];
-    const store: ProjectStore = {
-      ...backing,
-      writeJournal: async (meta, cmds) => {
-        calls.push({ meta, cmds });
-        if (calls.length === 1) await new Promise<void>((resolve) => { finish = resolve; });
-        await backing.writeJournal(meta, cmds);
-      },
-    };
-    const { projects } = harness(store, { initiallyOn: false });
-    const captured = journalOf(CMDS);
-    projects.note('beam', captured, 'beam-hash');
-    const saving = projects.save();
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-
-    // Neither a caller mutation nor a later Model refresh may change the in-flight payload.
-    (captured.entries[0]!.cmd as { name?: string }).name = 'mutated caller data';
-    projects.note('beam', journalOf([...CMDS, { cmd: 'material.add', name: 'steel' }]), 'later-beam-hash');
-    projects.fork();
-    projects.note('plate', journalOf([{ cmd: 'model.new', name: 'plate' }]), 'plate-hash');
-    finish();
-
-    const receipt = await saving;
-    expect(receipt).toMatchObject({ id: 'id-1', name: 'beam', hash: 'beam-hash' });
-    expect(receipt?.journal).toEqual(journalOf(CMDS));
-    expect(calls[0]).toMatchObject({ meta: { id: 'id-1', name: 'beam', hash: 'beam-hash' }, cmds: CMDS });
-    expect(projects.current()).toMatchObject({ id: 'id-2', name: 'plate', hash: 'plate-hash' });
-    expect(await backing.journal('id-1')).toEqual(CMDS);
-
-    await projects.save();
-    expect(await backing.journal('id-2')).toEqual([{ cmd: 'model.new', name: 'plate' }]);
-  });
-
-  it('rejects an explicit Journal write failure and produces no saved receipt', async () => {
-    const backing = make();
-    const onError = vi.fn();
-    const store: ProjectStore = { ...backing, writeJournal: vi.fn(async () => { throw new Error('quota'); }) };
-    const { projects } = harness(store, { initiallyOn: false, onError });
-    projects.note('beam', journalOf(CMDS), 'h');
-
-    await expect(projects.save()).rejects.toThrow('quota');
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'quota' }));
-    expect(await backing.journal('id-1')).toBeNull();
-    expect(projects.current()).toMatchObject({ id: 'id-1', commands: 2, autosave: false });
-  });
-
-  it('file.autosave off stops writing and never deletes what is already saved', async () => {
-    const store = make();
-    const { projects, tick } = harness(store);
-    projects.note('beam', journalOf(CMDS), 'h');
-    tick();
-    await projects.flush();
-
-    projects.setEnabled(false);
-    expect(projects.enabled()).toBe(false);
-    const edited = [...CMDS, { cmd: 'material.add' as const, name: 'steel' }];
-    projects.note('beam', journalOf(edited), 'h2');
-    tick();
-    await projects.flush();
-    expect(await store.journal('id-1')).toEqual(CMDS);
-    expect(projects.list().map((p) => p.name)).toEqual(['beam']);
-    expect(projects.current()).toMatchObject({ autosave: false, commands: 3, hash: 'h2' });
-
-    const receipt = await projects.save();
-    expect(receipt?.journal).toEqual(journalOf(edited));
-    expect(await store.journal('id-1')).toEqual(edited);
-
-    projects.setEnabled(true);
-    projects.note('beam', journalOf(edited), 'h2');
-    tick();
-    await projects.flush();
-    expect(await store.journal('id-1')).toHaveLength(3);
-  });
-
-  it('reports a failed background write through onError and flush rejects it', async () => {
-    const store = make();
-    const onError = vi.fn();
-    store.writeJournal = () => Promise.reject(new Error('quota'));
-    const { projects, tick } = harness(store, { onError });
-    projects.note('beam', journalOf(CMDS), 'h');
-    tick();
-    await expect(projects.flush()).rejects.toThrow('quota');
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'quota' }));
-    expect(projects.current()).toMatchObject({ name: 'beam' });
-  });
-
-  it('tells the app about every change, so the top bar and the Recent list follow', async () => {
-    const onChange = vi.fn();
-    const { projects, tick } = harness(make(), { onChange });
-    projects.note('beam', journalOf(CMDS), 'h');
-    expect(onChange).toHaveBeenCalled();
-    tick();
-    await projects.flush();
-    expect(onChange.mock.calls.length).toBeGreaterThan(1);
-  });
-});
-
-describe('the default timer', () => {
-  it('writes on its own, without an injected clock', async () => {
-    const store = memoryProjects();
-    const projects = makeProjects({ store, replay: async () => undefined, reset: async () => undefined, delayMs: 1 });
-    projects.note('beam', journalOf(CMDS), 'h');
-    await new Promise((r) => setTimeout(r, 10));
-    await projects.flush();
-    expect(await store.journal((await store.list())[0]!.id)).toEqual(CMDS);
-    // A real `crypto.randomUUID` id, not an injected one.
-    expect((await store.list())[0]!.id).toMatch(/^[0-9a-f-]{36}$/);
-  });
-});
-
 describe('tx', () => {
   it('rejects rather than swallowing a request that fails', async () => {
     await expect(tx(factory, PROJECTS, 'readonly', (s) => s.get(undefined as never))).rejects.toBeTruthy();
+  });
+});
+
+/**
+ * Issue #247. Chromium 153 ends the browser process when IndexedDB deserialises a stored
+ * `FileSystemHandle` in an off-the-record profile — no exception, no crash event, nothing a `try`
+ * can catch. So what is tested here is that start-up never makes that read, and that a record
+ * which cannot become a usable handle is recoverable data: forgotten, reported as
+ * `file.not-found`, and costing the rest of the browser's storage nothing.
+ */
+describe('a remembered project folder', () => {
+  const crumbs = (initial: Record<string, string> = {}): Breadcrumbs & { all: Record<string, string> } => {
+    const all: Record<string, string> = { ...initial };
+    return {
+      all,
+      getItem: (key: string) => all[key] ?? null,
+      setItem: (key: string, value: string) => void (all[key] = value),
+      removeItem: (key: string) => void delete all[key],
+    };
+  };
+  const handleKeys = (): Promise<IDBValidKey[]> => tx<IDBValidKey[]>(factory, HANDLES, 'readonly', (s) => s.getAllKeys());
+  /** Every key whose *value* is deserialised, and what the breadcrumb said at the time. */
+  const watchGets = (crumb: Breadcrumbs): { reads: string[]; restore: () => void } => {
+    const reads: string[] = [];
+    const real = IDBObjectStore.prototype.get;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(function (this: IDBObjectStore, key: IDBValidKey | IDBKeyRange) {
+      reads.push(`${String(key)} while ${crumb.getItem(RESTORING) ?? 'clear'}`);
+      return real.call(this, key);
+    });
+    return { reads, restore: () => spy.mockRestore() };
+  };
+  const dirHandle = (name: string): DirHandle => ({ kind: 'directory', name }) as unknown as DirHandle;
+  /** Both records as a browser would hold them, with whatever the handle slot deserialised to. */
+  const poison = async (value: unknown, name = 'poison'): Promise<void> => {
+    await tx(factory, HANDLES, 'readwrite', (s) => s.put(value, 'folder'));
+    await tx(factory, HANDLES, 'readwrite', (s) => s.put({ name, at: 7 }, 'folder:info'));
+  };
+  const project: ProjectMeta = { id: 'kept', name: 'kept', at: 2, createdAt: 1, commands: 2, hash: null, thumbnail: null };
+
+  it('offers the folder by name at start-up without ever deserialising the handle', async () => {
+    await rememberHandle(dirHandle('corbel'), factory, () => 5);
+    const store = crumbs();
+    const watch = watchGets(store);
+    try {
+      expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 5 });
+    } finally {
+      watch.restore();
+    }
+    expect(watch.reads).toEqual(['folder:info while clear']);
+  });
+
+  it('keeps the projects and forgets a handle record that is no longer a directory handle', async () => {
+    await indexedDbAtomicProjects(factory).update(project.id, () => ({ id: project.id, meta: project, cmds: CMDS, generation: '1', version: '0' }));
+    await poison({ kind: 'file', name: 'not-a-folder' });
+
+    // The start screen still gets its list, and is still offered the folder: neither read deserialises it.
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([project]);
+    expect(await rememberedFolder(factory)).toEqual({ name: 'poison', at: 7 });
+
+    const store = crumbs();
+    await expect(recallHandle(factory, store)).rejects.toMatchObject({
+      code: 'file.not-found',
+      cause: 'the remembered folder ‘poison’ is no longer available in this browser',
+      where: 'the remembered project folder',
+      suggestion: 'open a project folder again to pick it',
+    });
+    // Recoverable data: the bad record is gone, the offer with it, the projects untouched.
+    expect(await handleKeys()).toEqual([]);
+    expect(await rememberedFolder(factory)).toBeNull();
+    expect(store.all).toEqual({});
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([project]);
+    expect((await indexedDbAtomicProjects(factory).read('kept'))?.cmds).toEqual(CMDS);
+  });
+
+  it('never reads the handle again when restoring it did not come back', async () => {
+    await indexedDbAtomicProjects(factory).update(project.id, () => ({ id: project.id, meta: project, cmds: CMDS, generation: '1', version: '0' }));
+    await poison(dirHandle('poison'));
+    // The breadcrumb the previous attempt left behind: the browser went down before it was cleared.
+    const store = crumbs({ [RESTORING]: 'poison' });
+    const watch = watchGets(store);
+    try {
+      await expect(recallHandle(factory, store)).rejects.toMatchObject({
+        code: 'file.not-found',
+        cause: 'restoring ‘poison’ ended this browser last time, so it is not tried again',
+      });
+    } finally {
+      watch.restore();
+    }
+    expect(watch.reads).toEqual(['folder:info while poison']);
+    expect(await handleKeys()).toEqual([]);
+    expect(store.all).toEqual({});
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([project]);
+  });
+
+  it('carries the breadcrumb across the read that can kill the browser, and clears it after', async () => {
+    await rememberHandle(dirHandle('corbel'), factory, () => 5);
+    const store = crumbs();
+    const watch = watchGets(store);
+    try {
+      expect(await recallHandle(factory, store)).toMatchObject({ kind: 'directory', name: 'corbel' });
+    } finally {
+      watch.restore();
+    }
+    expect(watch.reads).toEqual(['folder:info while clear', 'folder while corbel']);
+    expect(store.all).toEqual({});
+    // A handle that did come back stays remembered for the next reload.
+    expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 5 });
+  });
+
+  it('drops a handle an older build left without a descriptor beside it', async () => {
+    await tx(factory, HANDLES, 'readwrite', (s) => s.put(dirHandle('orphan'), 'folder'));
+    expect(await rememberedFolder(factory)).toBeNull();
+    expect(await handleKeys()).toEqual([]);
+    expect(await recallHandle(factory, crumbs())).toBeNull();
+  });
+
+  it('reports a remembered folder that no longer reads as the same structured error', async () => {
+    // Deserialises to a directory handle, but the folder behind it is gone: a revoked or moved one.
+    await poison(dirHandle('gone'), 'gone');
+    const store = crumbs();
+    await expect(reopenRemembered(factory, store)).rejects.toMatchObject({
+      code: 'file.not-found',
+      where: 'the remembered project folder',
+      suggestion: 'open a project folder again to pick it',
+    });
+    expect(await handleKeys()).toEqual([]);
+    await expect(reopenRemembered(factory, store)).resolves.toBeNull();
+  });
+
+  it('forgets both records together, so nothing half-remembered is ever offered', async () => {
+    await rememberHandle(dirHandle('corbel'), factory, () => 5);
+    expect(await handleKeys()).toEqual(['folder', 'folder:info']);
+    const store = crumbs({ [RESTORING]: 'corbel' });
+    await forgetHandle(factory, store);
+    expect(await handleKeys()).toEqual([]);
+    expect(store.all).toEqual({});
   });
 });

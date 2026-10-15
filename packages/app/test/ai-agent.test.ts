@@ -75,6 +75,24 @@ async function drain(gen: AsyncGenerator<AgentEvent, unknown>): Promise<AgentEve
 const turnOf = (events: AgentEvent[]) => (events.find((e) => e.type === 'turn') as Extract<AgentEvent, { type: 'turn' }>).turn;
 
 describe('the agent loop', () => {
+  it('rejects unlisted and tool:false capabilities even when a provider proposes them',async()=>{
+    const {registry,dispatched}=fixture();
+    const keySpy=vi.spyOn(registry,'dispatch');
+    const {provider}=fakeProvider([[{type:'tool_use',id:'private',name:'ai_setKey',input:{provider:'openai',key:'fixture'}},{type:'done',stopReason:'tool_use'}],FINAL_ROUND]);
+    const turn=turnOf(await drain(runTurn({provider,registry,model:'test',system:'',tools:[{name:'ai_setKey',description:'forged',input_schema:{}}],messages:[]})));
+    expect(turn.calls[0]?.status).toBe('failed');expect(turn.calls[0]?.result).toContain('explicit user action');expect(keySpy).not.toHaveBeenCalled();expect(dispatched).toEqual([]);
+    const {provider:unlisted}=fakeProvider([TOOL_ROUND,FINAL_ROUND]);
+    const empty=turnOf(await drain(runTurn({provider:unlisted,registry,model:'test',system:'',tools:[],messages:[]})));
+    expect(empty.calls.every(call=>call.status==='failed')).toBe(true);expect(keySpy).not.toHaveBeenCalled();
+  });
+  it('keeps trusted Command and Query identities when proposed arguments contain overrides',async()=>{
+    const {registry,dispatched}=fixture();
+    const query=vi.spyOn(registry,'query');
+    const {provider}=fakeProvider([[{type:'tool_use',id:'box',name:'geometry_addBox',input:{cmd:'ai.setKey',name:'safe',size:['1 m','1 m','1 m']}},{type:'tool_use',id:'query',name:'query_model',input:{query:'query.account'}},{type:'done',stopReason:'tool_use'}],FINAL_ROUND]);
+    const turn=turnOf(await drain(runTurn({provider,registry,model:'test',system:'',tools:toToolDefinitions(registry),messages:[]})));
+    expect(turn.calls.every(call=>call.status==='succeeded')).toBe(true);expect(dispatched.map(command=>command.cmd)).toEqual(['geometry.addBox']);
+    expect(query).toHaveBeenCalledWith({query:'query.model'});
+  });
   it('returns validation diagnostics as a failed script tool result without starting execution', async () => {
     const transport = fakeTransport();
     transport.query = vi.fn(async () => ({ entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
@@ -86,7 +104,7 @@ describe('the agent loop', () => {
       [{ type: 'tool_use', id: 'bad-script', name: 'run_script', input: { code: 'wrong' } }, { type: 'done', stopReason: 'tool_use' }],
       FINAL_ROUND,
     ]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] })));
     expect(turn.calls[0]?.status).toBe('failed');
     expect(host.script.run).not.toHaveBeenCalled();
     expect(transport.dispatch).not.toHaveBeenCalled();
@@ -114,7 +132,7 @@ describe('the agent loop', () => {
   it('sends a failed Command back as its structured Error with is_error, and the card says so', async () => {
     const { registry } = fixture({ failBox: true });
     const { provider, seen } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
-    const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: 'rules', tools: [], messages: [{ role: 'user', content: [] }] }));
+    const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: 'rules', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] }));
 
     const failed = seen[1]!.messages[2]!.content[0] as { content: string; isError?: boolean };
     expect(failed.isError).toBe(true);
@@ -126,7 +144,7 @@ describe('the agent loop', () => {
   it('computes the Journal diff of the turn and how many steps undo it', async () => {
     const { registry } = fixture();
     const { provider } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] })));
     expect(turn.diff.map((e) => e.seq)).toEqual([1]);
     expect(turn.undoSteps).toBe(1);
     expect(turn.undoJournal).toEqual(JOURNALS[1]!.hash);
@@ -139,7 +157,7 @@ describe('the agent loop', () => {
     const rounds = [TOOL_ROUND, FINAL_ROUND].map((round) => round.map((event): ChatEvent =>
       event.type === 'usage' ? { type: 'usage', usage: { input: 150_000, cacheRead: 25_000, output: 1_000 } } : event));
     const { provider } = fakeProvider(rounds);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'gpt-6-astra', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'gpt-6-astra', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] })));
     expect(turn.usage).toEqual({ input: 300_000, cacheRead: 50_000, output: 2_000 });
     expect(turn.cost).toBeCloseTo(3.15, 12);
   });
@@ -160,7 +178,7 @@ describe('the agent loop', () => {
     after.entries[1]!.cmd = command as never;
     const { registry } = fixture({ journals: [JOURNALS[0]!, after] });
     const { provider } = fakeProvider([[{ type: 'tool_use', id: 'default', name, input }], FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.diff).toEqual([after.entries[1]!]);
     expect(turn.undoSteps).toBe(1);
   });
@@ -172,7 +190,7 @@ describe('the agent loop', () => {
     const { registry } = fixture({ journals: [{ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }, after] });
     vi.spyOn(registry, 'dispatch').mockResolvedValue({ seq: 0, revision: 1, hash: 'b' });
     const { provider } = fakeProvider([[{ type: 'tool_use', id: 'new', name: 'model_new', input: { name: 'new' } }], FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.diff).toHaveLength(1);
     expect(turn.undoJournal).toBeNull();
     expect(turn.undoSteps).toBe(0);
@@ -184,7 +202,7 @@ describe('the agent loop', () => {
     after.revision++;
     const { registry, dispatched } = fixture({ journals: [JOURNALS[0]!, after] });
     const { provider } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.diff.map((entry) => entry.cmd.cmd)).toEqual(['geometry.addBox']);
     expect(turn.undoJournal).toBeNull();
     await undoTurn(registry, turn.undoSteps, turn.undoJournal);
@@ -199,7 +217,7 @@ describe('the agent loop', () => {
     let seq = 0;
     vi.spyOn(registry, 'dispatch').mockImplementation(async () => ({ seq: ++seq, hash: seq === 1 ? 'b' : 'c' }));
     const { provider } = fakeProvider([[...TOOL_ROUND, { type: 'tool_use', id: 'second', name: 'geometry_addBox', input: { name: 'second', size: ['1 m', '1 m', '1 m'] } }], FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.diff.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(turn.undoSteps).toBe(2);
     expect(turn.undoJournal).toBe(after.hash);
@@ -210,7 +228,7 @@ describe('the agent loop', () => {
     after.entries[0]!.cmd = { cmd: 'model.new', name: 'different model' } as never;
     const { registry } = fixture({ journals: [JOURNALS[0]!, after] });
     const { provider } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.undoJournal).toBeNull();
     expect(turn.undoSteps).toBe(0);
   });
@@ -219,7 +237,7 @@ describe('the agent loop', () => {
     const { registry } = fixture();
     vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: [], journalEntries: [JOURNALS[1]!.entries[1]!] });
     const { provider } = fakeProvider([[{ type: 'tool_use', id: 'script', name: 'run_script', input: { code: 'build()' } }], FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.diff).toEqual([JOURNALS[1]!.entries[1]!]);
     expect(turn.undoSteps).toBe(1);
     expect(turn.undoJournal).toEqual(JOURNALS[1]!.hash);
@@ -231,18 +249,18 @@ describe('the agent loop', () => {
       [{ type: 'tool_use', id: 's1', name: 'run_script', input: { code: 'fem.model.new({})' } }, { type: 'tool_use', id: 's2', name: 'not_a_tool', input: {} }, { type: 'done', stopReason: 'tool_use' }],
       FINAL_ROUND,
     ]);
-    const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] }));
+    const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] }));
     const calls = turnOf(events).calls;
     expect(calls[0]).toMatchObject({ command: 'script.run', status: 'succeeded' });
     expect(calls[1]).toMatchObject({ command: 'not_a_tool', status: 'failed' });
-    expect(JSON.parse((seen[1]!.messages[2]!.content[1] as { content: string }).content).code).toBe('not-found');
+    expect(JSON.parse((seen[1]!.messages[2]!.content[1] as { content: string }).content).code).toBe('unsupported');
   });
 
   it('marks a partially successful script as failed while preserving receipts and output', async () => {
     const { registry } = fixture();
     vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: ['built one body'], error: 'line 2: no such Set', journalEntries: [JOURNALS[1]!.entries[1]!] });
     const { provider, seen } = fakeProvider([[{ type: 'tool_use', id: 'script', name: 'run_script', input: { code: 'buildThenFail()' } }], FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: toToolDefinitions(registry), messages: [] })));
     expect(turn.calls[0]!.status).toBe('failed');
     expect(JSON.parse(turn.calls[0]!.result)).toMatchObject({ error: 'line 2: no such Set', console: ['built one body'] });
     expect(turn.diff).toEqual([JOURNALS[1]!.entries[1]!]);
@@ -253,14 +271,14 @@ describe('the agent loop', () => {
   it('counts the skills the model loaded itself', async () => {
     const { registry } = fixture();
     const { provider } = fakeProvider([[{ type: 'tool_use', id: 'k1', name: 'skill_invoke', input: { name: 'beam-theory-check' } }, { type: 'done', stopReason: 'tool_use' }], FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] })));
     expect(turn.skills).toEqual(['beam-theory-check']);
   });
 
   it('stops on a provider error and still reports the turn', async () => {
     const { registry } = fixture();
     const { provider } = fakeProvider([[{ type: 'error', message: '401 invalid x-api-key' }]]);
-    const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] }));
+    const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] }));
     expect(events.filter((e) => e.type === 'error')).toEqual([{ type: 'error', message: '401 invalid x-api-key' }]);
     expect(turnOf(events).calls).toEqual([]);
   });
@@ -269,11 +287,11 @@ describe('the agent loop', () => {
     const { registry } = fixture();
     const clock = vi.fn(() => clock.mock.calls.length * 1000);
     const slow = fakeProvider([TOOL_ROUND, TOOL_ROUND, TOOL_ROUND]);
-    const events = await drain(runTurn({ provider: slow.provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }], timeoutMs: 1, now: clock }));
+    const events = await drain(runTurn({ provider: slow.provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }], timeoutMs: 1, now: clock }));
     expect(events.some((e) => e.type === 'error' && e.message.includes('was stopped'))).toBe(true);
 
     const looping = fakeProvider([TOOL_ROUND, TOOL_ROUND, TOOL_ROUND]);
-    const capped = await drain(runTurn({ provider: looping.provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }], maxRounds: 2 }));
+    const capped = await drain(runTurn({ provider: looping.provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }], maxRounds: 2 }));
     expect(looping.seen).toHaveLength(2);
     expect(turnOf(capped).calls).toHaveLength(4);
   });
@@ -285,7 +303,7 @@ describe('the agent loop', () => {
     }) as never;
     const registry = new Registry({ schema: schema as unknown as EngineSchema, host: fakeHost(transport) });
     const { provider } = fakeProvider([FINAL_ROUND]);
-    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [{ role: 'user', content: [] }] })));
     expect(turn.diff).toEqual([]);
     expect(turn.undoSteps).toBe(0);
   });
@@ -304,7 +322,7 @@ it('finishes an active tool on interruption, skips later tools and retains paire
     { type: 'done', stopReason: 'tool_use' },
   ]]);
   const messages: Message[] = [];
-  const events = await drain(runTurn({ registry, provider, model: 'test', system: '', tools: [], messages, signal: controller.signal }));
+  const events = await drain(runTurn({ registry, provider, model: 'test', system: '', tools: toToolDefinitions(registry), messages, signal: controller.signal }));
   expect(dispatch).toHaveBeenCalledTimes(1);
   expect(seen).toHaveLength(1);
   expect(turnOf(events).calls.map(c => c.status)).toEqual(['succeeded', 'cancelled']);
@@ -328,7 +346,7 @@ it.each([false, true])('marks unreported interrupted usage unknown (prior round:
       controller.abort();
     }
   } };
-  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [], signal: controller.signal })));
   expect(turn.cost).toBeNull();
   expect(turn.usage.input).toBe(priorRound ? 100 : 0);
 });
@@ -342,7 +360,7 @@ it('retains known usage when interrupted between requests without starting anoth
     { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } },
     { type: 'done', stopReason: 'tool_use' },
   ]]);
-  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: toToolDefinitions(registry), messages: [], signal: controller.signal })));
   expect(seen).toHaveLength(1);
   expect(turn.cost).toBeCloseTo(0.001);
 });

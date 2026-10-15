@@ -1,0 +1,152 @@
+{
+  "id": "composite-block-shear",
+  "title": "A composite block in shear",
+  "minutes": 12,
+  "summary": "Two materials, one interface: cut a cavity, fill it with a second Body, tie the two together, and predict the apparent shear stiffness before you solve for it.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A sandwich panel: two steel face sheets around an aluminium core, sheared through its thickness. Wide and thin on purpose — a specimen this shape keeps the free edges far from the middle, which is what the theory at the end assumes.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "composite-shear" }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres, kilonewtons, megapascals.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "The outer material, as one solid block",
+      "explain": "Build it as if it were solid steel end to end: 200 × 200 mm in plan, 30 mm thick. The cavity for the core comes next.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "block" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "block", "size": ["200 mm", "30 mm", "200 mm"] }
+    },
+    {
+      "title": "Cut the cavity for the core",
+      "explain": "`geometry.subtract` cuts a shape out of an existing Body — here, the middle third of the thickness, all the way through in plan. `block` is left as two disconnected slabs, 10 mm each, with nothing directly joining them: whatever goes in the gap is the only thing that will.",
+      "expect": { "cmd": "geometry.subtract", "match": { "name": "cavity" } },
+      "highlight": "geometry.subtract",
+      "doIt": { "cmd": "geometry.subtract", "name": "cavity", "from": "block", "shape": { "kind": "box", "size": ["200 mm", "10 mm", "200 mm"], "at": ["0 mm", "10 mm", "0 mm"] } }
+    },
+    {
+      "title": "A second Body to fill it",
+      "explain": "`core` is its own Body, exactly the size and position of the cavity it fills. Nothing about `geometry.addBox` says the two touch — the Model, right now, is two solids that happen to share a surface, mechanically unrelated.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "core" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "core", "size": ["200 mm", "10 mm", "200 mm"], "at": ["0 mm", "10 mm", "0 mm"] }
+    },
+    {
+      "title": "The outer material",
+      "explain": "Steel.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3 }
+    },
+    {
+      "title": "The core material",
+      "explain": "Aluminium — a different modulus, and a different Poisson's ratio. This is the first tutorial where that difference is the entire point.",
+      "expect": { "cmd": "material.add", "match": { "name": "aluminium" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "aluminium", "E": "70 GPa", "nu": 0.33 }
+    },
+    {
+      "title": "Assign steel to the outer Body",
+      "explain": "`material.assign` takes one Material and any number of Bodies — but never the reverse. Two Bodies, two separate assignments.",
+      "expect": { "cmd": "material.assign", "match": { "material": "steel" } },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["block"] }
+    },
+    {
+      "title": "Assign aluminium to the core",
+      "explain": "Now every Body has exactly one Material, which is all `solve.run` requires — it says nothing yet about whether the two Bodies are connected.",
+      "expect": { "cmd": "material.assign", "match": { "material": "aluminium" } },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "aluminium", "bodies": ["core"] }
+    },
+    {
+      "title": "Mesh both Bodies",
+      "explain": "One `mesh.set` call covers every Body in the Model with the same lattice. That does not tie them together — a shared mesh setting is not a shared node — it only means both Bodies are ready to be.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "10 mm" }, "order": 1 }
+    },
+    {
+      "title": "Name the interface, from the mesh",
+      "explain": "`block`'s own auto-named faces cover its six outer sides; a cavity cut all the way through in plan, like this one, does not leave a clean auto-generated Set on a lattice mesh the way a simple box's faces do. `geometry.nameFace` names a face Set directly from a geometric rule instead — a plane, here — evaluated against the real mesh boundary, and re-evaluated after every remesh. This one is the lower slab's top face, at the bottom of the cavity.",
+      "expect": { "cmd": "geometry.nameFace", "match": { "name": "blockLower" } },
+      "highlight": "geometry.nameFace",
+      "doIt": { "cmd": "geometry.nameFace", "name": "blockLower", "of": "block", "where": { "kind": "plane", "normal": [0, 1, 0], "offset": "10 mm" } }
+    },
+    {
+      "title": "Name the other side of the interface",
+      "explain": "The upper slab's bottom face, at the top of the cavity. Its outward normal points the other way, so the plane's normal flips too.",
+      "expect": { "cmd": "geometry.nameFace", "match": { "name": "blockUpper" } },
+      "highlight": "geometry.nameFace",
+      "doIt": { "cmd": "geometry.nameFace", "name": "blockUpper", "of": "block", "where": { "kind": "plane", "normal": [0, -1, 0], "offset": "-20 mm" } }
+    },
+    {
+      "title": "Fix the base",
+      "explain": "The very bottom of the lower slab, clamped in every direction — the datum the shear is measured against.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "block.ymin" }
+    },
+    {
+      "title": "Restrain the top out of the shear plane",
+      "explain": "The top face is free to move sideways — that is the whole point — but held to zero in the other two directions, so what follows is shear and not some mixture of shear and bending.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "topRestrain" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "topRestrain", "on": "block.ymax", "dofs": ["uy", "uz"] }
+    },
+    {
+      "title": "Prescribe the shear, not a force",
+      "explain": "`constraint.prescribe` sets one displacement component to a chosen non-zero value on a Set — here, `ux` on the top face. 0.3 mm over a 30 mm thickness is 1 % engineering shear strain. Prescribing the displacement, rather than a force, is what makes \"apparent stiffness\" a single well-defined number to solve for: reaction over prescribed motion, not the other way around.",
+      "expect": { "cmd": "constraint.prescribe", "match": { "name": "shear" } },
+      "highlight": "constraint.prescribe",
+      "doIt": { "cmd": "constraint.prescribe", "name": "shear", "on": "block.ymax", "dof": "ux", "value": "0.3 mm" }
+    },
+    {
+      "title": "What happens without a tie",
+      "explain": "Solving right now would fail: `core` touches `block` geometrically, but the two Bodies still have entirely separate degrees of freedom, and nothing built so far restrains `core` at all. The engine reports it plainly — `solve.not-positive-definite`, a non-positive pivot, suggesting `constraint.fix` — because as far as the stiffness matrix is concerned, `core` is a rigid body floating in space. A shared mesh setting was never a bond.",
+      "expect": null
+    },
+    {
+      "title": "Tie the lower interface",
+      "explain": "`contact.add` glues two face Sets: every node of `slave` is constrained to the point it projects onto in `master`, in every displacement component — no gap, no sliding, `kind: \"bonded\"` is the only kind there is today. It costs an ordinary static solve, not a contact search, because it is a linear constraint inside the same operator.",
+      "expect": { "cmd": "contact.add", "match": { "name": "bondLower" } },
+      "highlight": "contact.add",
+      "doIt": { "cmd": "contact.add", "name": "bondLower", "master": "blockLower", "slave": "core.ymin", "kind": "bonded" }
+    },
+    {
+      "title": "Tie the upper interface",
+      "explain": "The same tie, at the top of the core. Both interfaces have to be tied — one bonded face still leaves the other end of the core free to peel away.",
+      "expect": { "cmd": "contact.add", "match": { "name": "bondUpper" } },
+      "highlight": "contact.add",
+      "doIt": { "cmd": "contact.add", "name": "bondUpper", "master": "blockUpper", "slave": "core.ymax", "kind": "bonded" }
+    },
+    {
+      "title": "One Step, five Constraints",
+      "explain": "The two supports, the prescribed shear, and both ties — a Step is just the list of what is active together.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root", "topRestrain", "shear", "bondLower", "bondUpper"], "loads": [] }
+    },
+    {
+      "title": "Solve it",
+      "explain": "The reaction on `shear` is the total force it took to impose that 0.3 mm — everything the theory below needs.",
+      "expect": { "cmd": "solve.run" },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static" }
+    },
+    {
+      "title": "The bounds, the answer, and why it is outside them",
+      "explain": "Predict the range, then see where the real, finite specimen actually lands.",
+      "expect": null,
+      "theory": "Shear modulus from the two elastic constants, $G = E / (2(1+\\nu))$: $G_{\\text{steel}} = 80.77\\,\\mathrm{GPa}$, $G_{\\text{aluminium}} = 26.32\\,\\mathrm{GPa}$. The core is a third of the thickness, the two steel face sheets together the other two thirds ($f_{\\text{steel}} = 2/3$, $f_{\\text{core}} = 1/3$).\n\nThe layers are stacked *along the direction the shear stress has to travel*, so equilibrium demands the same shear stress pass through each one in turn — the **series (Reuss) bound**:\n$$\\frac{1}{G_{\\text{series}}} = \\frac{f_{\\text{steel}}}{G_{\\text{steel}}} + \\frac{f_{\\text{core}}}{G_{\\text{aluminium}}} \\quad\\Rightarrow\\quad G_{\\text{series}} = 47.80\\,\\mathrm{GPa}$$\nThe other extreme, if the same two materials instead sat side by side sharing the same top-to-bottom motion, is the **parallel (Voigt) bound**:\n$$G_{\\text{parallel}} = f_{\\text{steel}} G_{\\text{steel}} + f_{\\text{core}} G_{\\text{aluminium}} = 62.62\\,\\mathrm{GPa}$$\nBefore solving, the honest prediction is \"somewhere in $[47.80, 62.62]$ GPa, close to the series end, since this is a series arrangement.\"\n\nReading the reaction on `shear` back as $\\tau/\\gamma$ gives $G_{\\text{apparent}} \\approx 46.4\\,\\mathrm{GPa}$ at this mesh (46.1 GPa at half the element size — settled to within 1 %, so this is not a mesh artefact). That is *below* the series bound, not inside $[47.80, 62.62]$. It is not a wrong answer: Reuss and Voigt bound the effective modulus of an infinite, periodic composite, and this specimen is one layer of each material with four free edges, not an infinite stack. A free edge can only let a structure deform *more* than the idealised infinite one, never less — the same reasoning behind $K_t = 3$ holding only for an infinite plate in the Kirsch tutorials. Landing just under the series bound, rather than inside the textbook range, is what a real, finite specimen of a series composite is supposed to do."
+    }
+  ]
+}

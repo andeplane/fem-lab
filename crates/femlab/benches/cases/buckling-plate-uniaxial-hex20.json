@@ -1,0 +1,137 @@
+{
+  "name": "buckling-plate-uniaxial-hex20",
+  "reference": "Benchmark B5b: a simply supported square plate under uniaxial compression, E = 210 GPa, nu = 0.3, 1000 x 1000 x 10 mm. sigma_cr = k pi^2 D / (b^2 t) with k = 4 for a square plate compressed on one pair of edges (Timoshenko & Gere, Theory of Elastic Stability, 2nd ed., section 9.2) and D = E t^3 / (12 (1 - nu^2)) = 19230.77 N m: sigma_cr = 75.920 MPa, so lambda = 75.920 against the 1 MPa reference pressure. Gated at 3 %, which is what a single quadratic element through a 10 mm thickness earns. Modelled as one quarter, 500 x 500 x 10 mm of hex20: xmin and ymin are the real plate edges (simply supported, uz = 0, in-plane free), xmax and ymax are the centrelines of the sin(pi x / a) sin(pi y / b) fundamental mode, where ux and uy are respectively zero. The unloaded edge is free in-plane, so the pre-buckling state is uniaxial: sigma_yy = 0, which is what the k = 4 value belongs to.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "buckling-plate-uniaxial"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "plate",
+      "size": [
+        "500 mm",
+        "500 mm",
+        "10 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 10,
+          "ny": 10,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "edge-x",
+      "on": "plate.xmin",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "edge-y",
+      "on": "plate.ymin",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "centreline-x",
+      "on": "plate.xmax",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "centreline-y",
+      "on": "plate.ymax",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "squeeze",
+      "on": "plate.xmin",
+      "value": "1 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "buckle",
+      "procedure": "buckling",
+      "constraints": [
+        "edge-x",
+        "edge-y",
+        "centreline-x",
+        "centreline-y"
+      ],
+      "loads": [
+        "squeeze"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "buckle"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/bucklingFactors/0",
+      "expect": 75.92,
+      "tol": 0.03,
+      "rel": true,
+      "note": "sigma_cr = 4 pi^2 D / (b^2 t) over the 1 MPa reference stress"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "the pre-buckling static state balances its applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

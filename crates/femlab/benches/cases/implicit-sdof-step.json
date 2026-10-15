@@ -1,0 +1,191 @@
+{
+  "name": "implicit-sdof-step",
+  "reference": "Benchmark F3: one hex8 cube of steel, 100 mm, clamped at xmin and held flat in y and z at xmax under a 1 kN axial step load. The four free DOFs move as one, so the model is the scalar m x'' + k x = P with k = M A/L (uniaxial strain, M = E(1-nu)/((1+nu)(1-2nu)) = 282.69 GPa) and m = rho A L/3 (the consistent mass of a linear ramp): omega = sqrt(3M/rho)/L = 104272.6 rad/s, T = 60.257 us, u_static = P L/(M A) = 3.5374e-5 mm. Newmark average acceleration at T/200 follows u(t) = u_static (1 - cos omega t): 2 u_static at T/2 and 3T/2, back to zero at T. Sampled at the extremes, where the nearest retained frame is second-order close.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "sdof-step"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "cube",
+      "size": [
+        "100 mm",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "cube"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 1,
+          "ny": 1,
+          "nz": 1
+        }
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "cube.xmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "guide",
+      "on": "cube.xmax",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "cube.xmax",
+      "total": [
+        "1 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "ring",
+      "procedure": "implicit",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "dt": "3.012864e-7 s",
+      "tEnd": "1.205146e-4 s",
+      "alpha": 0,
+      "outputEvery": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "ring"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "100 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "3.012864e-5 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": 7.07483e-05,
+      "tol": 0.01,
+      "rel": true,
+      "note": "2 u_static at the first peak, t = T/2"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "100 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "9.038592e-5 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": 7.07483e-05,
+      "tol": 0.01,
+      "rel": true,
+      "note": "2 u_static again at 3T/2: no decay, no drift"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "100 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "6.025728e-5 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 3.5374150000000003e-07,
+      "rel": false,
+      "note": "back to rest at t = T"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "100 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 3.5374150000000003e-07,
+      "rel": false,
+      "note": "and at 2T, the end of the run"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-direct",
+      "note": "one factorisation, back-substituted every step"
+    }
+  ]
+}

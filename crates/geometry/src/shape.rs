@@ -4,11 +4,15 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::imported::MAX_TRIANGLES;
 use crate::sketch::Sketch;
 use crate::GeomError;
 
 /// Default number of facets around a circle for cylinders, spheres and revolutions.
 pub const DEFAULT_SEGMENTS: u32 = 32;
+
+/// A boolean over shapes of different dimensions has no meaning.
+const DIM_MIX: &str = "cannot combine 1D line members, 2D sheets and 3D solids";
 
 /// Scale, then rotate about x, y, z (degrees, in that order), then translate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -137,12 +141,52 @@ pub enum Shape {
     Transform { shape: Box<Shape>, at: Affine3 },
     /// A named sub-shape: its faces are tagged `<name>.<tag>`.
     Named { name: String, shape: Box<Shape> },
+    /// Straight line members between joints: a truss or a frame. `points` are the joints,
+    /// `members` index pairs into them, and each member is cut into `divisions` elements. It
+    /// has no volume and no surface, so it never becomes a [`crate::Solid`]; the line mesher
+    /// is its own geometry. Its node sets are `p0 … pN`, one per joint. `beam` makes the
+    /// members Timoshenko beams (`Beam2`) instead of pin-jointed bars (`Truss2`); it defaults
+    /// to false and is left out of the serialised form then, so every Model written before it
+    /// existed still loads as the truss it was.
+    Polyline {
+        points: Vec<[f64; 3]>,
+        members: Vec<[u32; 2]>,
+        divisions: u32,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beam: bool,
+    },
+    /// A triangle mesh read from a file (`geometry.import`), welded into a solid by the
+    /// geometry kernel. Its faces are patches of triangles that meet more smoothly than
+    /// `feature_angle`, tagged `face0`, `face1`, … largest area first.
+    Mesh {
+        /// Vertex positions in metres.
+        positions: Vec<[f64; 3]>,
+        /// Triangles as vertex indices, counter-clockwise seen from outside.
+        triangles: Vec<[u32; 3]>,
+        /// Dihedral angle in degrees above which an edge splits two face patches; 30 by default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_angle: Option<f64>,
+        /// Collapse mesh features smaller than this many metres before use.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_below: Option<f64>,
+    },
 }
 
 impl Shape {
-    /// 2 for sheets (and booleans of sheets), 3 otherwise.
+    /// Whether this Body came from an imported triangle mesh, allowing a host to wrap that
+    /// mesh in a world-space transform without losing its import-specific metadata.
+    pub fn is_imported(&self) -> bool {
+        match self {
+            Shape::Mesh { .. } => true,
+            Shape::Transform { shape, .. } | Shape::Named { shape, .. } => shape.is_imported(),
+            _ => false,
+        }
+    }
+
+    /// 1 for line members, 2 for sheets (and booleans of sheets), 3 otherwise.
     pub fn dim(&self) -> usize {
         match self {
+            Shape::Polyline { .. } => 1,
             Shape::Sheet { .. } => 2,
             Shape::Union { shapes } | Shape::Intersect { shapes } => shapes.first().map_or(3, Shape::dim),
             Shape::Subtract { from, .. } => from.dim(),
@@ -210,7 +254,7 @@ impl Shape {
                 for s in shapes {
                     s.validate()?;
                     if s.dim() != d {
-                        return Err(GeomError("cannot combine 2D sheets with 3D solids".into()));
+                        return Err(GeomError(DIM_MIX.into()));
                     }
                 }
                 Ok(())
@@ -220,7 +264,7 @@ impl Shape {
                 for c in cut {
                     c.validate()?;
                     if c.dim() != from.dim() {
-                        return Err(GeomError("cannot combine 2D sheets with 3D solids".into()));
+                        return Err(GeomError(DIM_MIX.into()));
                     }
                 }
                 Ok(())
@@ -234,6 +278,57 @@ impl Shape {
                     return Err(GeomError(format!("'{name}' is not a valid name (no dots or spaces)")));
                 }
                 shape.validate()
+            }
+            Shape::Polyline { points, members, divisions, .. } => {
+                crate::mesher::line::check(points, members, *divisions)
+            }
+            Shape::Mesh { positions, triangles, feature_angle, simplify_below } => {
+                if triangles.len() < 4 {
+                    return Err(GeomError(format!(
+                        "an imported mesh needs at least 4 triangles to bound a solid, got {}",
+                        triangles.len()
+                    )));
+                }
+                if triangles.len() > MAX_TRIANGLES {
+                    return Err(GeomError(format!(
+                        "an imported mesh is limited to {MAX_TRIANGLES} triangles, got {}; decimate it first",
+                        triangles.len()
+                    )));
+                }
+                for (i, p) in positions.iter().enumerate() {
+                    if p.iter().any(|c| !c.is_finite()) {
+                        return Err(GeomError(format!("vertex {i} has a non-finite coordinate: {p:?}")));
+                    }
+                }
+                for (i, t) in triangles.iter().enumerate() {
+                    for v in t {
+                        if *v as usize >= positions.len() {
+                            return Err(GeomError(format!(
+                                "triangle {i} refers to vertex {v}, but the mesh has {} vertices",
+                                positions.len()
+                            )));
+                        }
+                    }
+                    let n = crate::solid::tri_normal(
+                        positions[t[0] as usize],
+                        positions[t[1] as usize],
+                        positions[t[2] as usize],
+                    );
+                    if n == [0.0; 3] || n.iter().any(|c| !c.is_finite()) {
+                        return Err(GeomError(format!("triangle {i} has zero or non-finite area")));
+                    }
+                }
+                if let Some(a) = feature_angle {
+                    if !(*a > 0.0 && *a < 180.0) {
+                        return Err(GeomError(format!("featureAngle must be in (0, 180) degrees, got {a}")));
+                    }
+                }
+                if let Some(s) = simplify_below {
+                    if !(*s >= 0.0 && s.is_finite()) {
+                        return Err(GeomError(format!("simplifyBelow must be zero or positive, got {s}")));
+                    }
+                }
+                Ok(())
             }
         }
     }
@@ -286,6 +381,13 @@ impl Shape {
             }
             Shape::Transform { shape, at } => shape.contains(at.inverse(p))?,
             Shape::Named { shape, .. } => shape.contains(p)?,
+            // A member is a curve: it has no interior for a point to be inside of.
+            Shape::Polyline { .. } => false,
+            // An imported mesh has no analytic form; `Solid` ray-casts the evaluated
+            // manifold instead, which is the only place the answer exists.
+            Shape::Mesh { .. } => {
+                return Err(GeomError("an imported mesh is only contained-tested as an evaluated Solid".into()))
+            }
         })
     }
 }
@@ -387,6 +489,15 @@ mod tests {
         let named = Shape::Named { name: "beam".into(), shape: Box::new(b.clone()) };
         assert_eq!(named.dim(), 3);
         assert!(named.contains([0.5, 0.5, 0.5]).unwrap());
+        // A line body is a curve: dimension 1, with no interior for a point to be inside of.
+        let line = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 2,
+            beam: false,
+        };
+        assert_eq!(line.dim(), 1);
+        assert!(!line.contains([0.5, 0.0, 0.0]).unwrap());
         assert_eq!(Shape::Union { shapes: vec![] }.dim(), 3);
         assert_eq!(Shape::Subtract { from: Box::new(sheet.clone()), cut: vec![] }.dim(), 2);
         let bad = Shape::Sheet { sketch: Sketch { outer: vec![], holes: vec![] } };
@@ -405,9 +516,87 @@ mod tests {
         assert!(Shape::Named { name: "n".into(), shape: Box::new(bad.clone()) }.contains([0.0; 3]).is_err());
     }
 
+    /// The unit cube as a triangle soup, wound counter-clockwise seen from outside.
+    fn cube_soup() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let quads: [[u32; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+        (positions, quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect())
+    }
+
+    #[test]
+    fn an_imported_mesh_validates_its_soup_and_has_no_analytic_containment() {
+        let (positions, triangles) = cube_soup();
+        let cube = Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: None,
+            simplify_below: None,
+        };
+        assert_eq!(cube.dim(), 3);
+        assert!(cube.validate().is_ok());
+        assert!(cube.contains([0.5; 3]).unwrap_err().0.contains("evaluated Solid"));
+        let with = |p: Vec<[f64; 3]>, t: Vec<[u32; 3]>, angle: Option<f64>, simplify: Option<f64>| {
+            Shape::Mesh { positions: p, triangles: t, feature_angle: angle, simplify_below: simplify }
+                .validate()
+                .unwrap_err()
+                .0
+        };
+        assert!(with(positions.clone(), triangles[..3].to_vec(), None, None).contains("at least 4 triangles"));
+        assert!(with(positions.clone(), vec![[0, 1, 2]; MAX_TRIANGLES + 1], None, None).contains("limited to"));
+        let mut nan = positions.clone();
+        nan[2][1] = f64::NAN;
+        assert!(with(nan, triangles.clone(), None, None).contains("vertex 2 has a non-finite coordinate"));
+        let mut oob = triangles.clone();
+        oob[5][2] = 99;
+        assert!(with(positions.clone(), oob, None, None).contains("triangle 5 refers to vertex 99"));
+        let mut flat = triangles.clone();
+        flat[7] = [1, 1, 2];
+        assert!(with(positions.clone(), flat, None, None).contains("triangle 7 has zero or non-finite area"));
+        let huge = vec![[0.0; 3], [1e300, 0.0, 0.0], [0.0, 1e300, 0.0], [0.0, 0.0, 1.0]];
+        let big = vec![[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]];
+        assert!(with(huge, big, None, None).contains("triangle 0 has zero or non-finite area"));
+        assert!(with(positions.clone(), triangles.clone(), Some(0.0), None).contains("featureAngle"));
+        assert!(with(positions.clone(), triangles.clone(), Some(180.0), None).contains("featureAngle"));
+        assert!(with(positions.clone(), triangles.clone(), None, Some(-1.0)).contains("simplifyBelow"));
+        assert!(with(positions.clone(), triangles.clone(), None, Some(f64::NAN)).contains("simplifyBelow"));
+        let good = Shape::Mesh { positions, triangles, feature_angle: Some(45.0), simplify_below: Some(0.0) };
+        assert!(good.validate().is_ok());
+        assert!(serde_json::to_string(&good).unwrap().starts_with(r#"{"kind":"mesh","positions":"#));
+    }
+
     #[test]
     fn validation() {
         assert!(Shape::Box { size: [1.0, 0.0, 1.0] }.validate().unwrap_err().0.contains("size[1]"));
+        // A Polyline's validation is the line mesher's, so both name the same cause.
+        let line = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+            beam: true,
+        };
+        assert!(line.validate().is_ok());
+        // `beam: false` is the truss every earlier Model meant, and it serialises without the flag.
+        let truss = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+            beam: false,
+        };
+        let json = serde_json::to_string(&truss).unwrap();
+        assert!(!json.contains("beam"), "{json}");
+        assert_eq!(serde_json::from_str::<Shape>(&json).unwrap(), truss);
+        assert!(serde_json::to_string(&line).unwrap().contains("\"beam\":true"));
+        let short = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1, beam: false };
+        assert!(short.validate().unwrap_err().0.contains("at least 2 points"));
         assert!(Shape::Cylinder { radius: -1.0, height: 1.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 0.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 1.0, segments: Some(2) }.validate().is_err());

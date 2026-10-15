@@ -80,20 +80,21 @@ export function inlineDefs(schema: JsonSchema, defs: Record<string, unknown>): J
 
 /** Drop the `cmd`/`query` discriminator: the tool name carries it. */
 export function stripDiscriminator(schema: JsonSchema): JsonSchema {
-  const { properties = {}, required = [], ...rest } = schema as { properties?: Record<string, unknown>; required?: string[] };
+  const { properties = {}, required = [], 'x-execution': _execution, ...rest } = schema as { properties?: Record<string, unknown>; required?: string[]; 'x-execution'?: unknown };
   const { cmd: _c, query: _q, ...props } = properties;
   return { ...rest, properties: props, required: required.filter((r) => r !== 'cmd' && r !== 'query') };
 }
 
 /**
  * Providers require an object root and Anthropic rejects root combinators. Project an object
- * union onto its properties: shared required fields stay required, branch-only fields become
- * optional, and differing property types become nested unions. The registry still validates
- * branch relationships against the original schema before dispatching a call.
+ * union onto its properties: shared required fields stay required and differing types become
+ * nested unions. Intersections retain fields required by either part and intersect differing
+ * property constraints. The registry validates all branch relationships against the original
+ * schema before dispatching a call.
  */
 export function toolInputSchema(schema: JsonSchema): JsonSchema {
-  const { anyOf, oneOf, ...rest } = schema;
-  const variants = (anyOf ?? oneOf) as JsonSchema[] | undefined;
+  const { anyOf, oneOf, allOf, ...rest } = schema;
+  const variants = (anyOf ?? oneOf ?? allOf) as JsonSchema[] | undefined;
   if (!variants) return stripDiscriminator(schema);
   const branches = variants.map(toolInputSchema);
   const properties: Record<string, unknown> = {};
@@ -101,9 +102,11 @@ export function toolInputSchema(schema: JsonSchema): JsonSchema {
   for (const name of names) {
     const choices = branches.map((b) => (b['properties'] as Record<string, unknown>)[name]).filter((v) => v !== undefined);
     const unique = [...new Map(choices.map((v) => [JSON.stringify(v), v])).values()];
-    properties[name] = unique.length === 1 ? unique[0] : { anyOf: unique };
+    properties[name] = unique.length === 1 ? unique[0] : { [allOf ? 'allOf' : 'anyOf']: unique };
   }
-  const required = [...names].filter((name) => branches.every((b) => (b['required'] as string[]).includes(name)));
+  const required = [...names].filter((name) => allOf
+    ? branches.some((b) => (b['required'] as string[]).includes(name))
+    : branches.every((b) => (b['required'] as string[]).includes(name)));
   return { ...rest, type: 'object', properties, required };
 }
 

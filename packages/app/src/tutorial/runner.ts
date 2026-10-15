@@ -63,7 +63,7 @@ export class TutorialRunner {
    * `seq`. `Journal::append` sets `seq = entries.len()`, so a `seq` is an index too — but one
    * that `model.new`, `journal.undo` and `file.restore` re-use when they rewrite the Journal.
    * A watermark kept across such a rewrite becomes unreachable and the step stalls for good
-   * (issue #87). An index is clamped to the Journal's current length instead, and seeding it
+   * (issue #87). A rewrite resets the index to the start of the replacement Journal, and seeding it
    * from the Journal length at construction is what stops entries that predate the tutorial
    * from satisfying its steps.
    */
@@ -155,8 +155,9 @@ export class TutorialRunner {
       const step = this.currentStep;
       if (!step?.expect) break;
       // The Journal was rewritten (model.new, journal.undo, file.restore): indices at or beyond
-      // its new length no longer name anything, so the baseline follows it down (issue #87).
-      if (this.baseline > entries.length) this.baseline = entries.length;
+      // its new length no longer name anything. Read the replacement from its first entry,
+      // including the model.new that rewrote it (issues #87, #451).
+      if (this.baseline > entries.length) this.baseline = 0;
       const at = entries.findIndex((e, k) => k >= this.baseline && matches(e.cmd as { cmd: string } & Record<string, unknown>, step.expect!));
       if (at < 0) break;
       this.baseline = at + 1;
@@ -206,6 +207,10 @@ export class TutorialRunner {
   async doIt(): Promise<unknown> {
     const cmd = this.currentStep?.doIt;
     if (!cmd) return undefined;
-    return this.deps.dispatch(cmd);
+    const result = await this.deps.dispatch(cmd);
+    // model.new can replace a one-entry Journal with another one-entry Journal, so length
+    // alone cannot expose that rewrite. Reset only after the replacement succeeds.
+    if (cmd.cmd === 'model.new') this.baseline = 0;
+    return result;
   }
 }

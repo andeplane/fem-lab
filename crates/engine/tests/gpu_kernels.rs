@@ -10,14 +10,15 @@ use femlab_engine::fem::assembly::{assemble_stiffness, pattern, reduce, resolve,
 use femlab_engine::fem::element::Material;
 use femlab_engine::fem::loads::{assemble_loads, Load};
 use femlab_engine::fem::material::builtin_law;
-use femlab_engine::fem::problem::{Constraint, Problem};
+use femlab_engine::fem::mpc;
+use femlab_engine::fem::problem::{Constraint, Coupling, Problem};
 use femlab_engine::gpu::cg::CgContext;
 use femlab_engine::gpu::{Gpu, MAX_WORKGROUPS, WORKGROUP};
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::solve::{solve, SolveOptions};
 use femlab_engine::{Engine, ErrorCode, NoClock, Progress, Query, QueryResult, ResolvedSet, SetKind};
-use femlab_geometry::mesh::ElementKind;
+use femlab_geometry::mesh::{ElementBlock, ElementKind, Face};
 use femlab_geometry::{Mesh, Structured};
 
 fn gpu() -> Gpu {
@@ -48,26 +49,34 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
     }
     let bodies = vec!["beam".to_string()];
     let p = Problem {
+        plies: Vec::new(),
+        directors: &[],
         mesh: &mesh,
         sets: &sets,
         body_of_block: &bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
+        section_of_block: vec![None; mesh.blocks.len()],
+        orientation_of_block: vec![None; mesh.blocks.len()],
+        sections: Vec::new(),
+        points: Vec::new(),
         materials: vec![Material {
             law: builtin_law("linear-elastic").expect("built in"),
             props: vec![210e9, 0.3],
             rho: 7800.0,
-            alpha: 0.0,
-            k: 0.0,
+            alpha: [0.0; 3],
+            k: [0.0; 3],
             cp: 0.0,
+            axes: None,
         }],
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::IncompatibleModes,
         constraints: vec![Constraint {
             name: "root".into(),
             nodes: "xmin".into(),
-            dofs: [true, true, true],
+            dofs: [true, true, true, false, false, false],
             value: 0.0,
         }],
+        couplings: Vec::new(),
         loads: vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }],
         temperature: None,
         heat: false,
@@ -78,7 +87,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
     let mut f = a.f_thermal.clone();
     assemble_loads(&p, &mut f).expect("a traction on a real face");
     let rc = resolve(&p).expect("no conflict");
-    let red = reduce(&a.k, &f, &rc);
+    let red = reduce(&a.k, &f, &rc, &[]);
     (red.k_ff, red.f_f)
 }
 
@@ -199,6 +208,61 @@ fn engine_reports_the_adapter_in_capabilities() {
     let mut e2 = Engine::new(None, Box::new(NoClock), 1);
     let QueryResult::Capabilities(c) = e2.query(Query::Capabilities {}).unwrap() else { panic!() };
     assert!(!c.gpu && c.adapter.is_none());
+}
+
+/// #64: the mixed-precision GPU solve must retain a shell's constant-curvature
+/// solution as the mesh is refined, including its rotational degrees of freedom.
+#[test]
+fn shell_moment_strip_matches_plate_theory_through_gpu_pcg() {
+    let mut e = Engine::new(Some(gpu()), Box::new(NoClock), 2);
+    for n in [2, 4, 8] {
+        let mesh = serde_json::json!({
+            "cmd": "mesh.set", "mesher": {"kind": "surface", "body": "skin", "patches": [{
+                "corners": [["0 m", "0 m", "0 m"], ["1 m", "0 m", "0 m"],
+                    ["1 m", "1 m", "0 m"], ["0 m", "1 m", "0 m"]],
+                "n": [n, 1], "tags": [null, "tip", null, "root"]
+            }]}
+        })
+        .to_string();
+        for command in [
+            r#"{"cmd":"model.new","name":"GPU shell strip"}"#,
+            &mesh,
+            r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0}"#,
+            r#"{"cmd":"material.assign","material":"elastic","bodies":["skin"]}"#,
+            r#"{"cmd":"section.add","name":"thin","shape":{"kind":"shell","thickness":"10 mm"}}"#,
+            r#"{"cmd":"section.assign","section":"thin","bodies":["skin"]}"#,
+            r#"{"cmd":"constraint.fix","name":"root","on":"skin.root"}"#,
+            r#"{"cmd":"load.moment","name":"bend","on":"skin.tip","total":["0 N m","1 N m","0 N m"]}"#,
+            r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["bend"]}"#,
+            r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
+        ] {
+            pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+        }
+        let QueryResult::Result(result) = e.query(Query::Result { step: None, result_id: None }).unwrap() else {
+            panic!("result")
+        };
+        assert_eq!(result.solver, "gpu-pcg");
+        for (field, component, expected) in [("displacement", 2, -0.00003), ("rotation", 1, 0.00006)] {
+            let query = serde_json::from_value(serde_json::json!({
+                "query": "query.probe", "step": "s", "field": field, "component": component,
+                "at": ["1 m", "0.5 m", "0 m"]
+            }))
+            .unwrap();
+            let QueryResult::Probe(probe) = e.query(query).unwrap() else { panic!("probe") };
+            assert!((probe.value.value / expected - 1.0).abs() < 1e-6, "n={n}, {field}: {:?}", probe.value);
+        }
+        for (field, expected) in [("stressTop", 60000.0), ("stressBottom", -60000.0), ("shellMoment", 1.0)] {
+            let QueryResult::Field(values) =
+                e.query(Query::Field { step: None, result_id: None, field: field.into() }).unwrap()
+            else {
+                panic!("field")
+            };
+            assert_eq!((values.per.as_str(), values.components), ("elementNode", 6));
+            for value in values.values.chunks_exact(6) {
+                assert!((value[0] / expected - 1.0).abs() < 1e-6, "n={n}, {field}: {value:?}");
+            }
+        }
+    }
 }
 
 /// A4 on the device: the CSR SpMV against an f64 sum of the same f32 values, per component,
@@ -423,4 +487,153 @@ fn requesting_a_backend_nobody_has_is_an_error() {
     let e = pollster::block_on(Gpu::request_with(Gpu::default_backends(), wgpu::Features::all())).unwrap_err();
     assert_eq!(e.code, ErrorCode::Unsupported);
     assert!(e.cause.contains("device request failed"));
+}
+
+/// The reduced system of the same cantilever cut in two at mid-span and tied back together.
+///
+/// This is what proves the GPU needs no change for a bonded contact: `mpc::transform` runs
+/// *before* `assembly::reduce`, so what reaches a solver is still a plain `k_ff`. A later change
+/// that moved the GPU up to the un-reduced operator would fail here rather than silently.
+fn tied_cantilever() -> (Csr, Vec<f64>) {
+    let half: Mesh = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([0.5, 0.1, 0.1]);
+    let node_offset = half.n_nodes() as u32;
+    let elem_offset = half.n_elems() as u32;
+    let mut mesh = half.clone();
+    let moved: Vec<f64> = half.coords.iter().enumerate().map(|(i, x)| if i % 3 == 0 { x + 0.5 } else { *x }).collect();
+    mesh.coords.extend(moved);
+    for blk in &half.blocks {
+        mesh.blocks.push(ElementBlock {
+            kind: blk.kind,
+            conn: blk.conn.iter().map(|n| n + node_offset).collect(),
+            first_elem: blk.first_elem + elem_offset,
+        });
+    }
+    mesh.face_sets = half
+        .face_sets
+        .iter()
+        .map(|(name, faces)| (format!("a.{name}"), faces.clone()))
+        .chain(half.face_sets.iter().map(|(name, faces)| {
+            let shifted = faces.iter().map(|f| Face { elem: f.elem + elem_offset, local: f.local }).collect();
+            (format!("b.{name}"), shifted)
+        }))
+        .collect();
+    let mut sets = BTreeMap::new();
+    for (name, faces) in &mesh.face_sets {
+        let mut nodes: Vec<u32> = faces.iter().flat_map(|&f| mesh.face_nodes(f)).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        sets.insert(name.clone(), ResolvedSet { kind: SetKind::Face, faces: faces.clone(), nodes, elems: Vec::new() });
+    }
+    let bodies = vec!["a".to_string(), "b".to_string()];
+    let p = Problem {
+        plies: Vec::new(),
+        directors: &[],
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0); mesh.blocks.len()],
+        section_of_block: vec![None; mesh.blocks.len()],
+        orientation_of_block: vec![None; mesh.blocks.len()],
+        sections: Vec::new(),
+        points: Vec::new(),
+        materials: vec![Material {
+            law: builtin_law("linear-elastic").expect("built in"),
+            props: vec![210e9, 0.3],
+            rho: 7800.0,
+            alpha: [0.0; 3],
+            k: [0.0; 3],
+            cp: 0.0,
+            axes: None,
+        }],
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::IncompatibleModes,
+        constraints: vec![Constraint {
+            name: "root".into(),
+            nodes: "a.xmin".into(),
+            dofs: [true, true, true, false, false, false],
+            value: 0.0,
+        }],
+        couplings: vec![Coupling::Bonded {
+            name: "weld".into(),
+            master: "a.xmax".into(),
+            slave: "b.xmin".into(),
+            tol: 1e-9,
+        }],
+        loads: vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -1e5] }],
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+    };
+    let pat = pattern(&mesh, 3);
+    let a = assemble_stiffness(&p, &pat).expect("steel on a box assembles");
+    let mut f = a.f_thermal.clone();
+    assemble_loads(&p, &mut f).expect("a traction on a real face");
+    let rc = resolve(&p).expect("no conflict");
+    let m = mpc::build(&p).expect("matched faces pair");
+    let (kt, ft) = mpc::transform(&a.k, &f, &m);
+    let red = reduce(&kt, &ft, &rc, &m.slaves);
+    (red.k_ff, red.f_f)
+}
+
+/// A bonded contact reaches the GPU as an ordinary reduced system, and the f32 CG inside the
+/// f64 refinement loop lands on the answer the direct solver gives.
+#[test]
+fn a_tied_assembly_solves_on_the_gpu_and_matches_the_direct_solver() {
+    let g = gpu();
+    let (k, f) = tied_cantilever();
+    let pool = Pool::new(2);
+    let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
+    let (want, _) = pollster::block_on(solve(&k, &f, &direct, &pool, None, &mut nop)).expect("direct");
+    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let (got, info) = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop)).expect("gpu-pcg");
+    assert_eq!(info.solver, "gpu-pcg");
+    let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let diff: Vec<f64> = got.iter().zip(&want).map(|(a, b)| a - b).collect();
+    assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
+    // The slave rows left the free set before the solver saw the matrix: no empty row reaches it.
+    assert!((0..k.n).all(|r| k.row_ptr[r] < k.row_ptr[r + 1]), "every reduced row has entries");
+}
+
+/// #673: exercise the actual assembled B-bar operator, GPU Jacobi preconditioner and
+/// refinement against uniaxial elasticity, including Poisson contraction and recovered stress.
+#[test]
+fn mean_dilatation_hex8_gpu_patch_matches_uniaxial_elasticity() {
+    let mut e = Engine::new(Some(gpu()), Box::new(NoClock), 2);
+    for n in [2, 4, 8] {
+        let mesh=serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":1,"nz":1}},"formulation":"mean-dilatation"}).to_string();
+        for command in [
+            r#"{"cmd":"model.new","name":"GPU B-bar patch"}"#,
+            r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","1 m","1 m"]}"#,
+            &mesh,
+            r#"{"cmd":"material.add","name":"elastic","E":"200 GPa","nu":0.25}"#,
+            r#"{"cmd":"material.assign","material":"elastic","bodies":["bar"]}"#,
+            r#"{"cmd":"constraint.fix","name":"x","on":"bar.xmin","dofs":["ux"]}"#,
+            r#"{"cmd":"constraint.fix","name":"y","on":"bar.ymin","dofs":["uy"]}"#,
+            r#"{"cmd":"constraint.fix","name":"z","on":"bar.zmin","dofs":["uz"]}"#,
+            r#"{"cmd":"load.traction","name":"pull","on":"bar.xmax","total":["200 MN","0 N","0 N"]}"#,
+            r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["x","y","z"],"loads":["pull"]}"#,
+            r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
+        ] {
+            pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+        }
+        let result: serde_json::Value =
+            serde_json::to_value(e.query(Query::Result { step: None, result_id: None }).unwrap()).unwrap();
+        assert_eq!(result["solver"], "gpu-pcg");
+        for (component, want) in [(0, 0.001), (1, -0.00025), (2, -0.00025)] {
+            let query=serde_json::from_value(serde_json::json!({"query":"query.probe","step":"s","field":"displacement","component":component,"at":["1 m","1 m","1 m"]})).unwrap();
+            let value: serde_json::Value = serde_json::to_value(e.query(query).unwrap()).unwrap();
+            let got = value["value"]["value"].as_f64().unwrap();
+            assert!((got / want - 1.0).abs() < 1e-7, "n={n},component={component}: {got} vs {want}");
+        }
+        let value: serde_json::Value = serde_json::to_value(
+            e.query(Query::Field { step: None, result_id: None, field: "stress".into() }).unwrap(),
+        )
+        .unwrap();
+        for stress in value["values"].as_array().unwrap().chunks_exact(6) {
+            assert!((stress[0].as_f64().unwrap() / 200e6 - 1.0).abs() < 1e-7);
+            for other in &stress[1..] {
+                assert!(other.as_f64().unwrap().abs() < 20.0);
+            }
+        }
+    }
 }

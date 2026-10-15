@@ -14,6 +14,8 @@ use manifold_rust::linalg::{Vec2, Vec3};
 use manifold_rust::manifold::Manifold;
 use manifold_rust::types::{MeshGL64, OpType, Polygons};
 
+use crate::imported::{face_patches, to_manifold, MeshIndex, DEFAULT_FEATURE_ANGLE};
+use crate::predicate::FacePredicate;
 use crate::shape::{Affine3, Shape, DEFAULT_SEGMENTS};
 use crate::sketch::{Loop, Sketch};
 use crate::GeomError;
@@ -28,10 +30,194 @@ pub struct TriMesh {
     pub tag_names: Vec<String>,
 }
 
+/// One connected imported face patch, measured from its source triangles.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FacePatch {
+    pub tag: String,
+    pub triangle_count: u32,
+    pub area: f64,
+    pub centroid: [f64; 3],
+    pub mean_normal: [f64; 3],
+    /// A geometry rule suitable for turning the ordinal patch into a durable named Face.
+    pub suggested_predicate: FacePredicate,
+}
+
 impl TriMesh {
     pub fn tag_of(&self, tri: usize) -> &str {
         &self.tag_names[self.tags[tri] as usize]
     }
+
+    /// Measure every tagged patch and suggest the most specific predicate its tessellation
+    /// supports: plane, circular cylinder, or a centroid-safe bounding box.
+    pub fn face_patches(&self) -> Vec<FacePatch> {
+        let mut groups = vec![Vec::new(); self.tag_names.len()];
+        for (vertices, tag) in self.triangles.iter().zip(&self.tags) {
+            groups[*tag as usize].push([
+                self.positions[vertices[0] as usize],
+                self.positions[vertices[1] as usize],
+                self.positions[vertices[2] as usize],
+            ]);
+        }
+        self.tag_names.iter().zip(groups).map(|(name, triangles)| patch_summary(name, &triangles)).collect()
+    }
+}
+
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn norm3(v: [f64; 3]) -> f64 {
+    libm::sqrt(dot3(v, v))
+}
+
+fn unit3(v: [f64; 3]) -> [f64; 3] {
+    let n = norm3(v);
+    [v[0] / n, v[1] / n, v[2] / n]
+}
+
+fn patch_summary(tag: &str, triangles: &[[[f64; 3]; 3]]) -> FacePatch {
+    let mut area = 0.0;
+    let mut centroid = [0.0; 3];
+    let mut normal_sum = [0.0; 3];
+    let mut normals = Vec::with_capacity(triangles.len());
+    let mut centres = Vec::with_capacity(triangles.len());
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for tri in triangles {
+        let cross = cross3(sub(tri[1], tri[0]), sub(tri[2], tri[0]));
+        let a = 0.5 * norm3(cross);
+        let c = [
+            (tri[0][0] + tri[1][0] + tri[2][0]) / 3.0,
+            (tri[0][1] + tri[1][1] + tri[2][1]) / 3.0,
+            (tri[0][2] + tri[1][2] + tri[2][2]) / 3.0,
+        ];
+        area += a;
+        for k in 0..3 {
+            centroid[k] += a * c[k];
+            normal_sum[k] += 0.5 * cross[k];
+            for p in tri {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        normals.push(unit3(cross));
+        centres.push(c);
+    }
+    for value in &mut centroid {
+        *value /= area;
+    }
+    let diag = norm3(sub(hi, lo));
+    let eps = (diag * 1e-8).max(f64::EPSILON);
+    let suggested_predicate = plane_fit(triangles, &normals, eps)
+        .or_else(|| cylinder_fit(triangles, &centres, &normals, diag))
+        .unwrap_or_else(|| FacePredicate::Bbox { min: lo.map(|x| x - eps), max: hi.map(|x| x + eps) });
+    FacePatch {
+        tag: tag.to_string(),
+        triangle_count: triangles.len() as u32,
+        area,
+        centroid,
+        mean_normal: normal_sum.map(|x| x / area),
+        suggested_predicate,
+    }
+}
+
+fn plane_fit(triangles: &[[[f64; 3]; 3]], normals: &[[f64; 3]], tol: f64) -> Option<FacePredicate> {
+    let normal = normals[0];
+    let offset = dot3(normal, triangles[0][0]);
+    let coplanar = triangles.iter().flatten().all(|p| (dot3(normal, *p) - offset).abs() <= tol);
+    let aligned = normals.iter().all(|n| dot3(normal, *n).abs() >= 1.0 - 1e-10);
+    (coplanar && aligned).then_some(FacePredicate::Plane { normal, offset, tol: Some(tol) })
+}
+
+fn cylinder_fit(
+    triangles: &[[[f64; 3]; 3]],
+    centres: &[[f64; 3]],
+    normals: &[[f64; 3]],
+    diag: f64,
+) -> Option<FacePredicate> {
+    let mut best = ([0.0; 3], 0.0);
+    for normal in &normals[1..] {
+        let cross = cross3(normals[0], *normal);
+        let size = norm3(cross);
+        if size > best.1 {
+            best = (cross, size);
+        }
+    }
+    if best.1 < 0.25 {
+        return None;
+    }
+    let axis = unit3(best.0);
+    if normals.iter().any(|n| dot3(*n, axis).abs() > 1e-8) {
+        return None;
+    }
+    let reference = if axis[0].abs() < 0.8 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let u = unit3(cross3(axis, reference));
+    let v = cross3(axis, u);
+    // Project relative to a nearby point so a far-from-origin translation cannot erase the
+    // radius in the circumcircle's squared coordinates.
+    let origin = centres[0];
+    let project = |p: [f64; 3]| {
+        let local = sub(p, origin);
+        [dot3(local, u), dot3(local, v)]
+    };
+    let vertices: Vec<[f64; 2]> = triangles.iter().flatten().copied().map(project).collect();
+    let p0 = vertices[0];
+    let p1 = *vertices
+        .iter()
+        .max_by(|a, b| dist2(**a, p0).total_cmp(&dist2(**b, p0)))
+        .expect("a validated patch has vertices");
+    let p2 = *vertices
+        .iter()
+        .max_by(|a, b| area2(p0, p1, **a).abs().total_cmp(&area2(p0, p1, **b).abs()))
+        .expect("a validated patch has vertices");
+    let centre = circumcentre(p0, p1, p2);
+    let radii: Vec<f64> = vertices.iter().map(|p| libm::sqrt(dist2(*p, centre))).collect();
+    let radius = radii.iter().sum::<f64>() / radii.len() as f64;
+    let residual = radii.iter().map(|r| (r - radius).abs()).fold(0.0, f64::max);
+    let fit_tol = (diag * 1e-6).max(f64::EPSILON);
+    if residual > fit_tol {
+        return None;
+    }
+    let min_edge_radius = triangles
+        .iter()
+        .flat_map(|tri| (0..3).map(move |i| (project(tri[i]), project(tri[(i + 1) % 3]))))
+        .map(|(a, b)| point_segment_distance2(centre, a, b))
+        .fold(radius, f64::min);
+    let tol = (radius - min_edge_radius).max(residual) + fit_tol;
+    let along = centres.iter().map(|p| dot3(*p, axis)).sum::<f64>() / centres.len() as f64;
+    let origin_along = dot3(origin, axis);
+    let point = [
+        origin[0] + u[0] * centre[0] + v[0] * centre[1] + axis[0] * (along - origin_along),
+        origin[1] + u[1] * centre[0] + v[1] * centre[1] + axis[1] * (along - origin_along),
+        origin[2] + u[2] * centre[0] + v[2] * centre[1] + axis[2] * (along - origin_along),
+    ];
+    Some(FacePredicate::Cylinder { point, axis, radius, tol: Some(tol) })
+}
+
+fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1])
+}
+
+fn area2(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+fn point_segment_distance2(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let l2 = dist2(a, b);
+    let t = if l2 == 0.0 { 0.0 } else { (((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1]) / l2).clamp(0.0, 1.0) };
+    libm::sqrt(dist2(p, [a[0] + t * ab[0], a[1] + t * ab[1]]))
+}
+
+fn circumcentre(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> [f64; 2] {
+    let b = [b[0] - a[0], b[1] - a[1]];
+    let c = [c[0] - a[0], c[1] - a[1]];
+    let d = 2.0 * (b[0] * c[1] - b[1] * c[0]);
+    // The maximum-area third point is non-collinear here: varying surface normals supplied
+    // the axis, and every accepted normal is perpendicular to it.
+    let bb = b[0] * b[0] + b[1] * b[1];
+    let cc = c[0] * c[0] + c[1] * c[1];
+    [a[0] + (bb * c[1] - cc * b[1]) / d, a[1] + (cc * b[0] - bb * c[0]) / d]
 }
 
 /// An evaluated shape.
@@ -45,6 +231,9 @@ pub struct Solid {
     tri: TriMesh,
     /// For 2D sheets: the sampled boundary loops (outer ccw, holes cw) with edge tags.
     outline: Vec<Loop>,
+    genus: i32,
+    /// The evaluated manifold, for the containment a shape tree cannot answer analytically.
+    index: MeshIndex,
 }
 
 /// The tagged triangles of one primitive leaf, in world coordinates.
@@ -106,7 +295,7 @@ fn point_segment_distance3(p: [f64; 3], a: [f64; 3], b: [f64; 3]) -> f64 {
 
 /// Distance from a point to a triangle: the plane distance when the projection falls inside,
 /// else the distance to the nearest edge.
-fn point_triangle_distance(p: [f64; 3], t: &[[f64; 3]; 3]) -> f64 {
+pub(crate) fn point_triangle_distance(p: [f64; 3], t: &[[f64; 3]; 3]) -> f64 {
     let n = tri_normal(t[0], t[1], t[2]);
     let h = dot3(sub(p, t[0]), n);
     let q = [p[0] - h * n[0], p[1] - h * n[1], p[2] - h * n[2]];
@@ -131,7 +320,7 @@ fn v3(p: [f64; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], p[2])
 }
 
-fn tri_normal(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
+pub(crate) fn tri_normal(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
     let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
@@ -247,7 +436,7 @@ fn tag_leaf(
     m: &Manifold,
     prefix: &str,
     leaves: &mut Leaves,
-    classify: &dyn Fn([f64; 3], [f64; 3]) -> String,
+    classify: &dyn Fn(usize, [f64; 3], [f64; 3]) -> String,
 ) -> Vec<u32> {
     let gl = m.get_mesh_gl64(-1);
     // a primitive is exactly one run
@@ -259,7 +448,7 @@ fn tag_leaf(
         let v = gl.get_tri_verts(t);
         leaf.tris.push([pos[v[0] as usize], pos[v[1] as usize], pos[v[2] as usize]]);
         leaf.normals.push(n);
-        leaf.tags.push(join(prefix, &classify(cen, n)));
+        leaf.tags.push(join(prefix, &classify(t, cen, n)));
     }
     leaves.insert(id, leaf);
     vec![id]
@@ -281,31 +470,34 @@ fn eval(shape: &Shape, prefix: &str, leaves: &mut Leaves) -> Result<(Manifold, V
     let (m, ids) = match shape {
         Shape::Box { size } => {
             let m = Manifold::cube(v3(*size), false);
-            let ids = tag_leaf(&m, prefix, leaves, &|_, n| box_tag(n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, _, n| box_tag(n));
             (m, ids)
         }
         Shape::Cylinder { radius, height, segments } => {
             let m = Manifold::cylinder(*height, *radius, *radius, segments.unwrap_or(DEFAULT_SEGMENTS) as i32);
-            let ids = tag_leaf(&m, prefix, leaves, &|_, n| cylinder_tag(n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, _, n| cylinder_tag(n));
             (m, ids)
         }
         Shape::Sphere { radius, segments } => {
             let m = Manifold::sphere(*radius, segments.unwrap_or(DEFAULT_SEGMENTS) as i32);
-            let ids = tag_leaf(&m, prefix, leaves, &|_, _| "surface".to_string());
+            let ids = tag_leaf(&m, prefix, leaves, &|_, _, _| "surface".to_string());
             (m, ids)
         }
         Shape::Sheet { .. } => return Err(GeomError("a 2D sheet cannot be evaluated as a solid".into())),
+        Shape::Polyline { .. } => {
+            return Err(GeomError("a line body has no volume: the line mesher is its own geometry".into()))
+        }
         Shape::Extrude { sketch, height } => {
             let loops = sketch.loops(sketch_chord_tol(sketch, DEFAULT_SEGMENTS))?;
             let m = Manifold::extrude(&polygons(&loops), *height, 0, 0.0, Vec2::new(1.0, 1.0));
-            let ids = tag_leaf(&m, prefix, leaves, &|c, n| extrude_tag(&loops, c, n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, c, n| extrude_tag(&loops, c, n));
             (m, ids)
         }
         Shape::Revolve { sketch, angle, segments } => {
             let segs = segments.unwrap_or(DEFAULT_SEGMENTS);
             let loops = sketch.loops(sketch_chord_tol(sketch, segs))?;
             let m = Manifold::revolve(&polygons(&loops), segs as i32, *angle);
-            let ids = tag_leaf(&m, prefix, leaves, &|c, n| revolve_tag(&loops, *angle, c, n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, c, n| revolve_tag(&loops, *angle, c, n));
             (m, ids)
         }
         Shape::Union { shapes } => {
@@ -334,6 +526,12 @@ fn eval(shape: &Shape, prefix: &str, leaves: &mut Leaves) -> Result<(Manifold, V
             (apply_affine(&m, at), ids)
         }
         Shape::Named { name, shape } => eval(shape, name, leaves)?,
+        Shape::Mesh { positions, triangles, feature_angle, simplify_below } => {
+            let m = to_manifold(positions, triangles, *simplify_below)?;
+            let tags = face_patches(&m.get_mesh_gl64(-1), feature_angle.unwrap_or(DEFAULT_FEATURE_ANGLE));
+            let ids = tag_leaf(&m, prefix, leaves, &|t, _, _| tags[t].clone());
+            (m, ids)
+        }
     };
     Ok((m, ids))
 }
@@ -391,6 +589,8 @@ impl Solid {
             bbox: ([bb.min.x, bb.min.y, bb.min.z], [bb.max.x, bb.max.y, bb.max.z]),
             tri: TriMesh { positions: pos, triangles, tags: tri_tags, tag_names },
             outline: vec![],
+            genus: m.genus(),
+            index: MeshIndex::new(m),
         })
     }
 
@@ -418,6 +618,8 @@ impl Solid {
             bbox: (lo, hi),
             tri: TriMesh::default(),
             outline: loops,
+            genus: 0,
+            index: MeshIndex::new(Manifold::new()),
         })
     }
 
@@ -458,9 +660,15 @@ impl Solid {
             v
         }
     }
-    /// Analytic containment via the shape tree.
+    /// Topological genus: 0 for a ball or a box, 1 for a torus, one per through-hole. A
+    /// sheet reports 0.
+    pub fn genus(&self) -> i32 {
+        self.genus
+    }
+    /// Containment, analytic on the shape tree (curved primitives are exact circles there).
+    /// An imported mesh has no analytic form and is ray-cast against the evaluated manifold.
     pub fn contains(&self, p: [f64; 3]) -> bool {
-        self.shape.contains(p).unwrap_or(false)
+        self.shape.contains(p).unwrap_or_else(|_| self.index.contains(p))
     }
     /// Centroid of the triangle mesh (3D) or of the outline (2D).
     pub fn centroid(&self) -> [f64; 3] {
@@ -705,6 +913,18 @@ mod tests {
     }
 
     #[test]
+    fn a_line_body_never_becomes_a_solid() {
+        let line = Shape::Polyline {
+            points: vec![[0.0; 3], [1.0, 0.0, 0.0]],
+            members: vec![[0, 1]],
+            divisions: 1,
+            beam: false,
+        };
+        let e = Solid::evaluate(&line).unwrap_err();
+        assert!(e.0.contains("no volume"), "{}", e.0);
+    }
+
+    #[test]
     fn sheet_loop_transform_refuses_overflow() {
         let at = Affine3 { scale: [1e308, 1.0, 1.0], ..Default::default() };
         let error = transformed_sheet_loops(&Sketch::rect(2.0, 1.0), &at, "", 0.1).unwrap_err();
@@ -753,6 +973,62 @@ mod tests {
     }
 
     #[test]
+    fn an_imported_mesh_evaluates_to_a_solid_with_patch_faces() {
+        let positions = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+        let quads: [[u32; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+        let triangles: Vec<[u32; 3]> = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
+        let shape = Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: None,
+            simplify_below: None,
+        };
+        let s = Solid::evaluate(&shape).unwrap();
+        assert!((s.volume() - 1.0).abs() < 1e-12);
+        assert!((s.area() - 6.0).abs() < 1e-12);
+        assert_eq!(s.genus(), 0);
+        assert_eq!(s.tags(), ["face0", "face1", "face2", "face3", "face4", "face5"]);
+        // containment falls through the shape tree's error to the ray cast
+        assert!(s.contains([0.5; 3]) && !s.contains([2.0, 0.5, 0.5]));
+        assert!(format!("{s:?}").contains("MeshIndex(12 triangles)"));
+        // a feature angle wide enough to weld the whole cube into one patch
+        let welded = Solid::evaluate(&Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: Some(91.0),
+            simplify_below: None,
+        })
+        .unwrap();
+        assert_eq!(welded.tags(), ["face0"]);
+        // and one that swallows the body entirely
+        let gone = Solid::evaluate(&Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: None,
+            simplify_below: Some(100.0),
+        });
+        assert!(gone.unwrap_err().0.contains("simplifies away to nothing"));
+        // an open surface is not a solid
+        let open: Vec<[u32; 3]> = triangles.iter().copied().filter(|t| !t.contains(&6)).collect();
+        let err =
+            Solid::evaluate(&Shape::Mesh { positions, triangles: open, feature_angle: None, simplify_below: None });
+        assert!(err.unwrap_err().0.contains("Not Closed"));
+        // a sheet keeps the analytic answer and never reaches the ray cast
+        let sheet = Solid::evaluate(&Shape::Sheet { sketch: Sketch::rect(1.0, 1.0) }).unwrap();
+        assert_eq!(sheet.genus(), 0);
+        assert!(sheet.contains([0.5, 0.5, 0.0]));
+    }
+
+    #[test]
     fn errors_and_edge_cases() {
         assert!(Solid::evaluate(&Shape::Box { size: [0.0; 3] }).is_err());
         let gone =
@@ -771,6 +1047,8 @@ mod tests {
         let s = Solid::evaluate(&Shape::Box { size: [1.0; 3] }).unwrap();
         assert!(!s.triangles().tag_of(0).is_empty());
         assert_eq!(tri_normal([0.0; 3], [0.0; 3], [0.0; 3]), [0.0; 3]);
+        assert_eq!(point_segment_distance2([-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]), 1.0);
+        assert_eq!(point_segment_distance2([2.0, 0.0], [0.0, 0.0], [1.0, 0.0]), 1.0);
         assert_eq!(box_tag([0.0, -1.0, 0.0]), "ymin");
         assert_eq!(box_tag([0.0, 0.0, -1.0]), "zmin");
         assert_eq!(cylinder_tag([0.0, 0.0, -1.0]), "bottom");

@@ -1,0 +1,67 @@
+{
+  "name": "thermal-contact-series",
+  "reference": "Benchmark F4e: two conductors of different conductivity, meshed as separate Bodies with no shared node and joined by contact.add, then given a finite interface conductance with contact.thermal instead of the tie's perfect thermal contact. Held at 300 K and 400 K, the exact steady flux is q = deltaT / (L1/k1 + 1/hc + L2/k2) = 1388.8888888888887 W/m^2 with L1=0.4 m, k1=10 W/(m K), hc=500 W/(m^2 K), L2=0.6 m, k2=20 W/(m K). The temperature is linear on each side of the interface and drops by exactly q/hc = 2.7777777777777715 K crossing it, which is an oracle from series thermal resistance, not a comparison against the engine's own perfect-tie or convection paths.",
+  "journal": [
+    { "cmd": "model.new", "name": "thermal-contact-series" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "temperature": "K" } },
+    { "cmd": "geometry.addBox", "name": "a", "size": ["400 mm", "100 mm", "100 mm"] },
+    { "cmd": "geometry.addBox", "name": "b", "size": ["600 mm", "100 mm", "100 mm"], "at": ["400 mm", "0 mm", "0 mm"] },
+    { "cmd": "material.add", "name": "metalA", "E": "210 GPa", "nu": 0.3, "k": "10 W/(m K)", "source": "test fixture" },
+    { "cmd": "material.add", "name": "metalB", "E": "210 GPa", "nu": 0.3, "k": "20 W/(m K)", "source": "test fixture" },
+    { "cmd": "material.assign", "material": "metalA", "bodies": ["a"] },
+    { "cmd": "material.assign", "material": "metalB", "bodies": ["b"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": "100 mm" },
+      "order": 1,
+      "formulation": "full"
+    },
+    { "cmd": "contact.add", "name": "weld", "master": "a.xmax", "slave": "b.xmin", "kind": "bonded" },
+    { "cmd": "contact.thermal", "name": "resist", "of": "weld", "conductance": "500 W/(m^2 K)" },
+    { "cmd": "constraint.temperature", "name": "cold", "on": "a.xmin", "value": "300 K" },
+    { "cmd": "constraint.temperature", "name": "hot", "on": "b.xmax", "value": "400 K" },
+    {
+      "cmd": "step.add",
+      "name": "conduct",
+      "procedure": "heat-steady",
+      "constraints": ["cold", "hot", "weld"],
+      "loads": ["resist"],
+      "output": ["temperature"]
+    },
+    { "cmd": "solve.run", "step": "conduct" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "temperature", "at": ["200 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 327.77777777777777,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "midpoint of the k1 = 10 W/(m K) conductor: T = 300 + q x / k1"
+    },
+    {
+      "query": { "query": "query.probe", "field": "temperature", "at": ["700 mm", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": 379.16666666666663,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "midpoint of the k2 = 20 W/(m K) conductor, on the far side of the interface jump"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "the heat that enters at the hot end leaves at the cold one"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/0/value",
+      "expect": 13.888888888888888,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "q * A leaves through the held cold end, in watts"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false }
+  ]
+}

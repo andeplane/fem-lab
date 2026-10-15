@@ -1,0 +1,487 @@
+{
+ "name": "restrained-strip-transient-thermal-stress",
+ "reference": "Benchmark E8 (transient field chaining, #84). A plane-stress strip (1 m x 0.2 m, 0.2 m thick) is restrained on every edge (ux = uy = 0) and stepped from T0 = 300 K to T1 = 400 K at both x-faces by a heat-transient Step (diffusivity k/(rho cp) = 1 m^2/s); the static Step named after it is solved once per retained frame (#84), keeping the last as its Result and a von Mises frame per output time. The temperature is the same Fourier sine series the cooled-slab transient benchmark (E5 in docs/BENCHMARKS.md) uses, generalised to a rise between two endpoints instead of a decay to zero; using 50 terms, the omitted tail is exponentially negligible at every checked time. The stress is sigma_xx = sigma_yy = -E alpha dT / (1 - nu): the plane-STRESS biaxial-restraint result (sigma_zz = 0, free through the thickness), not the plane-STRAIN one -- a fully restrained plane-strain strip has zero strain in all three normal directions too, so it is the classical *confined* thermal stress sigma_xx = sigma_yy = sigma_zz = -E alpha dT / (1 - 2 nu), which is hydrostatic and carries zero von Mises everywhere. Per-frame min/max are gated against the analytic extremes at 1% of the E alpha (T1-T0) / (1-nu) = 300 MPa scale; the final frame is gated pointwise at 1e-6 relative, because by t = 2 s (about 20 diffusion time constants) the field is uniform to far below that.",
+ "journal": [
+  {
+   "cmd": "model.new",
+   "name": "restrained-strip-transient-thermal-stress"
+  },
+  {
+   "cmd": "model.setUnits",
+   "units": {
+    "length": "m",
+    "stress": "MPa",
+    "temperature": "K",
+    "time": "s"
+   }
+  },
+  {
+   "cmd": "model.setIdealisation",
+   "idealisation": {
+    "kind": "planeStress",
+    "thickness": "0.2 m"
+   }
+  },
+  {
+   "cmd": "geometry.add",
+   "name": "strip",
+   "shape": {
+    "kind": "sheet",
+    "sketch": {
+     "outer": [
+      {
+       "kind": "line",
+       "to": [
+        "1.0 m",
+        "0 m"
+       ],
+       "tag": "ymin"
+      },
+      {
+       "kind": "line",
+       "to": [
+        "1.0 m",
+        "0.2 m"
+       ],
+       "tag": "xmax"
+      },
+      {
+       "kind": "line",
+       "to": [
+        "0 m",
+        "0.2 m"
+       ],
+       "tag": "ymax"
+      },
+      {
+       "kind": "line",
+       "to": [
+        "0 m",
+        "0 m"
+       ],
+       "tag": "xmin"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "cmd": "material.add",
+   "name": "mat",
+   "E": "210 GPa",
+   "nu": 0.3,
+   "alpha": "1e-5 1/K",
+   "rho": "2 kg/m^3",
+   "k": "6 W/(m K)",
+   "cp": "3 J/(kg K)"
+  },
+  {
+   "cmd": "material.assign",
+   "material": "mat",
+   "bodies": [
+    "strip"
+   ]
+  },
+  {
+   "cmd": "mesh.set",
+   "mesher": {
+    "kind": "lattice",
+    "size": {
+     "nx": 24,
+     "ny": 1,
+     "nz": 1
+    }
+   },
+   "order": 1
+  },
+  {
+   "cmd": "constraint.temperature",
+   "name": "left",
+   "on": "strip.xmin",
+   "value": "400 K"
+  },
+  {
+   "cmd": "constraint.temperature",
+   "name": "right",
+   "on": "strip.xmax",
+   "value": "400 K"
+  },
+  {
+   "cmd": "constraint.fix",
+   "name": "xmin_f",
+   "on": "strip.xmin",
+   "dofs": [
+    "ux",
+    "uy"
+   ]
+  },
+  {
+   "cmd": "constraint.fix",
+   "name": "xmax_f",
+   "on": "strip.xmax",
+   "dofs": [
+    "ux",
+    "uy"
+   ]
+  },
+  {
+   "cmd": "constraint.fix",
+   "name": "ymin_f",
+   "on": "strip.ymin",
+   "dofs": [
+    "ux",
+    "uy"
+   ]
+  },
+  {
+   "cmd": "constraint.fix",
+   "name": "ymax_f",
+   "on": "strip.ymax",
+   "dofs": [
+    "ux",
+    "uy"
+   ]
+  },
+  {
+   "cmd": "load.temperature",
+   "name": "reference",
+   "bodies": [
+    "strip"
+   ],
+   "value": "300 K",
+   "reference": "300 K"
+  },
+  {
+   "cmd": "step.add",
+   "name": "conduct",
+   "procedure": "heat-transient",
+   "constraints": [
+    "left",
+    "right"
+   ],
+   "loads": [],
+   "dt": "0.001 s",
+   "tEnd": "2 s",
+   "theta": 0.5,
+   "initial": "300 K",
+   "outputEvery": 200
+  },
+  {
+   "cmd": "step.add",
+   "name": "stress",
+   "procedure": "static",
+   "after": "conduct",
+   "constraints": [
+    "xmin_f",
+    "xmax_f",
+    "ymin_f",
+    "ymax_f"
+   ],
+   "loads": [
+    "reference"
+   ]
+  },
+  {
+   "cmd": "solve.run",
+   "step": "conduct"
+  },
+  {
+   "cmd": "solve.run",
+   "step": "stress"
+  }
+ ],
+ "checks": [
+  {
+   "query": {
+    "query": "query.frames"
+   },
+   "path": "/field",
+   "expect": "vonMises",
+   "note": "the chained Step's retained field is discoverable, not assumed"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/10/time/value",
+   "expect": 2.0,
+   "tol": 1e-09,
+   "note": "eleven retained frames, one per frame of the heat-transient predecessor's History, the last exactly at tEnd"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/0/min/value",
+   "expect": 1.909668,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=0.0s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/0/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/1/min/value",
+   "expect": 246.939858,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=0.2s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/1/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/2/min/value",
+   "expect": 292.629355,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=0.4s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/2/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/3/min/value",
+   "expect": 298.976135,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=0.6s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/3/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/4/min/value",
+   "expect": 299.857774,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=0.8s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/4/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/5/min/value",
+   "expect": 299.980243,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=1.0s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/5/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/6/min/value",
+   "expect": 299.997256,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=1.2s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/6/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/7/min/value",
+   "expect": 299.999619,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=1.4s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/7/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/8/min/value",
+   "expect": 299.999947,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=1.6s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/8/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/9/min/value",
+   "expect": 299.999993,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=1.8s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/9/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/10/min/value",
+   "expect": 299.999999,
+   "tol": 3.0,
+   "note": "analytic centre (x=0.5 m) von Mises at t=2.0s from the Fourier series, within 1% of the 300 MPa scale"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/history/10/max/value",
+   "expect": 300.0,
+   "tol": 3.0,
+   "note": "the held faces sit at dT = t1 - t0 from t = 0 on, so the edge von Mises is the scale itself at every frame"
+  },
+  {
+   "query": {
+    "query": "query.probe",
+    "field": "stress",
+    "component": 0,
+    "at": [
+     "0.5 m",
+     "0.1 m",
+     "0 m"
+    ]
+   },
+   "path": "/value/value",
+   "expect": -300.0,
+   "tol": 1e-06,
+   "rel": true,
+   "note": "final sigma_xx at the centre: -E alpha dT / (1 - nu) with dT = t1 - t0 = 100 K, plane-stress biaxial restraint"
+  },
+  {
+   "query": {
+    "query": "query.probe",
+    "field": "stress",
+    "component": 1,
+    "at": [
+     "0.5 m",
+     "0.1 m",
+     "0 m"
+    ]
+   },
+   "path": "/value/value",
+   "expect": -300.0,
+   "tol": 1e-06,
+   "rel": true,
+   "note": "final sigma_yy at the centre: equal to sigma_xx (biaxial restraint), the same closed form"
+  },
+  {
+   "query": {
+    "query": "query.probe",
+    "field": "stress",
+    "component": 0,
+    "at": [
+     "0.0 m",
+     "0.1 m",
+     "0 m"
+    ]
+   },
+   "path": "/value/value",
+   "expect": -300.0,
+   "tol": 1e-06,
+   "rel": true,
+   "note": "final sigma_xx at the held edge: -E alpha dT / (1 - nu) with dT = t1 - t0 = 100 K, plane-stress biaxial restraint"
+  },
+  {
+   "query": {
+    "query": "query.probe",
+    "field": "stress",
+    "component": 1,
+    "at": [
+     "0.0 m",
+     "0.1 m",
+     "0 m"
+    ]
+   },
+   "path": "/value/value",
+   "expect": -300.0,
+   "tol": 1e-06,
+   "rel": true,
+   "note": "final sigma_yy at the held edge: equal to sigma_xx (biaxial restraint), the same closed form"
+  },
+  {
+   "query": {
+    "query": "query.result"
+   },
+   "path": "/balance",
+   "expect": 0.0,
+   "tol": 1e-09,
+   "note": "A7: reactions balance the applied load at the final retained state"
+  }
+ ]
+}

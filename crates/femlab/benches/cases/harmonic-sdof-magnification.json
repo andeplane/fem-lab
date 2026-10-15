@@ -1,0 +1,483 @@
+{
+  "name": "harmonic-sdof-magnification",
+  "reference": "Benchmark F14: the damped magnification curve of a single degree of freedom, |u|/u_static = 1/sqrt((1-r^2)^2 + (2 zeta r)^2) with phase = atan2(2 zeta r, 1-r^2), at r = f/f_n from 0.1 to 3.0 and zeta = 0.02, 0.05 and 0.2. One hex8 is clamped at xmin and guided at xmax, so the only free displacements are the four axial ones on the loaded face; that face's symmetry makes their uniform combination its own mode and a uniform axial traction excites nothing else, so the model IS one degree of freedom and mode superposition is exact rather than approximate. Gated at 1e-8: a loose tolerance here would hide a real error in the complex denominator, the phase convention or the modal participation. u_static comes from the static procedure and f_n from the modal one, and both are pinned by their own checks in this case.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "harmonic-sdof-magnification"
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "1 m",
+        "0.1 m",
+        "0.1 m"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 1,
+          "ny": 1,
+          "nz": 1
+        }
+      },
+      "order": 1,
+      "formulation": "full"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "bar.xmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "guide",
+      "on": "bar.xmax",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "bar.xmax",
+      "total": [
+        "10 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "pull-static",
+      "procedure": "static",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 4
+    },
+    {
+      "cmd": "step.add",
+      "name": "sweep-002",
+      "procedure": "harmonic",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "after": "modes",
+      "fStart": "165.95504263194275 Hz",
+      "fStop": "4978.6512789582821 Hz",
+      "points": 30,
+      "sweep": "linear",
+      "dampingRatio": 0.02
+    },
+    {
+      "cmd": "step.add",
+      "name": "sweep-005",
+      "procedure": "harmonic",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "after": "modes",
+      "fStart": "165.95504263194275 Hz",
+      "fStop": "4978.6512789582821 Hz",
+      "points": 30,
+      "sweep": "linear",
+      "dampingRatio": 0.05
+    },
+    {
+      "cmd": "step.add",
+      "name": "sweep-02",
+      "procedure": "harmonic",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "after": "modes",
+      "fStart": "165.95504263194275 Hz",
+      "fStop": "4978.6512789582821 Hz",
+      "points": 30,
+      "sweep": "linear",
+      "dampingRatio": 0.2
+    },
+    {
+      "cmd": "solve.run",
+      "step": "pull-static"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "sweep-002"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "sweep-005"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "sweep-02"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/0/amplitude/value",
+      "expect": 3.573117265080155e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 0.1"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/0/phase/value",
+      "expect": 0.004040382054269481,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 0.1"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/9/amplitude/value",
+      "expect": 8.84353741496596e-05,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 1.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/9/phase/value",
+      "expect": 1.5707963267948966,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 1.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/19/amplitude/value",
+      "expect": 1.1787192962814497e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 2.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/19/phase/value",
+      "expect": 3.1149323052151954,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 2.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/29/amplitude/value",
+      "expect": 4.4212713424321676e-07,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 3.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/29/phase/value",
+      "expect": 3.1265937784379427,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 3.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/0/amplitude/value",
+      "expect": 3.5729641594482223e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 0.1"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/0/phase/value",
+      "expect": 0.010100666585321908,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 0.1"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/9/amplitude/value",
+      "expect": 3.537414965986384e-05,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 1.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/9/phase/value",
+      "expect": 1.5707963267948966,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 1.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/19/amplitude/value",
+      "expect": 1.1765267167470185e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 2.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/19/phase/value",
+      "expect": 3.0750244898139694,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 2.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/29/amplitude/value",
+      "expect": 4.4186629266052076e-07,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 3.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-005"
+      },
+      "path": "/sweep/29/phase/value",
+      "expect": 3.104110216898132,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 3.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/0/amplitude/value",
+      "expect": 3.570233439746746e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 0.1"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/0/phase/value",
+      "expect": 0.040382075564499915,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 0.1"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/9/amplitude/value",
+      "expect": 8.84353741496596e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 1.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/9/phase/value",
+      "expect": 1.5707963267948966,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 1.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/19/amplitude/value",
+      "expect": 1.1393246453347995e-06,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 2.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/19/phase/value",
+      "expect": 2.8809902618424523,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 2.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/29/amplitude/value",
+      "expect": 4.3728478188053843e-07,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "|u| = u_static / sqrt((1-r^2)^2 + (2 zeta r)^2) at r = 3.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-02"
+      },
+      "path": "/sweep/29/phase/value",
+      "expect": 2.992702705980296,
+      "tol": 1e-08,
+      "note": "phase = atan2(2 zeta r, 1 - r^2) at r = 3.0"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/9/frequency/unit",
+      "expect": "Hz"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/sweep/9/phase/unit",
+      "expect": "rad"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep-002"
+      },
+      "path": "/stale",
+      "expect": false
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 1659.5504263194273,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "the driven axial mode: the closed form below is anchored on it"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "pull-static"
+      },
+      "path": "/extremes/0/max/value",
+      "expect": 3.537414965986384e-06,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "u_static from the independent static procedure"
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "name": "twisted-shaft-solid-coarse",
+  "reference": "Benchmark B14. Solid circular shaft under pure torsion (St Venant), a = 25 mm, L = 100 mm, E = 200 GPa, nu = 0.3 so G = E/(2(1+nu)) = 76.923076923... GPa. J = pi a^4 / 2 = 6.135923151542566e-7 m^4. Clamped (axial and circumferential DOFs held) at z = 0, load.torque total = 100 N*m at z = L. Closed form: u_theta(r,z) = T r z / (G J), tau_theta_z(r) = T r / J (independent of z). u_theta = alpha r z is exactly bilinear in the (r, z) meridional plane, and on this axis-aligned rectangular mesh r and z each vary with one parametric coordinate only, so quad4 reproduces it to machine precision on any mesh: this row and its -fine sibling are the same closed form on a 2x3 and a 6x10 mesh, both gated at 1e-9 on the tip twist and 1e-8 on the surface shear. u_theta(a, L) = 5.296676506098277e-6 m, tau_theta_z(a) = 4074366.54315252 Pa.",
+  "journal": [
+    { "cmd": "model.new", "name": "twisted-shaft-solid-coarse" },
+    { "cmd": "model.setUnits", "units": { "length": "m", "stress": "Pa", "force": "N" } },
+    { "cmd": "model.setIdealisation", "idealisation": { "kind": "axisymmetric", "twist": true } },
+    { "cmd": "material.add", "name": "steel", "E": "200 GPa", "nu": 0.3 },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "shaft",
+        "blocks": [
+          {
+            "corners": [["0 m", "0 m"], ["0.025 m", "0 m"], ["0.025 m", "0.1 m"], ["0 m", "0.1 m"]],
+            "n": [2, 3],
+            "tags": ["zmin", "outer", "zmax", "inner"]
+          }
+        ]
+      },
+      "order": 1
+    },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["shaft"] },
+    { "cmd": "constraint.fix", "name": "clamp", "on": "shaft.zmin", "dofs": ["uy", "uz"] },
+    { "cmd": "load.torque", "name": "torque", "on": "shaft.zmax", "total": "100 N*m" },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["clamp"],
+      "loads": ["torque"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": ["0.025 m", "0.1 m", "0 m"]
+      },
+      "path": "/value/value",
+      "expect": 5.296676506098277e-6,
+      "tol": 1e-9,
+      "rel": true,
+      "note": "u_theta(a, L) = T L a / (G J), the tip twist"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 5,
+        "at": ["0.025 m", "0.05 m", "0 m"]
+      },
+      "path": "/value/value",
+      "expect": 4074366.54315252,
+      "tol": 1e-8,
+      "rel": true,
+      "note": "tau_theta_z(a) = T a / J, Voigt row 5 under axisymmetric twist"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

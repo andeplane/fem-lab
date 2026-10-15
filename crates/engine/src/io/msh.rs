@@ -23,8 +23,10 @@ use crate::error::{Error, ErrorCode};
 
 fn gmsh_type(kind: ElementKind) -> u32 {
     match kind {
+        // Gmsh has one two-node line type; a beam written out comes back as a truss.
+        ElementKind::Truss2 | ElementKind::Beam2 => 1,
         ElementKind::Tri3 => 2,
-        ElementKind::Quad4 => 3,
+        ElementKind::Quad4 | ElementKind::Shell4 => 3,
         ElementKind::Tet4 => 4,
         ElementKind::Hex8 => 5,
         ElementKind::Tri6 => 9,
@@ -47,6 +49,7 @@ fn gmsh_face_type(kind: FaceKind) -> u32 {
 
 fn kind_of_gmsh_type(t: u32) -> Option<ElementKind> {
     Some(match t {
+        1 => ElementKind::Truss2,
         2 => ElementKind::Tri3,
         3 => ElementKind::Quad4,
         4 => ElementKind::Tet4,
@@ -137,22 +140,25 @@ const TET4_PERM: [u8; 4] = identity();
 const TET10_PERM: [u8; 10] = tet10_permutation();
 const QUAD4_PERM: [u8; 4] = identity();
 const QUAD8_PERM: [u8; 8] = identity();
+const TRUSS2_PERM: [u8; 2] = identity();
 const TRI3_PERM: [u8; 3] = identity();
 const TRI6_PERM: [u8; 6] = identity();
 
 /// Abaqus → Gmsh node permutation: `gmsh_conn[i] = abaqus_conn[table[i]]`. Identity for every
 /// linear kind and for tri6/quad8 (Gmsh and Abaqus agree there); tet10 swaps its last two nodes;
-/// hex20's twelve mid-edge nodes are reordered (derived above).
+/// hex20's twelve mid-edge nodes are reordered (derived above). A truss2 is Gmsh's own line
+/// element in the same node order.
 pub fn gmsh_permutation(kind: ElementKind) -> &'static [u8] {
     match kind {
         ElementKind::Hex8 => &HEX8_PERM,
         ElementKind::Hex20 => &HEX20_PERM,
         ElementKind::Tet4 => &TET4_PERM,
         ElementKind::Tet10 => &TET10_PERM,
-        ElementKind::Quad4 => &QUAD4_PERM,
+        ElementKind::Quad4 | ElementKind::Shell4 => &QUAD4_PERM,
         ElementKind::Quad8 => &QUAD8_PERM,
         ElementKind::Tri3 => &TRI3_PERM,
         ElementKind::Tri6 => &TRI6_PERM,
+        ElementKind::Truss2 | ElementKind::Beam2 => &TRUSS2_PERM,
     }
 }
 
@@ -187,7 +193,37 @@ struct Entity {
 }
 
 /// One Gmsh MSH 4.1 ASCII file (see the module doc for the physical-group/entity scheme).
-pub fn write_msh(mesh: &Mesh) -> String {
+pub fn write_msh(mesh: &Mesh) -> Result<String, Error> {
+    if mesh.blocks.iter().any(|b| b.kind == ElementKind::Shell4) {
+        if mesh.blocks.iter().any(|b| b.kind != ElementKind::Shell4) {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "MSH export of mixed shell and volume/member blocks is not implemented",
+            )
+            .at("format")
+            .suggest("mesh.export with format 'inp' or 'vtu'"));
+        }
+        // MSH quadrilaterals carry surface topology, not shell mechanics or two
+        // thickness sides. Export each midsurface once, with top/bottom membership
+        // as overlapping physical surface groups rather than duplicate elements.
+        let mut sheet = mesh.clone();
+        sheet.dim = 2;
+        for block in &mut sheet.blocks {
+            block.kind = ElementKind::Quad4;
+        }
+        for (name, faces) in &mesh.face_sets {
+            let set = sheet.elem_sets.entry(name.clone()).or_default();
+            set.extend(faces.iter().map(|f| f.elem));
+            set.sort_unstable();
+            set.dedup();
+        }
+        sheet.face_sets.clear();
+        return Ok(write_msh_impl(&sheet));
+    }
+    Ok(write_msh_impl(mesh))
+}
+
+fn write_msh_impl(mesh: &Mesh) -> String {
     let (lo, hi) = mesh.bbox();
     let bbox = format!("{} {} {} {} {} {}", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
 
@@ -688,6 +724,9 @@ pub fn read_msh(text: &str) -> Result<Mesh, Error> {
     mesh.elem_sets = elem_sets;
     mesh.face_sets = face_sets;
     mesh.node_sets = node_sets;
+    // A file can name a combination this reader assembles happily but the Mesh forbids — a
+    // line element as the volume element of a 2D mesh, say. One check here covers every kind.
+    mesh.validate().map_err(|e| Error::new(ErrorCode::Schema, e.0).at("mesh"))?;
     Ok(mesh)
 }
 

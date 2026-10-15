@@ -58,16 +58,23 @@ pub enum HeatLoad {
     /// Grey-body radiation from a face Set to a large surrounding at `t_inf`: the surface loses
     /// `sigma eps (T^4 - Tinf^4)` per unit area. Both temperatures are absolute.
     Radiation { faces: String, emissivity: f64, t_inf: f64 },
+    /// A finite conductance across the bonded contact `of`: `h (T_slave − T_master)` crosses the
+    /// interface per unit area, so the two sides are no longer at the same temperature. `of`
+    /// names a Coupling rather than a Set — the interface it acts on comes from the tie's own
+    /// slave faces — which is why [`HeatLoad::set`] answers `None` for it, unlike every other
+    /// variant here.
+    Contact { of: String, h: f64 },
 }
 
 impl HeatLoad {
-    /// The face Set this load acts on, if it acts on one.
+    /// The face Set this load acts on, if it acts on one. A thermal contact names a Coupling,
+    /// not a Set, so it is not one of the Sets [`crate::fem::checks::all`] checks here.
     pub fn set(&self) -> Option<&str> {
         match self {
             HeatLoad::Convection { faces, .. } | HeatLoad::Flux { faces, .. } | HeatLoad::Radiation { faces, .. } => {
                 Some(faces)
             }
-            HeatLoad::Source { .. } => None,
+            HeatLoad::Source { .. } | HeatLoad::Contact { .. } => None,
         }
     }
 }
@@ -120,20 +127,25 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Result<Kin, 
     Ok(kin)
 }
 
-/// `∫ k ∇Nᵀ ∇N dV` into `out` (`n_nodes × n_nodes`, row-major); returns the smallest
+/// `∫ ∇Nᵀ K ∇N dV` into `out` (`n_nodes × n_nodes`, row-major); returns the smallest
 /// Gauss-point `det J`, which the well-posedness report carries just as the stiffness does.
+///
+/// `K = Rᵀ diag(k1, k2, k3) R` is the conductivity in global coordinates, formed once per
+/// element; an isotropic material makes it `k I` and the sum collapses to `k ∇N_a · ∇N_b`.
 pub fn conductivity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<f64, Error> {
     let kin = kinematics(kind, c, rule_of(kind))?;
     let nn = kin.n_nodes;
     let dim = kind.dim();
+    let k = c.material.conductivity_tensor();
     out.fill(0.0);
     for gp in 0..kin.n_gp {
-        let wk = kin.w[gp] * c.material.k;
+        let w = kin.w[gp];
         for a in 0..nn {
             let ga = kin.g[gp * nn + a];
             for b in 0..nn {
                 let gb = kin.g[gp * nn + b];
-                out[a * nn + b] += wk * (0..dim).map(|i| ga[i] * gb[i]).sum::<f64>();
+                let q: f64 = (0..dim).map(|i| ga[i] * (0..dim).map(|j| k[i][j] * gb[j]).sum::<f64>()).sum();
+                out[a * nn + b] += w * q;
             }
         }
     }

@@ -1,12 +1,22 @@
 //! Lossless editable Commands, read from the current Model rather than display summaries.
 use crate::command::*;
 use crate::model::{Amplitude, ConstraintKind, LoadKind, Model, SetSource};
-use crate::units::{Length, Q};
+use crate::units::{Dim, Length, Q};
 use crate::{Error, ErrorCode};
 use femlab_geometry::{FacePredicate as Face, RegionPredicate as Region, Segment, Shape, Sketch};
 
 fn length(v: f64) -> Q<Length> {
     Q::new(v, "m")
+}
+
+/// An SI value written as text rather than as `{value, unit}` parts.
+///
+/// `serde_json`'s float parser is not correctly rounded, so a value that needs all seventeen
+/// significant digits — a second moment of area usually does — comes back one ulp away and the
+/// definition would not re-apply to the same Model. `Display` writes the shortest string that
+/// round-trips and Rust's own `str::parse` reads it back exactly, both ways.
+fn si_text<D: Dim>(v: f64, unit: &str) -> Q<D> {
+    Q::text(&format!("{v} {unit}"))
 }
 
 fn sketch(s: &Sketch) -> SketchSpec {
@@ -49,17 +59,25 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
             shape: Box::new(shape(s)?),
             at: Placement { translate: Some(at.translate.map(length)), rotate: Some(at.rotate), scale: Some(at.scale) },
         },
-        // Named shapes are an internal geometry wrapper, not a public ShapeSpec. Imported
-        // snapshots can contain them; refuse editing instead of silently dropping face tags.
-        Shape::Named { .. } => {
+        // Named shapes are an internal geometry wrapper and a line body has its own Command,
+        // so neither is a public ShapeSpec. Imported snapshots can contain them nested; refuse
+        // editing instead of silently dropping face tags.
+        Shape::Named { .. } | Shape::Polyline { .. } => {
             return Err(Error::new(ErrorCode::Unsupported, "this imported shape contains internal face-name wrappers")
                 .at("shape")
                 .suggest("geometry.add with an explicit public shape definition"))
         }
+        // The Model keeps the welded triangles, not the file they came from, so the editable
+        // Command is the import itself rather than a shape definition.
+        Shape::Mesh { .. } => {
+            return Err(Error::new(ErrorCode::Unsupported, "an imported mesh Body has no editable shape definition")
+                .at("shape")
+                .suggest("geometry.import again with the file, a different unitLength or a different featureAngle"))
+        }
     })
 }
 
-fn face(p: &Face) -> FacePredicate {
+pub(crate) fn face(p: &Face) -> FacePredicate {
     match p {
         Face::Plane { normal, offset, tol } => {
             FacePredicate::Plane { normal: *normal, offset: length(*offset), tol: tol.map(length) }
@@ -84,24 +102,135 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
     let missing = || Error::not_found(kind.label(), name, &m.names(kind)).suggest("query.objects");
     Ok(match kind {
         ObjectKind::Body => {
+            if let Some(crate::model::MeshSettings {
+                mesher: crate::model::MesherSettings::Imported(source),
+                formulation,
+                ..
+            }) = &m.mesh
+            {
+                if source.body == name || source.regions.contains_key(name) {
+                    return Ok(Command::MeshSet {
+                        mesher: MesherSpec::Imported(crate::imported::spec(source)),
+                        order: Some(1),
+                        formulation: Some(*formulation),
+                        simplices: Some(false),
+                        refinement: None,
+                    });
+                }
+            }
             let b = m.body(name).ok_or_else(missing)?;
-            Command::GeometryAdd { name: b.name.clone(), shape: shape(&b.shape)? }
+            match &b.shape {
+                Shape::Polyline { points, members, divisions, beam } => Command::GeometryAddLine {
+                    name: b.name.clone(),
+                    points: points.iter().map(|p| p.map(length)).collect(),
+                    members: Some(members.clone()),
+                    divisions: Some(*divisions),
+                    kind: Some(if *beam { LineKind::Beam } else { LineKind::Truss }),
+                },
+                other => Command::GeometryAdd { name: b.name.clone(), shape: shape(other)? },
+            }
+        }
+        // Restore a shell's thickness; line sections use their resolved `generic` properties.
+        // Both forms are exactly idempotent when re-applied.
+        ObjectKind::Section => {
+            let x = m.section(name).ok_or_else(missing)?;
+            Command::SectionAdd {
+                name: x.name.clone(),
+                shape: if !x.plies.is_empty() {
+                    SectionSpec::Laminate {
+                        plies: x
+                            .plies
+                            .iter()
+                            .map(|ply| crate::command::ShellPlySpec {
+                                material: ply.material.clone(),
+                                thickness: si_text(ply.thickness, "m"),
+                                angle: Some(si_text(ply.angle, "rad")),
+                            })
+                            .collect(),
+                    }
+                } else if let Some(thickness) = x.section.thickness {
+                    SectionSpec::Shell { thickness: si_text(thickness, "m") }
+                } else {
+                    SectionSpec::Generic {
+                        a: si_text(x.section.a, "m^2"),
+                        i_y: si_text(x.section.i_y, "m^4"),
+                        i_z: si_text(x.section.i_z, "m^4"),
+                        j: si_text(x.section.j, "m^4"),
+                        k_y: Some(x.section.k_y),
+                        k_z: Some(x.section.k_z),
+                        c_y: Some(si_text(x.section.c_y, "m")),
+                        c_z: Some(si_text(x.section.c_z, "m")),
+                    }
+                },
+            }
         }
         ObjectKind::Material => {
             let x = m.material(name).ok_or_else(missing)?;
+            // The three material-axis components come back on the orthotropic block when there
+            // is one and as a single isotropic value otherwise, which is where they can go.
+            let ortho = x.orthotropic.as_ref().map(|o| {
+                Box::new(crate::command::Orthotropic {
+                    e1: Q::new(o.e1, "Pa"),
+                    e2: Q::new(o.e2, "Pa"),
+                    e3: Q::new(o.e3, "Pa"),
+                    g12: Q::new(o.g12, "Pa"),
+                    g13: Q::new(o.g13, "Pa"),
+                    g23: Q::new(o.g23, "Pa"),
+                    nu12: o.nu12,
+                    nu13: o.nu13,
+                    nu23: o.nu23,
+                    alpha: x.alpha.map(|v| v.axes().map(|c| Q::new(c, "1/K"))),
+                    k: x.k.map(|v| v.axes().map(|c| Q::new(c, "W/(m K)"))),
+                })
+            });
+            let isotropic = ortho.is_none();
             Command::MaterialAdd {
                 name: x.name.clone(),
-                e: Q::new(x.e, "Pa"),
+                e: x.e.map(|v| Q::new(v, "Pa")),
                 nu: x.nu,
+                orientation: x
+                    .orientation
+                    .map(|o| crate::command::Orientation { axis: o.axis, angle: Q::new(o.angle, "1") }),
+                orthotropic: ortho,
                 rho: x.rho.map(|v| Q::new(v, "kg/m^3")),
-                alpha: x.alpha.map(|v| Q::new(v, "1/K")),
-                k: x.k.map(|v| Q::new(v, "W/(m K)")),
+                alpha: x.alpha.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "1/K")),
+                k: x.k.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "W/(m K)")),
                 cp: x.cp.map(|v| Q::new(v, "J/(kg K)")),
                 yield_: x.yield_.map(|v| Q::new(v, "Pa")),
+                plasticity: x.plasticity.as_ref().map(|h| match h {
+                    crate::model::Hardening::Linear { h, .. } => {
+                        crate::command::Plasticity { h: Some(Q::new(*h, "Pa")), table: None }
+                    }
+                    crate::model::Hardening::Table { plastic_strain, stress } => crate::command::Plasticity {
+                        h: None,
+                        table: Some(
+                            plastic_strain
+                                .iter()
+                                .zip(stress)
+                                .map(|(&e, &s)| crate::command::HardeningPoint {
+                                    plastic_strain: e,
+                                    stress: Q::new(s, "Pa"),
+                                })
+                                .collect(),
+                        ),
+                    },
+                }),
                 source: x.source.clone(),
             }
         }
         ObjectKind::Set => {
+            if let Some(crate::model::MeshSettings { mesher: crate::model::MesherSettings::Imported(source), .. }) =
+                &m.mesh
+            {
+                if source.set_names().contains(name) {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "imported Sets are immutable mesher-owned memberships",
+                    )
+                    .at("name")
+                    .suggest("query.definition of the owning Body, then mesh.set with a replacement source"));
+                }
+            }
             let x = m.sets.iter().find(|s| s.name == name).ok_or_else(missing)?;
             match &x.source {
                 SetSource::Face { of, where_ } => {
@@ -124,6 +253,7 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
             let on = x.on.clone();
             match &x.kind {
                 ConstraintKind::Fix { dofs } => Command::ConstraintFix { name, on, dofs: Some(dofs.clone()) },
+                ConstraintKind::Pin => Command::ConstraintPin { name, on },
                 ConstraintKind::Prescribe { dof, value } => {
                     Command::ConstraintPrescribe { name, on, dof: *dof, value: length(*value) }
                 }
@@ -131,6 +261,32 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 ConstraintKind::Temperature { value } => {
                     Command::ConstraintTemperature { name, on, value: Q::new(*value, "K") }
                 }
+                ConstraintKind::Couple { point, coupling } => {
+                    Command::ConstraintCouple { name, point: point.clone(), on, kind: *coupling }
+                }
+                ConstraintKind::Bonded { master, tol } => Command::ContactAdd {
+                    name,
+                    master: master.clone(),
+                    slave: on,
+                    kind: ContactKind::Bonded,
+                    tol: tol.map(length),
+                },
+                ConstraintKind::Frictionless { master, tol } => Command::ContactAdd {
+                    name,
+                    master: master.clone(),
+                    slave: on,
+                    kind: ContactKind::Frictionless,
+                    tol: tol.map(length),
+                },
+                ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => Command::ConstraintCyclic {
+                    name,
+                    from: from.clone(),
+                    to: on,
+                    axis: *axis,
+                    angle_deg: *angle_deg,
+                    through: through.map(|t| t.map(length)),
+                    tol: tol.map(length),
+                },
             }
         }
         ObjectKind::Load => {
@@ -145,6 +301,9 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 }
                 LoadKind::Force { on, total } => {
                     Command::LoadForce { name, on: on.clone(), total: total.map(|v| Q::new(v, "N")) }
+                }
+                LoadKind::Moment { on, total } => {
+                    Command::LoadMoment { name, on: on.clone(), total: total.map(|v| Q::new(v, "N*m")) }
                 }
                 LoadKind::Gravity { g } => Command::LoadGravity { name, g: g.map(|v| Q::new(v, "m/s^2")) },
                 LoadKind::Temperature { bodies, value, reference } => Command::LoadTemperature {
@@ -165,6 +324,12 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 LoadKind::HeatFlux { on, q } => Command::LoadHeatFlux { name, on: on.clone(), q: Q::new(*q, "W/m^2") },
                 LoadKind::HeatSource { bodies, q } => {
                     Command::LoadHeatSource { name, bodies: bodies.clone(), q: Q::new(*q, "W/m^3") }
+                }
+                LoadKind::Torque { on, total } => {
+                    Command::LoadTorque { name, on: on.clone(), total: Q::new(*total, "N*m") }
+                }
+                LoadKind::ThermalContact { of, h } => {
+                    Command::ContactThermal { name, of: of.clone(), conductance: Q::new(*h, "W/(m^2 K)") }
                 }
             }
         }
@@ -187,6 +352,26 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 initial: x.initial.map(|v| Q::new(v, "K")),
                 nonlinear_tolerance: x.nonlinear_tolerance,
                 nonlinear_max_iterations: x.nonlinear_max_iterations,
+                f_start: x.f_start.map(|v| Q::new(v, "Hz")),
+                f_stop: x.f_stop.map(|v| Q::new(v, "Hz")),
+                points: x.points,
+                sweep: x.sweep,
+                damping_ratio: x.damping_ratio,
+                damping_ratios: x.damping_ratios.clone(),
+                psd: x.psd.as_ref().map(|points| {
+                    points
+                        .iter()
+                        .map(|p| crate::command::PsdPoint { frequency: Q::new(p[0], "Hz"), density: Q::new(p[1], "s") })
+                        .collect()
+                }),
+                alpha: x.alpha,
+                rayleigh_alpha: x.rayleigh_alpha.map(|v| Q::new(v, "Hz")),
+                rayleigh_beta: x.rayleigh_beta.map(|v| Q::new(v, "s")),
+                initial_velocity: x.initial_velocity.as_ref().map(|list| {
+                    list.iter()
+                        .map(|iv| InitialVelocitySpec { on: iv.on.clone(), value: iv.value.map(|v| Q::new(v, "m/s")) })
+                        .collect()
+                }),
                 amplitude: x.amplitude.as_ref().map(|a| match a {
                     Amplitude::Sine { amplitude, period } => {
                         AmplitudeSpec::Sine { amplitude: *amplitude, period: Q::new(*period, "s") }
@@ -195,6 +380,8 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                         AmplitudeSpec::Table { t: t.iter().map(|v| Q::new(*v, "s")).collect(), value: value.clone() }
                     }
                 }),
+                increments: x.increments,
+                max_cutbacks: x.max_cutbacks,
             }
         }
     })

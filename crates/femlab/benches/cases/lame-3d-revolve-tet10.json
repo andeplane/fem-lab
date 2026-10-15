@@ -1,0 +1,205 @@
+{
+  "name": "lame-3d-revolve-tet10",
+  "reference": "Benchmark D6. The same Lame thick cylinder as lame-3d-revolve-hex20 (a = 0.1 m, b = 0.2 m, internal pressure p = 60 MPa, E = 200 GPa, nu = 0.3), but the tube is a 90-degree CSG revolve (geometry.add) tagged tube.zmin/outer/zmax/inner by segment and tube.theta0/theta1 on the cut faces -- the identical Set names the hex20 case's mapped block gives the sweep mesher -- meshed by the free tet mesher instead of sweep+mapped. Order 2 gives tet10 with mid-edge nodes projected onto the curved inner and outer faces by isosurface stuffing (ADR 0021), so the boundary is round rather than faceted. This row's own reaction-balance and freshness checks (below) are the gate: the model is well posed and the tube.* Sets a sweep-mesher Journal already relies on still resolve after mesh.set swaps the mesher, the point #22 exists to prove. Point-probed stress and displacement at r = 0.15 m (mid-wall) are recorded, not gated: this mesher's dihedral-bounded cut-and-warp tetrahedra converge on a point value far more slowly than the sweep mesher's exact prismatic hex20 do (13% stress / 13% displacement error even at h = 0.012 m, five minutes to solve, against 28%/9% at h = 0.02 m -- convergence is real but not tight enough for a 2%/1% gate at a size this suite can afford; D7 shows the same story one order lower). Every line below this comment except the mesher and the probe point is otherwise byte-for-byte lame-3d-revolve-hex20.json.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "lame-3d-tet"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "geometry.add",
+      "name": "tube",
+      "shape": {
+        "kind": "revolve",
+        "angle": 90,
+        "segments": 16,
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "0.2 m",
+                "0 m"
+              ],
+              "tag": "zmin"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0.2 m",
+                "0.1 m"
+              ],
+              "tag": "outer"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0.1 m",
+                "0.1 m"
+              ],
+              "tag": "zmax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0.1 m",
+                "0 m"
+              ],
+              "tag": "inner"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "tet",
+        "size": "0.02 m"
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "theta0",
+      "on": "tube.theta0",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "theta1",
+      "on": "tube.theta1",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "zmin",
+      "on": "tube.zmin",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "zmax",
+      "on": "tube.zmax",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "theta0",
+        "theta1",
+        "zmin",
+        "zmax"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "0.15 m",
+          "0 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 40.07533339641699,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_theta(0.15 m) recorded at h=0.02 m: the closed form there is 55.5556 MPa"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0.15 m",
+          "0 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -19.977579943666218,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_rr(0.15 m) recorded at h=0.02 m: the closed form there is -15.5556 MPa"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0.15 m",
+          "0 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 3.881441816165952e-05,
+      "tol": 0.01,
+      "rel": true,
+      "note": "u_r(0.15 m) recorded at h=0.02 m: the closed form there is 4.246667e-5 m"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-08,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

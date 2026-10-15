@@ -9,7 +9,7 @@ import { readHostCaps } from '../src/capabilities';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { Store } from '../src/store';
 import { Palette, objectRoute, fuzzy, rankCommands, requiredOf, score } from '../src/ui/Overlays';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 const registry = new Registry({

@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -5,7 +6,7 @@ import { expect, it } from 'vitest';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 const commands = JSON.parse(readFileSync(path.join(root, 'crates/engine/tests/fixtures/transformed-sheet.json'), 'utf8'));
-const wasm = createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js'));
+const wasm = batchModule(createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js')));
 
 it('meshes the transformed Sheet through the actual wasm API with its hole and named Sets', async () => {
   for (const size of ['1 m', '0.5 m', '0.25 m']) {

@@ -1,0 +1,13 @@
+[package]
+name = "fem-266-le10-replay"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.94"
+
+[dependencies]
+faer = { version = "=0.24.4", default-features = false, features = ["std", "sparse-linalg", "rayon"] }
+rayon = "=1.12.0"
+
+# Standalone diagnostic host, intentionally outside the production workspace.
+[workspace]
+resolver = "2"

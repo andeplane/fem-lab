@@ -11,7 +11,10 @@ repository = "https://github.com/andeplane/fem-lab"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: serde_json's default float parser is not correctly rounded, so a value that
+# needs all seventeen significant digits comes back one ulp away and a Journal would not replay
+# to the same Model. Determinism is a hard requirement here (ADR 0013), so pay the parse cost.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 schemars = "1.2"
 libm = "0.2"
 thiserror = "2"

@@ -1,0 +1,21 @@
+{
+  "title": "Pinned–pinned column, Euler buckling",
+  "tag": "P1 · verify",
+  "tags": [
+    "buckling",
+    "steel",
+    "symmetry",
+    "eigenvalue"
+  ],
+  "difficulty": 3,
+  "sentence": "A 200 × 200 mm S355 column, 5 m between pins, modelled as its lower half with a symmetry plane at mid-height — one linear buckling Step against π²EI/L².",
+  "expected": {
+    "quantity": "critical load P_cr",
+    "value": 11054,
+    "unit": "kN",
+    "reference": "Euler P_cr = π²EI/(KL)² with K = 1 and I = b⁴/12; the eigenvalue multiplies the 40 kN reference load"
+  },
+  "theory": "A linear buckling Step solves $(K + \\lambda K_g)\\varphi = 0$: $\\lambda$ is the factor on the applied load at which the structure has a second equilibrium shape. With a 1 MPa reference pressure on a 40 000 mm² section the reference load is 40 kN, so $P_{cr} = 40\\lambda$ kN. The closed form is $P_{cr} = \\pi^2 EI/(KL)^2$ with $K = 1$ for pinned–pinned. This eigenvalue is an **upper bound**, not a design load: it assumes a perfectly straight, residual-stress-free, elastic member. EN 1993-1-1 §6.3.1 replaces it with $N_{b,Rd} = \\chi A f_y/\\gamma_{M1}$, and here the curve-c value is about 60 % of the eigenvalue.",
+  "tutorial": "column-buckling",
+  "thumbnail": null
+}

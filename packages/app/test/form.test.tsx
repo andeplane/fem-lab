@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from './wait-for';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { Store } from '../src/store';
+import { Store, type FormState } from '../src/store';
 import { SchemaForm, errorFor } from '../src/ui/SchemaForm';
 import { commandLine, type Defs } from '../src/ui/schema';
 
@@ -35,10 +35,10 @@ const model = (): ModelSummary =>
   }) as unknown as ModelSummary;
 
 /** A dispatch that behaves like the app's: `form.open` really re-opens the form. */
-function mount(cmd: string, values: Record<string, unknown> = {}) {
+function mount(cmd: string, values: Record<string, unknown> = {}, target?: FormState['target']) {
   const store = new Store();
   store.set({ model: model(), ready: true });
-  store.openForm(cmd, values);
+  store.openForm(cmd, values, false, target);
   const transport = fakeTransport();
   const registry = new Registry({ schema: doc, host: fakeHost(transport), hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, { current: null }, async () => undefined)] });
   const sent: { cmd: string }[] = [];
@@ -67,6 +67,136 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('opens a heat Material form with thermal and mass fields first and stiffness hidden', () => {
+    const { root, store } = mount('material.add', { name: 'conductor' });
+    store.set({ model: { ...model(), steps: [{ name: 'heat', procedure: 'heat-steady', loads: [], constraints: [], solved: false }] } });
+    expect([...root.querySelectorAll('.props-body > [data-field]')].map(f => f.getAttribute('data-field'))).toEqual(['name', 'k', 'cp', 'rho', 'source']);
+    expect(field(root, 'E')).toBeNull();
+    expect(field(root, 'k').textContent).toContain('thermal conductivity');
+    expect(root.querySelector('[aria-label="Material physics"] [aria-pressed="true"]')!.textContent).toBe('mass');
+  });
+
+  it('uses callable Material chips and preserves hidden values through edits, Apply and Revert', () => {
+    const original = { name: 'steel', E: '210 GPa', nu: 0.3, k: '45 W/(m K)', cp: '460 J/(kg K)', rho: '7850 kg/m^3', source: 'EN 10025' };
+    const { root, store, sent } = mount('material.add', original);
+    const chip = () => [...root.querySelectorAll<HTMLButtonElement>('[aria-label="Material physics"] button')].find(b => b.textContent === 'stiffness')!;
+    expect(chip().getAttribute('aria-pressed')).toBe('true');
+    chip().click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'material.add', args: original, keepInitial: true, materialPhysics: ['mass', 'thermal'] });
+    expect(field(root, 'E')).toBeNull();
+    type(field(root, 'k').querySelector('input')!, '50 W/(m K)');
+    expect(store.state.form!.materialPhysics).toEqual(['mass', 'thermal']);
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'material.add', ...original, k: '50 W/(m K)' });
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('E: "210 GPa"');
+    root.querySelector<HTMLButtonElement>('[data-cmd="form.open"].outline')!.click();
+    expect(store.state.form!.values).toEqual(original);
+    expect(store.state.form!.materialPhysics).toEqual(['mass', 'thermal']);
+    expect(field(root, 'E')).toBeNull();
+    chip().click();
+    expect(field(root, 'E').querySelector('input')!.value).toBe('210 GPa');
+    store.openForm('material.add', { name: 'fresh' });
+    expect(store.state.form!.materialPhysics).toBeUndefined();
+    expect(field(root, 'E')).not.toBeNull();
+  });
+
+  it('allows empty Material view groups without changing the definition, and shows hidden errors', async () => {
+    const { root, store, dispatch } = mount('material.add', { name: 'steel', E: '210 GPa', nu: 0.3 });
+    await dispatch({ cmd: 'form.open', command: 'material.add', args: store.state.form!.values, keepInitial: true, materialPhysics: [] });
+    expect(root.querySelectorAll('.props-body > [data-field]').length).toBe(2);
+    expect(store.state.form!.values['E']).toBe('210 GPa');
+    store.set({ formError: { code: 'schema', cause: 'E must be positive', where: 'E', suggestion: 'material.add with positive E' } });
+    expect(root.querySelector('.surface.error')!.textContent).toContain('E must be positive');
+    await expect(dispatch({ cmd: 'form.open', command: 'material.add', materialPhysics: ['nonsense'] })).rejects.toThrow();
+  });
+
+  it('changes Step fields with the selected procedure while keeping full values for Apply and Revert', async () => {
+    const original = { name: 'cooling', procedure: 'heat-transient', constraints: [], loads: [], dt: '1 s', tEnd: '10 s', theta: 0.5, initial: '300 K', alpha: -0.05, initialVelocity: [] };
+    const { root, store, sent } = mount('step.add', original);
+    expect(field(root, 'theta')).not.toBeNull();
+    expect(field(root, 'initial')).not.toBeNull();
+    expect(field(root, 'alpha')).toBeNull();
+    expect(field(root, 'initialVelocity')).toBeNull();
+    expect(root.querySelector('.procedure-summary')!.textContent).toContain('needs k, ρ, cp · gives T');
+    const choose = (name: string) => [...field(root, 'procedure').querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === name)!.click();
+    choose('implicit');
+    expect(field(root, 'alpha')).not.toBeNull();
+    expect(field(root, 'initialVelocity')).not.toBeNull();
+    expect(field(root, 'theta')).toBeNull();
+    expect(field(root, 'initial')).toBeNull();
+    expect(store.state.form!.values).toEqual({ ...original, procedure: 'implicit' });
+    type(field(root, 'alpha').querySelector('input')!, '-0.1');
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('initial: "300 K"');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'step.add', ...original, procedure: 'implicit', alpha: -0.1 });
+    root.querySelector<HTMLButtonElement>('[title="Revert to the values this form opened with"]')!.click();
+    expect(store.state.form!.values).toEqual(original);
+    expect(field(root, 'theta')).not.toBeNull();
+    expect(field(root, 'alpha')).toBeNull();
+    choose('static');
+    expect(field(root, 'dt')).not.toBeNull();
+    expect(field(root, 'nModes')).toBeNull();
+    expect(field(root, 'nonlinearTolerance')).toBeNull();
+    expect(root.querySelector('.procedure-summary')!.textContent).toContain('gives u, stress, reactions');
+    choose('randomVibration');
+    expect(field(root, 'psd')).not.toBeNull();
+    expect(field(root, 'dampingRatio')).not.toBeNull();
+    expect(field(root, 'fStart')).toBeNull();
+    expect(field(root, 'dt')).toBeNull();
+    await Promise.resolve();
+  });
+
+  it('shows errors for retained values whose procedure field is currently hidden', () => {
+    const { root, store } = mount('step.add', { name: 'static', procedure: 'static', constraints: [], loads: [], dampingRatio: -1 });
+    store.set({ formError: { code: 'schema', cause: 'dampingRatio must be non-negative', where: 'dampingRatio', suggestion: 'step.add with dampingRatio 0.02' } });
+    expect(field(root, 'dampingRatio')).toBeNull();
+    expect(root.querySelector('.surface.error')!.textContent).toContain('dampingRatio must be non-negative');
+  });
+
+  it('describes conductivity in the material picker when stiffness is absent', () => {
+    const { root, store, sent } = mount('material.assign');
+    store.set({ model: { ...model(), materials: [{ name: 'thermal', k: { value: 50, unit: 'W/(m K)' }, cp: { value: 440, unit: 'J/(kg K)' }, assignedTo: [] }] } });
+    const candidate = field(root, 'material').querySelector<HTMLButtonElement>('.chip-cand')!;
+    expect(candidate.title).toBe('k 50 W/(m K)');
+    candidate.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'material.assign', args: { material: 'thermal', bodies: [] }, keepInitial: true });
+  });
+
+  it.each([
+    ['body', 'geometry.addBox'], ['material', 'material.add'], ['set', 'geometry.nameFace'],
+    ['constraint', 'constraint.fix'], ['load', 'load.pressure'], ['step', 'step.add'],
+  ] as const)('inserts a %s reference using the edited object identity', async (kind, cmd) => {
+    const { root, sent } = mount(cmd, { name: 'beam' }, { kind, name: 'beam' });
+    root.querySelector<HTMLButtonElement>('.prop-name [data-cmd="chat.insertMention"]')!.click();
+    await Promise.resolve();
+    expect(sent).toEqual([{ cmd: 'chat.insertMention', ref: `${kind}:beam` }]);
+  });
+
+  it('preserves the reference target through field edits and Revert', async () => {
+    const { root, store, sent } = mount('geometry.addBox', { name: 'beam' }, { kind: 'body', name: 'beam' });
+    type(field(root, 'name').querySelector('input')!, 'unsaved-name');
+    root.querySelector<HTMLButtonElement>('.prop-name [data-cmd="chat.insertMention"]')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'chat.insertMention', ref: 'body:beam' });
+    root.querySelector<HTMLButtonElement>('[data-cmd="form.open"].outline')!.click();
+    expect(store.state.form!.target).toEqual({ kind: 'body', name: 'beam' });
+    store.openForm('geometry.addBox', { name: 'new-body' });
+    expect(root.querySelector('.prop-name [data-cmd="chat.insertMention"]')).toBeNull();
+  });
+
+  it('copies a valid reference when the Assistant cannot receive it', async () => {
+    const { root, sent, dispatch } = mount('geometry.addBox', { name: 'beam' }, { kind: 'body', name: 'beam' });
+    dispatch.mockImplementation(async c => {
+      sent.push(c);
+      if (c.cmd === 'chat.insertMention') throw new Error('Assistant unavailable');
+    });
+    root.querySelector<HTMLButtonElement>('.prop-name [data-cmd="chat.insertMention"]')!.click();
+    await Promise.resolve(); await Promise.resolve();
+    expect(sent).toEqual([
+      { cmd: 'chat.insertMention', ref: 'body:beam' },
+      { cmd: 'clipboard.copy', what: { kind: 'mention', ref: 'body:beam' } },
+    ]);
+  });
+
   it('teaches linear mesh accuracy and previews a quadratic fix as one Command', () => {
     const values = { mesher: { kind: 'free', of: 'plate', size: '10 mm' } };
     const { root, sent, store } = mount('mesh.set', values);
@@ -76,6 +206,17 @@ describe('SchemaForm', () => {
     expect(store.state.form!.initial).toEqual(values);
     expect(root.querySelector('[role="status"]')).toBeNull();
     expect(root.querySelector('.recorded-cmd')!.textContent).toContain('order: 2');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
+  });
+
+  it('preserves simplex conversion when previewing the quadratic accuracy fix', () => {
+    const values = { mesher: { kind: 'lattice', size: '10 mm' }, simplices: true, order: 1 };
+    const { root, sent } = mount('mesh.set', values);
+    expect(field(root, 'order').querySelector('[role="status"]')!.textContent).toContain('Linear tetrahedra');
+    root.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+    expect(sent).toEqual([{ cmd: 'form.open', command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }]);
+    expect(root.querySelector('[role="status"]')).toBeNull();
     root.querySelector<HTMLButtonElement>('.apply')!.click();
     expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
   });
@@ -177,7 +318,7 @@ describe('SchemaForm', () => {
     type(field(root, 'value').querySelector('input')!, '9 MPa');
     expect(store.state.form!.values['value']).toBe('9 MPa');
     root.querySelector<HTMLButtonElement>('[data-cmd="form.open"].outline')!.click();
-    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'load.pressure', args: { name: 'p', value: '2 MPa' } });
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'load.pressure', args: { name: 'p', value: '2 MPa' }, keepInitial: true });
     expect(store.state.form!.values['value']).toBe('2 MPa');
   });
 
