@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 
 class HostingReleaseSmoke(unittest.TestCase):
-    def release(self, *, custom=False, other_source=False, hosted_project='femlab-app', readiness='ready'):
+    def release(self, *, custom=False, other_source=False, hosted_project='femlab-app', readiness='ready', google=False, provider=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             infra = root / 'infra/google'
@@ -28,6 +28,7 @@ class HostingReleaseSmoke(unittest.TestCase):
             environments = []
 
             def output(command, **kwargs):
+                if command[:2] == ['gcloud', 'auth']: return 'test-access-token'
                 return 'https://direct-api.example.test' if command[0] == 'gcloud' else 'source-commit'
 
             def execute(command, **kwargs):
@@ -40,6 +41,9 @@ class HostingReleaseSmoke(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0)
 
             def response(url, **kwargs):
+                if hasattr(url, 'full_url'):
+                    self.assertEqual(url.full_url, 'https://identitytoolkit.googleapis.com/admin/v2/projects/femlab-app/defaultSupportedIdpConfigs/google.com?fields=enabled,clientId')
+                    return io.BytesIO(json.dumps(provider or {}).encode())
                 if url == 'https://femlab.app/__/firebase/init.json':
                     return io.BytesIO(json.dumps({'projectId': hosted_project, 'appId': 'app-production'}).encode())
                 if url == 'https://api.femlab.app/ready':
@@ -48,6 +52,7 @@ class HostingReleaseSmoke(unittest.TestCase):
 
             argv = [str(script), '--environment', 'production', '--account', 'selected-account', '--source', str(source), '--build-only']
             if custom: argv.append('--custom-domain')
+            if google: argv.append('--google-sign-in')
             with patch('sys.argv', argv), patch('subprocess.check_output', output), patch('subprocess.run', execute), patch('urllib.request.urlopen', response), contextlib.redirect_stdout(io.StringIO()) as stdout:
                 try:
                     runpy.run_path(str(script), run_name='__main__')
@@ -82,6 +87,18 @@ class HostingReleaseSmoke(unittest.TestCase):
     def test_unready_custom_api_cannot_build_or_publish(self):
         with self.assertRaisesRegex(RuntimeError, 'not ready'):
             self.release(custom=True, readiness='unavailable')
+
+    def test_google_button_requires_enabled_provider_and_client(self):
+        for provider in [{'enabled': False, 'clientId': 'public-id'}, {'enabled': True}]:
+            with self.subTest(provider=provider), self.assertRaisesRegex(RuntimeError, 'enabled Google provider'):
+                self.release(google=True, provider=provider)
+
+    def test_google_button_can_be_enabled_without_embedding_oauth_credentials(self):
+        manifest, environment = self.release(google=True, provider={'enabled': True, 'clientId': 'public-id'})
+        self.assertEqual(manifest['googleLogin'], 'enabled')
+        self.assertEqual(environment['FEMLAB_GOOGLE_SIGN_IN'], 'true')
+        self.assertNotIn('test-access-token', json.dumps(manifest) + environment['FEMLAB_FIREBASE_CONFIG'])
+        self.assertNotIn('public-id', environment['FEMLAB_FIREBASE_CONFIG'])
 
 
 if __name__ == '__main__':
