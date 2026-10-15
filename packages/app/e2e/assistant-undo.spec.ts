@@ -16,7 +16,7 @@ function response(tool: boolean): string {
 
 async function assistantTurn(page: Page) {
   await page.setViewportSize({ width: 1800, height: 1000 });
-  await page.addInitScript(() => sessionStorage.setItem('femlab.ai.key', 'test-key'));
+  await page.addInitScript(() => localStorage.setItem('femlab.ai.key', 'test-key'));
   let request = 0;
   await page.route('https://api.anthropic.com/v1/messages', (route) => route.fulfill({
     status: 200, headers: { 'content-type': 'text/event-stream', 'access-control-allow-origin': '*' }, body: response(request++ === 0),

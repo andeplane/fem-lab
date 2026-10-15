@@ -8,7 +8,7 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, STEP_ACCEPT, type AbaqusConversion, type AbaqusDependencies, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/runtime-schema';
-import { migratePersistentKeys } from './ai/key-storage';
+import { prepareKeyStorage } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, autosaveHistory, type ViewerRef } from './host';
@@ -430,7 +430,7 @@ const workspace = new SessionWorkspace<Bundle>({
 });
 async function boot(): Promise<void> {
   bootStage('Checking graphics capabilities…', 20);
-  migratePersistentKeys();
+  prepareKeyStorage(__HOSTED_AI__);
   // Select the initial backend from an actual adapter probe. Later candidate device failures
   // still abort replacement; they never silently change an established backend.
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
