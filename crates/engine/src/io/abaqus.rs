@@ -486,10 +486,7 @@ impl Builder {
                 }
             }
             Section::Elements { kind, set } => {
-                let arity = match kind {
-                    ImportedElementKind::Tet4 => 4,
-                    ImportedElementKind::Hex8 => 8,
-                };
+                let arity = kind.geometry().n_nodes();
                 let values = fields(record, "ELEMENT", arity + 1, arity + 1)?;
                 let id = label(values[0], record.line, "ELEMENT", "label")?;
                 if self.elements.contains_key(&id) {
@@ -694,10 +691,7 @@ impl Builder {
                         format!("source element {} is not defined", member.element),
                     )
                 })?;
-                let maximum = match element.kind {
-                    ImportedElementKind::Tet4 => 4,
-                    ImportedElementKind::Hex8 => 6,
-                };
+                let maximum = element.kind.geometry().n_faces() as u8;
                 if member.face > maximum {
                     return Err(malformed(
                         *line,

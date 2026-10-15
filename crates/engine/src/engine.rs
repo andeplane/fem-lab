@@ -1200,7 +1200,7 @@ impl Engine {
                 {
                     return Err(Error::new(
                         ErrorCode::Unsupported,
-                        "imported sources require order 1, full integration and no split/refinement",
+                        "imported sources require unchanged authored interpolation (order 1), full integration and no split/refinement",
                     )
                     .at("mesher")
                     .suggest("mesh.set with order 1, formulation full, simplices false and no refinement"));

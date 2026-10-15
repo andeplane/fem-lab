@@ -1,7 +1,7 @@
-//! Conservative certificates for the *original* Tet4/Hex8 geometry (#517).
+//! Conservative certificates for original linear and quadratic solid geometry (#517, #655).
 //!
-//! Finite f64 coordinates become exact rationals. A Hex8's reference map is
-//! trilinear, and its faces are their original bilinear patches, never triangles.
+//! Finite f64 coordinates become exact rationals. Complete Abaqus interpolation
+//! maps retain their curved faces; no corner-only or triangulated proxy is accepted.
 //! Acceptance proves global injectivity and every candidate pair's labelled
 //! contact. Some valid cells cannot satisfy these sufficient conditions: bounded
 //! proof failure is `Inconclusive`, not a claim that their geometry is invalid.
@@ -57,6 +57,61 @@ struct Polynomial {
 }
 
 impl Polynomial {
+    fn coordinate(axis: usize) -> Self {
+        let mut degree = [0; 3];
+        degree[axis] = 1;
+        let mut result = Self::zero(degree);
+        result.coefficients[1] = rat_one();
+        result
+    }
+
+    fn compose(&self, map: &[Self; 3]) -> Self {
+        let mut result = Self::constant(rat_zero());
+        for (i, coefficient) in self.coefficients.iter().enumerate() {
+            if rat_is_zero(coefficient) {
+                continue;
+            }
+            let mut term = Self::constant(coefficient.clone());
+            for (axis, power) in exponents(self.degree, i).into_iter().enumerate() {
+                for _ in 0..power {
+                    term = term.mul(&map[axis]);
+                }
+            }
+            result = result.add(&term);
+        }
+        result
+    }
+
+    // The simplex is the image of the closed cube under r=u,s=(1-u)v,
+    // t=(1-u)(1-v)w. Positivity of this exact composition is sufficient everywhere
+    // in the tetrahedron, including its collapsed reference boundaries.
+    fn on_simplex(&self) -> Self {
+        let one = Self::constant(rat_one());
+        let [u, v, w] = std::array::from_fn(Self::coordinate);
+        self.compose(&[u.clone(), one.sub(&u).mul(&v), one.sub(&u).mul(&one.sub(&v)).mul(&w)])
+    }
+    fn trimmed(self) -> Self {
+        let mut degree = [0; 3];
+        for (i, value) in self.coefficients.iter().enumerate() {
+            if !rat_is_zero(value) {
+                let e = exponents(self.degree, i);
+                for k in 0..3 {
+                    degree[k] = degree[k].max(e[k]);
+                }
+            }
+        }
+        if degree == self.degree {
+            return self;
+        }
+        let mut result = Self::zero(degree);
+        for (i, value) in self.coefficients.into_iter().enumerate() {
+            if !rat_is_zero(&value) {
+                result.coefficients[index(degree, exponents(self.degree, i))] = value;
+            }
+        }
+        result
+    }
+
     fn zero(degree: [usize; 3]) -> Self {
         Self { degree, coefficients: vec![rat_zero(); count(degree)] }
     }
@@ -74,11 +129,11 @@ impl Polynomial {
                 result.coefficients[at] += coefficient;
             }
         }
-        result
+        result.trimmed()
     }
 
     fn scale(&self, factor: &Rational) -> Self {
-        Self { degree: self.degree, coefficients: self.coefficients.iter().map(|c| c * factor).collect() }
+        Self { degree: self.degree, coefficients: self.coefficients.iter().map(|c| c * factor).collect() }.trimmed()
     }
 
     fn sub(&self, other: &Self) -> Self {
@@ -99,7 +154,7 @@ impl Polynomial {
                 result.coefficients[at] += a * b;
             }
         }
-        result
+        result.trimmed()
     }
 
     fn derivative(&self, axis: usize) -> Self {
@@ -114,7 +169,7 @@ impl Polynomial {
                 result.coefficients[index(degree, e)] = value;
             }
         }
-        result
+        result.trimmed()
     }
 
     fn evaluate(&self, at: &[Rational; 3]) -> Rational {
@@ -256,14 +311,77 @@ fn determinant(m: &[[Rational; 3]; 3]) -> Rational {
         + &m[0][2] * (&m[1][0] * &m[2][1] - &m[1][1] * &m[2][0])
 }
 
+fn polynomial_determinant(m: &[[Polynomial; 3]; 3]) -> Polynomial {
+    m[0][0]
+        .mul(&m[1][1].mul(&m[2][2]).sub(&m[1][2].mul(&m[2][1])))
+        .sub(&m[0][1].mul(&m[1][0].mul(&m[2][2]).sub(&m[1][2].mul(&m[2][0]))))
+        .add(&m[0][2].mul(&m[1][0].mul(&m[2][1]).sub(&m[1][1].mul(&m[2][0]))))
+}
+
+/// Exact Abaqus interpolation on [0,1]^3 or the unit tetrahedron. These are
+/// geometry polynomials, not a CPU duplicate used as a numerical solver oracle.
+fn source_shapes(kind: ElementKind) -> Vec<Polynomial> {
+    let one = Polynomial::constant(rat_one());
+    let xyz: [Polynomial; 3] = std::array::from_fn(Polynomial::coordinate);
+    if kind == ElementKind::Tet4 || kind == ElementKind::Tet10 {
+        let barycentric = [one.sub(&xyz[0]).sub(&xyz[1]).sub(&xyz[2]), xyz[0].clone(), xyz[1].clone(), xyz[2].clone()];
+        if kind == ElementKind::Tet4 {
+            return barycentric.to_vec();
+        }
+        let mut result: Vec<_> = barycentric.iter().map(|v| v.mul(&v.scale(&fraction(2, 1)).sub(&one))).collect();
+        result.extend(
+            kind.edges()
+                .iter()
+                .map(|&[a, b]| barycentric[a as usize].mul(&barycentric[b as usize]).scale(&fraction(4, 1))),
+        );
+        return result;
+    }
+    let linear: Vec<[Polynomial; 3]> = HEX_BITS
+        .iter()
+        .map(|bits| std::array::from_fn(|k| if bits[k] == 0 { one.sub(&xyz[k]) } else { xyz[k].clone() }))
+        .collect();
+    let mut result: Vec<_> = linear
+        .iter()
+        .map(|factors| {
+            let corner = factors[0].mul(&factors[1]).mul(&factors[2]);
+            if kind == ElementKind::Hex8 {
+                corner
+            } else {
+                corner.mul(
+                    &factors[0]
+                        .add(&factors[1])
+                        .add(&factors[2])
+                        .scale(&fraction(2, 1))
+                        .sub(&Polynomial::constant(fraction(5, 1))),
+                )
+            }
+        })
+        .collect();
+    if kind == ElementKind::Hex20 {
+        result.extend(kind.edges().iter().map(|&[a, b]| {
+            let axis = (0..3)
+                .find(|&k| HEX_BITS[a as usize][k] != HEX_BITS[b as usize][k])
+                .expect("edge varies along one axis");
+            let mut shape = xyz[axis].mul(&one.sub(&xyz[axis])).scale(&fraction(4, 1));
+            for k in 0..3 {
+                if k != axis {
+                    shape = shape.mul(&linear[a as usize][k]);
+                }
+            }
+            shape
+        }));
+    }
+    result
+}
+
 struct Cell {
     element: u32,
     kind: ElementKind,
     nodes: Vec<u32>,
     points: Vec<R3>,
     map: [Polynomial; 3],
-    lo: [f64; 3],
-    hi: [f64; 3],
+    lo: [Rational; 3],
+    hi: [Rational; 3],
 }
 
 impl Cell {
@@ -272,32 +390,26 @@ impl Cell {
         let nodes = mesh.elem_nodes(element).to_vec();
         let coordinates: Vec<_> = nodes.iter().map(|&node| mesh.node(node)).collect();
         let points: Vec<_> = coordinates.iter().map(|p| R3::from_vec3(Vec3::new(p[0], p[1], p[2]))).collect();
+        let shape = source_shapes(kind);
         let map = std::array::from_fn(|component| {
-            let values: Vec<_> = points.iter().map(|p| [&p.x, &p.y, &p.z][component].clone()).collect();
-            let mut polynomial = Polynomial::zero([1; 3]);
-            if kind == ElementKind::Hex8 {
-                for (i, &bits) in HEX_BITS.iter().enumerate() {
-                    polynomial.coefficients[index([1; 3], bits)] = values[i].clone();
-                }
-                // Corner values -> exact tensor power coefficients.
-                for axis in 0..3 {
-                    for i in 0..8 {
-                        if i & (1 << axis) != 0 {
-                            let previous = polynomial.coefficients[i ^ (1 << axis)].clone();
-                            polynomial.coefficients[i] -= previous;
-                        }
-                    }
-                }
-            } else {
-                polynomial.coefficients[0] = values[0].clone();
-                for axis in 0..3 {
-                    polynomial.coefficients[1 << axis] = &values[axis + 1] - &values[0];
-                }
+            let mut polynomial = Polynomial::constant(rat_zero());
+            for (point, shape) in points.iter().zip(&shape) {
+                polynomial = polynomial.add(&shape.scale([&point.x, &point.y, &point.z][component]));
             }
             polynomial
         });
-        let lo = std::array::from_fn(|k| coordinates.iter().map(|p| p[k]).fold(f64::INFINITY, f64::min));
-        let hi = std::array::from_fn(|k| coordinates.iter().map(|p| p[k]).fold(f64::NEG_INFINITY, f64::max));
+        // Quadratic maps can bulge beyond every nodal coordinate. Bound the original
+        // polynomial image by its exact Bernstein convex hull, never a nodal AABB.
+        // Duffy bounds the simplex image without enlarging it to a reference cube.
+        let image: [Polynomial; 3] = std::array::from_fn(|k| {
+            if kind == ElementKind::Tet4 || kind == ElementKind::Tet10 {
+                map[k].on_simplex().bernstein()
+            } else {
+                map[k].bernstein()
+            }
+        });
+        let lo = std::array::from_fn(|k| image[k].coefficients.iter().min().expect("nonempty polynomial").clone());
+        let hi = std::array::from_fn(|k| image[k].coefficients.iter().max().expect("nonempty polynomial").clone());
         Self { element, kind, nodes, points, map, lo, hi }
     }
 
@@ -316,19 +428,25 @@ impl Cell {
         for x in 0..3 {
             for y in 0..3 {
                 for z in 0..3 {
+                    if self.kind == ElementKind::Tet10 && x + y + z > 2 {
+                        continue;
+                    }
                     let at = [fraction(x, 2), fraction(y, 2), fraction(z, 2)];
                     let sample = std::array::from_fn(|i| std::array::from_fn(|j| jacobian[i][j].evaluate(&at)));
                     if Sign::of_rat(&determinant(&sample)) != Sign::Pos {
                         return Err(ImportedCertificateError::Invalid {
                             elements: vec![self.element],
-                            cause: format!("Hex8 has a nonpositive exact Jacobian at reference [{x}/2,{y}/2,{z}/2]"),
+                            cause: format!("solid has a nonpositive exact Jacobian at reference [{x}/2,{y}/2,{z}/2]"),
                         });
                     }
                 }
             }
         }
         let center: [[Rational; 3]; 3] = std::array::from_fn(|i| {
-            std::array::from_fn(|j| jacobian[i][j].evaluate(&[fraction(1, 2), fraction(1, 2), fraction(1, 2)]))
+            std::array::from_fn(|j| {
+                let center = if self.kind == ElementKind::Tet10 { fraction(1, 4) } else { fraction(1, 2) };
+                jacobian[i][j].evaluate(&[center.clone(), center.clone(), center])
+            })
         });
         let adjugate: [[Rational; 3]; 3] = std::array::from_fn(|i| {
             std::array::from_fn(|j| {
@@ -336,6 +454,31 @@ impl Cell {
                     - &center[(j + 1) % 3][(i + 2) % 3] * &center[(j + 2) % 3][(i + 1) % 3]
             })
         });
+        if self.kind == ElementKind::Tet10 || self.kind == ElementKind::Hex20 {
+            let normalized: [[Polynomial; 3]; 3] = std::array::from_fn(|i| {
+                std::array::from_fn(|j| {
+                    (0..3).fold(Polynomial::constant(rat_zero()), |sum, k| {
+                        sum.add(&jacobian[k][j].scale(&adjugate[i][k]))
+                    })
+                })
+            });
+            let symmetric: [[Polynomial; 3]; 3] = std::array::from_fn(|i| {
+                std::array::from_fn(|j| normalized[i][j].add(&normalized[j][i]).scale(&fraction(1, 2)))
+            });
+            let minors = [
+                symmetric[0][0].clone(),
+                symmetric[0][0].mul(&symmetric[1][1]).sub(&symmetric[0][1].mul(&symmetric[1][0])),
+                polynomial_determinant(&symmetric),
+            ];
+            let mut remaining = MAX_BOXES;
+            if !minors.iter().all(|minor| {
+                let domain = if self.kind == ElementKind::Tet10 { minor.on_simplex() } else { minor.clone() };
+                prove_positive(&domain, &mut remaining)
+            }) {
+                return Err(ImportedCertificateError::Inconclusive { elements:vec![self.element], cause: "bounded exact normalized-Jacobian certificate could not prove quadratic cell global injectivity".into() });
+            }
+            return Ok(());
+        }
         // J and Sym(AJ) are multi-affine, so the interior matrix is exactly a
         // convex combination of the eight corner matrices. The SPD cone is
         // convex. This is a matrix certificate, not sampled det(J) acceptance.
@@ -374,29 +517,41 @@ struct ImplicitFace {
     origin: R3,
     linear: R3,
     product: Option<(R3, R3)>,
+    quadratic: Option<Polynomial>,
 }
 
 impl ImplicitFace {
     fn new(cell: &Cell, face: usize) -> Self {
+        let mut result = Self::corner_separator(cell, face);
+        if cell.kind == ElementKind::Tet10 || cell.kind == ElementKind::Hex20 {
+            result.quadratic = implicit_quadric(cell, face);
+        }
+        result
+    }
+
+    fn corner_separator(cell: &Cell, face: usize) -> Self {
         let local = cell.kind.face_nodes(face);
         let origin = cell.points[local[0] as usize].clone();
         let b = cell.points[local[1] as usize].sub(&origin);
-        let c = cell.points[*local.last().expect("solid faces have corners") as usize].sub(&origin);
+        let c = cell.points[local[cell.kind.face_kind().n_corners() - 1] as usize].sub(&origin);
         let normal = b.cross(&c);
-        if cell.kind == ElementKind::Tet4 {
-            return Self { origin, linear: normal, product: None };
+        if cell.kind == ElementKind::Tet4 || cell.kind == ElementKind::Tet10 {
+            return Self { origin, linear: normal, product: None, quadratic: None };
         }
         let d = cell.points[local[2] as usize].sub(&origin).sub(&b).sub(&c);
         let u = c.cross(&d);
         let determinant = b.dot(&u);
         if rat_is_zero(&determinant) {
-            Self { origin, linear: normal, product: None }
+            Self { origin, linear: normal, product: None, quadratic: None }
         } else {
-            Self { origin, linear: normal.scale(&determinant), product: Some((u, d.cross(&b))) }
+            Self { origin, linear: normal.scale(&determinant), product: Some((u, d.cross(&b))), quadratic: None }
         }
     }
 
     fn evaluate(&self, point: &R3) -> Rational {
+        if let Some(quadratic) = &self.quadratic {
+            return quadratic.evaluate(&[point.x.clone(), point.y.clone(), point.z.clone()]);
+        }
         let relative = point.sub(&self.origin);
         let linear = self.linear.dot(&relative);
         match &self.product {
@@ -406,6 +561,9 @@ impl ImplicitFace {
     }
 
     fn compose(&self, map: &[Polynomial; 3]) -> Polynomial {
+        if let Some(quadratic) = &self.quadratic {
+            return quadratic.compose(map);
+        }
         let origin = [&self.origin.x, &self.origin.y, &self.origin.z];
         let relative: [Polynomial; 3] = std::array::from_fn(|k| map[k].sub(&Polynomial::constant(origin[k].clone())));
         let linear = linear_combination(&relative, &self.linear);
@@ -414,6 +572,106 @@ impl ImplicitFace {
             None => linear,
         }
     }
+}
+
+/// Reference nodes in half-unit coordinates, corners first and Abaqus edges next.
+fn reference_nodes(kind: ElementKind) -> Vec<[usize; 3]> {
+    let corners = if kind == ElementKind::Tet4 || kind == ElementKind::Tet10 {
+        vec![[0, 0, 0], [2, 0, 0], [0, 2, 0], [0, 0, 2]]
+    } else {
+        HEX_BITS.map(|p| p.map(|v| 2 * v)).to_vec()
+    };
+    let mut result = corners.clone();
+    if kind.n_nodes() != kind.n_corners() {
+        result.extend(
+            kind.edges()
+                .iter()
+                .map(|&[a, b]| std::array::from_fn(|k| (corners[a as usize][k] + corners[b as usize][k]) / 2)),
+        );
+    }
+    result
+}
+
+/// Recover an implicit quadric only when its composition with the complete
+/// original quadratic face is identically zero. Nodal fitting alone is insufficient.
+/// Faces beyond degree-two implicit geometry retain the conservative separator path.
+fn implicit_quadric(cell: &Cell, face: usize) -> Option<Polynomial> {
+    let reference: Vec<[usize; 3]> = if cell.kind == ElementKind::Tet10 {
+        vec![[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    } else {
+        HEX_BITS.to_vec()
+    };
+    let corners = &cell.kind.face_nodes(face)[..cell.kind.face_kind().n_corners()];
+    let origin = reference[corners[0] as usize];
+    let a = reference[corners[1] as usize];
+    let b = reference[*corners.last().expect("solid face") as usize];
+    let uv: [Polynomial; 3] = std::array::from_fn(|k| {
+        let c = Polynomial::constant(fraction(origin[k], 1));
+        c.add(&Polynomial::coordinate(0).scale(&(fraction(a[k], 1) - fraction(origin[k], 1))))
+            .add(&Polynomial::coordinate(1).scale(&(fraction(b[k], 1) - fraction(origin[k], 1))))
+    });
+    let face_map: [Polynomial; 3] = std::array::from_fn(|k| cell.map[k].compose(&uv));
+    let powers =
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [2, 0, 0], [1, 1, 0], [1, 0, 1], [0, 2, 0], [0, 1, 1], [0, 0, 2]];
+    let basis: Vec<_> = powers
+        .iter()
+        .map(|&power| {
+            let mut p = Polynomial::zero(power);
+            p.coefficients[index(power, power)] = rat_one();
+            p
+        })
+        .collect();
+    let columns: Vec<_> = basis.iter().map(|p| p.compose(&face_map)).collect();
+    let degree = std::array::from_fn(|k| columns.iter().map(|p| p.degree[k]).max().expect("quadric basis"));
+    let mut rows: Vec<Vec<Rational>> = (0..count(degree))
+        .map(|i| {
+            let e = exponents(degree, i);
+            columns
+                .iter()
+                .map(|p| {
+                    if (0..3).all(|k| e[k] <= p.degree[k]) {
+                        p.coefficients[index(p.degree, e)].clone()
+                    } else {
+                        rat_zero()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let mut pivots = Vec::new();
+    for column in 0..basis.len() {
+        let Some(pivot) = (pivots.len()..rows.len()).find(|&r| !rat_is_zero(&rows[r][column])) else {
+            continue;
+        };
+        let row = pivots.len();
+        rows.swap(row, pivot);
+        let scale = rows[row][column].clone();
+        for value in &mut rows[row] {
+            *value /= &scale;
+        }
+        for r in 0..rows.len() {
+            if r != row {
+                let factor = rows[r][column].clone();
+                for c in column..basis.len() {
+                    let value = &rows[row][c] * &factor;
+                    rows[r][c] -= value;
+                }
+            }
+        }
+        pivots.push(column);
+    }
+    let free = (0..basis.len()).find(|c| !pivots.contains(c))?;
+    let mut coefficients = vec![rat_zero(); basis.len()];
+    coefficients[free] = rat_one();
+    for (row, &column) in pivots.iter().enumerate() {
+        coefficients[column] = -&rows[row][free];
+    }
+    Some(
+        basis
+            .iter()
+            .zip(coefficients)
+            .fold(Polynomial::constant(rat_zero()), |p, (term, value)| p.add(&term.scale(&value))),
+    )
 }
 
 fn linear_combination(map: &[Polynomial; 3], vector: &R3) -> Polynomial {
@@ -453,32 +711,65 @@ fn certify_side(face: &ImplicitFace, cell: &Cell, remaining: &mut usize) -> Opti
         if sign == Sign::Neg {
             polynomial = polynomial.scale(&-rat_one());
         }
+        let simplex = cell.kind == ElementKind::Tet10;
         if zero.is_empty() {
-            if !prove_positive(&polynomial, remaining) {
+            let domain = if simplex { polynomial.on_simplex() } else { polynomial };
+            if !prove_positive(&domain, remaining) {
                 return None;
             }
         } else {
-            // A zero entity must be one reference face, edge or vertex, not a
-            // diagonal, disjoint corners, or an approximate coordinate contact.
-            let fixed: Vec<_> = (0..3)
-                .filter_map(|axis| {
-                    let bit = HEX_BITS[zero[0]][axis];
-                    zero.iter().all(|&i| HEX_BITS[i][axis] == bit).then_some((axis, bit))
-                })
-                .collect();
-            let expected: Vec<_> =
-                (0..8).filter(|&i| fixed.iter().all(|&(axis, bit)| HEX_BITS[i][axis] == bit)).collect();
-            if expected != zero {
-                return None;
-            }
-            for &(axis, bit) in &fixed {
-                if bit == 1 {
-                    polynomial = polynomial.reverse_axis(axis);
+            let reference = reference_nodes(cell.kind);
+            let mut fixed = Vec::new();
+            if simplex {
+                // λ0+λ1+λ2+λ3=1. Reorder barycentric vertices so λ0 is not
+                // excluded, then each excluded λ is an ordinary coordinate.
+                let barycentric: Vec<[usize; 4]> =
+                    reference.iter().map(|p| [2 - p.iter().sum::<usize>(), p[0], p[1], p[2]]).collect();
+                let excluded: Vec<_> = (0..4).filter(|&k| zero.iter().all(|&i| barycentric[i][k] == 0)).collect();
+                let expected: Vec<_> =
+                    (0..reference.len()).filter(|&i| excluded.iter().all(|&k| barycentric[i][k] == 0)).collect();
+                if excluded.is_empty() || expected != zero {
+                    return None;
+                }
+                let anchor = (0..4).find(|k| !excluded.contains(k)).expect("nonempty simplex entity");
+                let permutation: Vec<_> = std::iter::once(anchor).chain((0..4).filter(|&k| k != anchor)).collect();
+                let xyz: [Polynomial; 3] = std::array::from_fn(Polynomial::coordinate);
+                let bary = [
+                    Polynomial::constant(rat_one()).sub(&xyz[0]).sub(&xyz[1]).sub(&xyz[2]),
+                    xyz[0].clone(),
+                    xyz[1].clone(),
+                    xyz[2].clone(),
+                ];
+                let map = std::array::from_fn(|k| {
+                    bary[permutation.iter().position(|&old| old == k + 1).expect("vertex permutation")].clone()
+                });
+                polynomial = polynomial.compose(&map);
+                fixed.extend(
+                    excluded
+                        .iter()
+                        .map(|old| (permutation.iter().position(|k| k == old).expect("excluded vertex") - 1, 0)),
+                );
+            } else {
+                // Corner-first quadratic faces have additional mid-edge nodes;
+                // classify the complete reference entity, never just its corners.
+                fixed.extend((0..3).filter_map(|axis| {
+                    let value = reference[zero[0]][axis];
+                    (value != 1 && zero.iter().all(|&i| reference[i][axis] == value)).then_some((axis, value / 2))
+                }));
+                let expected: Vec<_> = (0..reference.len())
+                    .filter(|&i| fixed.iter().all(|&(axis, bit)| reference[i][axis] == 2 * bit))
+                    .collect();
+                if fixed.is_empty() || expected != zero {
+                    return None;
+                }
+                for &(axis, bit) in &fixed {
+                    if bit == 1 {
+                        polynomial = polynomial.reverse_axis(axis);
+                    }
                 }
             }
-            // After reversing fixed coordinates, the expected entity is u=v=...
-            // =0. Exact p=u*H1+v*H2(+w*H3), each H>0, proves precisely that
-            // zero set over the closed cube, including boundary tangencies.
+            // Exact p=Σ coordinate_i*H_i, H_i>0, proves precisely the labelled
+            // reference face/edge/vertex. No point samples stand in for contact.
             let mut quotients = Vec::with_capacity(fixed.len());
             for &(axis, _) in &fixed {
                 let (quotient, remainder) = polynomial.take_factor(axis);
@@ -488,7 +779,10 @@ fn certify_side(face: &ImplicitFace, cell: &Cell, remaining: &mut usize) -> Opti
             if !polynomial.coefficients.iter().all(rat_is_zero) {
                 return None;
             }
-            if !quotients.iter().all(|quotient| prove_positive(quotient, remaining)) {
+            if !quotients.iter().all(|q| {
+                let domain = if simplex { q.on_simplex() } else { q.clone() };
+                prove_positive(&domain, remaining)
+            }) {
                 return None;
             }
         }
@@ -500,6 +794,68 @@ fn certify_side(face: &ImplicitFace, cell: &Cell, remaining: &mut usize) -> Opti
 
 fn intersect_labels(current: &mut Vec<u32>, other: &[u32]) {
     current.retain(|node| other.contains(node));
+}
+
+/// Same labels alone do not identify a quadratic patch: midpoint labels must
+/// belong to the same corner edges. A corner-cycle isomorphism then fixes every
+/// coefficient of its Tri6/Quad8 interpolation, and hence the complete shared map.
+fn matching_entity(a: &Cell, b: &Cell, common: &[u32]) -> bool {
+    if common.len() == 1 {
+        return true;
+    }
+    let entities = |cell: &Cell| {
+        let mut result = Vec::new();
+        for (i, &[u, v]) in cell.kind.edges().iter().enumerate() {
+            let mut nodes = vec![cell.nodes[u as usize], cell.nodes[v as usize]];
+            if cell.kind.n_nodes() != cell.kind.n_corners() {
+                nodes.push(cell.nodes[cell.kind.n_corners() + i]);
+            }
+            result.push((2, nodes));
+        }
+        for f in 0..cell.kind.n_faces() {
+            result.push((
+                cell.kind.face_kind().n_corners(),
+                cell.kind.face_nodes(f).iter().map(|&i| cell.nodes[i as usize]).collect(),
+            ));
+        }
+        result
+    };
+    for (corners, an) in entities(a) {
+        let mut key = an.clone();
+        key.sort_unstable();
+        if key != common {
+            continue;
+        }
+        for (bc, bn) in entities(b) {
+            if corners != bc || an.len() != bn.len() {
+                continue;
+            }
+            for start in 0..corners {
+                for reverse in [false, true] {
+                    let at = |i: usize| {
+                        if reverse {
+                            (start + corners - i % corners) % corners
+                        } else {
+                            (start + i) % corners
+                        }
+                    };
+                    let equal = (0..corners).all(|i| an[i] == bn[at(i)]);
+                    let edges = (corners..an.len()).all(|i| {
+                        if corners == 2 {
+                            return an[i] == bn[i];
+                        }
+                        let edge = i - corners;
+                        let other = if reverse { at(edge + 1) } else { at(edge) };
+                        an[i] == bn[corners + other]
+                    });
+                    if equal && edges {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 fn certify_pair(a: &Cell, b: &Cell) -> bool {
@@ -524,8 +880,8 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
                 // entities because each cell has already proved injectivity.
                 intersect_labels(&mut zero_a, &sa.zero_nodes);
                 intersect_labels(&mut zero_b, &sb.zero_nodes);
-                // At this callsite both cells proved injectivity, and at least
-                // one is Hex8 (Tet/Tet uses its separate exact certificate).
+                // Both original maps have proved injectivity. Exact entity
+                // correspondence below also checks quadratic mid-edge incidence.
                 // Each Hex zero set is a Cartesian reference entity; their
                 // intersections contain 0/1/2/4 vertices. Tet zero sets are
                 // simplex entities with at most 3 vertices. Thus matched
@@ -539,7 +895,10 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
                 // edges must use the same four ruling edges. Both cases force
                 // the same D4 corner cycle and the same bilinear patch. No
                 // additional edge/cycle/count fallback can reject this state.
-                if zero_a.is_empty() || zero_b.is_empty() || (zero_a == common && zero_b == common) {
+                if zero_a.is_empty()
+                    || zero_b.is_empty()
+                    || (zero_a == common && zero_b == common && matching_entity(a, b, &common))
+                {
                     return true;
                 }
             }
@@ -548,7 +907,7 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
     false
 }
 
-/// Certify Tet4/Hex8 original geometry, or reject without mutating the mesh.
+/// Certify Tet4/Tet10/Hex8/Hex20 original geometry, or reject without mutating the mesh.
 /// Connectivity and finite coordinates must already be validated by the caller.
 /// Topological connectedness/manifoldness is a separate importing-host check.
 ///
@@ -567,23 +926,28 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
 /// contact to the same labelled vertex, edge or face on both cells. Multiple
 /// separators cover edge/vertex adjacency. No approximate inverse or mesh skin is
 /// used. Unsupported sufficient conditions and depth/work exhaustion fail closed.
+/// Quadratic maps use polynomial Sylvester minors (Tet10 composed with Duffy),
+/// exact Bernstein image bounds, and identically implicit face quadrics. Shared
+/// entity identity checks every corner/mid-edge label and its reference incidence.
+/// See ADR0033 for the sufficient-condition limits; arbitrary implicit faces beyond
+/// the separator family may be inconclusive despite valid geometry.
 /// Each pair gets at most 4096 proof boxes, split at most 12 times in fixed xyz
 /// order. Broad-phase memory is linear; worst-case pair work remains quadratic.
 pub fn certify_imported_geometry(mesh: &Mesh) -> Result<(), ImportedCertificateError> {
     let mut cells = Vec::with_capacity(mesh.n_elems());
     for element in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(element);
-        if kind != ElementKind::Tet4 && kind != ElementKind::Hex8 {
+        if ![ElementKind::Tet4, ElementKind::Hex8, ElementKind::Tet10, ElementKind::Hex20].contains(&kind) {
             return Err(ImportedCertificateError::Inconclusive {
                 elements: vec![element],
-                cause: "original-geometry certificate supports only Tet4 and Hex8".into(),
+                cause: "original-geometry certificate supports only Tet4, Tet10, Hex8 and Hex20".into(),
             });
         }
         let cell = Cell::new(mesh, element);
         cell.certify_injective()?;
         cells.push(cell);
     }
-    cells.sort_by(|a, b| a.lo[0].total_cmp(&b.lo[0]).then(a.element.cmp(&b.element)));
+    cells.sort_by(|a, b| a.lo[0].cmp(&b.lo[0]).then(a.element.cmp(&b.element)));
     let mut active: Vec<usize> = Vec::new();
     for (i, cell) in cells.iter().enumerate() {
         active.retain(|&j| cells[j].hi[0] >= cell.lo[0]);
@@ -617,6 +981,62 @@ pub fn certify_imported_geometry(mesh: &Mesh) -> Result<(), ImportedCertificateE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex20_retains_the_serendipity_total_degree_four_term() {
+        // This genuine Hex20 basis term is not total-degree-two geometry.
+        // F=(u+u²vw/16,v,w), det J=1+uvw/8 > 0 over the unit cube.
+        let kind = ElementKind::Hex20;
+        let coords = reference_nodes(kind)
+            .iter()
+            .flat_map(|p| {
+                let [u, v, w] = p.map(|x| x as f64 / 2.);
+                [u + u * u * v * w / 16., v, w]
+            })
+            .collect();
+        let mesh = Mesh {
+            dim: 3,
+            coords,
+            blocks: vec![crate::ElementBlock { kind, conn: (0..20).collect(), first_elem: 0 }],
+            node_sets: Default::default(),
+            elem_sets: Default::default(),
+            face_sets: Default::default(),
+        };
+        let cell = Cell::new(&mesh, 0);
+        let at = [fraction(1, 4), fraction(1, 2), fraction(3, 4)];
+        assert_eq!(cell.map[0].evaluate(&at), fraction(515, 2048));
+        assert_eq!(cell.map[0].derivative(0).evaluate(&at), fraction(259, 256));
+        certify_imported_geometry(&mesh).unwrap();
+    }
+
+    #[test]
+    fn quadratic_maps_keep_the_complete_polynomial_shear_between_nodes() {
+        for kind in [ElementKind::Tet10, ElementKind::Hex20] {
+            let reference = reference_nodes(kind);
+            let coords: Vec<f64> = reference
+                .iter()
+                .flat_map(|p| {
+                    let [x, y, z] = p.map(|v| v as f64 / 2.);
+                    [x, y, z + x * (1. - x) / 4.]
+                })
+                .collect();
+            let mesh = Mesh {
+                dim: 3,
+                coords,
+                blocks: vec![crate::ElementBlock { kind, conn: (0..kind.n_nodes() as u32).collect(), first_elem: 0 }],
+                node_sets: Default::default(),
+                elem_sets: Default::default(),
+                face_sets: Default::default(),
+            };
+            let cell = Cell::new(&mesh, 0);
+            let at = [fraction(1, 4), fraction(1, 8), fraction(1, 8)];
+            assert_eq!(cell.map[0].evaluate(&at), fraction(1, 4));
+            assert_eq!(cell.map[1].evaluate(&at), fraction(1, 8));
+            assert_eq!(cell.map[2].evaluate(&at), fraction(11, 64));
+            assert_eq!(cell.map[2].derivative(0).evaluate(&at), fraction(1, 8));
+            assert_eq!(cell.map[2].derivative(2).evaluate(&at), rat_one());
+        }
+    }
 
     #[test]
     fn exact_polynomial_algebra_agrees_with_closed_forms_and_retains_interface_remainders() {
