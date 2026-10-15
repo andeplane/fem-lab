@@ -4,7 +4,7 @@ import { boundedProvider, EvaluationBudget, requireFreeDisk, restoreEvaluationBu
 import { runLane, type EvalAdapter } from '../src/runner';
 import { EVAL_CASES } from '../src/cases';
 
-const request: ChatRequest = { system: 'engineering', messages: [], tools: [], model: 'gpt-5.6-sol', maxTokens: 1000 };
+const request: ChatRequest = { system: 'engineering', messages: [], tools: [], model: 'gpt-6.1-sol', maxTokens: 1000 };
 const usage: Usage = { input: 90, cacheRead: 10, output: 20 };
 const limits = { model: request.model, maxUsd: 1, maxRequests: 4, maxInputTokens: 128_000 };
 function provider(report: Usage | null = usage): Provider {
@@ -27,7 +27,7 @@ describe('bounded evaluation generation', () => {
     expect(p.chat).toHaveBeenCalledWith(request);
     expect(resources.mock.invocationCallOrder[0]).toBeLessThan(count.mock.invocationCallOrder[0]!);
     expect(count.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(p.chat).mock.invocationCallOrder[0]!);
-    expect(budget.snapshot()).toMatchObject({ requests: 1, chargedOrReservedUsd: 0.000764, stoppedReason: null });
+    expect(budget.snapshot()).toMatchObject({ requests: 1, chargedOrReservedUsd: 0.000381, stoppedReason: null });
   });
   it('refuses a request before generation when its maximum charge exceeds the remaining USD cap', async () => {
     const p = provider(), budget = new EvaluationBudget({ ...limits, maxUsd: 0.001 });
@@ -39,13 +39,13 @@ describe('bounded evaluation generation', () => {
   it('retains a worst-case reservation and halts both lanes when provider usage is unknown', async () => {
     const p = provider(null), budget = new EvaluationBudget(limits), bounded = boundedProvider(p, budget, async () => 100, async () => undefined);
     await drain(bounded.chat(request));
-    expect(budget.snapshot()).toMatchObject({ requests: 1, chargedOrReservedUsd: 0.0205, stoppedReason: expect.stringContaining('usage unavailable') });
+    expect(budget.snapshot()).toMatchObject({ requests: 1, chargedOrReservedUsd: 0.01025, stoppedReason: expect.stringContaining('usage unavailable') });
     await drain(bounded.chat(request));
     expect(p.chat).toHaveBeenCalledOnce();
   });
   it('rejects invalid usage, unknown tariffs, changed model, oversized context and exhausted request count', () => {
     const budget = new EvaluationBudget(limits);
-    expect(() => budget.reserve('unknown', 100, 1000)).toThrow('model differs');
+    expect(() => budget.reserve('gpt-6-astra', 100, 1000)).toThrow('model differs');
     expect(() => budget.reserve(request.model, 128001, 1000)).toThrow('token limits');
     expect(() => new EvaluationBudget({ ...limits, model: 'unpriced' }).reserve('unpriced', 100, 1000)).toThrow('tariff');
     const held = budget.reserve(request.model, 100, 1000);
@@ -67,6 +67,7 @@ describe('bounded evaluation generation', () => {
     const budget = new EvaluationBudget(limits);
     budget.reserve(request.model, 100, 1000).finish(usage);
     expect(restoreEvaluationBudget(limits, budget.snapshot()).snapshot()).toEqual(budget.snapshot());
+    expect(() => restoreEvaluationBudget(limits, { ...budget.snapshot(), model: 'gpt-5.6-sol' })).toThrow('checkpoint');
     expect(() => restoreEvaluationBudget(limits, undefined)).toThrow('missing');
     expect(() => restoreEvaluationBudget(limits, null)).toThrow('missing');
     expect(() => restoreEvaluationBudget(limits, {})).toThrow('incompatible');

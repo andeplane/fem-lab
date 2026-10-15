@@ -130,7 +130,7 @@ its lanes are explicitly not run and cannot pass the quality gate.
 Both lanes share one budget. The defaults are USD 50, 400 generation requests, at most
 128,000 authoritative input tokens and 16,000 output tokens per request, 20 rounds per
 case, ten minutes per case and 90 minutes wall time. The official
-[GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol), checked
+[GPT-6.1 Sol model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol), checked
 2026-10-15, supports the existing Standard tariff. Before each generation the runner counts
 the same Responses payload and reserves its maximum output and worst-case cache-write
 input cost. Generation retries are disabled. Missing or inconsistent usage retains the

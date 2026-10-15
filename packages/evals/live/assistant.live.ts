@@ -22,7 +22,7 @@ const sha = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).d
 
 it('runs the fixed twenty problems through real browser and MCP hosts', async () => {
   const key = process.env['OPENAI_API_KEY'];
-  const model = process.env['FEMLAB_EVAL_MODEL'] ?? 'gpt-5.6-sol';
+  const model = process.env['FEMLAB_EVAL_MODEL'] ?? 'gpt-6.1-sol';
   const startedAt = new Date().toISOString();
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const dirty = execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim() !== '';
@@ -34,7 +34,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const previousBytes = resume ? await readFile(path.resolve(root, resume)) : undefined;
   const previous = previousBytes ? JSON.parse(previousBytes.toString()) as EvaluationArtifact : undefined;
   const sdkVersion = (JSON.parse(await readFile(path.join(root, 'node_modules/openai/package.json'), 'utf8')) as { version: string }).version;
-  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, minimumFreeGiB: 30, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
+  const configuration = { providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, minimumFreeGiB: 30, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
   if (previous && (previous.format !== 'femlab-assistant-eval/1' || previous.manifest.gitCommit !== commit || previous.manifest.dirty || previous.manifest.specificationSha256 !== sha(JSON.stringify(EVAL_CASES)) || previous.manifest.provider !== 'openai' || previous.manifest.model !== model || JSON.stringify(previous.manifest.configuration) !== JSON.stringify(configuration) || previous.lanes.some(lane => !lane.live) || !previous.controls || previous.controls.caseInFlight !== false)) throw new Error('checkpoint configuration or frozen source differs; start a new evaluation');
   const budget = previous ? restoreEvaluationBudget(limits, previous.controls?.budget) : new EvaluationBudget(limits);
   const runStartedAt = previous?.manifest.startedAt ?? startedAt;
@@ -48,7 +48,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const beforeCase = async () => { budget.assertReady(); await resources(); caseInFlight = true; await persistProgress(); };
   const client = key ? new OpenAI({ apiKey: key, maxRetries: 0, timeout: 120_000 }) : null;
   const unavailableProvider: Provider = { id: 'openai', models: [], async *chat() { throw new Error('provider credential unavailable'); } };
-  const provider = client ? boundedProvider(responsesProvider(client), budget, async request => {
+  const provider = client ? boundedProvider(responsesProvider(client, [model]), budget, async request => {
     const { model: requestedModel, input, instructions, tools } = responseParameters(request);
     return (await client.responses.inputTokens.count({ model: requestedModel, input, instructions, tools }, { signal: request.signal })).input_tokens;
   }, resources, () => persistProgress()) : unavailableProvider;

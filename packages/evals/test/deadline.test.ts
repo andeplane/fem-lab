@@ -9,7 +9,7 @@ it('aborts a stuck supplier, waits for reservation settlement and closes only it
   const started = new Promise<void>(resolve => { entered = resolve; });
   const cancel = vi.fn(), close = vi.fn(async () => undefined);
   const clock: DeadlineClock = { schedule: vi.fn((_ms, expire) => { fire = expire; return cancel; }) };
-  const request: ChatRequest = { system: '', messages: [], tools: [], model: 'gpt-5.6-sol', maxTokens: 1000 };
+  const request: ChatRequest = { system: '', messages: [], tools: [], model: 'gpt-6.1-sol', maxTokens: 1000 };
   let aborted = false;
   const supplier: Provider = { id: 'openai', models: [request.model], async *chat(req) {
     entered();
@@ -23,7 +23,7 @@ it('aborts a stuck supplier, waits for reservation settlement and closes only it
   fire();
   await expect(stuck).rejects.toThrow('host was closed');
   expect(aborted).toBe(true);
-  expect(budget.snapshot()).toMatchObject({ inFlightRequests: 0, chargedOrReservedUsd: 0.0205, stoppedReason: expect.stringContaining('usage unavailable') });
+  expect(budget.snapshot()).toMatchObject({ inFlightRequests: 0, chargedOrReservedUsd: 0.01025, stoppedReason: expect.stringContaining('usage unavailable') });
   expect(() => budget.assertReady()).toThrow('usage unavailable');
   expect(close).toHaveBeenCalledOnce(); expect(cancel).toHaveBeenCalledOnce();
 });
