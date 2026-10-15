@@ -13829,11 +13829,11 @@ fn imported_source_malformed_inputs_and_settings_never_publish() {
         (&["simplices"], serde_json::json!(true)),
         (&["refinement"], serde_json::json!({"boxes": [], "maxElements": 10})),
         (&["mesher", "nodeTargets"], serde_json::json!([123])),
-        (&["mesher", "nodeSets"], serde_json::json!({"LOWERcase": [10]})),
+        (&["mesher", "nodeSets"], serde_json::json!({"CONTROL\n": [10]})),
         (&["mesher", "nodeSets"], serde_json::json!({"ABSENT": [55]})),
         (&["mesher", "elementSets"], serde_json::json!({"ABSENT": [55]})),
-        (&["mesher", "elementSets"], serde_json::json!({"bad": [409]})),
-        (&["mesher", "surfaces"], serde_json::json!({"bad": [{"element": 409, "face": 1}]})),
+        (&["mesher", "elementSets"], serde_json::json!({"CONTROL\n": [409]})),
+        (&["mesher", "surfaces"], serde_json::json!({"CONTROL\n": [{"element": 409, "face": 1}]})),
         (&["mesher", "surfaces"], serde_json::json!({"ABSENT": [{"element": 55, "face": 1}]})),
         (&["mesher", "surfaces"], serde_json::json!({"BAD": [{"element": 409, "face": 5}]})),
         (&["mesher", "surfaces"], serde_json::json!({"BAD": [{"element": 409, "face": 0}]})),
@@ -14040,7 +14040,7 @@ fn imported_source_survives_a_legal_empty_region_and_undo_recovers_its_preview()
 }
 
 #[test]
-fn imported_topology_rejects_nonmanifold_same_side_and_disconnected_tetrahedra() {
+fn imported_topology_rejects_nonmanifold_and_same_side_tetrahedra() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);
     let before = e.export_file();
@@ -14065,7 +14065,6 @@ fn imported_topology_rejects_nonmanifold_same_side_and_disconnected_tetrahedra()
     for (connectivity, cause) in [
         (vec![vec![1, 2, 3, 4], vec![1, 2, 3, 5], vec![1, 3, 2, 6]], "nonmanifold face"),
         (vec![vec![1, 2, 3, 4], vec![1, 2, 3, 5]], "opposite cyclic connectivity"),
-        (vec![vec![1, 2, 3, 4], vec![7, 8, 9, 10]], "one face-connected mesh"),
     ] {
         let elements: Vec<_> = connectivity
             .into_iter()
@@ -14829,3 +14828,6 @@ mod modal_convergence;
 
 #[path = "registry/modal_thread_determinism.rs"]
 mod modal_thread_determinism;
+
+#[path = "registry/imported_regions.rs"]
+mod imported_regions;

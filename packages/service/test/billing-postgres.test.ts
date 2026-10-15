@@ -13,11 +13,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   const db=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`,max:16});
   let clock=new Date('2026-10-14T12:00:00Z'),accountId='',fail=false;
   const now=()=>clock,accounts=postgresAccounts(db,now,randomUUID),ledger=creditLedger(db,now,randomUUID);
-  let invoice:BillingInvoice,subscription:BillingSubscription;
+  let invoice:BillingInvoice,subscription:BillingSubscription,chargeLookups:{id:string;kind:'charge'|'dispute'}[]=[];
   const gateway:BillingGateway={
     verify(body,signature){if(signature!=='fixture')throw new Error('private signature detail');return JSON.parse(new TextDecoder().decode(body)) as BillingEnvelope;},
     async invoice(){if(fail)throw new Error('private payment outage');return structuredClone(invoice);},
-    async subscription(){return structuredClone(subscription);},async chargeCustomer(){return 'cus_owner';},
+    async subscription(){return structuredClone(subscription);},async chargeCustomer(id,kind){chargeLookups.push({id,kind});return 'cus_owner';},
   };
   const billing=billingLifecycle(db,gateway,{live:false,prices:{plus:'price_plus',pro:'price_pro',studio:'price_studio'}},now,randomUUID);
   const envelope=(id='evt_one',type='invoice.paid',objectId='in_one'):BillingEnvelope=>({id,type,objectId,customerId:'cus_owner',live:false});
@@ -30,7 +30,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
   });
   beforeEach(async()=>{
     await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_inbox CASCADE');await db.query('TRUNCATE billing_leases');
-    clock=new Date('2026-10-14T12:00:00Z');fail=false;
+    clock=new Date('2026-10-14T12:00:00Z');fail=false;chargeLookups=[];
     accountId=(await accounts.provision({uid:'owner',email:'owner@example.com'})).id;await grantFreeFixture(ledger, accountId, clock);
     await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[accountId,'cus_owner',clock]);
     const start=clock.getTime()/1000,end=new Date('2026-11-14T12:00:00Z').getTime()/1000;
@@ -75,11 +75,15 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('durable payment lifecycle on Po
     invoice.customerId='cus_other';await deliver();expect((await db.query('SELECT * FROM paid_periods')).rows).toHaveLength(0);
     expect((await ledger.balance(accountId)).plan).toBe('free');
   });
-  it('refund/dispute freezes paid access for review and preserves consumed history',async()=>{
+  it.each([
+    {type:'charge.refunded',objectId:'ch_one',kind:'charge' as const},
+    {type:'charge.dispute.created',objectId:'du_one',kind:'dispute' as const},
+  ])('$type independently freezes paid access through canonical ownership and preserves consumed history',async({type,objectId,kind})=>{
     await deliver();const grant=(await db.query("SELECT id FROM credit_grants WHERE plan='plus'")).rows[0];
     await db.query("INSERT INTO credit_entries(id,account_id,grant_id,source,amount,kind,created_at) VALUES($1,$2,$3,'consumed','-300','usage',$4)",[randomUUID(),accountId,grant.id,clock]);
-    await deliver(envelope('evt_refund','charge.refunded','ch_one'));await deliver(envelope('evt_dispute','charge.dispute.created','dp_one'));
-    expect((await ledger.balance(accountId)).plan).toBe('free');expect((await db.query('SELECT * FROM billing_reviews')).rows).toHaveLength(2);
+    await deliver({...envelope('evt_review',type,objectId),customerId:kind==='dispute'?null:'cus_owner'});
+    expect(chargeLookups).toEqual([{id:objectId,kind}]);
+    expect((await ledger.balance(accountId)).plan).toBe('free');expect((await db.query('SELECT * FROM billing_reviews')).rows).toHaveLength(1);
     expect((await db.query("SELECT amount FROM credit_entries WHERE source='consumed'")).rows[0].amount).toBe('-300');
   });
   it('rejects a second overlapping paid period even if it has another invoice ID',async()=>{

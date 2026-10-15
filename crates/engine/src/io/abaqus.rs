@@ -712,6 +712,7 @@ impl Builder {
         let element_lines: BTreeMap<_, _> = self.elements.iter().map(|(&id, (_, line))| (id, *line)).collect();
         let first_element = element_lines.values().copied().min().expect("nonempty elements checked above");
         let source = ImportedMeshSpec {
+            regions: BTreeMap::new(),
             body: body.to_string(),
             nodes: self.nodes.into_values().map(|(node, _)| node).collect(),
             elements: self.elements.into_values().map(|(element, _)| element).collect(),
@@ -727,10 +728,14 @@ impl Builder {
                 .collect(),
             surfaces: self.surfaces.into_iter().map(|(name, (_, faces))| (name, faces.into_keys().collect())).collect(),
             node_targets: Vec::new(),
-            provenance: Some(ImportedProvenance {
+            provenance: Some(Box::new(ImportedProvenance {
+                source_files: BTreeMap::new(),
+                source_name: None,
+                node_identities: BTreeMap::new(),
+                element_identities: BTreeMap::new(),
                 sha256: digest.to_string(),
                 conversion_version: CONVERSION_VERSION.to_string(),
-            }),
+            })),
         };
         let checked = crate::imported::source(&source)
             .map_err(|error| source_location(error, &node_lines, &element_lines, first_element))?;

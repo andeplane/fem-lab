@@ -752,6 +752,10 @@ pub struct ImportedMeshSpec {
     pub body: String,
     pub nodes: Vec<ImportedNodeSpec>,
     pub elements: Vec<ImportedElement>,
+    /// Disjoint named element regions. Keys are editable Body identities; memberships use
+    /// authored element labels. Elements outside regions belong to the source Body.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub regions: BTreeMap<String, Vec<u32>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub node_sets: BTreeMap<String, Vec<u32>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -762,7 +766,7 @@ pub struct ImportedMeshSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_targets: Vec<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provenance: Option<ImportedProvenance>,
+    pub provenance: Option<Box<ImportedProvenance>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -816,6 +820,46 @@ pub struct ImportedProvenance {
     /// SHA-256 of the input bytes, lowercase hex; recorded by the converter after verification.
     pub sha256: String,
     pub conversion_version: String,
+    /// Immutable supplied-file manifest; paths are relative names, never host file handles.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_files: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
+    /// Original assembly identities keyed by the persistent global source label.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "source_identities")]
+    pub node_identities: BTreeMap<u32, ImportedEntityIdentity>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "source_identities")]
+    pub element_identities: BTreeMap<u32, ImportedEntityIdentity>,
+}
+
+// Tagged Command deserialization buffers a serde Content value, whose map-key
+// deserializer does not perform serde_json's string-to-integer key conversion.
+fn source_identities<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<u32, ImportedEntityIdentity>, D::Error> {
+    let entries = BTreeMap::<String, ImportedEntityIdentity>::deserialize(deserializer)?;
+    entries
+        .into_iter()
+        .map(|(key, identity)| {
+            let label = key.parse::<u32>().map_err(serde::de::Error::custom)?;
+            if key != label.to_string() {
+                return Err(serde::de::Error::custom("identity map keys must be canonical decimal source labels"));
+            }
+            Ok((label, identity))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedEntityIdentity {
+    pub source_label: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
 }
 
 /// Local maximum edge lengths applied after the chosen mesher. Bounds are world
@@ -1668,8 +1712,10 @@ pub enum Command {
         source: Option<String>,
     },
 
-    /// Assign a Material to one or more Bodies. Every Body needs a Material before solving;
-    /// a Body without one is reported by query.model and blocks solve.run.
+    /// Assign a Material to one or more Bodies. Imported element regions are editable Bodies;
+    /// assigning the source owner supplies their default, while region assignments override it.
+    /// Every element-owning Body needs a Material before solving; a missing assignment is
+    /// reported by query.model and blocks solve.run.
     #[serde(rename = "material.assign", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialAssign {
@@ -1703,7 +1749,9 @@ pub enum Command {
         shape: SectionSpec,
     },
 
-    /// Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;
+    /// Assign a Section to one or more Bodies, including imported element regions. A region
+    /// overrides the source owner Section; an unassigned region inherits that default.
+    /// Every line or shell Body needs a Section before solving;
     /// one without it is reported by query.model warnings and blocks solve.run with
     /// model.no-section. A shell needs a shell thickness section, a line member needs a
     /// cross-section, and a solid gets its section from its geometry. `orientation` names the global
