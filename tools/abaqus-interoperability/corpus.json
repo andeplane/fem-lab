@@ -74,6 +74,51 @@
       "file": "topopt-test_inpstiffness.jl",
       "license": "MIT, original TopOpt.jl copyright/license retained externally",
       "provenance": "Primary project regression checks C3D10 order, five cells, E=70000, nu=.3, node force and pressure faces; definition evidence, not a published displacement oracle"
+    },
+    {
+      "id": "bfe-case06-input",
+      "url": "https://raw.githubusercontent.com/BriefFiniteElementNet/BriefFiniteElement.Net/8e627e941aec0ad86de69e78a483a132aef8ceb5/Validation/Validation/Case_06/Job-11.inp",
+      "bytes": 22270,
+      "sha256": "4c68bd4b4fa0f27423a65854c49f0f2109f26e187222db302b077340433225af",
+      "file": "author-abaqus-case06.inp",
+      "license": "LGPLv3, original BriefFiniteElement.Net source license retained externally",
+      "provenance": "Untouched primary author validation artifacts at pinned8e627e941aec0ad86de69e78a483a132aef8ceb5; authors explicitly identify ABAQUS comparison. Actual Abaqus version and CAE generation workflow unknown; no fresh local Abaqus run."
+    },
+    {
+      "id": "bfe-case06-probe",
+      "url": "https://raw.githubusercontent.com/BriefFiniteElementNet/BriefFiniteElement.Net/8e627e941aec0ad86de69e78a483a132aef8ceb5/Validation/Validation/Case_06/Displacements",
+      "bytes": 147821,
+      "sha256": "6806e99c3d4225e7de9dba98aa752e064e2fb5090e1b878f51f79b86ed762f55",
+      "file": "author-abaqus-case06.Displacements",
+      "license": "LGPLv3, original BriefFiniteElement.Net source license retained externally",
+      "provenance": "Untouched primary author validation artifacts at pinned8e627e941aec0ad86de69e78a483a132aef8ceb5; authors explicitly identify ABAQUS comparison. Actual Abaqus version and CAE generation workflow unknown; no fresh local Abaqus run."
+    },
+    {
+      "id": "bfe-case06-validator",
+      "url": "https://raw.githubusercontent.com/BriefFiniteElementNet/BriefFiniteElement.Net/8e627e941aec0ad86de69e78a483a132aef8ceb5/Validation/Validation/Case_06/Validator.cs",
+      "bytes": 6391,
+      "sha256": "d55960268fc1750c245af094c7f9099870a3c18d6aaef995eb61625673ed18b2",
+      "file": "author-abaqus-case06.Validator.cs",
+      "license": "LGPLv3, original BriefFiniteElement.Net source license retained externally",
+      "provenance": "Untouched primary author validation artifacts at pinned8e627e941aec0ad86de69e78a483a132aef8ceb5; authors explicitly identify ABAQUS comparison. Actual Abaqus version and CAE generation workflow unknown; no fresh local Abaqus run."
+    },
+    {
+      "id": "bfe-lgpl3-license",
+      "url": "https://raw.githubusercontent.com/BriefFiniteElementNet/BriefFiniteElement.Net/8e627e941aec0ad86de69e78a483a132aef8ceb5/LICENSE",
+      "bytes": 7651,
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "file": "COPYING.BriefFiniteElementNet-LGPL-3",
+      "license": "LGPLv3, original BriefFiniteElement.Net source license retained externally",
+      "provenance": "Untouched primary author validation artifacts at pinned8e627e941aec0ad86de69e78a483a132aef8ceb5; authors explicitly identify ABAQUS comparison. Actual Abaqus version and CAE generation workflow unknown; no fresh local Abaqus run."
+    },
+    {
+      "id": "bfe-validation-readme",
+      "url": "https://raw.githubusercontent.com/BriefFiniteElementNet/BriefFiniteElement.Net/8e627e941aec0ad86de69e78a483a132aef8ceb5/Validation/Validation/Readme.md",
+      "bytes": 943,
+      "sha256": "8cc7579d5c7b0368ea6236a8419c9513e8c24ef97461751273ad1501db6429f6",
+      "file": "author-abaqus-validation.Readme.md",
+      "license": "LGPLv3, original BriefFiniteElement.Net source license retained externally",
+      "provenance": "Untouched primary author validation artifacts at pinned8e627e941aec0ad86de69e78a483a132aef8ceb5; authors explicitly identify ABAQUS comparison. Actual Abaqus version and CAE generation workflow unknown; no fresh local Abaqus run."
     }
   ],
   "comparisons": [
@@ -200,6 +245,51 @@
         "END STEP"
       ],
       "oracle": "Every displacement vector printed by the independently built and executed CalculiX 2.23 on the unchanged FreeCAD export. Reaction is checked against analytical applied-force sum, not a CalculiX RF result; integration-point stress comparison remains unclaimed."
+    },
+    {
+      "id": "author-abaqus-case06",
+      "deck": "author-abaqus-case06.inp",
+      "reference": "author-abaqus-case06.Displacements",
+      "referenceFormat": "abaqus-probe",
+      "referenceInstance": "BEAM-1",
+      "element": "C3D8",
+      "nodes": 275,
+      "elements": 160,
+      "unitLength": "1 m",
+      "unitForce": "1 N",
+      "step": "Step-1",
+      "referenceDisplacementScaleToMetres": 1,
+      "displacementRelativeTolerance": 2e-06,
+      "displacementAbsoluteToleranceMetres": 1e-13,
+      "totalAppliedForceNewtons": [
+        0,
+        -4000000,
+        0
+      ],
+      "keywords": [
+        "PREPRINT",
+        "PART",
+        "NODE",
+        "ELEMENT",
+        "NSET",
+        "ELSET",
+        "SOLID SECTION",
+        "END PART",
+        "ASSEMBLY",
+        "INSTANCE",
+        "END INSTANCE",
+        "END ASSEMBLY",
+        "MATERIAL",
+        "ELASTIC",
+        "BOUNDARY",
+        "STEP",
+        "STATIC",
+        "CLOAD",
+        "RESTART",
+        "OUTPUT",
+        "END STEP"
+      ],
+      "oracle": "All275directU vectors from original authors ABAQUS nodal probe report, with1005consistent repeated attached-element vectors and all275originalcoordinates matched. Authors Validator.cs explicitly pairs this deck and ABAQUS comparison; original Abaqus version/CAE workflow unknown. No fresh local Abaqus execution. Unchanged CCX attempt only emitted a mesh and is not a displacement oracle. Reaction is independent analytical applied-force sum, not published RF."
     }
   ],
   "externalCandidates": [

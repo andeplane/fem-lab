@@ -133,7 +133,7 @@ def reference_displacements(text, set_name, time):
 
 def flat_source_inventory(text, element):
     """Attest these two explicit flat reference meshes; this is not an import converter."""
-    arity = {"C3D10": 10, "C3D20": 20}[element]
+    arity = {"C3D8": 8, "C3D10": 10, "C3D20": 20}[element]
     nodes, tokens = set(), []
     active = None
     for line in text.splitlines():
@@ -179,10 +179,47 @@ def executed_reference(data, expected, deck_hash):
     return rows
 
 
+def abaqus_probe_reference(text, instance, source):
+    """Read the author's original nodal probe table, not rounded deformed coordinates."""
+    marker = "Attached elements           U, U1           U, U2           U, U3"
+    if text.count(marker) != 1:
+        raise ValueError("expected one authored Abaqus direct-displacement table")
+    coordinates, rows = {}, {}
+    for line in text[:text.index(marker)].splitlines():
+        fields = line.split()
+        if len(fields) == 8 and fields[0] == instance and fields[1].isdigit():
+            label = int(fields[1])
+            if label in coordinates:
+                raise ValueError("duplicate authored coordinate row")
+            coordinates[label] = [float(v) for v in fields[2:5]]
+    for line in text[text.index(marker):].splitlines():
+        fields = line.split()
+        if len(fields) == 6 and fields[0] == instance and fields[1].isdigit() and fields[2].isdigit():
+            label, values = int(fields[1]), [float(v) for v in fields[3:]]
+            if not all(math.isfinite(v) for v in values) or (label in rows and rows[label] != values):
+                raise ValueError("inconsistent or nonfinite repeated attached-element displacement")
+            rows[label] = values
+    nodes, active = {}, None
+    for line in source.splitlines():
+        if line.startswith("**") or not line.strip():
+            continue
+        if line.startswith("*"):
+            active = line[1:].split(",")[0].strip().upper()
+        elif active == "NODE":
+            fields = line.split(",")
+            nodes[int(fields[0])] = [float(v) for v in fields[1:4]]
+    if not rows or nodes != coordinates or rows.keys() != nodes.keys():
+        raise ValueError("authored probe/source node coordinates or complete identities differ")
+    return rows
+
+
 def case_reference(case, source):
     if case.get("referenceFormat") == "executed-json":
         return executed_reference((ROOT / case["reference"]).read_bytes(), case["referenceIdentity"],
                                   digest((source / case["deck"]).read_bytes()))
+    if case.get("referenceFormat") == "abaqus-probe":
+        return abaqus_probe_reference((source / case["reference"]).read_text(), case["referenceInstance"],
+                                      (source / case["deck"]).read_text())
     return reference_displacements((source / case["reference"]).read_text(),
                                    case["referenceSet"], case["referenceTime"])
 

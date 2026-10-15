@@ -23,7 +23,8 @@ python3 tools/abaqus-interoperability/corpus.py compare \
 ```
 
 `compare --case calculix-beam20p` selects one named case; the default requires **both**
-official cases, the unchanged FreeCAD export and the authored assembly. An unsupported keyword, import/solve failure,
+official cases, the unchanged FreeCAD export, the authors' Abaqus assembly case and our authored
+assembly. An unsupported keyword, import/solve failure,
 changed source hash, omitted reference node, altered load, wrong units, nonfinite field or
 thread disagreement fails the command. It never repairs the source, strips physics,
 overrides a formulation or treats an unsupported case as a numerical pass. Fresh comparison
@@ -101,6 +102,36 @@ uses the independent analytical applied-force sum above. Integration-point stres
 retained but unclaimed pending an independently established ordering correspondence.
 Reference execution/source inventory is **not** FEM Lab numerical acceptance: the untouched
 input must still pass complete conversion and explicit solve against the composed importer.
+
+## Authors' published Abaqus assembly validation, with all nodal displacements
+
+[BriefFiniteElement.Net Case_06](https://github.com/BriefFiniteElementNet/BriefFiniteElement.Net/tree/8e627e941aec0ad86de69e78a483a132aef8ceb5/Validation/Validation/Case_06)
+provides an unchanged `Job-11.inp`, original textual `Displacements` probe report and an
+adjacent `Validator.cs` that explicitly names this input and an **ABAQUS** nodal-displacement
+comparison. The fetcher pins those primary author artifacts and the original LGPLv3 license
+outside the checkout. The source's actual Abaqus version and CAE export workflow are unknown;
+neither a verified modern CAE export nor a fresh local Abaqus execution is claimed. The author
+validator code documents their comparison intent; it was not executed here, and its literal
+report filename differs from the published file's name.
+
+This ordinary assembly uses `PART`/`ASSEMBLY`/`INSTANCE`, source names beginning with `_`,
+`INTERNAL` sets and instance-qualified assembly memberships. It has 275 nodes and 160 **full
+C3D8** elements, `E=210 GPa`, `ν=.25`, fixed-root constraints and a named linear static
+`Step-1`. Four nodal y-loads of -1e6 N give -4e6 N total; original output requests include
+`RESTART,WRITE,FREQUENCY=0` and field/history `PRESELECT`. The authored validation code's
+metre displacement labels and the input's material/load magnitudes establish the declared
+SI m/N system used by the harness.
+
+The strict fifth case `author-abaqus-case06` reads all 275 direct `U1/U2/U3` vectors from the
+original report, verifies each original coordinate against the source and requires its 1,005
+repeated attached-element rows to agree. It **does not** subtract the coarsely printed
+deformed coordinates or infer values from a screenshot. Original published precision uses the
+same fixed displacement tolerance as the other cases; reaction equilibrium is independently
+checked against +4e6 N in y, not a published RF result. A single unchanged CalculiX attempt
+exited 0 while warning about unsupported assembly/output content and produced only a mesh,
+with no displacement DAT. That run is retained as a limitation, **not** a numerical oracle
+or an excuse to strip unsupported model data. Actual FEM Lab agreement remains pending the
+composed import/solve runtime.
 
 ## Authored assembly: two materials and two transformed instances
 

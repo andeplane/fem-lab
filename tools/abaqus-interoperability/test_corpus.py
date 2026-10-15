@@ -28,6 +28,25 @@ PRINTED = """
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_author_probe_uses_direct_u_and_checks_duplicate_attachments(self):
+        source = "*PART,NAME=Beam\n*NODE\n7,1.5,2,3\n205,4,5,6\n*END PART\n"
+        probe = """Variable: U, All direct
+ BEAM-1 7 1.5 2 3 1.51 2.02 3.03
+ BEAM-1 205 4 5 6 4.04 5.05 6.06
+ Part Instance Node ID Attached elements           U, U1           U, U2           U, U3
+ BEAM-1 7 1 0.001 0.002 0.003
+ BEAM-1 7 2 0.001 0.002 0.003
+ BEAM-1 205 2 0.004 0.005 0.006
+"""
+        self.assertEqual(corpus.abaqus_probe_reference(probe, "BEAM-1", source),
+                         {7: [.001, .002, .003], 205: [.004, .005, .006]})
+        for changed in [probe.replace("7 2 0.001", "7 2 0.009"),
+                        probe.replace("205 4 5 6", "205 4 5 7"),
+                        probe.replace("BEAM-1 205 2 0.004 0.005 0.006", ""),
+                        probe.replace("7 1 0.001", "7 1 NaN")]:
+            with self.assertRaises(ValueError):
+                corpus.abaqus_probe_reference(changed, "BEAM-1", source)
+
     def test_observed_freecad_reference_is_pinned_to_the_executed_original(self):
         manifest = json.loads(corpus.MANIFEST.read_text())
         case = next(case for case in manifest["comparisons"] if case["id"] == "freecad-testcube")
