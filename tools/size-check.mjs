@@ -29,7 +29,9 @@ const walk = (c) => {
   for (const css of c.css ?? []) landing.add(css);
   for (const k of c.imports ?? []) walk(manifest[k]);
 };
-walk(Object.values(manifest).find((c) => c.isEntry));
+// Other documents (e.g. the auth host) are separate entries, not part of the engine landing.
+if (!manifest['index.html']?.isEntry) throw new Error('Engine landing entry is missing.');
+walk(manifest['index.html']);
 
 // `index.html` starts these itself (vite.config.ts injects the links), so they are boot traffic.
 const preloaded = new Set([...readFileSync(path.join(dist, 'index.html'), 'utf8').matchAll(/rel="modulepreload"[^>]*href="[^"]*\/([^"/]+)"/g)].map((m) => `assets/${m[1]}`));

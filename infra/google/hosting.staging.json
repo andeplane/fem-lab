@@ -37,6 +37,19 @@
             "value": "no-cache"
           }
         ]
+      },
+      {
+        "source": "/signin.html",
+        "headers": [
+          {
+            "key": "Cross-Origin-Embedder-Policy",
+            "value": "unsafe-none"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          }
+        ]
       }
     ],
     "rewrites": [
