@@ -99,6 +99,26 @@ describe('ScriptHost', () => {
     await expect(run).resolves.toMatchObject({ journalEntries: [{ seq: 3, hashAfter: 'script-hash', cmd: command }] });
   });
 
+  it('keeps only completed file deliveries, including before a later script failure, local to each run', async () => {
+    const scripts = new ScriptHost(() => new FakeWorker() as unknown as Worker, async payload => {
+      if (payload['cmd'] === 'file.write') throw new Error('write refused');
+      if (payload['cmd'] === 'file.export') return { cancelled: true };
+      return { name: 'actual-default.femlab.json', to: 'download' };
+    }, async () => ({ name: 'not-a-delivery.json', to: 'download' }));
+    const run = scripts.run('save();');
+    const worker = FakeWorker.last!;
+    await worker.call('dispatch', { cmd: 'file.save' });
+    await worker.call('dispatch', { cmd: 'file.export', spec: { format: 'webm' } });
+    await expect(worker.call('dispatch', { cmd: 'file.write', path: 'failed.md', text: 'x' })).rejects.toThrow('write refused');
+    await worker.call('dispatch', { cmd: 'view.fit' });
+    await worker.call('query', { query: 'query.model' });
+    worker.finish({ console: [], error: 'after delivery' });
+    await expect(run).resolves.toEqual({ result: null, console: [], error: 'after delivery', files: [{ name: 'actual-default.femlab.json', to: 'download' }] });
+    const next = scripts.run('next();');
+    FakeWorker.last!.finish({ console: [] });
+    await expect(next).resolves.toEqual({ result: null, console: [] });
+  });
+
   it('preserves structured failures and refuses recursive script execution', async () => {
     const boom = vi.fn(async () => {
       throw Object.assign(new Error('nope'), { code: 'not-found', cause: 'no such Set' });

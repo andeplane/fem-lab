@@ -6,7 +6,7 @@ import { useStore } from '../ui/cmd';
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
 // holds this panel against `registry.list()` the same way it holds the shell.
-import { FemError, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
+import { FemError, FileDelivery, parseMentions, parseRef, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
@@ -76,10 +76,22 @@ type Item =
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
   | { kind: 'diff'; owner: RegistryProducer | null; entries: JournalEntry[]; steps: number; journal: string | null }
-  | { kind: 'files'; files: string[] }
+  | { kind: 'files'; files: FileDelivery[] }
   | { kind: 'bad'; text: string };
 
 const WROTE = new Set(['file.write', 'file.save', 'file.export']);
+
+/** Only host-confirmed delivery metadata, never a requested name or script-authored return. */
+export function fileDeliveries(call: ToolCall): FileDelivery[] {
+  if (call.status !== 'succeeded' && call.status !== 'failed') return [];
+  try {
+    const result: unknown = JSON.parse(call.result);
+    const files = call.command === 'script.run' ? object(result)?.['files']
+      : call.status === 'succeeded' && WROTE.has(call.command) ? [result] : [];
+    const deliveries = FileDelivery.array().safeParse(files);
+    return deliveries.success ? deliveries.data : [];
+  } catch { return []; }
+}
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 /**
@@ -423,7 +435,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             add({ kind: 'bad', text: event.message });
           } else if (event.type === 'turn') {
             finishProse();
-            const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
+            const wrote = event.turn.calls.flatMap(fileDeliveries);
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
             if (event.turn.diff.length > 0) {
               const owner = event.turn.undoSteps > 0 ? await acquireRegistryProducer(registry) : null;
@@ -946,12 +958,13 @@ function Item({ item, dispatch, state }: { state: UiState; item: Item; dispatch:
   }
   if (item.kind === 'files') {
     return (
-      <div class="card">
-        <div class="head">Wrote {item.files.length} files</div>
-        {item.files.map((path) => (
-          <div class="files-row" key={path}>
-            <span class="path">{path}</span>
-            <Cmd cmd="clipboard.copy" title="Copy the path" run={() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'text', text: path } })}>
+      <div class="card files-card">
+        <div class="head">Files</div>
+        {item.files.map(({ name, to }, index) => (
+          <div class="files-row" key={index}>
+            <span class="path">{name}</span>
+            <span class="faint">{to === 'folder' ? 'project folder' : 'download'}</span>
+            <Cmd cmd="clipboard.copy" title="Copy the filename" run={() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'text', text: name } })}>
               copy
             </Cmd>
           </div>
