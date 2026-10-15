@@ -66,7 +66,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('reviewed monthly free allowance
     // Independently priced: 112 uncached Mini input tokens cost $0.000084;
     // one cached input token costs $0.000000075. Neither debit rounds to a whole credit.
     for(const usage of [{input:112,cacheRead:0,output:0},{input:0,cacheRead:1,output:0}]){
-      const request=await prepare(account);await holds.reserve(account.id,request.id,112);await holds.dispatch(account.id,request.id);
+      const request=await prepare(account);await holds.reserve(account.id,request.id,112);
+      // 112 uncached input plus the 1,000-output ceiling reserves $0.004584.
+      expect((await ledger.balance(account.id,'usd-milli-v1')).reservedCredits).toBe(4.584);
+      await holds.dispatch(account.id,request.id);
       await holds.settle(account.id,request.id,usage);await holds.settle(account.id,request.id,usage);
     }
     const server=serviceServer({now,newId:randomUUID,ready:async()=>true,freeAllowance:api,account:async(_header,unit)=>({...account,usage:await ledger.balance(account.id,unit),freeAllowance:await api.status(account.id)})});
