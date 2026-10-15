@@ -79,7 +79,7 @@ iframe lacks COEP and is blocked by the isolated engine document. A fresh first 
 still reaches Google; the earlier IAB-only network error does not establish a universal
 first-click failure.
 
-[ADR 0034](../adr/0034-google-redirect-in-a-separate-host-document.md) records the
+[ADR 0035](../adr/0035-google-redirect-in-a-separate-host-document.md) records the
 separate same-origin `signin.html` host. Both Hosting configurations leave only that
 document outside COEP, retaining the isolated engine and a strict auth-page CSP. The
 engine shares tab session persistence but never initializes a redirect resolver or helper
