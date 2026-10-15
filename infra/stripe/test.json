@@ -3,6 +3,7 @@
   "livemode": false,
   "project": "femlab-app-staging",
   "apiVersion": "2026-09-30.endive",
+  "creditUnit": "usd-milli-v1",
   "billingEnabled": true,
   "taxClassificationConfirmed": true,
   "taxMode": "automatic",
@@ -88,6 +89,5 @@
   "managedPaymentsAccountEnabled": true,
   "managedPaymentsEligibilityConfirmed": true,
   "managedPaymentsTermsAccepted": false,
-  "managedPaymentsCheckoutVerified": true,
-  "creditUnit": "usd-milli-v1"
+  "managedPaymentsCheckoutVerified": true
 }
