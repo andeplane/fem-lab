@@ -50,7 +50,7 @@ export function maximumCharge(model: string, inputTokens: number, maxOutput: num
   const inputRate = rate.write && rate.write > rate.input ? rate.write : rate.input;
   return input * inputRate * (long ? 2n : 1n) + output * rate.output * (long ? 3n : 2n) / 2n;
 }
-/** Supplier baseline for v1: $0.75 per million credits, rounded upward in USD microdollars. */
+/** Tariff v1: $0.75 per million legacy weighted-token credits, rounded up in USD microdollars. */
 export function supplierMicros(subcredits: bigint): bigint {
   if (subcredits < 0n) throw new Error('Supplier cost cannot be negative.');
   return (subcredits + 39n) / 40n;

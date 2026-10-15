@@ -44,7 +44,17 @@ responses, exact 3-subcredit cached usage, immutable grant/debit/receipt snapsho
 and SSE/status/cross-unit replay without another provider dispatch. All existing
 monthly identity, funding, revocation and paid-dispatch regressions still pass.
 193 registry tests pass with 100% statements, branches, functions and lines.
-Both packages typecheck. Frontend and release evidence follow in the issue/PR.
+Both packages typecheck; the service builds and all 27 Stripe guards pass.
+
+The [display verification plan](728-credit-display.md) records 1,366 app tests
+passing with five expected skips and all 91 authored modules passing coverage
+thresholds, app typecheck, production build and 67-file secret scan, and four
+CPU Chromium account/public-policy checks including a 390px viewport. Browser
+and Node release WASM were rebuilt from the matching Rust tree before these
+checks. Independent finance/security review found no functional blocker.
+All owned local verification servers and PostgreSQL are stopped. The release
+owner records actual deployment, existing-account comparison and canonical
+Stripe Product readback separately in the issue/PR.
 
 The PR initially stacks on #718's reviewed-free-allowance branch. Retarget after
 that foundation merges; never include unrelated engine changes in the focused
