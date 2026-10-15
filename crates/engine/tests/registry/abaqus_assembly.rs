@@ -124,3 +124,44 @@ fn abaqus_included_connectivity_faces_sets_and_geometry_keep_the_authored_file_a
         assert_eq!(error.where_.as_deref().unwrap().matches("Parts/beam.inc:").count(), 1);
     }
 }
+
+#[test]
+fn abaqus_included_instance_transforms_and_overrides_keep_the_offending_file() {
+    let root = "*INCLUDE,INPUT=Parts/assembly.inc\n";
+    let invalid_axis = ASSEMBLY.replace("0,0,0,0,0,1,90", "0,0,0,0,0,0,90");
+    let assembly_with_override = ASSEMBLY.replace(
+        "*INSTANCE, NAME=\"first instance\", PART=\"Part A\"\n",
+        "*INSTANCE, NAME=\"first instance\", PART=\"Part A\"\n*INCLUDE,INPUT=Overrides.inc\n",
+    );
+    for (assembly, overrides, expected, cause) in [
+        (invalid_axis, "", "Parts/assembly.inc: line 22 *INSTANCE axis", "rotation axis"),
+        (
+            assembly_with_override.clone(),
+            "*NSET,NSET=\"Root, = Face\"\n10\n",
+            "Overrides.inc: line 1 *NSET NSET",
+            "cannot override inherited part sets",
+        ),
+        (
+            assembly_with_override.clone(),
+            "*NODE\n50,0,0,0\n",
+            "Overrides.inc: line 1 *INSTANCE mesh",
+            "part mesh or section cannot be overridden",
+        ),
+        (assembly_with_override, "*NSET\n10\n", "Overrides.inc: line 1 *NSET NSET", "required"),
+    ] {
+        let files =
+            BTreeMap::from([("Parts/assembly.inc".into(), assembly), ("Overrides.inc".into(), overrides.into())]);
+        let error = abaqus::convert_mesh_sources(
+            root,
+            "included",
+            "mesh",
+            &Q::text("1 m"),
+            Some("Main.inp"),
+            &files,
+            &sha256_hex(root.as_bytes()),
+        )
+        .unwrap_err();
+        assert_eq!(error.where_.as_deref(), Some(expected), "{error:?}");
+        assert!(error.cause.contains(cause), "{error:?}");
+    }
+}

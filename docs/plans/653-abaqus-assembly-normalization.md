@@ -40,6 +40,8 @@ retains its flat, single-material, single-step scope and rejects supplied includ
   labels fail during collection. A cached count per part reserves expanded entities and
   declared memberships before copying that part into another instance. Instance Builders
   are flattened one at a time, rather than retained in a vector.
+  Repeated heading/preprint metadata is admitted before retention, with a 64 MiB UTF-8
+  and 1000000-record bound, including empty metadata records.
   Cycles, traversal, excessive depth, more than 128 provided files, aggregate input above
   16 MiB and expanded input above 16 MiB are errors. File hashes and the root name persist.
 - The paired #654 mapper handles analysis and output records explicitly. Unknown physical
@@ -60,6 +62,11 @@ include filename and line. Small injected-budget fixtures verify that an over-li
 instance is rejected before its later invalid Set is parsed, and that duplicate/over-limit
 record prefixes are rejected before an invalid tail is read. Unsupported physical
 records adjacent to valid structural data must fail rather than disappear.
+Deferred instance transform and expansion checks retain their authored include filename;
+an inherited-name or mesh override identifies the offending declaration's file even when
+that declaration is included from a different file than the instance keyword.
+Small presentation-budget tests exercise repeated heading bytes, preprint key/value bytes
+and empty metadata rows; rejected copies must leave retained metadata and counters unchanged.
 
 Reference semantics: [Input Syntax Rules](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEMODRefMap/simamod-c-inputsyntax.htm),
 [Assembly Definition](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEMODRefMap/simamod-c-partassy.htm),

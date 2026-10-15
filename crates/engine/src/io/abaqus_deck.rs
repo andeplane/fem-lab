@@ -239,6 +239,57 @@ struct ExpansionCount {
 impl ExpansionCount {
     const LIMIT: Self = Self { nodes: 250_000, elements: 250_000, memberships: 1_000_000 };
 }
+
+/// Presentation metadata may be inherited repeatedly without adding mesh entities.
+/// Bound both owned UTF-8 and empty metadata records before retaining another copy.
+struct PresentationBudget {
+    bytes: usize,
+    records: usize,
+    byte_limit: usize,
+    record_limit: usize,
+}
+impl Default for PresentationBudget {
+    fn default() -> Self {
+        Self { bytes: 0, records: 0, byte_limit: 64 * 1024 * 1024, record_limit: 1_000_000 }
+    }
+}
+impl PresentationBudget {
+    fn append(
+        &mut self,
+        global: &mut Builder,
+        headings: Vec<String>,
+        preprint: Vec<BTreeMap<String, bool>>,
+        line: usize,
+    ) -> Result<(), Error> {
+        let records = headings.len().saturating_add(preprint.len());
+        let bytes = headings
+            .iter()
+            .map(String::len)
+            .chain(preprint.iter().flat_map(|settings| settings.keys().map(|key| key.len() + 1)))
+            .fold(0usize, usize::saturating_add);
+        if records > self.record_limit.saturating_sub(self.records) {
+            return Err(malformed(
+                line,
+                "INSTANCE",
+                "metadata",
+                format!("expanded presentation exceeds {} records", self.record_limit),
+            ));
+        }
+        if bytes > self.byte_limit.saturating_sub(self.bytes) {
+            return Err(malformed(
+                line,
+                "INSTANCE",
+                "metadata",
+                format!("expanded presentation exceeds {} UTF-8 bytes", self.byte_limit),
+            ));
+        }
+        self.records += records;
+        self.bytes += bytes;
+        global.headings.extend(headings);
+        global.preprint.extend(preprint);
+        Ok(())
+    }
+}
 fn check_expansion(
     current: ExpansionCount,
     additional: ExpansionCount,
@@ -263,6 +314,7 @@ struct Instance {
     blocks: Vec<DeckBlock>,
     position: Vec<DeckRecord>,
     line: usize,
+    source: Option<Arc<str>>,
 }
 
 fn no_data(block: &DeckBlock) -> Result<(), Error> {
@@ -272,53 +324,72 @@ fn no_data(block: &DeckBlock) -> Result<(), Error> {
     Ok(())
 }
 
-fn transform(point: [f64; 3], records: &[DeckRecord], line: usize) -> Result<[f64; 3], Error> {
-    if records.len() > 2 {
-        return Err(malformed(line, "INSTANCE", "position", "at most translation and rotation records are allowed"));
-    }
-    let mut point = point;
-    if let Some(translation) = records.first() {
-        if translation.fields.len() != 3 {
+fn transform(point: [f64; 3], records: &[DeckRecord], line: usize, source: Option<&str>) -> Result<[f64; 3], Error> {
+    let mut origin = source;
+    let transformed = (|| {
+        if records.len() > 2 {
             return Err(malformed(
-                translation.line,
+                line,
                 "INSTANCE",
-                "translation",
-                "translation requires three coordinates",
+                "position",
+                "at most translation and rotation records are allowed",
             ));
         }
-        for (k, coordinate) in point.iter_mut().enumerate() {
-            *coordinate += abaqus::scalar(&translation.fields[k], translation.line, "INSTANCE", "translation", 1.0)?;
+        let mut point = point;
+        if let Some(translation) = records.first() {
+            origin = translation.source.as_deref().or(source);
+            if translation.fields.len() != 3 {
+                return Err(malformed(
+                    translation.line,
+                    "INSTANCE",
+                    "translation",
+                    "translation requires three coordinates",
+                ));
+            }
+            for (k, coordinate) in point.iter_mut().enumerate() {
+                *coordinate +=
+                    abaqus::scalar(&translation.fields[k], translation.line, "INSTANCE", "translation", 1.0)?;
+            }
         }
-    }
-    if let Some(rotation) = records.get(1) {
-        if rotation.fields.len() != 7 {
-            return Err(malformed(
-                rotation.line,
-                "INSTANCE",
-                "rotation",
-                "rotation requires two axis points and an angle",
-            ));
+        if let Some(rotation) = records.get(1) {
+            origin = rotation.source.as_deref().or(source);
+            if rotation.fields.len() != 7 {
+                return Err(malformed(
+                    rotation.line,
+                    "INSTANCE",
+                    "rotation",
+                    "rotation requires two axis points and an angle",
+                ));
+            }
+            let mut values = [0.0; 7];
+            for (k, value) in values.iter_mut().enumerate() {
+                *value = abaqus::scalar(&rotation.fields[k], rotation.line, "INSTANCE", "rotation", 1.0)?;
+            }
+            let axis = [values[3] - values[0], values[4] - values[1], values[5] - values[2]];
+            let length = axis[0].hypot(axis[1]).hypot(axis[2]);
+            if !length.is_finite() || length == 0.0 {
+                return Err(malformed(
+                    rotation.line,
+                    "INSTANCE",
+                    "axis",
+                    "rotation axis must have distinct finite points",
+                ));
+            }
+            let axis = axis.map(|v| v / length);
+            let p = [point[0] - values[0], point[1] - values[1], point[2] - values[2]];
+            let (s, c) = values[6].to_radians().sin_cos();
+            let cross =
+                [axis[1] * p[2] - axis[2] * p[1], axis[2] * p[0] - axis[0] * p[2], axis[0] * p[1] - axis[1] * p[0]];
+            let dot = axis[0] * p[0] + axis[1] * p[1] + axis[2] * p[2];
+            point = std::array::from_fn(|k| values[k] + p[k] * c + cross[k] * s + axis[k] * dot * (1.0 - c));
         }
-        let mut values = [0.0; 7];
-        for (k, value) in values.iter_mut().enumerate() {
-            *value = abaqus::scalar(&rotation.fields[k], rotation.line, "INSTANCE", "rotation", 1.0)?;
+        origin = source;
+        if !point.iter().all(|p| p.is_finite()) {
+            return Err(malformed(line, "INSTANCE", "position", "instance transform overflows finite coordinates"));
         }
-        let axis = [values[3] - values[0], values[4] - values[1], values[5] - values[2]];
-        let length = axis[0].hypot(axis[1]).hypot(axis[2]);
-        if !length.is_finite() || length == 0.0 {
-            return Err(malformed(rotation.line, "INSTANCE", "axis", "rotation axis must have distinct finite points"));
-        }
-        let axis = axis.map(|v| v / length);
-        let p = [point[0] - values[0], point[1] - values[1], point[2] - values[2]];
-        let (s, c) = values[6].to_radians().sin_cos();
-        let cross = [axis[1] * p[2] - axis[2] * p[1], axis[2] * p[0] - axis[0] * p[2], axis[0] * p[1] - axis[1] * p[0]];
-        let dot = axis[0] * p[0] + axis[1] * p[1] + axis[2] * p[2];
-        point = std::array::from_fn(|k| values[k] + p[k] * c + cross[k] * s + axis[k] * dot * (1.0 - c));
-    }
-    if !point.iter().all(|p| p.is_finite()) {
-        return Err(malformed(line, "INSTANCE", "position", "instance transform overflows finite coordinates"));
-    }
-    Ok(point.map(|p| p + 0.0))
+        Ok(point.map(|p| p + 0.0))
+    })();
+    transformed.map_err(|e| located(e, origin))
 }
 
 /// Normalize flat or CAE assembly decks into one typed, labelled source and scoped analysis.
@@ -440,8 +511,16 @@ fn normalize_deck(
                         return Err(malformed(line, "INSTANCE", "PART", format!("part {part_name} is not defined")));
                     }
                     instance = Some(instances.len());
-                    instances
-                        .push((name, Instance { part: part_name, blocks: Vec::new(), position: block.records, line }));
+                    instances.push((
+                        name,
+                        Instance {
+                            part: part_name,
+                            blocks: Vec::new(),
+                            position: block.records,
+                            line,
+                            source: block.keyword.source,
+                        },
+                    ));
                 }
                 "ENDINSTANCE" => {
                     block.keyword.only(&[])?;
@@ -494,6 +573,7 @@ fn normalize_deck(
     }
 
     let mut global = Builder::default();
+    let mut presentation_budget = PresentationBudget::default();
     let mut node_ids = BTreeMap::new();
     let mut element_ids = BTreeMap::new();
     let mut node_sets = BTreeMap::new();
@@ -520,6 +600,7 @@ fn normalize_deck(
             &[][..],
             1,
             ExpansionCount::default(),
+            None,
         ));
     } else {
         let presentation: Vec<_> = model_blocks
@@ -528,43 +609,53 @@ fn normalize_deck(
             .cloned()
             .collect();
         let presentation = local_mesh(&presentation, scale)?;
-        global.headings = presentation.headings;
-        global.preprint = presentation.preprint;
+        presentation_budget
+            .append(&mut global, presentation.headings, presentation.preprint, 1)
+            .map_err(|e| located(e, source_name))?;
         for (instance_name, instance) in &instances {
-            transform([0.0; 3], &instance.position, instance.line)?;
+            transform([0.0; 3], &instance.position, instance.line, instance.source.as_deref())?;
             let inherited = &parts[&instance.part];
             let part_has_mesh = inherited.iter().any(|b| matches!(b.keyword.name.as_str(), "NODE" | "ELEMENT"));
-            if part_has_mesh
-                && instance
-                    .blocks
-                    .iter()
-                    .any(|b| matches!(b.keyword.name.as_str(), "NODE" | "ELEMENT" | "SOLIDSECTION"))
+            if let Some(block) = instance
+                .blocks
+                .iter()
+                .find(|b| part_has_mesh && matches!(b.keyword.name.as_str(), "NODE" | "ELEMENT" | "SOLIDSECTION"))
             {
-                return Err(malformed(
-                    instance.line,
-                    "INSTANCE",
-                    "mesh",
-                    "an inherited part mesh or section cannot be overridden in an instance",
+                return Err(located(
+                    malformed(
+                        block.keyword.line,
+                        "INSTANCE",
+                        "mesh",
+                        "an inherited part mesh or section cannot be overridden in an instance",
+                    ),
+                    block.keyword.source.as_deref(),
                 ));
             }
             for block in &instance.blocks {
                 if matches!(block.keyword.name.as_str(), "NSET" | "ELSET" | "SURFACE") {
                     let key = if block.keyword.name == "SURFACE" { "NAME" } else { block.keyword.name.as_str() };
                     let name =
-                        abaqus::name(block.keyword.required(key)?, block.keyword.line, &block.keyword.name, key)?;
+                        (|| abaqus::name(block.keyword.required(key)?, block.keyword.line, &block.keyword.name, key))()
+                            .map_err(|e| located(e, block.keyword.source.as_deref()))?;
                     for previous in inherited.iter().filter(|b| b.keyword.name == block.keyword.name) {
-                        if abaqus::name(
-                            previous.keyword.required(key)?,
-                            previous.keyword.line,
-                            &previous.keyword.name,
-                            key,
-                        )? == name
-                        {
-                            return Err(malformed(
-                                block.keyword.line,
-                                &block.keyword.name,
+                        let previous_name = (|| {
+                            abaqus::name(
+                                previous.keyword.required(key)?,
+                                previous.keyword.line,
+                                &previous.keyword.name,
                                 key,
-                                "instance definitions cannot override inherited part sets or surfaces",
+                            )
+                        })()
+                        .map_err(|e| located(e, previous.keyword.source.as_deref()))?;
+                        if previous_name == name {
+                            return Err(located(
+                                malformed(
+                                    block.keyword.line,
+                                    &block.keyword.name,
+                                    key,
+                                    "instance definitions cannot override inherited part sets or surfaces",
+                                ),
+                                block.keyword.source.as_deref(),
                             ));
                         }
                     }
@@ -578,11 +669,12 @@ fn normalize_deck(
                 instance.position.as_slice(),
                 instance.line,
                 part_counts[&instance.part],
+                instance.source.clone(),
             ));
         }
     }
 
-    for (ordinal, (scope, source_part, inherited, additions, position, line, minimum)) in
+    for (ordinal, (scope, source_part, inherited, additions, position, line, minimum, source)) in
         local_plans.into_iter().enumerate()
     {
         let current = ExpansionCount {
@@ -590,7 +682,7 @@ fn normalize_deck(
             elements: global.elements.len(),
             memberships: global.memberships,
         };
-        check_expansion(current, minimum, expansion_limit, line)?;
+        check_expansion(current, minimum, expansion_limit, line).map_err(|e| located(e, source.as_deref()))?;
         // Only the current instance is parsed; previous instances have already been flattened.
         let mut combined = inherited.to_vec();
         combined.extend_from_slice(additions);
@@ -600,15 +692,21 @@ fn normalize_deck(
             ExpansionCount { nodes: local.nodes.len(), elements: local.elements.len(), memberships: local.memberships },
             expansion_limit,
             line,
-        )?;
-        global.reserve_members(local.memberships, line, "INSTANCE")?;
+        )
+        .map_err(|e| located(e, source.as_deref()))?;
+        global.reserve_members(local.memberships, line, "INSTANCE").map_err(|e| located(e, source.as_deref()))?;
         let mut region_members = Vec::new();
         let instanced = matches!(scope, DeckScope::Instance(_));
         for (id, (mut node, source_line)) in local.nodes {
             let mapped = if instanced { global.nodes.len() as u32 + 1 } else { id };
             if instanced {
                 let point = node.at.clone().map(|v| v.si()).into_iter().collect::<Result<Vec<_>, _>>()?;
-                let point = transform([point[0] / scale, point[1] / scale, point[2] / scale], position, line)?;
+                let point = transform(
+                    [point[0] / scale, point[1] / scale, point[2] / scale],
+                    position,
+                    line,
+                    source.as_deref(),
+                )?;
                 node.at = point.map(|v| Q::new(v * scale, "m"));
                 let instance = match &scope {
                     DeckScope::Instance(name) => Some(name.clone()),
@@ -739,8 +837,9 @@ fn normalize_deck(
         if matches!(scope, DeckScope::Instance(_)) {
             regions.insert(format!("{body}_instance_{}", ordinal + 1), region_members);
         }
-        global.headings.extend(local.headings);
-        global.preprint.extend(local.preprint);
+        presentation_budget
+            .append(&mut global, local.headings, local.preprint, line)
+            .map_err(|e| located(e, source.as_deref()))?;
     }
     // Assembly nodes and sets are handled against the complete instance identity map below.
     add_assembly(
@@ -1252,13 +1351,13 @@ mod tests {
     #[test]
     fn instance_position_uses_translation_before_right_handed_axis_rotation() {
         let records = [record(&["2", "0", "0"]), record(&["0", "0", "0", "0", "0", "1", "90"])];
-        let actual = transform([1.0, 0.0, 0.0], &records, 4).unwrap();
+        let actual = transform([1.0, 0.0, 0.0], &records, 4, None).unwrap();
         assert!(actual[0].abs() < 1e-14);
         assert!((actual[1] - 3.0).abs() < 1e-14);
         assert_eq!(actual[2], 0.0);
-        assert_eq!(transform([1.0, 2.0, 3.0], &[], 1).unwrap(), [1.0, 2.0, 3.0]);
+        assert_eq!(transform([1.0, 2.0, 3.0], &[], 1, None).unwrap(), [1.0, 2.0, 3.0]);
         let about_offset = [record(&["0", "0", "0"]), record(&["1", "0", "0", "1", "0", "1", "180"])];
-        let actual = transform([2.0, 0.0, 0.0], &about_offset, 1).unwrap();
+        let actual = transform([2.0, 0.0, 0.0], &about_offset, 1, None).unwrap();
         assert!(actual[0].abs() < 1e-14);
         for records in [
             vec![record(&["0", "0"])],
@@ -1268,7 +1367,7 @@ mod tests {
             vec![record(&["NaN", "0", "0"])],
             vec![record(&["1e308", "0", "0"])],
         ] {
-            assert!(transform([1e308, 0.0, 0.0], &records, 3).is_err());
+            assert!(transform([1e308, 0.0, 0.0], &records, 3, None).is_err());
         }
     }
 
@@ -1342,22 +1441,50 @@ mod tests {
         assert!(source_dependencies(&root, None, &sources).unwrap_err().cause.contains("expanded"));
     }
     #[test]
+    fn presentation_admission_bounds_repeated_text_and_empty_records_before_append() {
+        let mut global = Builder::default();
+        let mut budget = PresentationBudget { byte_limit: 7, record_limit: 10, ..PresentationBudget::default() };
+        budget.append(&mut global, vec!["1234".into()], vec![], 1).unwrap();
+        let error = budget.append(&mut global, vec!["5678".into()], vec![], 2).unwrap_err();
+        assert_eq!(error.cause, "expanded presentation exceeds 7 UTF-8 bytes");
+        assert_eq!(global.headings, ["1234"]);
+        assert_eq!(budget.bytes, 4);
+        assert_eq!(budget.records, 1);
+        let mut budget = PresentationBudget { byte_limit: 5, record_limit: 10, ..PresentationBudget::default() };
+        let flags = BTreeMap::from([("ECHO".into(), true)]);
+        budget.append(&mut global, vec![], vec![flags.clone()], 1).unwrap();
+        assert_eq!(budget.bytes, 5);
+        assert!(budget.append(&mut global, vec![], vec![flags], 2).is_err());
+        assert_eq!(global.preprint.len(), 1);
+        let mut budget = PresentationBudget { record_limit: 1, ..PresentationBudget::default() };
+        budget.append(&mut global, vec![String::new()], vec![], 1).unwrap();
+        let error = budget.append(&mut global, vec![], vec![BTreeMap::new()], 2).unwrap_err();
+        assert_eq!(error.cause, "expanded presentation exceeds 1 records");
+        assert_eq!(global.preprint.len(), 1);
+        assert_eq!(budget.bytes, 0);
+        assert_eq!(budget.records, 1);
+    }
+
+    #[test]
     fn expansion_is_reserved_before_a_later_instance_is_parsed_or_copied() {
         let text = include_str!("../../tests/fixtures/abaqus/assembly-two-instances.inp");
         let poisoned = text.replace("*NSET, NSET=TIP\n40\n", "*NSET,NSET=TIP\nUNDEFINED\n");
-        let digest = crate::hash::sha256_hex(poisoned.as_bytes());
+        let root = "*INCLUDE,INPUT=Parts/assembly.inc\n";
+        let digest = crate::hash::sha256_hex(root.as_bytes());
+        let sources = BTreeMap::from([("Parts/assembly.inc".into(), poisoned)]);
         let error = normalize_deck(
-            &poisoned,
+            root,
             "mesh",
             &Q::text("1 m"),
             &digest,
-            None,
-            &BTreeMap::new(),
+            Some("Main.inp"),
+            &sources,
             ExpansionCount { nodes: 7, elements: 2, memberships: 100 },
         )
         .err()
         .unwrap();
         assert_eq!(error.cause, "expanded assembly exceeds 7 nodes");
+        assert_eq!(error.where_.as_deref(), Some("Parts/assembly.inc: line 20 *INSTANCE nodes"));
         let current = ExpansionCount { nodes: 4, elements: 1, memberships: 4 };
         for additional in [
             ExpansionCount { nodes: 4, elements: 0, memberships: 0 },
