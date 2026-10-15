@@ -98,8 +98,12 @@ fn abaqus_import_rejects_units_unsupported_decks_and_databases_without_overwriti
     std::fs::write(&saved, "prior project").unwrap();
     abaqus_import(&source, &saved).assert().code(1).stderr(contains("unitForce"));
     abaqus_import(&source, &saved).arg("--unit-force=-1 N").assert().code(1);
-    let bad = dir.join("assembly.inp");
-    std::fs::write(&bad, "*PART,NAME=P\n").unwrap();
+    let bad = dir.join("unsupported.inp");
+    std::fs::write(
+        &bad,
+        std::fs::read_to_string(&source).unwrap().replace("*MATERIAL", "*USER ELEMENT,TYPE=U1,NODES=4\n*MATERIAL"),
+    )
+    .unwrap();
     abaqus_import(&bad, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains("unsupported"));
     for extension in ["odb", "cae"] {
         let binary = dir.join(format!("results.{extension}"));
