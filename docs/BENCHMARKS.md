@@ -189,6 +189,19 @@ checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-t
 construction and concurrent callers; no solve may mutate faer's global setting.
 The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
 
+#640 adds the actual full Hex20 modal counterexample found by the FV52 investigation:
+16×16×4 elements, 5321 nodes, ten modes and UZ-only supports on the four bottom edges.
+At native 1/2/4 workers, all eighteen public payloads must match exactly under `NoClock`:
+the complete document, Mesh, Result, surface, four named Sets and all ten retained mode
+fields, including the measured residual, warnings and near-zero/repeated eigenvectors.
+The original worker-count-dependent triangular solve fails this regression. Per-call
+native factorization and triangular solution now use a fixed logical arithmetic budget
+of 64, scheduled by the existing pool; Windows factorization remains sequential and
+wasm is unchanged ([ADR0031](adr/0031-fixed-sparse-direct-arithmetic-partition.md)).
+This is an exact reproducibility oracle, not a new frequency reference or convergence
+study: both FV52 tables remain unresolved under #7, and the existing physical and
+original-operator residual gates above remain unchanged.
+
 The Result-validity integration check also holds probe/path values and independently parsed
 VTU datasets identical across a display-only Model rename; a subsequent physics edit still
 refuses all three consumers as stale, including after another rename (#123, #133).

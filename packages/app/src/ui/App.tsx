@@ -527,7 +527,22 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
       try {
-        v = new Viewer(el, () => viewer.onBounds?.());
+        v = new Viewer(el, () => viewer.onBounds?.(), () => {
+          // Read actual host chrome only for an explicit Fit; resizing keeps the person's pose.
+          const parent = el.parentElement;
+          const box = el.getBoundingClientRect();
+          if (!parent || parent.classList.contains('comparison-pane') || box.width === 0 || box.height === 0) return null;
+          let top = 12, right = box.width - 12, bottom = box.height - 36;
+          for (const selector of ['.viewer-chrome', '.stale-banner']) {
+            const overlay = parent.querySelector(selector)?.getBoundingClientRect();
+            if (overlay?.height) top = Math.max(top, overlay.bottom - box.top + 12);
+          }
+          const legend = parent.querySelector('.legend')?.getBoundingClientRect();
+          if (legend?.width) right = Math.min(right, legend.left - box.left - 12);
+          const deformation = parent.querySelector('.deform-bar')?.getBoundingClientRect();
+          if (deformation?.height) bottom = Math.min(bottom, deformation.top - box.top - 12);
+          return right > 24 && bottom > top + 12 ? { width: box.width, height: box.height, left: 12, right, top, bottom } : null;
+        });
       } catch (e) {
         // No WebGL2 is a fact about the browser, not a crash: say so and keep the rest usable.
         setBroken(`This browser could not open a WebGL2 context: ${(e as Error).message}`);

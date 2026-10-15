@@ -93,10 +93,11 @@ class BillingConfigTests(unittest.TestCase):
             config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root)
         self.assertEqual(self.calls, [])
 
-    def test_automatic_tax_requires_verified_registration_and_noncollection_does_not(self):
+    def test_automatic_tax_requires_verified_registration(self):
         path = self.root / 'test.json'
         catalog = json.loads(path.read_text())
         catalog['taxMode'] = 'automatic'
+        catalog['taxClassificationConfirmed'] = True
         path.write_text(json.dumps(catalog))
         with self.assertRaisesRegex(ValueError, 'activeTaxRegistrationVerified'):
             config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root)
@@ -106,6 +107,23 @@ class BillingConfigTests(unittest.TestCase):
         result = config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root, verify=lambda *args: None)
         self.assertEqual(result['env']['BILLING_TAX_MODE'], 'automatic')
         self.assertEqual(result['env']['BILLING_ENABLED'], 'true')
+
+    def test_classification_is_required_only_when_collecting_automatic_tax(self):
+        path = self.root / 'test.json'
+        catalog = json.loads(path.read_text())
+        catalog['taxClassificationConfirmed'] = False
+        catalog['activeTaxRegistrationVerified'] = True
+        catalog['taxMode'] = 'not_collecting'
+        path.write_text(json.dumps(catalog))
+        result = config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root, verify=lambda *args: None)
+        self.assertEqual(result['env']['BILLING_TAX_MODE'], 'not_collecting')
+        self.assertEqual(result['env']['BILLING_ENABLED'], 'true')
+        self.calls.clear()
+        catalog['taxMode'] = 'automatic'
+        path.write_text(json.dumps(catalog))
+        with self.assertRaisesRegex(ValueError, 'taxClassificationConfirmed'):
+            config.resolve('staging', 'femlab-app-staging', self.gcloud, activation='enabled', root=self.root)
+        self.assertEqual(self.calls, [])
         catalog['activeTaxRegistrationVerified'] = False
         catalog['taxMode'] = 'not_collecting'
         path.write_text(json.dumps(catalog))

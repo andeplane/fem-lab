@@ -92,9 +92,12 @@ Portal configuration to **both** the API and recovery job, together with
 `not_collecting`. Pending or unknown collection decisions cannot enable checkout;
 disabled billing still prepares webhook and recovery processing. Automatic
 collection requires the owner-confirmed decision and separately verified active
-registration evidence. An explicit owner-confirmed non-collection decision does
-not require fabricating a registration. Both manifests remain pending; the code
-does not infer the owner's tax obligations from company or Stripe account status.
+registration evidence and confirmed product classification. An explicit
+owner-confirmed non-collection decision requires neither a registration nor an
+invented product classification. Following the owner's clarification below, both
+manifests record `not_collecting`; other launch acceptance gates remain false and
+checkout remains disabled. The code does not infer the owner's tax obligations
+from company or Stripe account status.
 Production's return
 origin is `https://femlab.app`; staging uses its own Hosting origin.
 
@@ -123,7 +126,8 @@ recovery-job and traffic rollback gates remain in place.
    [Checkout settings](https://dashboard.stripe.com/acct_1UQmBTAAtmJJ65hf/settings/checkout).
    Required terms consent depends on those account settings; direct account policy
    URLs are a Dashboard operation. Preserve unrelated account branding/settings.
-3. Confirm product tax classification and collection policy with the owner. On
+3. Confirm collection policy with the owner; product classification is required
+   before activating automatic collection. On
    inspection, live Tax settings are active but have **no registrations and no
    default tax code**. Test mode has no registrations and an existing downloadable
    personal software default (`txcd_10202000`), which must not be silently inherited
@@ -137,8 +141,9 @@ recovery-job and traffic rollback gates remain in place.
    The adapter enables `automatic_tax` only for `taxMode=automatic`, and release
    activation requires `activeTaxRegistrationVerified=true` as well as the owner's
    decision. `taxMode=not_collecting` explicitly sends `automatic_tax.enabled=false`
-   after the owner confirms that collection policy. Neither mode is selected by
-   default. Automatic tax does not collect in a jurisdiction without an applicable
+   after the owner confirms that collection policy. Missing decisions remain
+   pending; the owner's explicit initial choice is recorded below. Automatic tax
+   does not collect in a jurisdiction without an applicable
    registration; never describe that as verified tax collection. Run a test
    calculation and inspect `taxability_reason` for an automatic collection setup.
    A later change of tax policy does not retroactively reconfigure existing Stripe
@@ -150,6 +155,22 @@ recovery-job and traffic rollback gates remain in place.
    these tests. Record evidence and enable the live webhook before live checkout.
 5. Activate production only after the above evidence and owner decisions are
    recorded. The present manifests intentionally keep billing disabled.
+
+## Owner statements and initial collection mode
+
+On 2026-10-15 the owner reported: “not VAT, but will work in norway”, then clarified
+that **the business is based in Norway and customers are international**. Both
+manifests therefore record the owner's initial `not_collecting` decision and
+`taxCollectionDecisionConfirmed=true`; checkout remains disabled until the other
+acceptance gates pass. No Norway-only customer or payment restriction is applied.
+No registration or product tax classification was invented. Automatic collection
+still requires confirmed classification and verified active registration.
+
+This records the owner's stated registration status and initial configuration; it
+is not a determination that no tax obligations exist in any customer country.
+International registration, collection and filing obligations remain the owner's
+responsibility to establish with a qualified tax adviser, using Stripe's
+[threshold monitoring](https://docs.stripe.com/tax/monitoring) as supporting data.
 
 ## Tokens and model choice
 
@@ -191,7 +212,7 @@ choosing one as the default; token price alone is insufficient.
 
 ## Verification
 
-Thirteen Python checks exercise secret stdin handling, mode/owner/currency/product
+Fourteen Python checks exercise secret stdin handling, mode/owner/currency/product
 guards, error redaction, missing-key refusal, explicit activation gates,
 preservation across releases, pinned references and both API/recovery bindings.
 The release orchestration check uses fake cloud boundaries and verifies the
