@@ -222,7 +222,7 @@ fn abaqus_static_axial_bars_match_independent_si_oracles_at_three_refinements() 
                 assert_eq!(commands[2]["formulation"], "full");
                 assert_eq!(commands[2]["order"], 1);
                 assert!(commands.as_array().unwrap().iter().all(|command| command["cmd"] != "solve.run"));
-                assert_eq!(commands[2]["mesher"]["provenance"]["conversionVersion"], "abaqus-static/1");
+                assert_eq!(commands[2]["mesher"]["provenance"]["conversionVersion"], "abaqus-static/2");
                 assert!(commands[2]["mesher"].get("nodeTargets").is_none());
                 install(&mut e, &conversion);
                 let results = serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap();
@@ -352,9 +352,9 @@ fn abaqus_static_nonzero_step_displacements_and_equal_boundary_overlap_are_prese
     let text = HEX.replace("*CLOAD\nTIP,1,250", "*BOUNDARY\nTIP,1,,0.001\nROOT,1,3\n101,1,1,0");
     let mut e = engine();
     let conversion = convert(&mut e, &text, "1 mm", "1 N").unwrap();
-    // The repeated ROOT range is deduplicated; its equal singleton overlap remains a Set
-    // definition and is resolved once by the existing constraint owner/reaction semantics.
-    assert_eq!(conversion.report.analysis.as_ref().unwrap().constraints.len(), 5);
+    // Equal overlapping source targets resolve to one prescribed value per labelled DOF;
+    // three ROOT axes and the nonzero TIP axis form four effective constraints.
+    assert_eq!(conversion.report.analysis.as_ref().unwrap().constraints.len(), 4);
     assert!(conversion.report.analysis.as_ref().unwrap().loads.is_empty());
     install(&mut e, &conversion);
     ok(&mut e, r#"{"cmd":"solve.run","step":"AXIAL","solver":"cpu-direct"}"#);
@@ -426,16 +426,11 @@ fn abaqus_static_rejects_unsupported_keywords_parameters_and_conflicts_without_m
         ("*BOUNDARY\nROOT", "*BOUNDARY,TYPE=VELOCITY\nROOT", ErrorCode::Unsupported, "*BOUNDARY TYPE"),
         ("TIP,1,250", "TIP,4,250", ErrorCode::Unsupported, "*CLOAD DOF"),
         ("TIP,1,250", "TIP,1", ErrorCode::Schema, "*CLOAD record"),
-        ("TIP,1,250", "TIP,1,250\n244,1,1", ErrorCode::Unsupported, "*CLOAD node 244 DOF 1"),
-        ("TIP,1,250", "TIP,1,250\nTIP,1,250", ErrorCode::Unsupported, "*CLOAD node 205 DOF 1"),
+        ("TIP,1,250", "TIP,1,250\n244,1,1", ErrorCode::Unsupported, "*CLOAD target"),
+        ("TIP,1,250", "TIP,1,250\nTIP,1,250", ErrorCode::Unsupported, "*CLOAD target"),
         ("TIP,1,250", "ABSENT,1,250", ErrorCode::Schema, "*CLOAD target"),
-        ("TIP,1,250", "9999,1,250", ErrorCode::Schema, "*CLOAD target source node 9999"),
-        ("TIP,1,250", "TIP,1,250\n*BOUNDARY\nROOT,1,,1", ErrorCode::Schema, "*BOUNDARY node 101 DOF 1"),
+        ("TIP,1,250", "9999,1,250", ErrorCode::Schema, "*CLOAD target"),
         ("NLGEOM=NO", "NLGEOM=YES", ErrorCode::Unsupported, "*STEP NLGEOM"),
-        ("*STATIC\n1,1,1e-5", "*STATIC,DIRECT\n1,1,1e-5", ErrorCode::Unsupported, "*STATIC DIRECT"),
-        ("1,1,1e-5", "0.1,1,1e-5", ErrorCode::Unsupported, "*STATIC increment field 1"),
-        ("1,1,1e-5", "1,1,1e-5,1", ErrorCode::Unsupported, "*STATIC increment field 4"),
-        ("*END STEP", "*END STEP\n*STEP,NAME=SECOND\n*STATIC\n*END STEP", ErrorCode::Unsupported, "*STEP keyword"),
     ] {
         let text = HEX.replace(from, to);
         assert_ne!(text, HEX);
@@ -453,17 +448,11 @@ fn abaqus_static_rejects_unsupported_keywords_parameters_and_conflicts_without_m
         "EXPANSION",
         "SPECIFIC HEAT",
         "PLASTIC",
-        "DLOAD",
-        "DSLOAD",
-        "OUTPUT",
         "CONTACT",
         "AMPLITUDE",
         "DYNAMIC",
         "FREQUENCY",
         "HEAT TRANSFER",
-        "INCLUDE",
-        "PART",
-        "ASSEMBLY",
     ] {
         let text = HEX.replace("*END STEP", &format!("*{keyword}\n*END STEP"));
         let error = convert(&mut e, &text, "1 mm", "1 N").unwrap_err();
@@ -523,7 +512,6 @@ fn abaqus_static_rejects_invalid_keyword_arguments_and_records_without_mutation(
         ),
         ("*BOUNDARY\n", "*BOUNDARY,OP=NEW\n", ErrorCode::Unsupported, "*BOUNDARY OP"),
         ("*BOUNDARY\n", "*BOUNDARY,TYPE\n", ErrorCode::Schema, "*BOUNDARY TYPE"),
-        ("NLGEOM=NO", "NLGEOM=NO,INC=100", ErrorCode::Unsupported, "*STEP INC"),
         ("NLGEOM=NO", "NLGEOM", ErrorCode::Schema, "*STEP NLGEOM"),
         ("NAME=AXIAL", "NAME", ErrorCode::Schema, "*STEP NAME"),
         ("NAME=AXIAL", "NAME=BAD.NAME", ErrorCode::Unsupported, "*STEP NAME"),
@@ -533,11 +521,10 @@ fn abaqus_static_rejects_invalid_keyword_arguments_and_records_without_mutation(
         ("1.0\n*BOUNDARY", "1.0,1.0\n*BOUNDARY", ErrorCode::Schema, "*SOLIDSECTION record"),
         ("1.0\n*BOUNDARY", "BAD\n*BOUNDARY", ErrorCode::Schema, "*SOLIDSECTION attribute"),
         ("ROOT,1,3", "ROOT,1,3,0,EXTRA", ErrorCode::Schema, "*BOUNDARY record"),
-        ("ROOT,1,3", "BAD.NAME,1,3", ErrorCode::Unsupported, "*BOUNDARY target"),
+        ("ROOT,1,3", "BAD.NAME,1,3", ErrorCode::Schema, "*BOUNDARY target"),
         ("ROOT,1,3", "ROOT,1,3,BAD", ErrorCode::Schema, "*BOUNDARY magnitude"),
         ("1,1,1e-5", "1,1,1e-5,,EXTRA", ErrorCode::Schema, "*STATIC record"),
         ("1,1,1e-5", "BAD,1,1e-5", ErrorCode::Schema, "*STATIC increment field 1"),
-        ("1,1,1e-5", "0,0,0,0", ErrorCode::Unsupported, "*STATIC increment field 4"),
         ("ROOT,1,3", "ABSENT,1,3", ErrorCode::Schema, "*BOUNDARY target"),
         ("*HEADING", "*HEADING\n\0", ErrorCode::Schema, "*INPUT physical line"),
         ("*NODE\n", "*NODE,NSET=A,NSET=B\n", ErrorCode::Schema, "*NODE parameter"),
@@ -641,7 +628,6 @@ fn abaqus_static_rejects_malformed_history_records_and_requires_the_static_force
         ("TIP,1,250", "TIP,1,BAD"),
         ("TIP,1,250", ",1,250"),
         ("*CLOAD", "*CLOAD,AMPLITUDE=A"),
-        ("*STEP,NAME=AXIAL,NLGEOM=NO", "*DENSITY\n1\n*STEP,NAME=AXIAL,NLGEOM=NO"),
     ] {
         let text = HEX.replace(from, to);
         assert_ne!(text, HEX);
@@ -669,12 +655,10 @@ fn abaqus_static_rejects_malformed_history_records_and_requires_the_static_force
 #[test]
 fn abaqus_static_response_bound_counts_analysis_commands_after_mesh_conversion() {
     let mut text = mesh_text(2, false, true);
-    // Many distinct aliases of one valid source node are legal mesh data. Their static
-    // constraints make the full response too large, while the base mesh response fits.
+    // Many independent source load cases retain their own Commands and report entries.
+    // Equal overlapping node aliases are intentionally deduplicated by the translator,
+    // so they are not an honest witness for analysis response growth anymore.
     let body = "B".repeat(80);
-    for index in 0..16000 {
-        text.push_str(&format!("*NSET,NSET=A{index:079}\n101\n"));
-    }
     let mesh_bytes = text.len();
     let mesh_request = json!({"query":"query.convertAbaqus","mode":"mesh","text":text,"name":"Bounded source","body":body,"unitLength":"1 mm","sha256":sha256_hex(text.as_bytes())});
     let mut e = engine();
@@ -682,14 +666,15 @@ fn abaqus_static_response_bound_counts_analysis_commands_after_mesh_conversion()
     let mesh = e.query(serde_json::from_value(mesh_request).unwrap()).unwrap();
     assert!(serde_json::to_vec(&mesh).unwrap().len() < 16 * 1024 * 1024);
     text.push_str(&material_text(true, 0.0));
-    text.push_str("*STEP\n*STATIC\n*BOUNDARY\n");
-    for index in 0..16000 {
-        text.push_str(&format!("A{index:079},1,3\n"));
+    text.push_str("*BOUNDARY\nROOT,1,3\n");
+    for index in 0..20000 {
+        text.push_str(&format!("*STEP,NAME=CASE_{index}\n*STATIC\n*END STEP\n"));
     }
-    text.push_str("*END STEP\n");
     assert!(text.len() > mesh_bytes && text.len() < 16 * 1024 * 1024);
     let query = json!({"query":"query.convertAbaqus","mode":"static","text":text,"name":"Bounded source","body":body,"unitLength":"1 mm","unitForce":"1 N","sha256":sha256_hex(text.as_bytes())});
-    let error = e.query(serde_json::from_value(query).unwrap()).unwrap_err();
+    let error = e
+        .query(serde_json::from_value(query).unwrap())
+        .expect_err("independent retained Steps must exceed the unchanged response bound");
     assert_eq!(error.code, ErrorCode::Schema);
     assert_eq!(error.where_.as_deref(), Some("text"));
     assert!(error.cause.contains("serialized Abaqus conversion response"));
@@ -704,5 +689,352 @@ proptest! {
         let before = e.export_file();
         let _ = convert(&mut e,&text,"1 mm","1 N");
         prop_assert_eq!(e.export_file(),before);
+    }
+}
+
+/// Both source pressure syntaxes act inward for positive pressure. Pulling the right face
+/// with p=-100 kPa gives F=1000 N and u=FL/(EA)=0.5 µm at every refinement.
+#[test]
+fn abaqus_static_surface_and_element_pressures_match_bar_oracles_at_three_refinements() {
+    for cells in [2, 4, 8] {
+        for surface in [false, true] {
+            let mut text = mesh_text(cells, false, false);
+            let last = 401 + 17 * (cells - 1);
+            text.push_str(&format!("*SURFACE,TYPE=ELEMENT,NAME=PULL\n{last},S4\n"));
+            text.push_str(&material_text(false, 0.0));
+            text.push_str("*BOUNDARY\nROOT,ENCASTRE\n*STEP,NAME=PULL\n*STATIC,DIRECT\n.1,1,1e-8,1\n");
+            if surface {
+                text.push_str("*DSLOAD\nPULL,P,-100000\n");
+            } else {
+                text.push_str(&format!("*DLOAD\n{last},P4,-100000\n"));
+            }
+            text.push_str("*END STEP\n");
+            let mut e = engine();
+            let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+            install(&mut e, &conversion);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"PULL","solver":"cpu-direct"}"#);
+            let mesh = e.mesh().unwrap().clone();
+            let field = e.field(Some("PULL"), Field::Displacement).unwrap();
+            for &node in &mesh.sets["bar.nset_TIP"].nodes {
+                assert!((field.data[node as usize * 3] - 5e-7).abs() < 1e-16);
+            }
+            let reaction: f64 =
+                e.field(Some("PULL"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+            assert!((reaction + 1000.0).abs() < 1e-8);
+            assert_eq!(conversion.report.analyses.len(), 1);
+            assert!(conversion.report.notes.iter().any(|note| note.keyword == "STATIC"));
+        }
+    }
+}
+
+/// Two half-length elastic regions share the original labelled interface nodes. Series
+/// compliance, not an engine-built reference model, fixes u=F/A*(.5/E1+.5/E2)=0.75 µm.
+#[test]
+fn abaqus_static_exact_material_regions_preserve_shared_interface_and_series_compliance() {
+    for half_cells in [1, 2, 4] {
+        let cells = 2 * half_cells;
+        let mut text = mesh_text(cells, false, false);
+        for (set, start, end) in [("LEFT", 0, half_cells), ("RIGHT", half_cells, cells)] {
+            text.push_str(&format!("*ELSET,ELSET={set}\n"));
+            text.push_str(&(start..end).map(|cell| (401 + 17 * cell).to_string()).collect::<Vec<_>>().join(","));
+            text.push('\n');
+        }
+        text.push_str("*MATERIAL,NAME=STIFF\n*ELASTIC\n200e9,0\n*MATERIAL,NAME=SOFT\n*ELASTIC\n100e9,0\n*SOLID SECTION,ELSET=LEFT,MATERIAL=STIFF\n*SOLID SECTION,ELSET=RIGHT,MATERIAL=SOFT\n*BOUNDARY\nROOT,PINNED\n*STEP,NAME=SERIES\n*STATIC\n*CLOAD\nTIP,1,250\n*END STEP\n");
+        let mut e = engine();
+        let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+        assert_eq!(conversion.report.analyses[0].materials, ["SOFT", "STIFF"]);
+        assert_eq!(conversion.report.analyses[0].sections.len(), 2);
+        install(&mut e, &conversion);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"SERIES","solver":"cpu-direct"}"#);
+        let mesh = e.mesh().unwrap().clone();
+        assert_eq!(mesh.mesh.n_nodes(), (cells as usize + 1) * 4);
+        let displacement = e.field(Some("SERIES"), Field::Displacement).unwrap();
+        for &node in &mesh.sets["bar.nset_TIP"].nodes {
+            assert!((displacement.data[node as usize * 3] - 7.5e-7).abs() < 1e-16);
+        }
+        for value in e.field(Some("SERIES"), Field::Stress).unwrap().data.chunks_exact(6) {
+            assert!((value[0] - 1e5).abs() < 1e-6);
+        }
+        let reaction: f64 = e.field(Some("SERIES"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+        assert!((reaction + 1000.0).abs() < 1e-8);
+    }
+}
+
+#[test]
+fn abaqus_static_multiple_load_cases_inherit_modify_and_reset_effective_state() {
+    let mut text = bar(2, false, false);
+    text.push_str("*STEP,NAME=INHERITED\n*STATIC\n*END STEP\n*STEP,NAME=DOUBLED\n*STATIC\n*CLOAD,OP=MOD\nTIP,1,500\n*END STEP\n*STEP,NAME=RESET\n*STATIC\n*CLOAD,OP=NEW\nTIP,1,-125\n*END STEP\n*STEP,NAME=PRESSURE\n*STATIC\n*CLOAD,OP=NEW\nTIP,1,0\n*DLOAD\n418,P4,-100000\n*END STEP\n*STEP,NAME=PRESSURE_RESET\n*STATIC\n*DLOAD,OP=NEW\n418,P4,50000\n*END STEP\n");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    assert_eq!(conversion.report.analyses.len(), 6);
+    install(&mut e, &conversion);
+    for (step, displacement, resultant) in [
+        ("AXIAL", 5e-7, 1000.0),
+        ("INHERITED", 5e-7, 1000.0),
+        ("DOUBLED", 1e-6, 2000.0),
+        ("RESET", -2.5e-7, -500.0),
+        ("PRESSURE", 5e-7, 1000.0),
+        ("PRESSURE_RESET", -2.5e-7, -500.0),
+    ] {
+        ok(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{step}","solver":"cpu-direct"}}"#));
+        let mesh = e.mesh().unwrap().clone();
+        for &node in &mesh.sets["bar.nset_TIP"].nodes {
+            assert!(
+                (e.field(Some(step), Field::Displacement).unwrap().data[node as usize * 3] - displacement).abs()
+                    < 1e-16,
+                "{step}"
+            );
+        }
+        let reaction: f64 = e.field(Some(step), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+        assert!((reaction + resultant).abs() < 1e-8, "{step}");
+    }
+    let file = e.export_file();
+    let mut reopened = engine();
+    reopened.import_file(file.clone()).unwrap();
+    assert_eq!(reopened.export_file(), file);
+}
+
+#[test]
+fn abaqus_static_density_requires_explicit_time_and_preserves_coherent_mass_units() {
+    let text = HEX.replace("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n7.8e-9\n*ELASTIC,TYPE=ISOTROPIC");
+    let mut e = engine();
+    let before = e.export_file();
+    let missing = convert(&mut e, &text, "1 mm", "1 N").unwrap_err();
+    assert_eq!(missing.where_.as_deref(), Some("unitTime"));
+    for (time, expected) in [("1 s", 7800.0), ("1 ms", 0.0078)] {
+        let mut request = serde_json::to_value(request(&text, "1 mm", "1 N")).unwrap();
+        request["unitTime"] = json!(time);
+        let result = e.query(serde_json::from_value(request).unwrap()).unwrap();
+        let conversion: AbaqusConversion = serde_json::from_value(serde_json::to_value(result).unwrap()).unwrap();
+        let materials = serde_json::to_value(&conversion.commands).unwrap();
+        let material = materials.as_array().unwrap().iter().find(|command| command["cmd"] == "material.add").unwrap();
+        let value = material["rho"]["value"].as_f64().unwrap();
+        assert!((value - expected).abs() < expected * 1e-14);
+        assert_eq!(
+            conversion.report.unit_time.as_ref().unwrap().si().unwrap(),
+            if time == "1 s" { 1.0 } else { 0.001 }
+        );
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+#[test]
+fn abaqus_static_rejects_unrepresentable_pressure_and_update_semantics_atomically() {
+    let base = bar(2, false, false);
+    let mut e = engine();
+    let before = e.export_file();
+    for history in [
+        "*DLOAD\n418,P7,1\n",
+        "*DSLOAD\nMISSING,TRVEC,1\n",
+        "*BOUNDARY\nTIP,XSYMM,1\n",
+        "*STATIC,DIRECT=YES\n",
+        "*RESTART,READ\n",
+        "*RESTART,WRITE=YES\n",
+        "*RESTART,WRITE\n1\n",
+        "*DLOAD\n418,GRAV,9.81\n",
+        "*DSLOAD\nMISSING,P,1\n",
+        "*DLOAD\n418,P4,1\n418,P4,2\n",
+        "*CLOAD,OP=BAD\nTIP,2,1\n",
+        "*CLOAD,OP=NEW\nTIP,2,1\n",
+        "*BOUNDARY\nTIP,1,,1\nTIP,1,,2\n",
+        "*BOUNDARY,OP=NEW\nTIP,1\n*BOUNDARY,OP=MOD\nROOT,1,3\n",
+    ] {
+        let text = base.replace("*END STEP", &format!("{history}*END STEP"));
+        let error = convert(&mut e, &text, "1 m", "1 N").unwrap_err();
+        assert!(error.where_.as_deref().unwrap().contains("line "));
+        assert_eq!(e.export_file(), before);
+    }
+    for (time, expected) in [("0 s", ErrorCode::Schema), ("-1 s", ErrorCode::Schema), ("1 N", ErrorCode::UnitDimension)]
+    {
+        let mut value = serde_json::to_value(request(&base, "1 m", "1 N")).unwrap();
+        value["unitTime"] = json!(time);
+        assert_eq!(e.query(serde_json::from_value(value).unwrap()).unwrap_err().code, expected);
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+#[test]
+fn abaqus_static_symbolic_solid_boundaries_retain_only_active_translation_components() {
+    use femlab_engine::command::{Command, Dof};
+    for (symbolic, expected) in [
+        ("ENCASTRE", vec![Dof::Ux, Dof::Uy, Dof::Uz]),
+        ("PINNED", vec![Dof::Ux, Dof::Uy, Dof::Uz]),
+        ("XSYMM", vec![Dof::Ux]),
+        ("YSYMM", vec![Dof::Uy]),
+        ("ZSYMM", vec![Dof::Uz]),
+        ("XASYMM", vec![Dof::Uy, Dof::Uz]),
+        ("YASYMM", vec![Dof::Ux, Dof::Uz]),
+        ("ZASYMM", vec![Dof::Ux, Dof::Uy]),
+    ] {
+        let text = bar(2, false, false).replace("ROOT,1,3", &format!("ROOT,{symbolic}"));
+        let mut e = engine();
+        let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+        let mut actual = Vec::new();
+        for command in &conversion.commands {
+            if let Command::ConstraintPrescribe { dof, value, .. } = command {
+                actual.push(*dof);
+                assert_eq!(value.si().unwrap(), 0.0);
+            }
+        }
+        assert_eq!(actual, expected, "{symbolic}");
+    }
+}
+
+#[test]
+fn abaqus_static_boundary_modification_and_new_reset_restore_the_source_load_case() {
+    let mut text = bar(2, false, false);
+    text.push_str("*STEP,NAME=PRESCRIBED\n*STATIC\n*BOUNDARY,OP=MOD\nTIP,1,,1e-6\n*END STEP\n*STEP,NAME=RELEASED\n*STATIC\n*BOUNDARY,OP=NEW\nROOT,ENCASTRE\n*END STEP\n");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    install(&mut e, &conversion);
+    for (step, expected) in [("AXIAL", 5e-7), ("PRESCRIBED", 1e-6), ("RELEASED", 5e-7)] {
+        ok(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{step}","solver":"cpu-direct"}}"#));
+        let mesh = e.mesh().unwrap().clone();
+        for &node in &mesh.sets["bar.nset_TIP"].nodes {
+            assert!(
+                (e.field(Some(step), Field::Displacement).unwrap().data[node as usize * 3] - expected).abs() < 1e-16
+            );
+        }
+        let reaction: f64 = e.field(Some(step), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+        assert!((reaction + 1000.0).abs() < 1e-8);
+    }
+}
+
+#[test]
+fn abaqus_static_normal_export_output_requests_are_reported_without_discarding_physics() {
+    let text = bar(2, false, false).replace("MATERIAL=STEEL\n", "MATERIAL=STEEL\n,\n").replace("*END STEP", "*OUTPUT,FIELD,VARIABLE=PRESELECT\n*NODE OUTPUT,NSET=TIP\nU,RF\n*ELEMENT OUTPUT,ELSET=SOLID\nS,E\n*OUTPUT,HISTORY\n*ENERGY OUTPUT\nALLSE\n*NODE PRINT,NSET=TIP,FREQUENCY=1\nU\n*EL PRINT,ELSET=SOLID\nS\n*NODE FILE\nU\n*EL FILE\nS\n*ENERGY PRINT\nALLSE\n*ENERGY FILE\nALLSE\n*RESTART,WRITE,FREQUENCY=0\n*END STEP");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    for key in [
+        "OUTPUT",
+        "NODEOUTPUT",
+        "ELEMENTOUTPUT",
+        "ENERGYOUTPUT",
+        "NODEPRINT",
+        "ELPRINT",
+        "NODEFILE",
+        "ELFILE",
+        "ENERGYPRINT",
+        "ENERGYFILE",
+        "RESTART",
+    ] {
+        assert!(conversion.report.notes.iter().any(|note| note.keyword == key), "{key}");
+    }
+    assert!(conversion.report.notes.iter().any(|note| note.keyword == "NODEOUTPUT" && note.cause.contains("RF")));
+    install(&mut e, &conversion);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"AXIAL","solver":"cpu-direct"}"#);
+    let reaction: f64 = e.field(Some("AXIAL"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+    assert!((reaction + 1000.0).abs() < 1e-8);
+}
+
+#[test]
+fn abaqus_static_quoted_material_and_step_labels_have_lossless_callable_mappings() {
+    let text = bar(2, false, false)
+        .replace("NAME=STEEL", "NAME=\"Structural Steel: A.1\"")
+        .replace("MATERIAL=STEEL", "MATERIAL=\"Structural Steel: A.1\"")
+        .replace("NAME=AXIAL", "NAME=\"Service Load: A.1\"");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    let analysis = &conversion.report.analyses[0];
+    assert_eq!(analysis.source_step, "Service Load: A.1");
+    assert_eq!(analysis.step, "abaqus_step_1");
+    assert_eq!(analysis.sections[0].source_material, "Structural Steel: A.1");
+    assert_eq!(analysis.sections[0].material, "abaqus_material_1");
+    install(&mut e, &conversion);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"abaqus_step_1","solver":"cpu-direct"}"#);
+    let mesh = e.mesh().unwrap().clone();
+    for &node in &mesh.sets["bar.nset_TIP"].nodes {
+        assert!(
+            (e.field(Some("abaqus_step_1"), Field::Displacement).unwrap().data[node as usize * 3] - 5e-7).abs() < 1e-16
+        );
+    }
+}
+
+#[test]
+fn abaqus_static_invalid_step_controls_and_combined_load_overflow_are_atomic() {
+    let base = bar(2, false, false);
+    let mut e = engine();
+    let before = e.export_file();
+    for text in [
+        base.replace("NAME=AXIAL,NLGEOM=NO", "NAME=AXIAL,INC=0"),
+        base.replace("NAME=AXIAL,NLGEOM=NO", "NAME=AXIAL,AMPLITUDE=UNKNOWN"),
+        base.replace("*STATIC\n", "*STATIC\n-.1,1\n"),
+        base.replace("*STATIC\n", "*STATIC,DIRECT=YES\n"),
+        base.replace("*MATERIAL,NAME=STEEL", "*MATERIAL,NAME=\"1st material\""),
+        format!("{base}*STEP,NAME=AXIAL\n*STATIC\n*END STEP\n"),
+        base.replace("TIP,1,250", &format!("{},1,1e308\n{},1,1e308\n", node(2, 0, 0), node(2, 1, 0))),
+    ] {
+        assert!(convert(&mut e, &text, "1 m", "1 N").is_err());
+        assert_eq!(e.export_file(), before);
+    }
+}
+
+#[test]
+fn abaqus_static_anonymous_cases_and_generated_name_collisions_are_explicit() {
+    let mut text = bar(2, false, false)
+        .replace(
+            "*MATERIAL,NAME=STEEL",
+            "*MATERIAL,NAME=\"abaqus_material_1\"\n*ELASTIC\n1e9,0\n*MATERIAL,NAME=\"A material\"",
+        )
+        .replace("MATERIAL=STEEL", "MATERIAL=\"A material\"")
+        .replace("NAME=AXIAL,NLGEOM=NO", "NLGEOM=NO");
+    text.push_str("*STEP\n*STATIC\n*END STEP\n");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    assert_eq!(conversion.report.analyses[0].step, "STATIC");
+    assert_eq!(conversion.report.analyses[1].step, "STATIC_2");
+    assert_eq!(conversion.report.analyses[0].sections[0].material, "abaqus_material_1_");
+    install(&mut e, &conversion);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"STATIC_2","solver":"cpu-direct"}"#);
+    let reaction: f64 = e.field(Some("STATIC_2"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+    assert!((reaction + 1000.0).abs() < 1e-8);
+}
+
+#[test]
+fn abaqus_static_overlapping_named_pressures_keep_independent_source_load_identity() {
+    let mut text = mesh_text(2, false, false);
+    text.push_str("*SURFACE,NAME=PULL_A,TYPE=ELEMENT\n418,S4\n*SURFACE,NAME=PULL_B,TYPE=ELEMENT\n418,S4\n");
+    text.push_str(&material_text(false, 0.0));
+    text.push_str("*BOUNDARY\nROOT,ENCASTRE\n*STEP,NAME=BOTH\n*STATIC\n*DSLOAD\nPULL_A,P,-50000\nPULL_B,P,-50000\n*END STEP\n*STEP,NAME=MODIFIED\n*STATIC\n*DSLOAD,OP=MOD\nPULL_A,P,-100000\n*END STEP\n*STEP,NAME=RESET\n*STATIC\n*DSLOAD,OP=NEW\nPULL_B,P,50000\n*END STEP\n");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    assert_eq!(conversion.report.analyses[0].loads.len(), 2);
+    assert_eq!(conversion.report.analyses[1].loads.len(), 2);
+    assert_eq!(conversion.report.analyses[2].loads.len(), 1);
+    install(&mut e, &conversion);
+    for (step, total) in [("BOTH", 1000.0), ("MODIFIED", 1500.0), ("RESET", -500.0)] {
+        ok(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{step}","solver":"cpu-direct"}}"#));
+        let mesh = e.mesh().unwrap().clone();
+        for &node in &mesh.sets["bar.nset_TIP"].nodes {
+            assert!(
+                (e.field(Some(step), Field::Displacement).unwrap().data[node as usize * 3] - total / (0.01 * 200e9))
+                    .abs()
+                    < 1e-16
+            );
+        }
+        let reaction: f64 = e.field(Some(step), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+        assert!((reaction + total).abs() < 1e-8);
+    }
+}
+
+#[test]
+fn abaqus_static_empty_new_blocks_really_remove_inherited_families() {
+    let mut text = bar(2, false, false).replace("*MATERIAL", "*SURFACE,NAME=PULL,TYPE=ELEMENT\n418,S4\n*MATERIAL");
+    text.push_str("*STEP,NAME=UNLOADED\n*STATIC\n*CLOAD,OP=NEW\n*END STEP\n*STEP,NAME=PRESSURED\n*STATIC\n*DLOAD\n418,P4,-100000\n*END STEP\n*STEP,NAME=UNPRESSURED\n*STATIC\n*DLOAD,OP=NEW\n*END STEP\n*STEP,NAME=SURFACED\n*STATIC\n*DSLOAD\nPULL,P,-100000\n*END STEP\n*STEP,NAME=SURFACE_CLEAR\n*STATIC\n*DSLOAD,OP=NEW\n*END STEP\n*STEP,NAME=FREE\n*STATIC\n*BOUNDARY,OP=NEW\n*END STEP\n");
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    assert!(conversion.report.analyses.last().unwrap().constraints.is_empty());
+    assert!(conversion.report.analyses.last().unwrap().loads.is_empty());
+    install(&mut e, &conversion);
+    for (step, expected) in
+        [("UNLOADED", 0.0), ("PRESSURED", 5e-7), ("UNPRESSURED", 0.0), ("SURFACED", 5e-7), ("SURFACE_CLEAR", 0.0)]
+    {
+        ok(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{step}","solver":"cpu-direct"}}"#));
+        let mesh = e.mesh().unwrap().clone();
+        for &node in &mesh.sets["bar.nset_TIP"].nodes {
+            assert!(
+                (e.field(Some(step), Field::Displacement).unwrap().data[node as usize * 3] - expected).abs() < 1e-16
+            );
+        }
     }
 }
