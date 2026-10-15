@@ -161,3 +161,34 @@ optimized CPU WASM bindings came from source `1d3952f6`, CI `38621438961`, artif
 222 recorded engine/build/generated input hashes matched. Logs, screenshots and provenance are
 preserved in `/private/tmp/fem-lab-573-evidence`. This is focused Chromium evidence; the dated
 observations above remain the historical baseline.
+
+
+## 2026-10-16 — Assistant keeps viewer controls visible (#758)
+
+At1180px the previous fixed Assistant covered84px of the viewer: the real production browser
+reported viewer.right872 against drawer.left788. A strengthened existing shell test reproduced
+that failure before the CSS change (1.7s,0retries). Canvas-size equality alone missed the overlap.
+
+Between1024px and1493px, the open Assistant now occupies the Properties track. The form stays
+mounted with its draft intact, but display:none removes its controls and splitter from keyboard
+focus until the drawer closes. One effective width controls the grid, drawer and resize handle;
+the requested size is preserved while its visible width is capped to leave a180px tree and520px
+viewer. At1180/default width the actual viewer is268..788 and the drawer788..1180. A requested
+520px drawer renders480px there, then returns to520px at1600px. The existing1494px-and-wider
+layout keeps Properties and Assistant side by side.
+
+Actual production CPU Chromium passed the strengthened existing case in9.869s,0retries:
+1180/1600/1494/1493/1280/1100px, two open/close cycles each, restored form drafts, hidden-form
+focus exclusion, native pointer and keyboard field selection, Compare/Single transitions,
+actual canvas drawing-buffer sizing, and unchanged public ModelFile/Journal/displacement data.
+Camera pose stays unchanged by layout toggles; Compare's own initial fit is a separate action.
+The1180 loaded-Result and comparison screenshots and1600 layout were opened for visual review.
+
+Source baseline was mainabd7c43f plus the two-file #758 patch. The8 actual bindings came from
+existing CI38815313306, artifact12011265133, producer4be56ea7 (whole tree equal to reviewed
+f1429500); engine/build/generated sources were identical to the baseline. Actual traced engine
+bytes match portablebcaf756c4218abcb59138cc0bee10be12a2a125702cc8c5971e7c5320f59366b,
+with schema c79967c2ed85c1b680d3f247c3e417449315e3f5e57f762cc1e3ccc5d561bf0e. App types,
+production build/secret scan,45 registered-control tests and size budgets passed. Proofs are
+retained in `/private/tmp/fem-lab-758-evidence`. This is focused local layout acceptance, not
+final CI, a new solver validation or full #90 completion; #757 tracks early Start separately.
