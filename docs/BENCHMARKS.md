@@ -3025,6 +3025,17 @@ A positive control applies the determinant-one shear to tetrahedra in opposite
 y/z quadrants: their complete shared quadratic edge is
 `y=0,z=x(1-x)/4`, with midside node `(1/2,0,1/16)` retained.
 
+### Alternate Abaqus mesh data files (#681)
+
+The authored `abaqus/alternate-data/` bundle defines the same positive unit tetrahedron
+through NODE INPUT and ELEMENT INPUT nested under a normal INCLUDE. Its four sparse
+coordinates, connectivity and instance identities must equal the inline definition;
+public Body volume is independently 1/6 m³ within 1e−14 m³. A separate straight-sided
+Tet10 record split across two alternate-data lines retains all ten original node labels.
+These extend source acquisition and identity checks, not the numerical element library
+or its existing refinement oracles. Bad raw records retain their data filename/line and
+must leave the authoritative Model/Journal unchanged.
+
 ## Explicit mean-dilatation Hex8 (issue #673)
 
 `mean-dilatation` is the eight-point Hex8 with volume-averaged trace of strain, matching
