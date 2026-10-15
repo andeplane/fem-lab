@@ -172,7 +172,6 @@ export class ProjectFolder {
       await writable.abort().catch(() => undefined);
       throw error;
     }
-    await this.refresh();
   }
 }
 

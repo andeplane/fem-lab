@@ -146,6 +146,39 @@ describe('the production project host', () => {
     expect(files['note.txt']).toBe('new');
   });
 
+  it('keeps successful text and binary delivery receipts when only the catalog refresh fails', async () => {
+    const files: Record<string, string> = { 'note.txt': 'old' };
+    const { registry, host, store, handle } = setup(files);
+    await registry.dispatch({ cmd: 'folder.open', handle });
+    const folder = store.state.folder!;
+    const catalog = folder.files;
+    const complete = vi.fn();
+    vi.spyOn(host.files, 'beginSave').mockReturnValue(complete);
+    const entries = vi.spyOn(handle, 'entries').mockImplementation(async function* () { throw new DOMException('catalog access revoked', 'NotAllowedError'); });
+    await expect(registry.dispatch({ cmd: 'file.write', path: 'note.txt', text: 'committed' })).resolves.toBeUndefined();
+    expect(files['note.txt']).toBe('committed');
+    await expect(registry.dispatch({ cmd: 'file.save', name: 'saved.femlab.json' })).resolves.toEqual({ name: 'saved.femlab.json', to: 'folder' });
+    expect(JSON.parse(files['saved.femlab.json']!)).toEqual(MODEL_FILE);
+    expect(complete).toHaveBeenCalledWith(MODEL_FILE.journal);
+    await host.folder.writeBytes('bytes.bin', new Uint8Array([0, 1, 2]));
+    expect([...files['bytes.bin']!].map(c => c.charCodeAt(0))).toEqual([0, 1, 2]);
+    expect(folder.files).toBe(catalog);
+    expect(store.state.console.filter(line => line.text.includes('file saved; project catalog could not refresh'))).toHaveLength(3);
+    entries.mockRestore();
+    await registry.dispatch({ cmd: 'folder.refresh' });
+    expect(folder.files.map(file => file.path)).toEqual(['bytes.bin', 'note.txt', 'saved.femlab.json']);
+  });
+
+  it('checks the binary snapshot size before allocating its contents', async () => {
+    const { registry, host, handle } = setup({ 'mesh.stl': 'small' });
+    await registry.dispatch({ cmd: 'folder.open', handle });
+    const file = await handle.getFileHandle('mesh.stl');
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    vi.spyOn(handle, 'getFileHandle').mockResolvedValue({ ...file, getFile: async () => ({ size: 32 * 1024 * 1024 + 1, lastModified: 0, text: async () => '', arrayBuffer }) });
+    await expect(host.folder.readBytes('mesh.stl')).rejects.toMatchObject({ code: 'unsupported' });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
   it('remembers an opaque handle, re-requests permission on reopen, and forgets it on close', async () => {
     const { registry, access, handle } = setup();
     handle.requestPermission = vi.fn(async () => 'granted' as const);
@@ -237,6 +270,15 @@ describe('the production project host', () => {
     expect(await access.recent()).toBeNull();
     expect(access.pick).not.toHaveBeenCalled();
     expect(await registry.dispatch({ cmd: 'file.read', path: 'note.txt' })).toEqual({ text: 'kept' });
+  });
+
+  it('preserves the structured remembered-handle error if optional cleanup storage also fails', async () => {
+    const { registry, access, store } = setup();
+    vi.spyOn(access, 'recall').mockResolvedValue({ kind: 'directory', name: 'invalid' } as DirHandle);
+    vi.spyOn(access, 'forget').mockRejectedValue(new Error('storage blocked'));
+    await expect(registry.dispatch({ cmd: 'folder.open', reopen: true })).rejects.toMatchObject({ code: 'schema', where: 'handle' });
+    expect(store.state.console.some(line => line.text.includes('could not forget the unavailable project folder'))).toBe(true);
+    expect(await registry.query({ query: 'query.folder' })).toBeNull();
   });
 
 });

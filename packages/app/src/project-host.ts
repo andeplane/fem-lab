@@ -72,6 +72,12 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
   const publish = (folder: ProjectFolder) => {
     if (store.state.folder === folder) store.setFolder(folder);
   };
+  const written = async (folder: ProjectFolder) => {
+    // close() already committed the file. A catalog failure must not turn that successful
+    // delivery into a failed save receipt or leave the Model's saved baseline dirty.
+    try { await folder.refresh(); publish(folder); }
+    catch (error) { store.log('warn', `file saved; project catalog could not refresh: ${String(error)}; retry folder.refresh`); }
+  };
   const check = (started: number) => {
     if (state.retired || state.generation !== started) throw new FemError('cancelled', 'a newer project open or close superseded this request', 'folder.open', 'use query.folder to see the active folder');
   };
@@ -102,7 +108,9 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
         const structured = projectError(error, 'folder.open');
         if ('reopen' in how && state.generation === started && !state.retired &&
           (structured.code === 'file.not-found' || structured.code === 'schema' || structured.cause.startsWith('NotReadableError:'))) {
-          await persist(() => access.forget());
+          await persist(() => access.forget()).catch((cleanup: unknown) => {
+            store.log('warn', `could not forget the unavailable project folder: ${String(cleanup)}`);
+          });
         }
         throw structured;
       }
@@ -140,12 +148,12 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
     },
     writeText: async (path, text) => {
       const folder = current();
-      try { await folder.writeText(path, text); publish(folder); }
+      try { await folder.writeText(path, text); await written(folder); }
       catch (error) { throw projectError(error, path); }
     },
     writeBytes: async (path, bytes) => {
       const folder = current();
-      try { await folder.writeBytes(path, bytes); publish(folder); }
+      try { await folder.writeBytes(path, bytes); await written(folder); }
       catch (error) { throw projectError(error, path); }
     },
   };

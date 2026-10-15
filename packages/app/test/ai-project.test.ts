@@ -65,6 +65,7 @@ describe('the project folder', () => {
     expect(await folder.readText('calc/sweep.ts')).toBe('fem.mesh.set({})');
     await folder.writeText('reports/beam.md', '# Beam');
     expect(files['reports/beam.md']).toBe('# Beam');
+    await folder.refresh();
     expect(folder.files.some((f) => f.path === 'reports/beam.md')).toBe(true);
     await folder.writeBytes('reports/beam.vtu', new TextEncoder().encode('<VTKFile/>'));
     expect(files['reports/beam.vtu']).toBe('<VTKFile/>');
