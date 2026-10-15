@@ -166,7 +166,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.save" class="tbutton file-action" title="Download the Model and its Journal as a femlab/1 file" label="Save as file">
         <span class="file-action-label" aria-hidden="true">Save as file</span><span class="file-action-icon" aria-hidden="true">↓</span>
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
+      <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="Copy a URL that reopens this Model">
         Share
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'export' }}>
