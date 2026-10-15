@@ -58,8 +58,8 @@ export interface FrozenManifest {
   schemaVersion: string;
   specificationSha256: string;
   artifacts: {
-    before: { app: string; nodeWasm: string; mcpPackage: string; mcpTarball: string };
-    after: { app: string; nodeWasm: string; mcpPackage: string; mcpTarball: string };
+    before: { app: string; nodeWasm: string; mcpPackage: string; mcpTarball: string; mcpDependencies: string; mcpLock: string };
+    after: { app: string; nodeWasm: string; mcpPackage: string; mcpTarball: string; mcpDependencies: string; mcpLock: string };
     stable: boolean;
   };
   provenance: {

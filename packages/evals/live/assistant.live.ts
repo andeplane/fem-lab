@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readdir, readFile, stat, statfs, writeFile, mkdir, rename, copyFile } from 'node:fs/promises';
+import { readFile, stat, statfs, writeFile, mkdir, rename, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import OpenAI from 'openai';
@@ -9,7 +9,7 @@ import { expect, it } from 'vitest';
 import { BrowserEvalAdapter, McpEvalAdapter } from '../src/adapters';
 import { boundedProvider, EvaluationBudget, requireFreeDisk, restoreEvaluationBudget } from '../src/budget';
 import { EVAL_CASES } from '../src/cases';
-import { prepareFrozenBuild } from '../src/frozen-build';
+import { prepareFrozenBuild, hashFrozenArtifacts } from '../src/frozen-build';
 import { markdownReport } from '../src/report';
 import { runLane, serializeArtifact, type EvaluationArtifact, type FrozenManifest, type EvalAdapter } from '../src/runner';
 import { laneResult } from '../src/score';
@@ -19,27 +19,6 @@ import type { LaneResult } from '../src/types';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../../..');
 const sha = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-
-async function fileHash(target: string | undefined): Promise<string> {
-  if (!target) return 'not-built';
-  const info = await stat(target);
-  if (info.isFile()) return sha(await readFile(target));
-  const files: string[] = [];
-  const walk = async (directory: string): Promise<void> => {
-    for (const name of (await readdir(directory)).sort()) {
-      const full = path.join(directory, name);
-      if ((await stat(full)).isDirectory()) await walk(full);
-      else files.push(full);
-    }
-  };
-  await walk(target);
-  const digest = createHash('sha256');
-  for (const file of files) { digest.update(path.relative(target, file)); digest.update(await readFile(file)); }
-  return digest.digest('hex');
-}
-async function artifactHashes(app?: string, nodeWasm?: string, mcpPackage?: string, tarball?: string) {
-  return { app: await fileHash(app), nodeWasm: await fileHash(nodeWasm), mcpPackage: await fileHash(mcpPackage), mcpTarball: await fileHash(tarball) };
-}
 
 it('runs the fixed twenty problems through real browser and MCP hosts', async () => {
   const key = process.env['OPENAI_API_KEY'];
@@ -88,7 +67,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const build = !unavailable ? await prepareFrozenBuild(root, reusedWasm) : null;
   try {
     if (build) await assertInFrozenPackage(build.mcpPackageDirectory, [build.mcpEntry, build.nodeWasm]);
-    const before = await artifactHashes(build?.appDirectory, build?.nodeWasm, build?.mcpPackageDirectory, build?.tarball);
+    const before = await hashFrozenArtifacts(build);
     if (previous && JSON.stringify(previous.manifest.artifacts.before) !== JSON.stringify(before)) throw new Error('checkpoint app/MCP artifact hashes differ; start a new evaluation');
     const manifest: FrozenManifest = {
       gitCommit: commit, dirty, engineVersion: 'not-run', schemaVersion: 'not-run', specificationSha256: sha(JSON.stringify(EVAL_CASES)),
@@ -133,7 +112,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
         await persist();
       }
     } finally { await server?.close(); }
-    manifest.artifacts.after = await artifactHashes(build?.appDirectory, build?.nodeWasm, build?.mcpPackageDirectory, build?.tarball);
+    manifest.artifacts.after = await hashFrozenArtifacts(build);
     manifest.artifacts.stable = JSON.stringify(before) === JSON.stringify(manifest.artifacts.after);
     for (const lane of lanes) {
       const capabilities = lane.cases.find(score => score.evidence.capabilities !== undefined)?.evidence.capabilities;

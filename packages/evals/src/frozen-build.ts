@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, stat, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { verifyReusedWasm, type ReusedWasm } from './frozen-reuse';
@@ -10,6 +11,8 @@ export interface FrozenBuild {
   mcpEntry: string;
   nodeWasm: string;
   tarball: string;
+  dependencyDirectory: string;
+  lockfile: string;
   commands: string[];
   wasmProvenance?: Record<string, unknown>;
   close(): Promise<void>;
@@ -46,6 +49,8 @@ export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm):
       mcpEntry: path.join(installed, entry),
       nodeWasm: path.join(installed, 'dist/wasm-node/femlab_engine_wasm_bg.wasm'),
       tarball,
+      dependencyDirectory: path.join(directory, 'node_modules'),
+      lockfile: path.join(directory, 'package-lock.json'),
       commands,
       ...(wasmProvenance ? { wasmProvenance } : {}),
       close: () => rm(directory, { recursive: true, force: true }),
@@ -54,4 +59,33 @@ export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm):
     await rm(directory, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function fileHash(target: string | undefined): Promise<string> {
+  if (!target) return 'not-built';
+  if ((await stat(target)).isFile()) return createHash('sha256').update(await readFile(target)).digest('hex');
+  const files: string[] = [];
+  const walk = async (directory: string): Promise<void> => {
+    for (const name of (await readdir(directory)).sort()) {
+      const full = path.join(directory, name);
+      if ((await stat(full)).isDirectory()) await walk(full);
+      else files.push(full);
+    }
+  };
+  await walk(target);
+  const digest = createHash('sha256');
+  for (const file of files) {
+    const contentHash = createHash('sha256').update(await readFile(file)).digest('hex');
+    digest.update(path.relative(target, file)).update('\0').update(contentHash).update('\0');
+  }
+  return digest.digest('hex');
+}
+
+/** Include actual isolated externals and their resolution lock, not only the MCP package. */
+export async function hashFrozenArtifacts(build: FrozenBuild | null) {
+  const [app, nodeWasm, mcpPackage, mcpTarball, mcpDependencies, mcpLock] = await Promise.all([
+    fileHash(build?.appDirectory), fileHash(build?.nodeWasm), fileHash(build?.mcpPackageDirectory),
+    fileHash(build?.tarball), fileHash(build?.dependencyDirectory), fileHash(build?.lockfile),
+  ]);
+  return { app, nodeWasm, mcpPackage, mcpTarball, mcpDependencies, mcpLock };
 }

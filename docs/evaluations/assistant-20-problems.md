@@ -85,8 +85,8 @@ prompt text and scorer; host-specific shortcuts are forbidden.
 
 The frozen manifest records:
 
-- git commit and dirty state, engine/schema version, SHA-256 of the app assets, Node wasm and MCP
-  package before and after the run, their stability, plus the twenty-case specification hash;
+- git commit and dirty state, engine/schema version, SHA-256 of the app assets, Node wasm, MCP
+  package, complete isolated dependency tree and installation lock before and after the run, their stability, plus the twenty-case specification hash;
 - host (`browser` or `mcp`), OS/runtime/Chromium versions, CPU/GPU mode and engine thread count;
 - provider, exact model identifier, service tier/reasoning controls, maximum tokens/rounds and
   timeout, with start/end timestamps;
@@ -144,7 +144,7 @@ Checkpoint JSON is written atomically before generation reservations, after sett
 after every case. A case or request still in flight cannot be resumed, and unknown billing
 requires a new run. At a clean case boundary, `FEMLAB_EVAL_RESUME=/absolute/path/run.json`
 reuses only the exact completed prefix under identical source, provider configuration,
-case specification and app/MCP artifact hashes. Earlier failures remain scored; they are
+case specification and app/MCP artifact hashes, including isolated external dependencies and their resolution lock. Earlier failures remain scored; they are
 not replaced by retries. The previous JSON is preserved before resumption. A resource or
 budget interruption remains explicit and cannot satisfy a host's quality gate. Default
 output names include the run timestamp; existing outputs require explicit resumption.

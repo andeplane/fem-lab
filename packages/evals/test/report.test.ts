@@ -6,7 +6,7 @@ import { EVAL_CASES } from '../src/cases';
 import type { LaneResult } from '../src/types';
 
 it('never presents an unavailable or interrupted lane as a measured zero-percent quality score', () => {
-  const hashes = { app: 'not-built', nodeWasm: 'not-built', mcpPackage: 'not-built', mcpTarball: 'not-built' };
+  const hashes = { app: 'not-built', nodeWasm: 'not-built', mcpPackage: 'not-built', mcpTarball: 'not-built', mcpDependencies: 'not-built', mcpLock: 'not-built' };
   const manifest: FrozenManifest = {
     gitCommit: 'fixture', dirty: false, engineVersion: 'not-run', schemaVersion: 'not-run', specificationSha256: 'fixed-cases',
     artifacts: { before: hashes, after: hashes, stable: true }, provenance: { source: 'not-run', buildCommands: [], appServer: 'not-run', mcp: 'not-run' },

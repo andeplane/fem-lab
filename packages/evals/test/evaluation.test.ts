@@ -442,8 +442,8 @@ describe('lane orchestration and artifacts', () => {
       manifest: {
         gitCommit: 'abc', dirty: false, engineVersion: '0', schemaVersion: '1', specificationSha256: 'sha',
         artifacts: {
-          before: { app: 'a', nodeWasm: 'w', mcpPackage: 'm', mcpTarball: 't' },
-          after: { app: 'a', nodeWasm: 'w', mcpPackage: 'm', mcpTarball: 't' }, stable: true,
+          before: { app: 'a', nodeWasm: 'w', mcpPackage: 'm', mcpTarball: 't', mcpDependencies: 'd', mcpLock: 'l' },
+          after: { app: 'a', nodeWasm: 'w', mcpPackage: 'm', mcpTarball: 't', mcpDependencies: 'd', mcpLock: 'l' }, stable: true,
         },
         provenance: { source: 'built-from-clean-HEAD', buildCommands: [], appServer: 'runner-loopback', mcp: 'isolated-tarball-install' },
         provider: 'openai', model: 'model', configuration: {},
