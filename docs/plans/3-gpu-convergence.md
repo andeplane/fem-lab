@@ -93,3 +93,26 @@ the integrated #740 affine recovery/replay case and the five bounded numerical w
 Whole-engine software-GPU coverage remains pending. A separately authorized, resource-bound
 66k diagnostic attempt may now collect the previously erased cause without changing its
 original assertions; a failed diagnostic is retained and never treated as convergence.
+
+## Metal command-buffer budget
+
+The separately authorized `63c15b30` 66k diagnostic remained RED: the first batched
+readback retained `validation=Some` (invalid staging buffer), `poll=Ok(QueueEmpty)`,
+an unawaited mapping and `device_loss=Some((Unknown,"Device is lost"))`. The actual
+hierarchy counts matched `12aea784`. No resource cap triggered and no convergence
+result was produced. The raw HAL warning was not captured by the test binary.
+
+Shipped-source cardinality establishes a concrete backend limit: each fine level records
+22 compute passes plus its child; four fine levels and the C/CT leaf make 90. Four CG
+passes make 94 per iteration, hence 2350 passes in the unchanged 25-iteration batch.
+wgpu-core 30 records a native body and transition buffer per pass. At least 4700 native
+buffers cannot fit Metal HAL's 4096 outstanding-unsubmitted-buffer guard, which reports
+device loss before submission. The proposed repair records the complete ordered V-cycle
+inside one compute pass, retaining every binding, dispatch, kernel and numerical setting.
+Actual bounded Metal witnesses and the existing 66k test, followed by software-GPU
+validation and 100% coverage, remain the acceptance gates. No 780k allocation is authorized.
+
+The pass-fusion source checkpoint compiled and passed focused Clippy/formatting and the
+same eight bounded real Metal tests. Independent source review confirmed wgpu's per-dispatch
+usage validation/barriers when storage buffers change read/write roles inside a pass.
+The original 66k regression and software-GPU/whole-engine coverage remain pending.

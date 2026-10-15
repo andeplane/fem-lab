@@ -281,8 +281,7 @@ impl Gather {
         Self { binds }
     }
 
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::ComputePipeline) {
-        let mut pass = encoder.begin_compute_pass(&Default::default());
+    fn encode(&self, pass: &mut wgpu::ComputePass<'_>, pipeline: &wgpu::ComputePipeline) {
         pass.set_pipeline(pipeline);
         for (bind, grid) in &self.binds {
             pass.set_bind_group(0, bind, &[]);
@@ -350,7 +349,11 @@ impl DevicePlan {
     }
 
     pub(super) fn encode(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.node.encode(encoder, &self.spmv, &self.vectors);
+        // Dispatches retain their exact order and storage dependencies inside one pass.
+        // A pass per kernel makes a five-level cycle exceed Metal's outstanding native
+        // command-buffer budget before the unchanged 25-iteration submission can finish.
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        self.node.encode(&mut pass, &self.spmv, &self.vectors);
     }
 }
 
@@ -484,12 +487,11 @@ impl Node {
     }
 
     fn vector(
-        encoder: &mut wgpu::CommandEncoder,
+        pass: &mut wgpu::ComputePass<'_>,
         step: &VectorStep,
         grid: [u32; 2],
         pipelines: &[wgpu::ComputePipeline],
     ) {
-        let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipelines[step.pipeline]);
         pass.set_bind_group(0, &step.bind, &[]);
         pass.dispatch_workgroups(grid[0], grid[1], 1);
@@ -497,31 +499,31 @@ impl Node {
 
     fn encode(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        pass: &mut wgpu::ComputePass<'_>,
         spmv: &wgpu::ComputePipeline,
         pipelines: &[wgpu::ComputePipeline],
     ) {
         match self {
             Self::Coarse { c, ct, .. } => {
-                c.encode(encoder, spmv);
-                ct.encode(encoder, spmv);
+                c.encode(pass, spmv);
+                ct.encode(pass, spmv);
             }
             Self::Fine { a, restrict, prolong, clear, smooth, residual, add, child, grid, .. } => {
-                Self::vector(encoder, clear, *grid, pipelines);
+                Self::vector(pass, clear, *grid, pipelines);
                 for step in smooth {
-                    a.encode(encoder, spmv);
-                    Self::vector(encoder, step, *grid, pipelines);
+                    a.encode(pass, spmv);
+                    Self::vector(pass, step, *grid, pipelines);
                 }
-                a.encode(encoder, spmv);
-                Self::vector(encoder, residual, *grid, pipelines);
-                restrict.encode(encoder, spmv);
-                child.encode(encoder, spmv, pipelines);
-                prolong.encode(encoder, spmv);
-                Self::vector(encoder, add, *grid, pipelines);
+                a.encode(pass, spmv);
+                Self::vector(pass, residual, *grid, pipelines);
+                restrict.encode(pass, spmv);
+                child.encode(pass, spmv, pipelines);
+                prolong.encode(pass, spmv);
+                Self::vector(pass, add, *grid, pipelines);
                 // The reverse polynomial is the adjoint of the pre-smoothing sequence.
                 for step in smooth.iter().rev() {
-                    a.encode(encoder, spmv);
-                    Self::vector(encoder, step, *grid, pipelines);
+                    a.encode(pass, spmv);
+                    Self::vector(pass, step, *grid, pipelines);
                 }
             }
         }

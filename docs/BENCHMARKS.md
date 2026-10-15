@@ -3158,6 +3158,15 @@ same structured `internal` error. Actual invalid-copy and device-destruction tes
 those diagnostics separately from numerical oracles. No residual, iteration or batch
 policy changes accompany this diagnostic; the 66k and 780,300-equation gates remain open.
 
+The `63c15b30` diagnostic captured an actual `Unknown` device loss before the first
+batched readback. Its five-level hierarchy recorded 90 compute passes per V-cycle;
+with four surrounding CG passes, the 25-iteration batch required 2350 compute passes.
+wgpu 30 records a native body and transition command buffer per pass, exceeding Metal's
+4096-outstanding-buffer limit before submission. The scheduling repair records each
+complete V-cycle in one compute pass with identical dispatch order, bindings and arithmetic.
+The same bounded independent witnesses and the original 66k assertions gate this repair;
+the dispatch count is not a substitute for the numerical tests. Large-case acceptance remains open.
+
 ## Fully prescribed affine Hex8 GPU solve (#740)
 
 `all_prescribed_affine_cube_gpu_preserves_recovery_and_journal` in `gpu_kernels.rs`
