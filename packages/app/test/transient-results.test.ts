@@ -14,6 +14,7 @@ const catalogue: FramesResult = {
   frames: [0, 0.2, 1].map((timeSi, index) => ({ index, timeSi, time: { value: timeSi, unit: 's' } })),
 };
 const summary: ResultSummary = {
+  modeCount: 0,
   resultId: 'result-1', reactionQuantity: 'force', step: 'motion', revision: 1, stale: false, solver: 'explicit', iterations: 5, residual: 0, timeMs: 1,
   extremes: [{ field: 'displacement', component: 1, min: metres(10), max: metres(10), minAt: origin, maxAt: origin }],
   reactions: [], appliedTotal: [{ value: 0, unit: 'N' }, { value: 0, unit: 'N' }, { value: 0, unit: 'N' }], balance: 0,

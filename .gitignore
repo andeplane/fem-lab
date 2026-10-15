@@ -11,3 +11,10 @@ packages/registry/src/generated/script-declarations*.json
 
 /release/
 /tools/__pycache__/
+/firebase-debug.log
+/infra/google/__pycache__/
+/infra/stripe/__pycache__/
+
+/.firebase/
+/vendor/step-converter/corresponding-source.tar.gz
+/packages/app/public/third-party/step-converter/

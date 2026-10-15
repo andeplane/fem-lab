@@ -1,0 +1,59 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "ordinary constant extreme centroid"
+  },
+  {
+    "cmd": "model.setUnits",
+    "units": {
+      "length": "m"
+    }
+  },
+  {
+    "cmd": "geometry.addLine",
+    "name": "beam",
+    "points": [
+      [
+        {
+          "value": 1.7976931348623157e+308,
+          "unit": "m"
+        },
+        "0 m",
+        "0 m"
+      ],
+      [
+        {
+          "value": 1.7976931348623157e+308,
+          "unit": "m"
+        },
+        "1 m",
+        "0 m"
+      ],
+      [
+        {
+          "value": 1.7976931348623157e+308,
+          "unit": "m"
+        },
+        "2 m",
+        "0 m"
+      ]
+    ],
+    "kind": "truss",
+    "divisions": 1
+  },
+  {
+    "cmd": "mesh.set",
+    "mesher": {
+      "kind": "lattice",
+      "size": "1 m"
+    }
+  },
+  {
+    "cmd": "geometry.nameRegion",
+    "name": "whole",
+    "where": {
+      "kind": "body",
+      "name": "beam"
+    }
+  }
+]

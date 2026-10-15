@@ -125,6 +125,103 @@ try {
     engine.free(); skipped.free();
     console.log(`${name}: full-solve native (1/4 threads), Node WASM, exact hashes/times and analytical fields/probes/paths passed`);
   }
+  // #286: two immutable solves, unequal retained schedules/meshes and explicit sampled
+  // differences cross the same checked batch, portable Journal and native CLI routes.
+  for (const kind of ['heat', 'explicit-2d', 'explicit-3d']) for (const order of [1, 2]) for (const nx of [2, 4]) {
+    const name = `comparison-${kind}-o${order}-n${nx}`, heat = kind === 'heat';
+    const recorder = new Engine(1), replay = new Engine(1), skipped = new Engine(1);
+    try {
+      const commands = JSON.parse(readFileSync(path.join(root, `tools/fixtures/transient-${kind}.json`)));
+      const mesh = commands.find(c => c.cmd === 'mesh.set'), step = commands.find(c => c.cmd === 'step.add');
+      mesh.order = order;
+      if (mesh.mesher.kind === 'mapped') mesh.mesher.blocks[0].n[0] = nx;
+      else mesh.mesher.size.nx = nx;
+      if (heat) Object.assign(step, { dt: '0.2 s', tEnd: '1 s', amplitude: { kind: 'table', t: ['0 s', '1 s'], value: [0, 1] } });
+      commands.find(c => c.cmd === 'solve.run').solver = 'cpu-direct';
+      for (const command of commands) await recorder.dispatch(JSON.stringify(command));
+      const left = query(recorder, { query: 'query.result' }).resultId;
+      await recorder.dispatch(JSON.stringify({ cmd: 'model.setUnits', units: { temperature: 'K', time: 's' } }));
+      if (heat) {
+        // Half overlap makes unavailable coverage observable, without changing the uniform oracle.
+        await recorder.dispatch(JSON.stringify({ cmd: 'geometry.addBox', name: 'bar', size: ['1 m', '0.1 m', '0.1 m'], at: ['0.5 m', '0 m', '0 m'] }));
+        await recorder.dispatch(JSON.stringify({ cmd: 'load.heatSource', name: 'source', bodies: ['bar'], q: '12 W/m^3' }));
+      }
+      const nextMesh = structuredClone(mesh);
+      if (nextMesh.mesher.kind === 'mapped') nextMesh.mesher.blocks[0].n[0] = 2 * nx;
+      else nextMesh.mesher.size.nx = 2 * nx;
+      await recorder.dispatch(JSON.stringify(nextMesh));
+      const nextStep = { ...step, ...(heat ? { dt: '0.4 s', tEnd: '0.9 s', outputEvery: 1, amplitude: { kind: 'table', t: ['0 s', '0.9 s'], value: [0, 1.8] } }
+        : { tEnd: '1.7 ms', dtFactor: 0.9, outputEvery: 2 }) };
+      await recorder.dispatch(JSON.stringify(nextStep));
+      await recorder.dispatch(JSON.stringify({ cmd: 'solve.run', step: step.name, solver: 'cpu-direct' }));
+      const right = query(recorder, { query: 'query.result' }).resultId;
+      const fileBefore = JSON.parse(recorder.export_file()), entries = fileBefore.journal.entries, hashes = entries.map(e => e.hashAfter);
+      const file = path.join(scratch, `${name}.json`); writeFileSync(file, JSON.stringify(entries));
+      assert.deepEqual(JSON.parse(await replay.replay_hashes(JSON.stringify(entries), false, true)), hashes);
+      const field = heat ? 'temperature' : 'displacement', component = heat ? 0 : 1;
+      const ids = [left, right], histories = ids.map(resultId => query(recorder, { query: 'query.frames', resultId }));
+      const operand = (resultId, sample) => ({ resultId, field, component, ...(sample ? { sample } : {}) });
+      const samples = [
+        [operand(left, { kind: 'frame', index: 1 }), operand(right, { kind: 'frame', index: 1 })],
+        [operand(left, { kind: 'frame', index: histories[0].frames.length - 1 }), operand(right, { kind: 'frame', index: histories[1].frames.length - 1 })],
+        [operand(left), operand(right)],
+        [operand(left, { kind: 'frame', index: 1 }), operand(right)],
+        [operand(left, { kind: 'frame', index: 1 }), operand(left, { kind: 'frame', index: histories[0].frames.length - 1 })],
+        ...(heat ? [[operand(left, { kind: 'time', time: '400 ms', sampling: 'exact' }), operand(right, { kind: 'time', time: '450 ms', sampling: 'nearest' })]] : []),
+      ];
+      const queries = ids.flatMap(resultId => [{ query: 'query.frames', resultId }, { query: 'query.surface', resultId }]);
+      for (let side = 0; side < ids.length; side++) for (const stamp of histories[side].frames) queries.push({ query: 'query.frame', resultId: ids[side], field, sample: { kind: 'frame', index: stamp.index } });
+      for (const [a, b] of samples) for (const onto of ['left', 'right']) for (const reverse of [false, true]) queries.push({ query: 'query.difference', left: reverse ? b : a, right: reverse ? a : b, onto });
+      const expected = queries.map(q => query(recorder, q));
+      const exact = (id, time) => heat ? (id === left ? 1 : 2) * time : -4.905 * time * time;
+      const tolerance = heat ? 1e-10 : 1e-12;
+      const oracle = response => {
+        if (response.sample) {
+          const value = exact(response.sample.resultId, response.sample.frame.timeSi);
+          response.values.forEach((v, i) => close(v, i % 3 === component ? value : 0, tolerance, `${name}: primary closed form ${i}`));
+        } else if (response.left) {
+          const actualTime = side => side.sample?.frame.timeSi ?? histories[ids.indexOf(side.resultId)].frames.at(-1).timeSi;
+          const value = exact(response.left.resultId, actualTime(response.left)) - exact(response.right.resultId, actualTime(response.right));
+          response.values.forEach((v, i) => { if (v !== null) close(v, value, tolerance, `${name}: sampled difference closed form ${i}`); });
+          assert.equal(response.coverage.outsideNodes.length, response.values.filter(v => v === null).length);
+          if (heat && response.left.resultId !== response.right.resultId) assert.ok(response.coverage.outsideNodes.length > 0);
+        }
+      };
+      expected.forEach(oracle);
+      for (const q of queries) {
+        const actual = query(replay, q), wanted = query(recorder, q);
+        const { values, ...metadata } = actual, { values: recordedValues, ...recordedMetadata } = wanted;
+        assert.deepEqual(metadata, recordedMetadata);
+        if (values) values.forEach((value, i) => value === null ? assert.equal(recordedValues[i], null) : close(value, recordedValues[i], tolerance, `${name}: WASM replay ${i}`));
+        oracle(actual);
+      }
+      for (const threads of [1, 4]) {
+        assert.deepEqual(run(file, ['--hashes'], threads).trim().split(/\r?\n/), hashes);
+        const results = JSON.parse(run(file, queries.flatMap(q => ['--query', JSON.stringify(q)]), threads));
+        for (let i = 0; i < results.length; i++) {
+          const { values, ...metadata } = results[i], { values: wasmValues, ...wasmMetadata } = expected[i];
+          assert.deepEqual(metadata, wasmMetadata, `${name}: native${threads} metadata${i}`);
+          if (values) values.forEach((value, j) => value === null ? assert.equal(wasmValues[j], null) : close(value, wasmValues[j], tolerance, `${name}: native${threads} values${i}:${j}`));
+          oracle(results[i]);
+        }
+      }
+      const transferQuery = queries.find(q => q.query === 'query.difference');
+      for (let i = 0; i < 2; i++) {
+        const staged = recorder.query_transfer(JSON.stringify(transferQuery)), original = Array.from(staged.values), validity = Array.from(staged.valid);
+        assert.ok(staged.values instanceof Float64Array); assert.ok(staged.valid instanceof Uint8Array);
+        const received = structuredClone(staged, { transfer: [staged.values.buffer, staged.valid.buffer] });
+        assert.equal(staged.values.buffer.byteLength, 0); assert.equal(staged.valid.buffer.byteLength, 0);
+        received.values.fill(99); received.valid.fill(0);
+        const fresh = recorder.query_transfer(JSON.stringify(transferQuery)); assert.deepEqual(Array.from(fresh.values), original); assert.deepEqual(Array.from(fresh.valid), validity);
+      }
+      assert.deepEqual(JSON.parse(recorder.export_file()), fileBefore);
+      await skipped.replay_hashes(JSON.stringify(entries), true, true);
+      const unavailable = { query: 'query.difference', left: samples[0][0], right: samples[0][1], onto: 'left' };
+      assert.throws(() => query(skipped, unavailable), error => error.code === 'not-found');
+      assert.throws(() => run(file, ['--skip-solves', '--query', JSON.stringify(unavailable)]), error => JSON.parse(String(error.stderr)).code === 'not-found');
+      console.log(`${name}: immutable sampled identities/times, analytical null coverage, transfer ownership and full-solve native1/4/WASM replay passed`);
+    } finally { recorder.free(); replay.free(); skipped.free(); }
+  }
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

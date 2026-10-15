@@ -1897,6 +1897,47 @@ fn merge_coincident_welds_joints_keeps_the_lowest_id_and_leaves_a_clean_mesh_alo
     assert_eq!(spanning.blocks[0].conn, [0, 1]);
 }
 
+#[test]
+fn merge_coincident_clamps_extreme_grid_neighbours_without_changing_weld_decisions() {
+    let tol = 1e-9;
+    for axis in 0..3 {
+        for translation in [f64::MAX, -f64::MAX] {
+            for direction in [-1.0, 1.0] {
+                // The first two points are 1.2 tol apart and remain distinct. Point 2 lies
+                // within 0.6 tol of both; point 0 must win even if point 1's cell is visited first.
+                let points: Vec<_> = [0.6 * tol, -0.6 * tol, 0.0, 3.0 * tol, 0.6 * tol]
+                    .into_iter()
+                    .map(|along| {
+                        let mut p = [0.0; 3];
+                        p[axis] = translation;
+                        p[(axis + 1) % 3] = along * direction;
+                        p
+                    })
+                    .collect();
+                let mut mesh = truss(&points, &[[0, 1], [1, 3], [2, 3], [4, 3]], 1);
+                mesh.node_sets.insert("all".into(), vec![0, 1, 2, 3, 4]);
+                mesh.node_sets.insert("cluster".into(), vec![0, 2, 4]);
+                mesh.elem_sets.insert("members".into(), vec![1, 3]);
+                let element_sets = mesh.elem_sets.clone();
+                let faces = mesh.face_sets.clone();
+                merge_coincident(&mut mesh, tol);
+                mesh.validate().unwrap();
+                assert_eq!(mesh.coords, [points[0], points[1], points[3]].concat());
+                assert_eq!(mesh.blocks[0].conn, [0, 1, 1, 2, 0, 2, 0, 2]);
+                assert_eq!(mesh.node_sets["all"], [0, 1, 2]);
+                assert_eq!(mesh.node_sets["cluster"], [0]);
+                assert_eq!(mesh.node_sets["p2"], [0]);
+                assert_eq!(mesh.node_sets["p3"], [2]);
+                assert_eq!(mesh.elem_sets, element_sets);
+                assert_eq!(mesh.face_sets, faces);
+                let welded = mesh.clone();
+                merge_coincident(&mut mesh, tol);
+                assert_eq!(mesh, welded, "border scans are deterministic and idempotent");
+            }
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
     /// Finite inputs can overflow when multiplied or added. No such point may reach weka.

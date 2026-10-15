@@ -58,6 +58,7 @@ function retarget(node, rename) {
 export function mergeSchema(doc) {
   const defs = {};
   const properties = {};
+  const rootNames = new Set(Object.values(TOP));
   for (const [key, name] of Object.entries(TOP)) {
     // eslint-disable-next-line no-unused-vars
     const { $schema, title, $defs = {}, ...body } = doc[key];
@@ -69,7 +70,10 @@ export function mergeSchema(doc) {
     do {
       changed = false;
       for (const [k, v] of Object.entries($defs)) {
-        if (!rename[k] && defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(retarget(v, rename))) {
+        // An earlier table may nest a later root (query.document contains ModelFile).
+        // Reserve that canonical name before transitive dependency prefixes can claim it.
+        const futureRoot = k !== name && rootNames.has(k) && !defs[k];
+        if (!rename[k] && (futureRoot || (defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(retarget(v, rename))))) {
           rename[k] = `${name}_${k}`;
           changed = true;
         }

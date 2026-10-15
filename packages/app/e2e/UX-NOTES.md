@@ -1,6 +1,8 @@
 # UX / QA pass against `docs/design/README.md`
 
-The app was driven through every state the design names, in a real Chromium at 1440 × 900 and
+This original mechanical QA record predates the thermal production pass below; its defect and
+follow-up status describes that earlier pass. The app was driven through the mechanical states
+then named by the design, in real Chromium at 1440 × 900 and
 1024 × 700, and each state was put beside the prototype (`docs/design/FEM Lab.dc.html`, served
 statically and screenshotted through the same driver). States covered: start (loading and
 ready), the ⌘K palette from the start screen, the examples gallery, an empty Model, a Body with
@@ -32,7 +34,9 @@ modal, the palette in the workspace, the Assistant drawer, the tutorial panel, s
 
 ### Found only by driving a modal and a transient Step (`e2e/postprocess.spec.ts`)
 
-Every state above was a static Step, because that is all the gallery had. The two fixtures
+Every state in that original pass was a static Step, because that was all the gallery had then.
+The later [thermal production pass](#thermal-production-pass-issue-473) covers the current heat
+gallery and retained temperature frames. The two original fixtures
 under `e2e/fixtures/` found four more.
 
 | # | What | Where | Severity | Status |
@@ -72,8 +76,8 @@ under `e2e/fixtures/` found four more.
 - **Frequencies table** — one row per natural frequency of a modal Step, with its period and a
   `view.showField { field: "mode:k" }` chip.
 - **Mode-shape animation** — ▶ / ❚❚ and a phase scrub on the deformation bar. A selected mode
-  is drawn as its own deformation and swept through `A·sin(2πt)`. Transient history remains a
-  plot until retained frame playback can show the actual fields.
+  is drawn as its own deformation and swept through `A·sin(2πt)`. At that pass, transient
+  history remained a plot; the thermal production pass below verifies the now-available retained-frame playback.
 - **Derived fields** — `n_y = f_y / σ_vM` and `σ/f_y`, computed in the app from von Mises and
   the smallest positive `yield` in `query.model`'s current material rows, converted to SI
   from their display stress units. The legend opens clamped at 1 for a utilisation and
@@ -88,3 +92,72 @@ under `e2e/fixtures/` found four more.
 
 - GIF and true transient-frame video wait for a GIF encoder and the transient frame playback
   path respectively; the app does not advertise either as available.
+
+## Thermal production pass (issue #473)
+
+This extends the original mechanical QA record with `heat-steady` and `heat-transient` states.
+The [thermal handoff](../../../docs/design/README.md#thermal-flow-production) contains the exact
+T3 recipe and current warning strings. Validation used the production build of main
+`01872918015b7b7e53d09f92a6931dd64aa011da`, Chromium's `cpu` Playwright project, one worker and
+1440 × 900. It used the complete CI-produced web/Node WASM artifact from run `38593183569`
+(artifact `11909261287`, SHA256
+`ad8657ac2b4af9b177cdcb089a49fcca748c6eb95e515f9022d8bc26dbe517d9`). Engine, geometry, WASM adapter
+and generated registry source were compared to that artifact's source
+`d1f4f7960b9bb0188d6a73d8a25f3e9cd8dcc58e` before building; they were identical. No engine rebuild
+or new numerical/convergence claim is part of this documentation pass.
+
+| Driven state | Observed screen and checked outcome |
+|---|---|
+| T3 ready | Opened **Transient heat in a bar (NAFEMS T3)** through Examples. Material row showed `ρ 7200 kg/m^3`, `k 35 W/(m K)`, `cp 440.5 J/(kg K)`; stored `E`/`ν` remained faint. Step row read `heat-transient · needs k, ρ, cp · gives T, reaction power, stored-energy rate · 2 constraints · 0 loads`. No blocker appeared despite an empty Loads group. |
+| Missing k | Replaced `slab` with its saved definition minus `k`. Banner showed W-1103 and `heat-transient Step 'transient' needs finite positive k; use material.add with k`; Solve was disabled. Restoring the original Material enabled it. |
+| T3 solved | Clicked the actual Solve button. It became `Solved · rev N`; the bottom `results` tab showed thermal reaction `Power W`, `Storage rate` and `Net applied = removed + storage`. Legend showed `T`, `K`, `transient · 32 s`; the transient temperature viewer had no exaggeration input. |
+| T3 probe/history | Probed `80 mm, 2.5 mm, 2.5 mm` through the Results input/button. The visible readout was `temperature 36.79 K · element 15 · 32 s`, within 0.5 K of the 36.60 temperature-rise reference. `query.result` history and `query.frames` both contained exactly 0, 8, 16, 24, 32 s. |
+| Actual retained frames | Home/End on the native retained-frame slider selected 0/32 s. The displayed time, legend and existing probe followed the selection; the initial probe read 0 K. These are retained engine fields, separate from the sinusoidal mode-shape animation in the original pass. |
+| Steady ready | Built a 1 m ×100 mm ×100 mm bar with only `k: 10 W/(m K)`, lattice 4×1×1, prescribed 0/100 K at xmin/xmax and both Constraints active. Step row read `heat-steady · needs k · gives T, reaction power · 2 constraints · 0 loads`; no mechanical support/load/property blocker appeared. |
+| Steady missing reference | Removed both Constraints from the Step's active list while keeping their definitions. Banner showed W-1301: `heat-steady needs a temperature reference in this Step; use constraint.temperature or load.convection on the analysed Body`. Restoring the active list allowed Solve. |
+| Steady Results/stale | Results showed scalar `T` in `K` and `Power W`; reaction rows were +10 W/−10 W, matching the bar's conduction power. Steady history was absent. Editing `k` to 20 W/(m K) retained the Result with `stale: true`, a stale Results header and `Re-solve` action. |
+
+The T3 fixture models **temperature rise in K from a zero reference**. Its 36.79 K readout is
+compared with the published 36.60 °C rise, not converted to an absolute Celsius temperature.
+Removing/restoring `k` adds Journal entries, so the gallery's benchmark comparison correctly
+becomes informative for the edited Model; the physical parameters were restored for the probe.
+
+Two focused browser cases passed (T3 2.8 s, steady 3.0 s), with no uncaught `pageerror` (the common
+browser fixture fails on one). An initial harness used an unknown tab Command and then a
+capitalized tab selector; those were corrected to the real lowercase `results` tab. A subsequent
+harness assertion incorrectly expected a serialized empty steady history array; the actual wire
+omits it, and the assertion was corrected. These failures were verification-script errors.
+Production build passed. Screenshots, the exact local QA script, logs and runtime provenance are
+archived independently in `/private/tmp/fem-lab-473-evidence`; this pass did not repeat the old
+1024 px or software-adapter cases, or audit unrelated Assistant/export/report UI.
+
+Limit observed in this dated pass: [#573](https://github.com/andeplane/fem-lab/issues/573) tracks generic deformation
+chrome still shown for steady scalar temperature (`exaggeration`, `steady · true scale`) and
+drawing-scale copy in thermal Results headers. Temperature is drawn on the undeformed mesh;
+these captions do not establish a displacement Result. The transient temperature frame controls
+already show real retained time. The issue owns the UI fix; this pass only records it.
+
+### Scalar Result controls resolved — #573 (2026-10-14)
+
+The follow-up uses the selected retained Result's displacement or mode-shape capability. A
+temperature-only steady Result now shows `steady` in the legend, without a deformation bar,
+displacement tooltip or drawing-scale clause in the Results header. Transient temperature keeps
+the retained-frame slider, displayed physical time, playback and speed controls; its legend shows
+the Step and current time without deformation wording. Mechanical Results keep exaggeration and
+true scale, including a temperature contour when that retained solve also contains displacement.
+
+The three focused production Chromium cases passed with one worker and no retries. The steady
+bar's independent mid-length probe remained 50 K for prescribed 0/100 K ends; transient Home/End
+selected the first/last retained engine frames; the mechanical true-scale button produced native
+slider value 1 with matching legend/header and unchanged Result. All three kept the Journal
+unchanged under view controls. Six UI cases additionally cover coupled temperature/displacement,
+retained modes and switching from a mechanical to a temperature-only solve; 139 focused UI tests,
+app typecheck and production build passed.
+
+This verification used main `9614fcf1` plus the #573 UI patch and the separately owned
+[#578](https://github.com/andeplane/fem-lab/issues/578) native range-granularity fix. The complete
+optimized CPU WASM bindings came from source `1d3952f6`, CI `38621438961`, artifact `11922835852`
+(WASM SHA-256 `a00271bffa1da852ba46951c8e6390a2ab65f63648e2d5da5dfece0ba2e21144`); all
+222 recorded engine/build/generated input hashes matched. Logs, screenshots and provenance are
+preserved in `/private/tmp/fem-lab-573-evidence`. This is focused Chromium evidence; the dated
+observations above remain the historical baseline.

@@ -585,3 +585,55 @@ fn run_answers_ordered_transient_queries_after_a_full_solve() {
         .code(2)
         .stderr(contains("cannot be used with"));
 }
+
+#[test]
+fn document_export_matches_the_public_checked_document_payload() {
+    let dir = scratch("document-export");
+    let source = dir.join("commands.json");
+    let mut commands: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../engine/tests/fixtures/document-display-overflow.json")).unwrap();
+    commands.pop(); // SI display is readable at candidate publication.
+    std::fs::write(&source, serde_json::to_vec(&commands).unwrap()).unwrap();
+    let read = femlab()
+        .arg("run")
+        .arg(&source)
+        .args(["--cpu", "--threads", "1", "--query", r#"{"query":"query.document"}"#])
+        .assert()
+        .success();
+    let replies: Vec<femlab_engine::query::ModelDocument> = serde_json::from_slice(&read.get_output().stdout).unwrap();
+    let document = &replies[0];
+    assert_eq!(document.revision as usize, commands.len());
+    assert_eq!(document.hash, document.file.journal.entries.last().unwrap().hash_after);
+    let output = dir.join("saved.femlab.json");
+    femlab()
+        .arg("export")
+        .arg(&source)
+        .args(["--format", "journal", "--cpu", "--threads", "1", "--out"])
+        .arg(&output)
+        .assert()
+        .success();
+    let saved = std::fs::read(&output).unwrap();
+    let file: femlab_engine::ModelFile = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(file, document.file);
+    assert_eq!(saved, (serde_json::to_string_pretty(&file).unwrap() + "\n").as_bytes());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn document_export_does_not_waive_unreadable_candidate_validation_or_overwrite_a_file() {
+    let dir = scratch("document-unreadable-candidate");
+    let source = dir.join("commands.json");
+    std::fs::write(&source, include_str!("../../engine/tests/fixtures/document-display-overflow.json")).unwrap();
+    let output = dir.join("keep.femlab.json");
+    std::fs::write(&output, "previous Model file").unwrap();
+    femlab()
+        .arg("export")
+        .arg(&source)
+        .args(["--format", "journal", "--cpu", "--threads", "1", "--out"])
+        .arg(&output)
+        .assert()
+        .code(1)
+        .stderr(contains("unit.display"));
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), "previous Model file");
+    std::fs::remove_dir_all(dir).unwrap();
+}

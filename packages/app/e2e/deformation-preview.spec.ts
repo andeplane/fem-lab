@@ -27,17 +27,20 @@ test('@cpu deformation previews while dragging and commits once on release', asy
   expect(await page.evaluate(() => (window as unknown as { scaleCommands: unknown[] }).scaleCommands)).toEqual([]);
   const during = await page.evaluate(() => window.fem.registry.query({ query: 'query.screenshot', legend: false }));
   expect(during).not.toEqual(before);
-  await expect(page.locator('.legend-sub')).toContainText(`×${scale}`);
+  // The legend displays four significant figures; the native range keeps the full value.
+  const shown = Number(/×([\d.e+-]+)/.exec((await page.locator('.legend-sub').textContent())!)![1]);
+  expect(shown).toBeCloseTo(scale, 1);
   await page.mouse.up();
   await expect.poll(() => page.evaluate(() => (window as unknown as { scaleCommands: unknown[] }).scaleCommands)).toEqual([{ cmd: 'view.setDeformScale', scale }]);
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   expect((await page.evaluate(() => window.fem.query.result({}))).stale).toBe(false);
-  // One Command per keypress, a step down. The step is read off the slider rather than assumed:
-  // the track grows with the drawn scale (#42), so it is not always 10.
-  const stepSize = Number(await slider.getAttribute('step'));
+  // One Command per native keypress, matching the acknowledged range value. Chromium chooses
+  // the keyboard increment when any numeric scale is representable on the track.
   await slider.press('ArrowLeft');
+  const afterKey = Number(await slider.inputValue());
+  expect(afterKey).toBeLessThan(scale);
   await expect.poll(() => page.evaluate(() => (window as unknown as { scaleCommands: unknown[] }).scaleCommands)).toEqual([
     { cmd: 'view.setDeformScale', scale },
-    { cmd: 'view.setDeformScale', scale: scale - stepSize },
+    { cmd: 'view.setDeformScale', scale: afterKey },
   ]);
 });

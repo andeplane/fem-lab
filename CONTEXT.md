@@ -47,9 +47,19 @@ sections, constraints, loads, steps and output requests. One document, one file.
 _Avoid_: project, scene, case, deck, job
 
 **Geometry**:
-The shapes being analysed, defined by a script of primitives and booleans and independent of
-any mesh.
+The shapes being analysed, defined by a script of primitives, sketches, booleans or imported
+triangles, independently of the finite-element Mesh. Solid evaluation produces a tagged
+triangle boundary; the Shape tree retains primitive and sketch parameters.
 _Avoid_: CAD, part file, solid model
+
+**B-rep**:
+A CAD boundary representation of surfaces, curves and their topology. The current analysis
+Model does not retain arbitrary imported B-rep or CAD feature history. General exact CAD
+editing is deferred under [ADR 0030](docs/adr/0030-exact-cad-editing-is-deferred-and-replay-stays-portable.md).
+
+**CAD hollowing**:
+Offsetting a solid's boundary and opening selected faces to form a wall of a chosen thickness;
+also called a CAD shell operation. It is distinct from the finite-element **Shell** below.
 
 **Body**:
 One connected region of the geometry, carrying a material and a name. Explicit Bodies own
@@ -177,6 +187,12 @@ _Avoid_: damping factor, loss factor, Q, viscosity
 The fields (displacement, stress, temperature, mode shapes) a Step produced, tied to the
 Mesh it ran on and to the Model revision it came from.
 _Avoid_: output, odb, solution
+
+**Static equilibrium ledger**:
+Retained SI force and moment accounting for a linear Cartesian static Result.
+All moments include force lever arms and rotational couples about the first
+retained Mesh node. Force and moment residuals have separate dimensioned scales
+and report verdicts; a force pass alone does not prove angular equilibrium.
 
 **Frame**:
 One retained primary nodal field at a physical time in a transient Result. Frame indices count
@@ -313,12 +329,34 @@ owned by an imported Mesher in the Model. Command coordinates carry length units
 coordinates are SI. Original labels distinguish coincident nodes; dense Mesh indices are
 only a deterministic mapping of participating nodes. Unused labels remain in the source
 and exact memberships, are explicitly reported, and have no FE DOFs or Result values. Replacing the source is `mesh.set`, never editing a
-mesh cache or individual generated Set. See ADR 0026 and issue #501.
+mesh cache or individual generated Set. Optional disjoint element regions are editable Body
+identities over shared connectivity: their material/section overrides live on the Model and
+otherwise inherit the source owner assignment. The source owner retains aggregate identity
+and the qualified source Set namespace. Disconnected components retain distinct labels.
+Optional provenance maps global labels to original instance/part-local labels and records
+supplied-file hashes. See ADR 0026, ADR 0032 and issues #501/#652.
+
+**STEP geometry conversion** — A host-only, on-demand conversion of declared-unit STEP
+surfaces to one tessellated geometry Body at explicit physical deflections. The checked
+Journal stores an ordinary `geometry.import` carrying SI-scaled ASCII triangles; replay
+needs neither the original STEP file nor OCCT. The conversion receipt is transient host
+state, not a second model definition. This differs from **Imported source**, which is
+authored FE connectivity and exact membership owned by an imported Mesher. Exact B-rep,
+CAD history, original face identifiers and CAD material assignments are not retained by
+STEP conversion. Durable face targets use geometric predicates. See ADR 0029 and #351.
 
 ## Hosted AI accounts
 
 **Account** — One verified Firebase identity mapped to service-owned status, entitlements
 and billing. It is not an engine Model, Session or Journal entry.
+
+**Merchant mode** — The explicit `pending`, `direct` or `managed` route for new paid
+purchases. It is independent of tax collection mode and does not convert an existing
+subscription. Pending cannot enable Checkout. See ADR 0032.
+
+**Purchase use** — An explicit personal/business choice for a new paid subscription,
+fixed for that subscription and preserved across tier changes. Catalog aliases map
+each use to the same tier allowance. It is independent of a tax ID. See ADR 0033.
 
 **AI token credit** — A versioned billing unit weighted by model and token category,
 separate from a raw LLM token or the browser's supplier-cost estimate.

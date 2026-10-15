@@ -43,6 +43,7 @@ const MODEL: ModelSummary = {
 };
 
 const RESULT: ResultSummary = {
+  modeCount: 0,
   resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
@@ -64,6 +65,7 @@ const RESULT: ResultSummary = {
 const BUCKLING_RESULT: ResultSummary = {
   ...RESULT,
   step: 'buckle',
+  modeCount: 2,
   frequencies: [],
   bucklingFactors: [17.3996, 17.3996],
 };
@@ -238,10 +240,23 @@ describe('the Results tab', () => {
 });
 
 describe('the probe readout', () => {
-  it('names the value, the node and the point in Results, and the face otherwise', () => {
-    expect(probeLine(null)).toBe('');
-    expect(probeLine({ face: 'beam.top', body: 'beam', point: [0, 0.412, 1.388], node: null, value: null })).toBe('beam.top · x 0.000 y 0.412 z 1.388 m');
-    expect(probeLine({ face: null, body: null, point: [0, 0, 0], node: 1342, value: 12.4 })).toBe('12.4 · node 1342 · x 0.000 y 0.000 z 0.000 m');
+  it('labels already-converted fields and converts the SI point into the chosen length unit', () => {
+    const mm = { value: 1000, unit: 'mm' };
+    const point: [number, number, number] = [1, 0.05, 0.1];
+    expect(probeLine(null, mm, null)).toBe('');
+    expect(probeLine({ face: null, body: null, point, node: 1342, value: -0.1901 }, mm, { label: 'uz', unit: 'mm' }))
+      .toBe('uz -0.1901 mm · node 1342 · x 1000 y 50 z 100 mm');
+    expect(probeLine({ face: null, body: null, point, node: 1342, value: 12.4 }, mm, { label: 'σ_vM', unit: 'MPa' }))
+      .toBe('σ_vM 12.4 MPa · node 1342 · x 1000 y 50 z 100 mm');
+    expect(probeLine({ face: null, body: null, point, node: 1, value: 0 }, { value: 1, unit: 'm' }, { label: 'εxx', unit: '' }))
+      .toBe('εxx 0 (1) · node 1 · x 1 y 0.05 z 0.1 m');
+  });
+
+  it('keeps geometry picks dimensional before a Result, including small coordinates', () => {
+    expect(probeLine({ face: 'beam.top', body: 'beam', point: [0, 0.412, 1.388], node: null, value: null }, { value: 1000, unit: 'mm' }, null))
+      .toBe('beam.top · x 0 y 412 z 1388 mm');
+    expect(probeLine({ face: null, body: 'beam', point: [0, 0.00001, -0.00002], node: null, value: null }, { value: 1, unit: 'm' }, null))
+      .toBe('beam · x 0 y 1.000e-5 z -2.000e-5 m');
   });
 });
 
@@ -300,6 +315,19 @@ function registryHarness(result: ResultSummary) {
   });
   return { registry, store, transport };
 }
+
+it('keeps the single Result metadata fresh without pushing a new solve into comparison-owned surfaces', async () => {
+  const { store, viewer, results, transport } = harness();
+  store.set({ resultComparison: { ...store.state.resultComparison, configuration: { mode: 'sideBySide', left: { resultId: 'old', field: 'displacement' }, right: { resultId: 'other', field: 'vonMises' } } } });
+  await results.refresh(true);
+  expect(store.state.result?.resultId).toBe(RESULT.resultId);
+  expect(viewer.current.setSurface).not.toHaveBeenCalled(); expect(transport.field).not.toHaveBeenCalled();
+  await results.onAck({ output: { type: 'solve' } });
+  expect(viewer.current.setSurface).not.toHaveBeenCalled();
+  store.set({ resultComparison: { ...store.state.resultComparison, configuration: { mode: 'single' } } });
+  await results.refresh(true);
+  expect(viewer.current.setSurface).toHaveBeenCalled(); expect(transport.field).toHaveBeenCalled();
+});
 
 describe('ResultsView', () => {
   it('pairs a dimmed stale Result with its retained mesh and restores current previews on mode changes', async () => {
@@ -386,7 +414,7 @@ describe('ResultsView', () => {
     expect(viewer.current.setSurface).toHaveBeenCalledTimes(calls);
   });
 
-  it('uses buckling factors when frequencies are empty for mode animation and fallback selection', async () => {
+  it('uses owned buckling modes for animation and fallback selection', async () => {
     expect(available('mode:99', BUCKLING_RESULT, false)).toBe('mode:1');
     const { store, viewer, results, transport } = harness(BUCKLING_RESULT);
     await results.animate({ step: 'buckle', mode: 2, playing: false, frame: 50 });
@@ -396,8 +424,20 @@ describe('ResultsView', () => {
     await expect(results.animate({ step: 'buckle', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
   });
 
+  it('refreshes a harmonic response after modal selection without fetching basis modes', async () => {
+    const harmonic = { ...RESULT, step: 'sweep', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const { store, results, transport } = harness(harmonic);
+    store.set({ fieldKey: 'mode:1' });
+    await results.refresh();
+    expect(store.state.fieldKey).toBe('vonMises');
+    expect(transport.field.mock.calls.every(call => call[1] !== 'mode:1')).toBe(true);
+    await expect(results.showField({ field: 'mode:1' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(results.animate({ step: 'sweep', mode: 1, playing: true })).rejects.toMatchObject({ code: 'not-found', where: 'view.animate.mode' });
+    expect(store.state.fieldKey).toBe('vonMises');
+  });
+
   it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
-    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
+    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', modeCount: 2, frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
     await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
     expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
     expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined, RESULT.resultId);
@@ -413,7 +453,7 @@ describe('ResultsView', () => {
   });
 
   it('keeps a newer pause when an older play finishes loading afterward', async () => {
-    const modal = { ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const modal = { ...RESULT, step: 'modes', modeCount: 1, frequencies: [{ value: 10, unit: 'Hz' }] };
     const { store, viewer, results, transport } = harness(modal);
     let finishLoad!: () => void;
     const loadPending = new Promise<void>((resolve) => { finishLoad = resolve; });

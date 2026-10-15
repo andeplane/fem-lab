@@ -189,6 +189,19 @@ checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-t
 construction and concurrent callers; no solve may mutate faer's global setting.
 The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
 
+#640 adds the actual full Hex20 modal counterexample found by the FV52 investigation:
+16×16×4 elements, 5321 nodes, ten modes and UZ-only supports on the four bottom edges.
+At native 1/2/4 workers, all eighteen public payloads must match exactly under `NoClock`:
+the complete document, Mesh, Result, surface, four named Sets and all ten retained mode
+fields, including the measured residual, warnings and near-zero/repeated eigenvectors.
+The original worker-count-dependent triangular solve fails this regression. Per-call
+native factorization and triangular solution now use a fixed logical arithmetic budget
+of 64, scheduled by the existing pool; Windows factorization remains sequential and
+wasm is unchanged ([ADR0031](adr/0031-fixed-sparse-direct-arithmetic-partition.md)).
+This is an exact reproducibility oracle, not a new frequency reference or convergence
+study: both FV52 tables remain unresolved under #7, and the existing physical and
+original-operator residual gates above remain unchanged.
+
 The Result-validity integration check also holds probe/path values and independently parsed
 VTU datasets identical across a display-only Model rename; a subsequent physics edit still
 refuses all three consumers as stale, including after another rename (#123, #133).
@@ -238,6 +251,47 @@ must report structured errors without wrapping dimensions. Representable boundar
 and `Gm^-35 = 1e-315 m^-35` remain valid. A shared native/wasm fixture verifies rejected force,
 temperature, geometry and display-unit Commands preserve the complete saved Model and Journal,
 and conversion Queries never serialize nonfinite numbers as JSON `null`.
+
+Unit scaling also rejects a nonzero multiplicative input that rounds to zero in f64, in
+both input-to-SI and SI-to-display conversion. Input multiplication is checked before
+adding an affine offset; output division is checked after subtracting it. True zeros,
+temperature-origin cancellation and surviving subnormals are valid. This is a bounded
+scaling-loss policy, not an exact-arithmetic requirement: ordinary f64 parsing and rounding
+remain unchanged. Subnormal tests use the independent binary tick `λ = 2^-1074`:
+
+| Boundary case | Independent expected result |
+| --- | --- |
+| `±1e-320 N` to `GN`; `±1e-320 uN` to SI | Structured `schema` error, no Model/Journal/Result mutation |
+| `±λ kN` to N, then back to kN | Exactly `±1000λ N`, then `±λ kN` (bit equality) |
+| `±499λ N` / `±501λ N` / `±1500λ N` to kN | Reject / `±λ` / `±2λ`; nearest-even rounding is accepted |
+| Smallest and largest signed subnormal; smallest normal | Known 17-digit `fmt_sig` text and JSON parsing preserve all bits |
+| Generated signed subnormals, checked `format(value,"N",17)` | Actual formatter/Quantity parsing preserves all bits |
+| `±1e-320 N` formatted in GN; a material's `1e-320 Pa` displayed in GPa | Checked formatters and public Model/report reads propagate errors; SI display restores the exact value |
+| `273.15 K` to degC; `-273.15 degC` to K | Valid zero |
+| `0 degC` to K; `0 K` to degC | `273.15 K`; `-273.15 degC` |
+
+Generated signed subnormal values exercise the actual formatter and text/JSON Quantity
+parsers, with bit comparisons so an accidentally returned zero cannot pass an absolute
+tolerance. Integer-tick kN conversions exercise a separate exact scaling identity. The
+native registry and shipped WASM run the same rejection and conversion fixtures against
+a solved small cantilever and check that its retained Result remains unchanged.
+
+Set-centroid boundary identities use a unit Tet4 at the origin plus independent unused
+authored NSET coordinates. Constant `±f64::MAX` samples at counts 3, 7, 10 and 100 have
+mathematical mean `±f64::MAX`: three/100-member overflow is repaired exactly, while the
+finite seven-member baseline retains its one-ulp rounding. Symmetric signed extremes
+have zero mean; `[MAX, -MAX, 3λ]`, `λ = 2^-1074`, retains its finite exact mean `λ`.
+The implementation preserves finite divide-before-sum results and uses a bounded,
+fixed-order scaled fallback only for nonfinite axes. Normalized values are summed before
+one division by the exactly representable member count (<2^53), then rescaled; dividing
+each normalized value first would repeat the original rounding-overflow defect.
+These constant/cancellation identities cover sample counts and coordinate scales, rather
+than a mesh convergence rate. Public ordinary Set centroids additionally preserve
+`[7, 0, 3λ]` and repair the actual three-node MAX-line mean to `[MAX, 1, 0]`
+(two line elements, with constant x and node y = 0/1/2). Native 1/4-thread and WASM
+fixtures check source/unused labels, the unit
+Tet's unchanged physical bounds, read-only Model/Journal/retained Results, replay/open,
+and genuine selected-unit overflow when the finite MAX coordinate is expressed in mm.
 
 A10 (`every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms`) checks
 all entries, component blocks and Cholesky pivots on scaled affine simplices and curved
@@ -338,6 +392,19 @@ the checks cannot see and the factorisation reports as `solve.not-positive-defin
 therefore holds every node across the bar axis with one `geometry.nameRegion` box, and B10's
 and B11's joints are braced by members that are not collinear. A named `constraint.mechanism`
 check is a separate issue.
+
+**Finite translated line joints (#595).** The weld-grid neighbour scan clamps its i64
+indices at the same bounds as its absolute-coordinate grid keys; actual coordinate distance
+still decides coincidence. A geometry-kernel regression translates each coordinate axis to
+both ±f64::MAX, then independently checks points separated by 1.2 tolerances remain distinct,
+a point within 0.6 tolerances of both selects the lowest original id, an exact duplicate
+joins that survivor, and a point outside tolerance remains separate. It checks exact
+connectivity, sorted/deduplicated node Sets, unchanged element Sets and idempotent welding.
+The public registry regression builds metre-long line members at x = ±f64::MAX m, checks
+`query.mesh` bounds/counts/edge lengths and shared versus separate joint identities, and
+compares one/four-thread builds and Journal replay byte-for-byte. Mesh reads and rejected
+zero-length/nonfinite input preserve the authored Model and Journal. This is a geometry
+admission/welding oracle; it does not claim an extreme-coordinate structural solve.
 
 **Stress is averaged at a joint.** `average_at_nodes` smooths across elements of the same
 material, and at a truss joint that means averaging the axial stresses of members pointing in
@@ -632,6 +699,7 @@ not ramp it.
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
 | C1 | Kirsch plate with a hole, plane stress | K_t = 3.00 (infinite plate); 3.018 for the Ansys VM142 finite geometry | 2 % at p=2 after Richardson | stress concentration, local refinement, symmetry (quarter model equals full) | green |
+| C1b | Finite-width VM142 square plate with a hole, plane stress | σxx(0, 0.5 in) = 3018 psi, Kt = 3.018; original 12 in square, 1 in hole | 2% on each of the three finest meshes | independent finite-geometry stress reference, five-level refinement, force balance and freshness (#626) | engine test + CLI case |
 | C2 | Lamé thick cylinder, plane strain, axisymmetric and 3D | σθθ(a) = 100 MPa, σrr(a) = −60 MPa; u_r(a) = 5.72e-5 m with ε_z = 0 and 5.90e-5 m with free ends (SimScale/SSLV04's number) | 1 % disp, 2 % stress at p=2 | axisymmetric and 3D agree | green |
 | C3 | Near-incompressible cylinder, ν = 0.49, 0.499, 0.4999 | regenerated from Lamé | < 2 % on u_r for a locking-free element; the hoop stress recorded | volumetric locking exposed and cured | green |
 | C4 | Cook's membrane, plane stress **and** plane strain | 23.97 (plane stress, Cook 1974's 23.9) and 21.53 (plane strain, arXiv 1806.07500's 21.520) — resolved | 1 % against the extrapolated value | bending-dominated distorted mesh | green |
@@ -649,6 +717,44 @@ the plan estimated, so it cannot meet a 2 % gate against 3.00. The Benchmark use
 3.022, extrapolating to 3.024. `the_kirsch_full_plate_equals_the_quarter_model_at_the_hole` builds
 the same plate as eight blocks turned into the four quadrants, holds it only against rigid motion
 on its two centre lines, and gets the quarter model's σ_xx(0, a) back to 1e-10.
+
+**C1b uses the finite VM142 problem and its own fixed reference.** The
+[Ansys VM142 description](https://ansyshelp.ansys.com/public/views/secured/corp/v251/en/ans_vm/Hlp_V_VM142.html)
+and [primary input](https://ansyshelp.ansys.com/public/views/secured/corp/v251/en/ans_vm/Hlp_V_VM142TXT.html)
+reference Roark (4th ed., p. 384): a 12 in square with a 1 in diameter hole,
+plane-stress thickness 1 in, E = 30 × 10⁶ psi and ν = 0.3. The quarter domain
+has outer extent 6 in, radius 0.5 in, symmetry ux = 0 on x = 0 and uy = 0 on
+y = 0, and uniform tensile pressure 1000 psi on x = 6 in. The top and hole are
+free. Its independent reference is σxx(0, 0.5 in) = 3018 psi (Kt = 3.018), with
+the original **2% tolerance unchanged**. Scope is the whole-plate static solve;
+APDL cut-boundary submodel interpolation is outside this case.
+
+`vm142::finite_vm142_plate_refines_against_its_independent_published_stress`
+replays the same public Journal as `vm142-finite-quarter-quad8.json`, changing
+only the mesh divisions and corresponding grading. Two mapped Quad8 blocks use
+n = 8, 16, 32, 64, 128 and radial ratio r = 4^(1/n), so the corner parameter map
+u(t) = (4^t − 1)/3 stays fixed as h is halved; circumferential spacing is uniform.
+Every mesh gates fresh Results and the independent resultant/reaction
+1000 psi × 6 in × 1 in = 6000 lbf, with zero net transverse force (1e-8 relative).
+All three finest meshes must meet the fixed 3018 psi reference within 2%.
+
+| n per block direction | σxx at the hole (psi) | Signed difference from 3018 psi |
+|---|---:|---:|
+| 8 | 2745.696049 | −9.02266% |
+| 16 | 2934.508127 | −2.76646% |
+| 32 | 3016.684813 | −0.04358% |
+| 64 | 3046.779769 | +0.95360% |
+| 128 | 3056.035585 | +1.26029% |
+
+The coarse two meshes fail the reference gate; the three finest pass. Discrete
+increments are positive and shrink from 188.812 to 82.177, 30.095 and 9.256 psi.
+Three-level observed rates are 1.200, 1.449 and 1.701, with fitted Richardson
+limits 3080.013, 3064.170 and 3060.147 psi. These fits are discretization
+diagnostics, **not independent oracles or proofs that true error decreases**.
+The sequence crosses the published target, and the cause of the offset remains
+unsettled. No universal recovered-point-stress rate is asserted from the
+quadratic element order. Tracking #7 retains the separate FV52 reference and D4
+norm questions; this case addresses only the finite VM142 criterion (#626).
 
 **C2's displacement depends on the idealisation, its stresses do not.** BENCHMARKS.md's single
 5.90e-5 m is the free-ended (σ_z = 0) value; every row here holds ε_z = 0 and so lands on
@@ -684,12 +790,41 @@ checked beyond aggregate counts.
 | D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
-| D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, H1 rate p over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
+| D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, full-gradient H1 seminorm rate p, plus retained engineering-strain rate p, over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
 | D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
 | D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
 | D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
 | D9 | quality, volume and Set survival on a box, cylinder, sphere and box-minus-cylinder at two sizes | dihedral ∈ [10.7°, 164.8°]; volume within the stated tolerance of the closed form; every Solid tag resolves to a non-empty face Set at both sizes | as stated | the mesher's SIGGRAPH 2007 dihedral-angle guarantee, measured rather than claimed | geometry test |
+
+**D3 remains unresolved after the bounded #639 investigation.** Full Hex20 grids
+4×4×1, 8×8×2 and 16×16×4 all met the measured modal backward-residual tolerance, but
+the fixed mode 4–10 discrepancy columns change under refinement and higher indexed mode
+content changes. Neither published reference was selected, and the original 3% comparisons
+are diagnostic only. The finest grid also exposed exact 1/4-thread nonreproducibility (#640).
+See [the findings and preserved raw-data index](research/639-fv52-solid-investigation.md)
+and [the frozen plan](plans/639-fv52-dual-reference-investigation.md). Parent #7 stays open.
+
+**D4 distinguishes full gradient, engineering strain and energy (#630).** The elastic
+H1 seminorm measures the Frobenius error of every derivative of the represented nodal
+interpolant against the independently analytic Hessian of φ: nine entries in 3D and four
+in the represented 2D plane model. A plane-stress constitutive thickness strain is not an
+extra displacement DOF. Incompatible-mode cases measure the nodal interpolant, without
+substituting recovered or enhanced strains. Axisymmetric no-twist displacement uses its
+3D cylindrical lift: the four r,z derivatives plus the hoop gradient component u_r/r, integrated
+with physical volume 2πr dr dz on r∈[1,2]. No axis-limit behavior is claimed. Scalar heat
+keeps its full gradient over the model domain. The existing unweighted model-domain L2
+and engineering-Voigt strain errors and their gates are retained; the latter is neither
+full displacement H1 nor a stiffness-weighted energy norm.
+
+The integrated evaluator is independently calibrated on every continuum interpolation
+kind. Adding ±αx_j to u_i gives E₊²+E₋²−2E₀²=2α² for each of the nine/four Cartesian
+derivative components on unit volume/area. Each rigid rotation plane gives 4α² while
+engineering strain remains unchanged. Radial perturbation ±(αr,0) has cylindrical gradient
+diag(α,0,α); the strip's revolved volume is 3π, giving 12πα². These closed forms catch missing
+skew derivatives, hoop terms and radial volume weights. The manufactured PDE solves still
+use exactly the existing refinements and ±0.1 order gates, with no duplicated solves or
+relaxed tolerances.
 
 **D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
 vertical displacement only along the outer face's mid-plane line and reports −5.38 MPa.
@@ -980,6 +1115,50 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F18 | #346, logarithmic decrement: F3's SDOF hex8 released with an initial velocity (no load) at ζ = 0.05, Rayleigh pair `α = ζω, β = ζ/ω` | `δ = 2πζ/√(1−ζ²)`, measured from two parabolically-interpolated peaks four damped periods apart, `ln(peak₀/peak₄)/4` | 1 % | free-decay damping reaches the ratio the pair was chosen for, independent of F3's step-load closed form | engine test |
 | F19 | #346, half-power bandwidth: F14's SDOF sweep at ζ = 0.02 driven entirely by the new `dampingRatios` list (one entry) instead of the scalar `dampingRatio` | `Δf ≈ 2ζf_n`, the two frequencies either side of resonance where `\|u\| = \|u_max\|/√2`, linearly interpolated on a 401-point sweep | 2 % | `dampingRatios` reaches the modal damping ratio the same way `dampingRatio` does, checked against a second independent relation | engine test |
 | F20 | #73, one-sided white-noise SDOF response, unit mass, f_n = 7 Hz, ζ = 0.2/0.02/1e-5 | stationary energy balance: variance = S p²/(8 ζ ω_n³); integrate to 10,000 f_n | 1e-8 relative | Hz normalization and resonance resolution; exact cancellation of equal modes with opposite participation and invariance to subdividing a linear PSD table | engine unit test |
+| F21 | #602, finite logarithmic frequency grids, including 1e-300–1e100 Hz and binary 2^-1074–2^974 | geometric midpoint 1e-100 Hz; independently encoded binary powers at 3/5/9/17 points; exact endpoints and identical shared quantiles under refinement | 4e-13 relative on closed quantiles; exact endpoint bits; finite nondecreasing values within bounds | positive finite endpoints do not require a representable endpoint ratio or exponential scale factor; subnormal/adjacent/MAX intervals and generated finite-bit patterns retain the range contract | engine unit + public registry |
+| F21b | #602, one full-integration guided steel hex8, complete four-mode basis, 10 kN axial force and log grid 1e-300–1e20 Hz at 3/5/9/17 points, native 1/4 threads | uniform tip amplitude F/abs(K-Mω²), K=C11 A/L, C11=E(1-ν)/[(1+ν)(1-2ν)], M=ρAL/3; undamped phase 0 or ±π | 1e-10 relative amplitude, 1e-12 phase; exact shared grid quantiles and replay/thread identity | the endpoint ratio still overflows, while the response denominator remains representable; the original 1e100 Hz fixture separately checks frequencies, retained modal fields and replay without declaring its high-frequency response accurate | public registry, native/WASM replay + Chromium |
+| F22 | #605, full-basis guided steel Hex8 harmonic response on ordinary 800–2400 Hz and extreme linear 1e99–1e100 Hz sweeps at 3/5/9 points, damping 0/0.05/0.8, native 1/4 threads | K=C11 A/L, M=ρAL/3, C=2ζ√(KM); amplitude F/hypot(K−Mω²,Cω), lag atan2(Cω,K−Mω²). At 1e100 Hz and ζ=0: 9.742421504070939e-200 m, lag π | 1e-10 relative amplitude; 1e-12 phase; positive finite amplitudes, matching retained displacement/probe values, nested quantiles and exact thread/replay identity | independent component exponent scaling preserves finite tiny responses and phases without overflowing squared denominators; true singular/nonfinite inputs retain their admission policy | engine unit + public registry + native/WASM replay + Chromium |
+
+Logarithmic grids interpolate the logs of their endpoints, then exponentiate the
+interpolated value. The bounded f64 result is nondecreasing; adjacent representable
+endpoints can produce repeated frequencies when no distinct interior value exists.
+Neither the endpoint ratio nor an intermediate exponential scale factor must be
+representable. Linear spacing retains its existing arithmetic, including zero Hz.
+The independently reproduced extreme-frequency complex-reciprocal defect (#605) is outside #602;
+the 1e100 Hz grid fixture is not a zero-amplitude physics oracle.
+
+**F22 (#605)** separately gates the complex reciprocal, without the logarithmic-grid
+correction in #602. The one-element guided bar has four free axial tip DOFs and a
+complete four-mode basis; uniform loading excites the exact axial mode. Integrating
+its linear x/L shape gives M=ρAL/3, and its constrained transverse strain gives
+K=C11 A/L. The response oracle is the closed-form damped oscillator, using these
+independent physical coefficients rather than the engine's eigenvalues.
+
+Pure complex-quotient cases use exact rational answers across smallest-subnormal,
+ordinary and maximum finite scales. Independent binary cases additionally preserve
+both coefficients for p=2^1023, a=2^-1000, b=2^500 (real 2^-977, imaginary −2^523)
+and p=2^1023, a=2^-1074, b=2 (real 2^-53, imaginary −2^1022), including swapped and
+signed components. These detect prematurely normalizing away the small numerator.
+Zero denominators and nonfinite arithmetic remain nonfinite; there is no epsilon,
+saturation or substituted zero response. The unchanged checked-display exact-resonance
+case and a finite-authored 1e200–2e200 Hz sweep with nonfinite derived coefficients
+verify rejection before publication, preserving prior modal/finite harmonic Results,
+the catalogue, Model/Journal/revision and the next accepted Result identifier.
+
+`tools/test-harmonic-reciprocal-replay.mjs` applies the same eighteen oscillator cases
+and singular/nonfinite publication boundaries to native 1/4 threads and WASM, with
+real Journal hash/replay checks. The four cases in `harmonic-reciprocal.spec.ts`
+check ordinary and extreme amplitudes, signed phases, retained modal fields and
+finite response-chart coordinates through the production Chromium app. They use
+the normal response-field selection, without overriding a selected mode.
+
+The #608 registry and Chromium regressions distinguish retained mode shapes from response
+metadata around these existing dynamic Benchmarks. `query.result.modeCount` is the number
+of owned `mode:k` fields: modal and buckling Results expose their shapes, while harmonic
+and random-vibration Results expose response fields. Harmonic basis frequencies remain
+unchanged, and selecting either response must not fetch a nonexistent mode. The earlier
+modal Result's summary and mode field remain identical when queried by its retained ID.
+This is a field-ownership and host integration check; it adds no numerical approximation.
 
 The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
 10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
@@ -2318,3 +2497,461 @@ rejection, and unsupported physics/options without active Model/Journal/Result m
 Native one/three-thread replay and native/WASM conversion/hash parity are separate
 checks. Only final linear equilibrium is imported; an Abaqus increment history is
 explicitly outside this supported slice.
+
+### Original quadratic-element query measurements (#524)
+
+Public Commands build a quarter annulus with radii `r=1 m`, `R=2 m`, quadratic
+mapped elements and `n=2,4,8` angular cells. `simplices:true` exercises Tri6; a
+`3 m` extrusion exercises Hex20 and Tet10. Neither tests nor hosts inject a
+private Mesh into an Engine, and this change adds no quadratic input reader.
+
+For one original P2 circular edge with half-angle `delta=pi/(4n)`, its coordinates
+in the centred frame are `x=R[1+(cos(delta)-1)t²]`, `y=R sin(delta)t`, `-1<=t<=1`.
+Green's theorem gives segment area `R² sin(delta)(4-cos(delta))/3`; subtracting
+the inner radius and summing gives original annulus area
+`A=n sin(delta)(4-cos(delta))`. Every original Quad8/Tri6 area and Hex20/Tet10
+volume sum must agree with `A` and `3A` to `3e-13` in SI. At `n=2`, the area is
+`2.3543606777341703 m²`, compared with the incorrect corner value
+`2.1213203435596424 m²`. Original quadratic geometry converges to the exact
+circular area `3pi/4` with observed order `[3.9,4.1]`.
+
+The exact original outer edge length is
+`L=2n sin(delta)[sqrt(1+k²)+asinh(k)/k]`, `k=2tan(delta/2)`.
+The public Line3 edge and Quad8/Tri6 cylindrical face measurements approach
+`L` and `3L` with each angular refinement reducing quadrature error by more
+than20 and relative error stays below `5e-6`; outer/inner measures retain their
+exact radius ratio. The coarse Hex20 face error is `4.4264e-5 m²`, reducing
+under refinement rather than being claimed exact. Three-point
+line/tensor Gauss and the positive symmetric degree5 triangle rule integrate
+the original map, but its norm is non-polynomial and is not claimed exact at
+one mesh size. Physical load quadrature is unchanged: plane-stress
+`pressureArea` still includes `2 mm` thickness and is distinct from geometric
+length, and the independently corrected Shell4 pressure area is covered under #525 above.
+
+Independent pure geometry regressions check a Tet10 map
+`(u+u²/4,v+v²/4,w+w²/4)`. Its positive diagonal Jacobian has total degree3;
+its exact volume is `1/6+0.75/12+0.1875/30+0.015625/90`, including the cubic
+moment `integral(uvw)=1/720`. The positive 27-point collapsed three-point
+Gauss rule integrates this degree exactly. For a Hex20 S2 map
+`x=u(1+0.1v²)`, `y=v(1+0.1u²)`, `z=w(1+0.1u²)`, its positive determinant
+contains `u^4`, and the exact volume is
+`8[1+0.3/3+(0.01-0.03)/9+0.009/5]`. Two-point tensor Gauss is insufficient;
+three points integrate every Hex20 determinant, whose maximum degree is5
+per coordinate. Rule tests verify positive weights and independent simplex
+monomial moments through triangle degree5 and tetrahedron degree3.
+
+Public query results, Model hashes and saved Journals are compared at one
+and four native threads and against WASM, with exact replay identity.
+Existing #523 linear volume/area and order4 bilinear-area regressions remain
+valid up to f64 roundoff, as does every physical stiffness, mass, pressure and
+traction rule. Straight-sided quadratic Quad8/Tri6 rectangles retain area
+`6 m²`, their Hex20/Tet10 extrusions retain volume `24 m³`, and side length/area
+and physical pressure area agree with the independent `3 m` / `12 m²` values.
+
+The public line-region preservation regression builds truss and beam Bodies with
+members from `(0,0,0)` to `(3,4,0)` to `(3,4,12) m`. Their independent lengths are
+`5 m` and `12 m`: the Body measure is `17 m`, while a region of these members has
+zero three-dimensional geometric volume (`0 m³`). At `1,2,4` subdivisions and
+mesh orders1/2, the elements remain two-node lines; counts, bounds, source joint
+coordinates, member connectivity, individual edge lengths and replay are checked
+at native one/four threads. A disjoint unit cube adds exactly `1 m³` to a mixed
+region, independently of the lines, preserving the ambient-volume contract.
+
+### Linear static force and moment conservation (#445)
+
+B25 now checks both force and moment conservation for the pure torsion and pure
+end-bending Steps. The support carries the opposite 1 kN m couple; no applied
+force is manufactured. Public registry tests repeat each closed-form twist,
+rotation and deflection at 2, 4 and 8 beam divisions. They also check a transverse
+tip force plus an independent end couple, cancelling forces and moments, and a
+no-load prescribed fixed/guided displacement against the Timoshenko flexibility
+`δ/P = L³/(12EI) + L/(κGA)`. The latter checks the two raw support couples and
+the prescribed translation's force lever arm separately.
+
+Linear Cartesian static Results retain an SI wrench ledger about their first
+Mesh node, with `L` equal to the maximum retained node distance from that node.
+Each applied/support nodal moment is `r×F + C`, including rotational reactions.
+The injected Pool recovers fixed-size node chunks in parallel and combines them
+in index order; exact SI accounting is checked at one and four threads.
+Force normalization uses the maximum of the gross applied/support nodal-force
+magnitudes and gross nodal-moment magnitudes divided by `L`; moment normalization
+uses the analogous maximum with force magnitudes multiplied by `L`. Magnitudes
+are accumulated before Constraint grouping, so cancellation and first-owner
+assignment cannot erase the scale. Residual vectors remain unchanged. Exact
+zero actions and residuals yield zero; no dimensional epsilon is introduced.
+A zero-span force ledger uses force magnitudes only.
+
+Frame translation/rotation and geometric scaling, display units, retained stale
+Results and exact unloaded states are covered separately. Thermal conservation
+keeps its power semantics; dynamic, eigen, nonlinear and axisymmetric Results
+do not claim this linear Cartesian static angular diagnostic. Rotational
+prescriptions remain outside the existing Length-only `constraint.prescribe`
+contract. The report checks moment conservation independently of force balance.
+
+Bonded face interpolation ties translations at a projected master point and does
+not supply an offset rotational couple across a geometric gap. A separate
+statics oracle checks coincident faces and a 0.25 m gap under a 200 N transverse
+load: force equilibrium still holds, while the gap leaves a real 50 N m angular
+residual. The query and report expose this limitation rather than treating the
+force pass as complete equilibrium or modifying bonded mechanics.
+
+**Representability and publication (#445).** Public fully held shafts with opposing
+±1e307 N m actions retain finite 2e307 SI action scales and exact zero residuals.
+Opposing ±1e308 N m actions overflow those scales; a separate 100 m lever with a
+1e308 N transverse force overflows its applied moment. Both are structured solve
+failures before a Result is published, preserving the prior selected Result and
+the immediately preceding Model/Journal/revision. No saturation or epsilon is used.
+Changing the finite large Result's display units to mN/mm also fails clearly for
+selected result/report Queries, because the requested scale conversion overflows.
+Its retained-id Query remains exact in its original N/m context. A solve authored
+with those unrepresentable preferred units preserves its prior readable Result.
+The same publication check is shared by a convergence study with `restore:false`
+and an adaptive study. Independent fully held beam/tet4 cases have zero motion
+and finite opposing actions; unrepresentable preferred units reject before
+replacing the selected Result, changing its catalogue or advancing its sequence.
+A uniform transient-temperature predecessor retains three genuine frames; its
+fully held static continuation has zero motion and finite stress. Opposing
+±1e308 N forces overflow only the gross wrench scale at chained recovery, which
+rejects without replacing the previous static Result or its catalogue.
+Buckling skips this static-only recovery in the shared postprocessor and retains
+its existing preload/force/buckling-factor contract. Legacy formatting behavior
+outside the new ledger is tracked separately by #580.
+
+
+### Checked display conversion (#580, inseparable unit grouping #582)
+
+The public Model/report regression authors a finite `1e308 Pa` modulus, then selects `mPa`.
+The mathematically required display magnitude is `1e311`, beyond f64: both reads reject
+with `unit.display` instead of relabelling the SI value, preserving Model, Journal, hash and
+revision. Returning to Pa reports the original `1e308 Pa` value. Unit-level force/moment
+and area/volume checks cover the same finite-SI/output-overflow boundary.
+
+The actual `units::format` output at seventeen significant digits is parsed back through
+Quantity conversion in the property test; it is not checked against a second formatter.
+Ordinary conversion tolerance is `1e-12 * abs(SI value)` for a representable generated
+domain: source magnitudes from `1e-6` to `1e6` with both signs and twenty-four unit symbols.
+Zero has an explicit exact round-trip check; an absolute floor cannot certify a lost tiny value. Offset temperature conversion retains the independent 20 °C = 293.15 K
+oracle. Finite numeric conversion overflow is rejected; the separate nonzero-underflow
+policy remains tracked by #583.
+
+A public unit cube with valid composite Length `m*s/s` must report volume `1 (m*s/s)*(m*s/s)*(m*s/s)`
+and face area `1 (m*s/s)*(m*s/s)`; both labels independently parse to the correct physical
+dimension. Grouping whole operands is required before repeated multiplication or torque
+multiplication, so checked conversion does not newly reject a valid selected unit.
+
+
+For torque operands, independently valid composite force `N*Gm^30/m^30` has factor
+`1e270`; composite length `Gm^5/nm^5*nm^35/m^34` has factor `1e-225`. Their product
+factor is `1e45`, so `1 N m` must display approximately `1e-45` in the grouped unit.
+Unparenthesized concatenation overflows an intermediate multiplication before cancellation.
+The relative tolerance `1e-8` admits the factor's unavoidable subnormal decimal rounding
+from `nm^35`; parsing back must recover `1 N m` to `1e-14`.
+
+Public coordinate cases independently place each lower/upper bound and each point-vector
+component on a known metre coordinate. A selected length factor `1e-315` cannot display
+that metre as a finite f64; every component must reject, preserving the actual native
+file, Journal, hash, revision and Result catalogue. The same checked array loop handles
+vectors and bounds, with no unchecked component or partial array publication.
+
+Six orthotropic moduli, density, yield and point mass are tested independently with finite
+authored SI values and mathematically overflowing configured display magnitudes. Positive
+point masses, elastic material definitions and a real mapped axisymmetric shaft satisfy
+their normal Command admission rules. Authored load, prescribed constraint, connection
+tolerance and thickness cases exercise their real public display dimensions.
+
+A square line loop has perimeter 4 m with each coordinate at most 1 m. A finite length factor
+`1e-308` leaves each coordinate readable near `1e308` while the perimeter requires `4e308`
+and must reject. A unit cube independently checks derived volume and density-times-volume
+mass conversions. Two individually readable `1e308 N` forces have an unrepresentable
+`2e308 N` report sum. A genuine line mesh with an outside named Set has no boundary face,
+so its ordinary `set.empty` diagnostic remains available. Two unused imported labels at
+the same `1e308 m` coordinate retain that exact centroid and a literal zero node measure;
+the separate three-MAX centroid arithmetic defect is tracked by #593.
+
+A fully prescribed rigid translation of a real truss has finite components `ux = uy =
+f64::MAX`, zero strain and zero reactions. Component probes return the exact prescribed
+values; the mathematical norm `sqrt(2) * MAX` exceeds the largest f64, so public norm
+probes, paths and convergence metrics reject with `unit.display` while the actual native
+file, hash, Journal and readable selected Result remain unchanged. This does not depend
+on an intermediate-overflow example whose correct mathematical norm would be finite.
+
+Unit changes conservatively stale Results (ADR 0017). Current probe/path/frame reads retain
+that fence; explicit Result IDs retain their solved units and scientific values. Stale-readable
+frame lists and summaries still check their requested time unit: a retained one-second frame
+cannot fit in a unit with factor `1e-315`. A prescribed cooling case retains initial ranges
+`[0,10] K` and `[10,10] K` and a final zero-temperature field, testing both historical
+extrema separately. Its storage power follows `rho cp V DeltaT / DeltaT_time`, with
+`rho cp V = 36110 J/K` and a one-second interval.
+
+Steady heat checks independently use Fourier power `k A DeltaT / L = 0.45 W` and a uniform
+source delivering `q V = 0.02 W`, shared equally by two held ends (`0.01 W` each). Selected
+power factors independently make a whole reaction or the applied sum unrepresentable while
+earlier nodal values stay finite. A translated axial bar from `1 m` to `2 m` has a readable
+one-metre wrench reference but an unrepresentable two-metre extremum coordinate; tension
+and compression select the maximum and minimum coordinate checks respectively.
+
+Convection, flux, source and contact conductance Commands admit finite `1e308` values in
+their actual typed SI dimensions. These four authored dimensions have no configurable
+UnitSet field, so their Model rows retain the existing literal `SI` label and exact admitted
+values. This invariant does not bypass checks for temperatures, computed quantities,
+frequencies or contact forces.
+
+Additional checked display fixtures use publicly admitted imported unit tetrahedra: volume
+`det(I)/6 = 1/6 m³`, right-triangle face area `1/2 m²`, and active Set values in those same
+physical dimensions. Tiny valid composite length units leave ordinary coordinates readable
+while derived volume or area units cannot represent the value. A mapped plane-stress unit
+square with thickness `1e100 m` has geometric edge length `1 m` and loaded pressure area
+`1e100 m²`; length factor `1e-108` leaves bbox, thickness and Body area readable while the
+loaded area overflows. Its ordinary quadrature oracle uses relative tolerance `1e-14`.
+Two directly admitted tetrahedra have bounded coordinates `|x| <= 1`: one has shortest edge
+`sqrt(2) m` and longest edge `2 m`, the regular one has every edge `sqrt(8) m`. Length factor
+`8.333e-309` leaves every bbox coordinate finite but respectively rejects the longest edge
+or the shortest edge. Each failed public Query preserves the full native file, model hash,
+revision and Result catalogue.
+
+The automatic origin-Box hand calculation reuses checked bbox dimensions, material E and
+exact authored LoadRow text from the Model summary. Its formula keeps the authored SI force;
+F/P denotes the magnitude of that vector's sole nonzero component. Computed cross-sectional
+area and analytical deflection retain checked conversions. Reusing assembled nodal force as
+the independent reference would admit quadrature rounding into the oracle and is avoided.
+
+The contact-specific display fixture is a supported axisymmetric interference fit with
+nu=0, E=40Pa, height h=1m and annular radii [a,r]=[1,2]m and [s,b]=[1.99,3]m.
+The shared anchor fixes both inner and outer radial boundaries. Lamé displacement
+`u=Ar+B/r` with zero endpoint displacement gives the force-conservative compatibility
+
+`F = 2π h E (r-s) / [(r²-a²)/(r²+a²) + (b²-s²)/(b²+s²)] = 2.5415407008 N`.
+
+The master/slave reference radii differ, so their equal/opposite transmitted force uses
+pressures `F/(2πrh)` and `F/(2πsh)` respectively. Equal pressure at both radii would be a
+wrong reference. With 2/4/8 radial cells the public contact force converges quadratically
+(relative gates 0.006/0.002/0.0005, observed rate in [1.8,2.2]). At four cells, every
+reaction component and the combined anchor reaction remains below1.4N while contact
+force exceeds2.5N. A valid force unit with factor8.333e-309 has finite limit≈1.498N,
+so the current Result rejects specifically at checked contact output. The Model remains
+readable, failed reads preserve the full native state, and retained-ID contact output
+keeps its original N units. The formatter test and independent convergence test are separate.
+
+The public undamped-resonance rejection fixture asks the modal registry for a finite positive
+natural frequency, then solves the same physical bar with that exact disclosed frequency as
+a harmonic sweep endpoint, damping0 and finite nonzero modal force projection. Independent
+oscillator response `Q/[(ωk²-ω²)+i2ζωkω]` has no finite value at `ω=ωk`, `ζ=0`, `Q!=0`.
+Its other retained frequencies lie off every disclosed mode and give a finite global peak;
+that does not make the resonant sample readable. The checked sweep output rejects before
+publishing, preserving the full native file/hash/revision/catalogue and the original modal
+summary/field. The next valid modal solve is result-2, so rejection consumes no Result ID.
+This case credits the actual amplitude/publication path, not unproved frequency failures.
+
+Additional isolated public reads cover an ordinary unit Box bbox, an imported unit-Tet Mesh
+bbox, a built line-node Set bbox, unused authored source-node bounds, and imported STL
+unit-cube patch areas. Each has an independently known SI extent or planar area; failed
+conversions preserve the complete native file/hash/revision/Result catalogue. They query
+their own capability directly, so an unrelated Model summary does not preempt the check.
+
+The hand-reference boundary uses an authored1N axial force on a1×0.1×0.1m Box,
+E=1e-207Pa and nu=0.49999999. The mathematical bar reference FL/(EA)=1e209m
+exceeds the finite limit of the chosen length unit (factor1e-101). The constrained one-Hex
+near-incompressible calculation has a finite, much smaller locking displacement, and
+Model/Mesh/Result queries remain readable. Verification rejects the independently
+unrepresentable reference without mutating the retained Result. This is a display and
+state-preservation fixture, not a physical large-strain or convergence claim.
+
+The interior-ply boundary uses a symmetric five-ply1m-wide flat cantilever, five1mm plies
+with E=[1,1e6,1,1e6,1]Pa, nu=0, and a1e-5Nm end moment. Symmetry gives B=0;
+D=∫E(z)z²dz, curvature=M/D, and sigma_x(z)=E(z)zM/D. At2/4/8 longitudinal cells,
+the stiff interior-ply outer face agrees with this independent constant-curvature reference
+(≈6.92305056Pa) within1e-7 relative error. Ordinary midplane and outer-surface stress
+remain below0.1Pa. A selected stress-unit factor≈1e-308 admits those fields and rejects
+the interior ply. Failed current reads and new solves preserve the prior original-unit
+Result and consume no Result ID; restoring SI lets the next solve publish result-2.
+
+### Retained transient-frame difference reads (#286)
+
+The public `query.difference` accepts each operand's existing typed `FrameSample`
+independently. Its result identifies both resolved retained indices/times and the
+explicit target Mesh. No time interpolation, extrapolation or final derived-field
+substitution is performed. Omitted samples preserve final-field behavior.
+
+The conservation fixture retains uniform `T_left(t)=t K` and `T_right(t)=2t K`
+on 2/4/8 axial cells against twice those counts, at both element orders. Its
+different integration/output schedules retain left 0/0.4/0.8/1 s and right
+0/0.3/0.6/0.9 s. Exact 400 ms versus explicitly nearest 450 ms resolves to
+0.4 s versus 0.3 s (the earlier midpoint tie), so every target-node scalar
+difference is −0.2 K within `1e-10 K`. Reversing operands gives +0.2 K; both
+target meshes must agree with the closed form. The old solved Celsius/minute
+metadata stays attached to the old id after current units change to Kelvin/seconds.
+Mixed final/sampled reads and final-frame equality are checked. Full transient
+temperature layout remains x with zero y/z; scalar reads explicitly select
+component 0, preserving the existing unsampled wire layout.
+
+The rigid free-fall fixture compares actual intermediate left output against the
+right final output from independently retained 1.3/1.7 ms schedules and 0.5/0.9
+CFL factors. Mapped quad4/quad8 and lattice hex8/hex20 use 1/2/4 axial cells
+against twice those counts. Every target node must satisfy
+`Delta u_y = −4.905 (t_left² − t_right²) m` within `1e-12 m`; x/z remain zero,
+including the 2D zero-padding convention. Complete vector, component 1, reversal
+and both projection targets are checked. These exact rigid fields must pass at
+every refinement; no asymptotic rate is invented for this patch case.
+
+Full-solve thermal replay at one/four native threads checks exact Journal hashes,
+solved files and retained catalogues/times. Every pair of saved times is read on
+both target meshes, checked bit-exactly across thread counts and independently
+against `Delta T=t_left−t_right K`. Skip-solves replay reports missing ids.
+Invalid index/time/dimensions, historical derived fields, final-only History and
+evicted ids fail without changing the authoritative file or retained catalogue.
+The same-id fixture selects 0.4/0.8 s from one stale retained solve after a live
+source edit. The direct-layout path must still give −0.4 K and distinct frame
+identities, preserving the file and catalogue. Shifted uniform-heating bodies
+repeat both orders and 2/4/8 versus twice those cells: overlap values give −0.4 K,
+while every outside node remains null on both targets, with exact coverage ids.
+
+An amplitude-driven axial bar uses `F=1000 N`, `E=200 GPa`, `nu=0`, and
+`A=0.01 m²`. Consistent end traction and root restraint give
+`u_x(x,t)=F*a(t)*x/(E*A)`. Unequal 0/0.4/0.8/1 s and 0/0.3/0.6/0.9 s
+schedules select amplitudes 0.4 and 0.3 on both orders and 2/4/8 versus twice
+those cells. Every target node must give `Delta u_x=5e-8*x m` within
+`1e-15 m`, with zero transverse components; no numerical reference solve is
+used for this affine projection patch.
+
+The forced-slab E5 pointwise solution is
+`T(x,t)=x*(1-x)/2 − sum_(odd n) 4*sin(n*pi*x)*exp(−n²*pi²*t)/(n*pi)³ K`
+for `k=rho=cp=L=q=1`, initially zero, zero-temperature end faces and insulated
+sides. Each field difference is checked at every node against the two continuum
+values at 0.05/0.10 s and 0.10/0.15 s. The 50 odd terms n=1..99 have a
+conservative tail bound `4*exp(−a*101²)/(pi³*101³*(1−exp(−203*a)))` for
+each operand, where `a=pi²*0.05`; the two-operand tail is below `1e-2192 K`.
+No finer engine solve supplies the answer.
+
+Spatial refinement uses 8/16/32 versus 16/32/64 axial cells, Crank–Nicolson
+left dt=1e-5 s and right dt=2e-5 s, retained strides 5000/2500, and endpoints
+0.15/0.20 s. Both target errors decrease and the coarsest stays below 0.002 K.
+Observed linear rates are 2.006 on coarse target nodes and 1.918 on projected
+fine nodes (both gates >=1.8); quadratic rates are 3.965 on coarse nodes
+(gate >=3.5) and 2.984 on fine noncoincident nodes (gate >=2.8). The latter is
+the expected third-order quadratic interpolation error, rather than the
+fourth-order nodal error. Finest linear errors are 2.937e-5/1.178e-4 K and
+quadratic errors 7.283e-9/5.926e-7 K. Backward-Euler dt=0.02/0.01/0.005 s
+on 32/64 cells compares 0.10/0.20 s at both orders and on both targets; the
+coarsest error stays below 0.01 K and every halving reduces it by >1.7.
+
+The permanent `tools/test-transient-replay.mjs` additionally records two solves for
+thermal, explicit 2D and explicit 3D cases at both orders and 2/4 versus 4/8 axial
+cells. Native one/four-thread and fresh Node-WASM full-solve replay preserve exact
+Journal hashes, catalogue/sample metadata and immutable file state. All retained
+primary frames and sampled/final/mixed/same-id/reversed differences use the uniform
+heating or rigid-fall formulas above (`1e-10 K` / `1e-12 m`). Shifted thermal bodies
+give exact null coverage on both targets. Detaching/mutating transferred difference
+values and validity arrays cannot change a subsequent read; skip-solves replay
+refuses the absent sampled ids. All twelve new comparison variants and twelve
+existing primary-History variants pass on authenticated frozen-source native/WASM.
+
+Production two-pane scrubbing/playback/browser and full strict coverage acceptance
+remain required by #286's linked plan before closing it.
+
+### STEP source geometry and converter-free replay (#351)
+
+These host conversion gates use directly hand-authored AP203 STEP fixtures in
+`packages/app/test/fixtures/step/`. The source records exact planes/circles/a cylindrical
+surface and shared topological edges, rather than a polygon exported by the tested kernel.
+`tools/test-step-import.mjs` calls the pinned patched converter and the actual checked
+registry adapter, then queries the ordinary engine geometry. This is a host conversion
+Benchmark; it does not add an OCCT dependency or original-STEP reader to `femlab bench`.
+
+| Source | Independent SI bounds | Exact volume (m³) | Exact surface area (m²) |
+| --- | --- | --- | --- |
+| 1 × 2 × 3 metre box | [0,0,0] to [1,2,3] | 6 | 22 |
+| 1 × 2 × 3 millimetre box | [0,0,0] to [0.001,0.002,0.003] | 6e-9 | 22e-6 |
+| 1 × 2 × 3 inch box | [0,0,0] to [0.0254,0.0508,0.0762] | 0.000098322384 | 0.01419352 |
+| Radius 1 m, height 2 m cylinder | exact source: [-1,-1,0] to [1,1,2] | 2π | 6π |
+
+Box errors use an arithmetic tolerance scaled by the declared unit. The explicit mm and
+conversion-based inch units change only the unit declaration of the independent source;
+they are not selected by display preferences. Curved tessellation bounds may lie inside
+the source cylinder's x/y extrema, so they are tested within physical deflection rather
+than compared to an exact extremum that the polygon need not sample.
+
+At absolute linear deflections 0.1, 0.025 and 0.00625 m, with coarse angular deflection
+π rad so it does not force finer segmentation, the cylinder checks decreasing analytic
+volume/area errors. The actual lateral facets independently establish their maximum radial
+sag `d`: the closest projected point lies on an edge unless the facet crosses the axis,
+which is rejected. The convex inscribed cross-section contains radius `1-d`, giving the
+conservative volume-error bound `2π(2d-d²)`. Passing `linearDeflection=d` alone is not treated
+as a proof of that geometric premise. Source tolerances can supersede a requested value.
+
+For the regular n-gon prism produced by these source circles, the additional closed forms
+are `V=n sin(2π/n)` and `A=4n sin(π/n)+n sin(2π/n)`. Circumferential chord length
+`h=2 sin(π/n)` gives second-order volume convergence, with error/h² tending to π/3.
+These formulas are independent of the converter and the engine's triangle integration.
+
+Each converted geometry also follows the normal Material, predicate-named face and lattice
+mesh workflow, requiring a nonempty Mesh and face Set. The resulting ordinary ModelFile
+and Journal are copied into an isolated directory with only a native executable and the
+checked FEM Node module pair. `tools/step-replay-only.mjs` replays native one/four threads
+and Node WASM, comparing every Journal hash and the complete Model, Mesh and resolved Set.
+The replay directory contains no original STEP, converter module or dependency tree.
+
+
+### Modal algebraic acceptance (#633; prerequisite to unresolved FV52 D3)
+
+Every requested modal eigenpair is checked on the original reduced pencil after identical
+constraint/MPC reduction of the mass and the elastic-plus-prestress stiffness:
+
+`eta_i = ||K phi_i - lambda_i M phi_i||_infinity / ((||K||_infinity + |lambda_i| ||M||_infinity) ||phi_i||_infinity)`.
+
+The matrix infinity norms are absolute row sums. `solve.run.tolerance` (default `1e-10`)
+bounds the maximum `eta_i`, reported as the Result's residual and its `rel_residual` scalar.
+`maxIterations` is the actual modal subspace-sweep budget (default 5000). Exhaustion or a
+nonfinite residual returns structured `solve.stalled` before Result publication. Invalid
+nonpositive/nonfinite tolerances and zero budgets are schema errors. Common binary-exponent
+scaling preserves the definition for huge/subnormal matrices and arbitrary nonzero mode
+normalizations; zero vectors are rejected.
+
+Backward accuracy does not certify a soft frequency's forward error. Resolved Ritz values
+must additionally meet the existing `1e-10` relative eigenvalue-change test. Only a value
+within its own Rayleigh stiffness-contraction cancellation resolution is exempt from that
+relative test: `|lambda| |phi^T M phi| <= gamma_s |phi|^T |K| |phi|`, where
+`gamma_s = s*u/(1-s*u)`, `u = f64::EPSILON/2`, and `s = 2*maxRowNnz + 2*n` bounds the
+CSR matvec/dot operation depth. This is an arithmetic-resolution diagnostic, not a physical
+rigid-mode classifier or a certified eigenvalue-error interval. A positive finite mass
+contraction is required; a nonzero weighted-mass contraction erased by unrelated huge
+matrix entries conservatively retains Ritz stabilization. Each exempt mode carries
+`modal.unresolved-frequency`, explicitly denying relative frequency-convergence certification.
+The residual uses the signed Ritz eigenvalue before the existing near-buckling
+nonpositive-frequency clamp, which is preserved; a displayed zero frequency does not imply
+that the underlying signed Ritz value was exactly zero.
+
+Independent scalar/matrix oracles include exact and deliberately wrong generalized pairs,
+rigid nullspaces, an isolated `1e-20` soft mode, a coupled cancellation-dominated resolved
+soft mode, and overflow/subnormal scaling. Public Engine regressions at 1/4 threads prove
+one-sweep nonconvergence preserves the complete Model/Journal, prior Result catalogue and
+retained field, and a later successful retry receives the next unconsumed Result identity.
+The actual reported residual is also checked against its reduced-pencil definition.
+Existing B4/B7/B13/B26/F11 frequency/refinement gates remain unchanged; in particular B26
+rejects a residual-only early-stopping policy. Free rigid modes and the existing prestressed
+near-buckling/zero-preload cases remain separate physical controls. No FV52 reference is
+selected or accepted by this prerequisite.
+
+Primary numerical convention: [SLEPc norm-based generalized-eigenproblem convergence](https://slepc.upv.es/release/manualpages/EPS/EPSConv.html).
+
+### Imported multi-material regions (#652)
+
+`registry/imported_regions.rs` checks a one-metre, 0.1 × 0.1 m axial bar with a shared
+interface at x = 0.5 m, E₁ = 200 GPa, E₂ = 100 GPa, ν = 0, and F = 1000 N. Independently
+authored Tet4 and Hex8 sources each run at 2, 4 and 8 axial cells. Exact series compliance
+is F/A × (L₁/E₁ + L₂/E₂), giving tip displacement 7.5 × 10⁻⁷ m, interface displacement
+2.5 × 10⁻⁷ m and constant axial stress 100000 Pa. Every participating node is checked
+against the piecewise linear displacement, all other stress components against zero, and
+root resultant against −1000 N. Shared interface node identities are counted explicitly;
+material regions do not duplicate nodes. These piecewise affine solutions are reproduced
+at all three refinements; no nonzero asymptotic error-rate claim is made.
+
+Separate registry cases verify disconnected valid components, exact assembly provenance,
+source-name identity, editable assignments, rename/dependency guards, portable save/open
+and replay. Existing geometric invalidity and non-overlap acceptance guards remain active.
+
+The imported-region temperature case additionally applies the source owner's uniform
+10 K increment to both material regions at 2/4/8 axial cells. With α = 10⁻⁵ K⁻¹ and
+three symmetry-plane constraints, the independent free-expansion solution is
+u = α ΔT x in every component, with zero elastic stress. Every participating coordinate
+is checked. This verifies aggregate Body targeting across material blocks using the
+existing thermoelastic procedure; it introduces no new kernel or convergence-rate claim.

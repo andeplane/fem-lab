@@ -3,20 +3,24 @@ import { AccountPanel } from './Account';
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
 // Playwright smoke can hold the DOM against `registry.list()`.
-import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/registry';
+import type { CommandDef, EngineSchema, JsonSchema, Registry, Valued } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
-import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
+import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
+import type { ResultComparison } from '../result-comparison';
 import { lazy } from '../lazy';
 import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
-import type { Viewer } from '../viewer/viewer';
+import type { Pick as ViewerPick, Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
+import { ComparisonControls, ComparisonPaneChrome } from './ResultComparison';
+import { ComparisonPlaybackControls } from './ComparisonPlayback';
 import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
 import { ImportAbaqus, AbaqusImportReport } from './ImportAbaqus';
+import { ImportStep, StepImportReport, STEP_IMPORT_DRAFT } from './ImportStep';
 import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
@@ -38,6 +42,8 @@ export interface AppProps {
   sessionKey?: string;
   dispatch: Dispatch;
   viewer: ViewerRef;
+  rightViewer?: ViewerRef;
+  comparison?: ResultComparison;
   /** Reads for the live parts of the form (`query.convert`); defaults to a no-op for tests. */
   query?: Query;
   /** `registry.list().commands`, which is what the ⌘K palette is a view of. */
@@ -81,7 +87,7 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   else if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
   else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
   else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
-  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects', 'abaqus', 'abaqusReport', 'account']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects', 'abaqus', 'abaqusReport', 'step', 'stepReport', 'account']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
 }
 
 const doc = schema as unknown as EngineSchema;
@@ -149,6 +155,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <span class="file-action-label" aria-hidden="true">Import .inp</span><span class="file-action-icon" aria-hidden="true">⇥</span>
       </Cmd>
       {s.abaqusReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'abaqusReport', open: true }} title="View this import’s source units, counts and Set mappings" label="Abaqus report"><span class="file-action-label" aria-hidden="true">Abaqus report</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
+      <Cmd dispatch={dispatch} cmd="form.open" class="tbutton file-action" args={{ command: 'geometry.importStep', args: STEP_IMPORT_DRAFT }} title="Import STEP geometry" label="Import STEP geometry"><span class="file-action-label" aria-hidden="true">Import STEP</span><span class="file-action-icon" aria-hidden="true">◇</span></Cmd>
+      {s.stepReport ? <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton file-action" args={{ panel: 'stepReport', open: true }} title="Last successful STEP conversion receipt" label="STEP receipt"><span class="file-action-label" aria-hidden="true">STEP receipt</span><span class="file-action-icon" aria-hidden="true">ⓘ</span></Cmd> : null}
       <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
@@ -219,10 +227,12 @@ function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 }
 
 /** The design's bottom-left readout: the contoured value, the node, and where it is. */
-export function probeLine(p: { face: string | null; body: string | null; point: [number, number, number]; node: number | null; value: number | null } | null): string {
+export function probeLine(p: ViewerPick | null, length: Valued, field: { label: string; unit: string } | null): string {
   if (!p) return '';
-  const where = `x ${p.point[0].toFixed(3)} y ${p.point[1].toFixed(3)} z ${p.point[2].toFixed(3)} m`;
-  const who = p.value === null ? (p.face ?? p.body ?? '—') : `${formatNumber(p.value)}`;
+  const point = p.point.map(value => formatNumber(value * length.value));
+  const where = `x ${point[0]} y ${point[1]} z ${point[2]} ${length.unit}`;
+  // The renderer's scalar is already in the legend's display unit; only the SI point converts.
+  const who = p.value === null || field === null ? (p.face ?? p.body ?? '—') : `${field.label} ${formatNumber(p.value)} ${field.unit || '(1)'}`;
   return p.node === null ? `${who} · ${where}` : `${who} · node ${p.node} · ${where}`;
 }
 
@@ -311,13 +321,14 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (!l) return null;
   const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result, s.yieldStress !== null);
   const ticks = legendTicks(l.min, l.max);
+  const deforms = hasDeformation(s.result, s.fieldKey);
   return (
     <div class="legend">
       <div class="legend-head">
         <span class="legend-field mono">{choiceOf(s.fieldKey, s.result).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
-        <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
-          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{s.transient?.catalogue.field === 'temperature' ? '' : ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}`}
+        <span class="legend-sub mono" title={deforms ? exaggerationHelp(s.deformScale) : undefined}>
+          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{deforms ? ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}` : ''}
         </span>
       </div>
       <div class="legend-body">
@@ -405,6 +416,8 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     viewer.current?.previewDeformScale(scale);
   };
   const physical = mode === undefined && (s.result?.history?.length ?? 0) > 0;
+  const deforms = hasDeformation(s.result, s.fieldKey);
+  if (!deforms && !physical) return null;
   const sweeps = mode !== undefined;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
@@ -457,7 +470,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
-      {s.transient?.catalogue.field === 'temperature' ? null : <>
+      {deforms ? <>
       <span class="faint" title={exaggerationHelp(s.deformScale)}>
         exaggeration
       </span>
@@ -467,7 +480,8 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         // An auto scale of ×1000 has to be reachable, and the thumb must not sit pinned at the
         // end of a 0–400 track when it is: the track grows to whatever is drawn.
         max={String(Math.max(400, s.deformScale))}
-        step={String(Math.max(1, Math.round(Math.max(400, s.deformScale) / 100)))}
+        // Registry scales include ×1 and fractions; native step rounding must not change them.
+        step="any"
         aria-label="exaggeration"
         title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
@@ -482,7 +496,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
-      </Cmd></>}
+      </Cmd></> : null}
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
         screenshot
       </Cmd>
@@ -490,12 +504,17 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
   );
 }
 
-function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'left' }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef; query: Query; comparison?: ResultComparison; side?: 'left' | 'right' }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
+  const probeEpoch = useRef(0);
   const [broken, setBroken] = useState('');
-  useEffect(() => { setProbe(''); }, [s.transient?.generation, s.transient?.frame.index]);
-  const results = s.viewMode === 'results' && s.result !== null;
+  useEffect(() => { probeEpoch.current++; setProbe(''); }, [s.revision, s.fieldKey, s.legend, s.viewMode, s.result?.resultId, s.transient?.generation, s.transient?.frame.index]);
+  const comparing = s.viewMode === 'results' && s.resultComparison.configuration.mode !== 'single';
+  const paneName = s.resultComparison.configuration.mode === 'difference' ? 'difference' : side;
+  const pane = comparing ? s.resultComparison[paneName] : null;
+  const comparisonDeforms = paneName === 'difference' ? pane?.canDeform : s.resultComparison.left?.canDeform || s.resultComparison.right?.canDeform;
+  const results = s.viewMode === 'results' && s.result !== null && !comparing;
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
@@ -504,32 +523,67 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;
-    const onResize = () => v?.resize();
+    const onResize = () => { v?.resize(); comparison?.resize(); };
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
       try {
-        v = new Viewer(el, () => viewer.onBounds?.());
+        v = new Viewer(el, () => viewer.onBounds?.(), () => {
+          // Read actual host chrome only for an explicit Fit; resizing keeps the person's pose.
+          const parent = el.parentElement;
+          const box = el.getBoundingClientRect();
+          if (!parent || parent.classList.contains('comparison-pane') || box.width === 0 || box.height === 0) return null;
+          let top = 12, right = box.width - 12, bottom = box.height - 36;
+          for (const selector of ['.viewer-chrome', '.stale-banner']) {
+            const overlay = parent.querySelector(selector)?.getBoundingClientRect();
+            if (overlay?.height) top = Math.max(top, overlay.bottom - box.top + 12);
+          }
+          const legend = parent.querySelector('.legend')?.getBoundingClientRect();
+          if (legend?.width) right = Math.min(right, legend.left - box.left - 12);
+          const deformation = parent.querySelector('.deform-bar')?.getBoundingClientRect();
+          if (deformation?.height) bottom = Math.min(bottom, deformation.top - box.top - 12);
+          return right > 24 && bottom > top + 12 ? { width: box.width, height: box.height, left: 12, right, top, bottom } : null;
+        });
       } catch (e) {
         // No WebGL2 is a fact about the browser, not a crash: say so and keep the rest usable.
         setBroken(`This browser could not open a WebGL2 context: ${(e as Error).message}`);
         return;
       }
       viewer.current = v;
-      v.setSelection(store.state.selection);
-      v.setHover(store.state.hover);
+      if (!comparison?.active) { v.setSelection(store.state.selection); v.setHover(store.state.hover); }
       viewer.onReady?.();
       v.onPick((p) => {
-        const frame = store.state.transient?.frame;
-        setProbe(`${probeLine(p)}${p && frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
+        if (comparison?.active) {
+          const configuration = store.state.resultComparison.configuration;
+          const name = configuration.mode === 'difference' ? 'difference' : side;
+          const metadata = store.state.resultComparison[name];
+          if (p && metadata) void dispatch({ cmd: 'view.pickComparison', pane: name, resultId: metadata.operand.resultId,
+            at: p.point.map(value => ({ value, unit: 'm' })), ...(p.body ? { body: p.body } : {}), ...(p.face ? { face: p.face } : {}) }).catch(() => undefined);
+          return;
+        }
+        const epoch = ++probeEpoch.current;
+        setProbe('');
+        if (p) {
+          const state = store.state;
+          const unit = state.model?.units.length ?? 'm';
+          const field = state.viewMode === 'results' && state.legend ? { label: choiceOf(state.fieldKey, state.result).label, unit: state.legend.unit } : null;
+          const frame = state.transient?.frame;
+          // Geometry-only picks need the same engine-owned conversion before any solve exists.
+          void query({ query: 'query.convert', quantity: { value: 1, unit: 'm' }, to: unit }).then(value => {
+            if (!gone && epoch === probeEpoch.current) setProbe(`${probeLine(p, value as Valued, field)}${frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
+          }).catch(error => { if (!gone && epoch === probeEpoch.current) store.fail(error); });
+        }
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
+      v.onCameraChange(() => comparison?.cameraChanged(side));
+      v.onCameraEnd(() => { if (v) void dispatch({ cmd: 'view.setCamera', ...v.getCamera() }).catch(() => undefined); });
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
-        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
-        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        // The layout box catches splitters; the canvas CSS size also changes when comparison
+        // reserves a legend column without changing that box. The fixed CSS dimensions keep
+        // backing-buffer writes from feeding the observer. Resize then reads the actual pane.
         observer.observe(el.parentElement ?? el);
+        observer.observe(el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
@@ -541,18 +595,18 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch, store]);
+  }, [viewer, dispatch, store, query, comparison, side]);
 
-  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
-  useEffect(() => viewer.current?.setHover(s.hover), [viewer, s.hover]);
+  useEffect(() => { if (!comparing) viewer.current?.setSelection(s.selection); }, [viewer, s.selection, comparing]);
+  useEffect(() => { if (!comparing) viewer.current?.setHover(s.hover); }, [viewer, s.hover, comparing]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
   const reSolveBlocker = solveBlockers(s.model, s.result?.step ?? '')[0];
   return (
-    <div class="viewer">
-      <canvas ref={canvas} />
-      <div class="viewer-chrome">
+    <div class={`viewer${comparing ? ' comparison-pane' : ''}`} data-comparison-pane={comparing ? paneName : undefined} data-result-id={pane?.operand.resultId}>
+      <canvas ref={canvas} aria-label={comparing ? `${paneName} retained Result` : 'Model viewer'} data-cmd={comparing ? 'view.pickComparison' : 'selection.set'} />
+      {side === 'left' ? <div class="viewer-chrome">
         <div class="viewer-toolbar">
           <div class="segmented" role="group" aria-label="display mode">
             {MODES.map((mode) => (
@@ -578,7 +632,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             fit
           </Cmd>
         </div>
-        {ref ? (
+        {ref && !comparing ? (
           <div class="selection-chip">
             <span>@{ref}</span>
             <Cmd dispatch={dispatch} cmd="clipboard.copy" class="key" args={{ what: { kind: 'selection' } }}>
@@ -586,9 +640,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             </Cmd>
           </div>
         ) : null}
-        {s.pickInto ? <div class="selection-chip armed">click a face in the viewer to fill {s.pickInto.join('.')}</div> : null}
-      </div>
-      {stale ? (
+        {s.pickInto && !comparing ? <div class="selection-chip armed">click a face in the viewer to fill {s.pickInto.join('.')}</div> : null}
+      </div> : null}
+      {stale && !comparing ? (
         <div class="stale-banner" role="status">
           <span>
             Result is stale — Model changed after revision {s.result!.revision}.
@@ -601,9 +655,15 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       ) : null}
       {results ? <Legend s={s} dispatch={dispatch} /> : null}
       {results ? <DeformBar s={s} store={store} dispatch={dispatch} viewer={viewer} /> : null}
-      <SolvingCard s={s} dispatch={dispatch} />
-      <ErrorCard s={s} dispatch={dispatch} />
-      <div class="probe mono">{probe}</div>
+      {pane ? <ComparisonPaneChrome pane={pane} name={paneName} s={s} dispatch={dispatch} /> : null}
+      {comparing && comparisonDeforms && side === 'left' ? <div class="deform-bar comparison-deform">
+        <span>Shared deformation ×{formatNumber(s.deformScale)}</span>
+        <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'true' }}>True</Cmd>
+        <Cmd cmd="view.setDeformScale" dispatch={dispatch} args={{ scale: 'auto' }}>Auto</Cmd>
+        <input type="number" step="any" min="0" aria-label="comparison deformation scale" data-cmd="view.setDeformScale" value={s.deformScale} onChange={e => { const scale = Number(e.currentTarget.value); if (Number.isFinite(scale) && scale >= 0) void dispatch({ cmd: 'view.setDeformScale', scale }).catch(() => undefined); }} />
+      </div> : null}
+      {side === 'left' ? <><SolvingCard s={s} dispatch={dispatch} /><ErrorCard s={s} dispatch={dispatch} /></> : null}
+      {!comparing ? <div class="probe mono">{probe}</div> : null}
       {broken ? (
         <div class="hint">{broken}</div>
       ) : (s.model?.bodies.length ?? 0) === 0 ? (
@@ -685,7 +745,7 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
   );
 }
 
-function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps) {
+function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, commands = [] }: AppProps) {
   const s = useStore(store);
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
@@ -715,11 +775,18 @@ function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
               <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
-                <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
+                <div class="result-workspace">
+                  <ComparisonControls s={s} dispatch={dispatch} query={read} />
+                  <ComparisonPlaybackControls s={s} store={store} dispatch={dispatch} query={read} preview={comparison} />
+                  <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>
+                    <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} query={read} comparison={comparison} />
+                    {rightViewer && s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? <ViewerPane s={s} store={store} dispatch={dispatch} viewer={rightViewer} query={read} comparison={comparison} side="right" /> : null}
+                  </div>
+                </div>
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
                 <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
-              <SchemaForm s={s.form?.cmd === 'file.importAbaqus' ? { ...s, form: null } : s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <SchemaForm s={s.form && ['file.importAbaqus', 'geometry.importStep'].includes(s.form.cmd) ? { ...s, form: null } : s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
               <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
@@ -727,7 +794,7 @@ function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps
       ) : (
         <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <Start s={s} dispatch={dispatch} />
-          {s.form && s.form.cmd !== 'file.importAbaqus' ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+          {s.form && !['file.importAbaqus', 'geometry.importStep'].includes(s.form.cmd) ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
         </div>
       )}
       <Examples s={s} dispatch={dispatch} />
@@ -735,6 +802,8 @@ function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps
       <AccountPanel s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <ImportAbaqus s={s} dispatch={dispatch} />
+      <ImportStep s={s} dispatch={dispatch} />
+      <StepImportReport s={s} dispatch={dispatch} />
       <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />

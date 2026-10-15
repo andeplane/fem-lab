@@ -14,6 +14,7 @@ import type { HostCaps } from './capabilities';
 import { choiceOf, modeCount } from './fields';
 import type { Projects } from './projects';
 import type { ResultsView } from './results';
+import type { ResultComparison } from './result-comparison';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
@@ -135,6 +136,7 @@ export function makeHostContext(
   capture: AnimationCapture = new AnimationCapture(captureEnvironment),
   abaqusIo?: AbaqusIo,
   account?: AccountServices,
+  comparison?: ResultComparison,
 ): HostContext {
   const own = session.projects;
   const v = (): Viewer => {
@@ -144,17 +146,23 @@ export function makeHostContext(
   return {
     account,
     transport,
+    ...(comparison ? { resultComparison: comparison } : {}),
     abaqus: { capture: () => ({ ...session.captureImport(), io: abaqusIo ?? browserAbaqusIo(document, crypto, store.state.folder) }) },
     view: {
-      fit: () => v().fit(),
-      setCamera: (c) => v().setCamera(c as CameraState),
-      preset: (p) => v().preset(p),
-      setProjection: (p) => v().setProjection(p),
-      showField: (f) => {
+      fit: () => comparison?.active ? comparison.preset('iso') : v().fit(),
+      setCamera: (c) => {
+        const viewer = v();
+        if (comparison) comparison.setCamera(c as CameraState); else viewer.setCamera(c as CameraState);
+      },
+      preset: (p) => comparison?.active ? comparison.preset(p) : v().preset(p),
+      setProjection: (p) => comparison?.active ? comparison.setProjection(p) : v().setProjection(p),
+      showField: async (f) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         return results?.showField(f as { field: string | null; component?: number | null });
       },
       setLegend: (l) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison legends require an explicit pane and Result', 'view.setLegend', 'view.setComparisonLegend');
         if (!results) {
           if (!l.colormap) return;
           store.set({ colormap: l.colormap as ColormapName });
@@ -164,23 +172,27 @@ export function makeHostContext(
         return results.setLegend(l as { colormap?: string; range?: [number, number] | 'auto' });
       },
       setDeformScale: (s) => {
+        if (comparison?.active) return comparison.setDeformScale(s);
         if (!results) return store.set({ deformScale: typeof s === 'number' ? s : 1 });
         v();
         results.setDeformScale(s);
       },
       setClip: (p) => {
         store.set({ clipOn: p !== null });
+        if (comparison?.active) return comparison.setClip(p ? { normal: p.normal, offset: p.offset } : null);
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
       toggle: (layer, on) => {
         const visible = v().setLayer(layer, on);
+        if (comparison?.active) comparison.viewers.right.current?.setLayer(layer, visible);
         store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
       },
       setVisible: (bodies, on) => {
+        if (comparison?.active) throw new FemError('unsupported', 'comparison visibility requires an explicit pane and Result', 'view.setVisible', 'view.setComparisonVisible');
         v().setVisible(bodies, on);
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
-      highlight: (s) => viewer.current?.setHighlight(s),
+      highlight: (s) => { if (!comparison?.active) viewer.current?.setHighlight(s); },
       hover: async (s) => {
         const commit = store.beginHover();
         const target = s.load
@@ -192,19 +204,27 @@ export function makeHostContext(
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
+        if (comparison?.active) comparison.viewers.right.current?.setTheme(t);
       },
-      animate: (a) => {
+      animate: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
         return results.animate(a);
       },
-      playTransient: (a) => {
+      playTransient: async (a) => {
         v();
+        if (comparison?.configured) await comparison.configure({ mode: 'single' });
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
         return results.playTransient(a);
       },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
+        if (comparison?.active) {
+          const guard = comparison.captureGuard(), png = await composePaneImages(comparison.capture(o));
+          guard();
+          return { png };
+        }
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
@@ -423,6 +443,26 @@ export function makeHostContext(
   };
 }
 
+/** Browser I/O stays in the host; the comparison controller supplies already-rendered panes. */
+async function composePaneImages(pngs: string[]): Promise<string> {
+  if (pngs.length === 1) return pngs[0]!;
+  const images = await Promise.all(pngs.map(png => new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = document.createElement('img');
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new FemError('internal', 'a captured comparison pane could not be decoded', 'query.screenshot'));
+    image.src = png;
+  })));
+  const canvas = document.createElement('canvas');
+  canvas.width = images.reduce((width, image) => width + image.naturalWidth, 0);
+  canvas.height = Math.max(...images.map(image => image.naturalHeight));
+  const context = canvas.getContext('2d');
+  if (!context) throw new FemError('unsupported', 'a 2D canvas is required to join comparison panes', 'query.screenshot');
+  context.fillStyle = '#0d0f13'; context.fillRect(0, 0, canvas.width, canvas.height);
+  let left = 0;
+  for (const image of images) { context.drawImage(image, left, 0); left += image.naturalWidth; }
+  return canvas.toDataURL('image/png');
+}
+
 /** Metadata and inputs are prepared before the session owner attempts activation. */
 export async function openExample(name: string, session: SessionHostServices) {
   const benchmark = await fetchExampleMetadata(name);
@@ -460,7 +500,7 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
     {
@@ -495,7 +535,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       tool: true,
       run: async (input) => {
         const { mode } = input as { mode: ViewMode };
-        if (results) return results.setMode(mode);
+        if (results) {
+          if (comparison && mode !== 'results') comparison.suspend();
+          await results.setMode(mode);
+          comparison?.resume();
+          return;
+        }
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
       },
@@ -542,6 +587,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
         const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
         store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);
         if (command === 'file.importAbaqus') store.togglePanel('abaqus', true);
+        if (command === 'geometry.importStep') { store.togglePanel('stepReport', false); store.togglePanel('step', true); }
       },
     },
     {

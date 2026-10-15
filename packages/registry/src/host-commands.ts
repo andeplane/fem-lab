@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
 import type { AbaqusConversion, AbaqusConversionReport, ExecutionPolicy, Command, JournalEntry, ModelFile, ModelSummary, PathResult, Query, ResultSummary } from './generated/engine';
 import { AbaqusImport, readAbaqus, type AbaqusIo } from './abaqus-import';
+import { StepImport, type StepImportHost } from './step-import';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
@@ -15,13 +16,14 @@ import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
 import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
 import {EMPTY_ACCOUNT,type AccountServices} from './account-types';
+import { ComparisonConfig, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, ComparisonPlaybackInput, RetainedFrameSample, type ResultComparisonHost } from './result-comparison';
 export { MAX_MODEL_FILE_BYTES } from './model-file';
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const int = z.number().int();
 const none = z.object({});
 
-export const CameraState = z.object({ position: vec3, target: vec3, up: vec3.optional() });
+export const CameraState = z.object({ position: vec3, target: vec3, up: vec3.optional(), zoom: z.number().positive().optional().describe('Dimensionless lens zoom, including orthographic orbit zoom. Omit to keep the current zoom.') });
 export const ViewPreset = z.enum(['iso', 'front', 'back', 'left', 'right', 'top', 'bottom']);
 export const Projection = z.enum(['perspective', 'orthographic']);
 export const FieldChoice = z.union([
@@ -38,13 +40,9 @@ export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
 export const Animation = z.object({ step: z.string().min(1), mode: int.positive().optional(), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
-const TimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
 export const TransientPlayback = z.object({
   step: z.string(), playing: z.boolean(), speed: z.number().positive().optional(),
-  sample: z.union([
-    z.object({ kind: z.literal('frame'), index: int.nonnegative() }),
-    z.object({ kind: z.literal('time'), time: TimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
-  ]).optional(),
+  sample: RetainedFrameSample.optional(),
 });
 export const SelectionInput = z.object({
   load: z.string().min(1).optional(),
@@ -143,6 +141,10 @@ export interface AutosaveVersion {
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
+  /** Optional host converter. Replay of its portable geometry Commands needs no converter. */
+  step?: StepImportHost;
+  /** Retained Result presentation is host-owned; headless hosts report unsupported explicitly. */
+  resultComparison?: ResultComparisonHost;
   /** Bound to the admitted producer before picker/read awaits; publication uses checked Commands. */
   abaqus: { capture(): {
     io: AbaqusIo;
@@ -377,14 +379,15 @@ interface Built {
  * here from Queries it can.
  */
 async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | null> {
-  const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
-  if (spec.format === 'script') {
+  if (spec.format === 'journal' || spec.format === 'script') {
+    const file = await ctx.transport.exportFile();
+    if (spec.format === 'journal') {
+      return { filename: `${file.model.name}.femlab.json`, mime: 'application/json', data: boundedModelFileText(file) };
+    }
     const { text } = (await ctx.transport.query({ query: 'query.script' })) as { text: string };
-    return { filename: `${name}.ts`, mime: 'text/typescript', data: text };
+    return { filename: `${file.model.name}.ts`, mime: 'text/typescript', data: text };
   }
-  if (spec.format === 'journal') {
-    return { filename: `${name}.femlab.json`, mime: 'application/json', data: boundedModelFileText(await ctx.transport.exportFile()) };
-  }
+  const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
   if (spec.format === 'png') {
     const options = ScreenshotOptions.parse({
       legend: spec['legend'] !== false,
@@ -417,9 +420,19 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | 
   return { filename: out.filename, mime: out.mime, data: out.bytes };
 }
 
+function comparisonHost(ctx: HostContext): ResultComparisonHost {
+  if (!ctx.resultComparison) throw new FemError('unsupported', 'this host has no Result comparison workspace', 'view.compareResults', 'open the browser app to compare retained Results');
+  return ctx.resultComparison;
+}
+
 export const HOST_COMMANDS: HostDef[] = [
-  def('view.fit', 'sessionView', 'Frame the camera on the whole mesh, or on the current selection when there is one. Use it after adding geometry or when the model has drifted out of view.', none, (_, ctx) => ctx.view.fit()),
-  def('view.setCamera', 'sessionView', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
+  def('view.compareResults', 'sessionView', 'Configure two explicit immutable Result ids and fields, each optionally selecting its own retained primary frame by exact/nearest physical time or retained index. Actual resolved ids and times remain visible; historical derived fields are unavailable. sideBySide draws their own retained surfaces with shared cameras and independent legends; difference draws engine left minus right on the required target side and reports interpolation/coverage. Omit samples for final fields; single restores the normal Result workflow. No Model or Journal change.', ComparisonConfig, (input, ctx) => comparisonHost(ctx).configure(input)),
+  def('view.playComparison', 'sessionView', 'Play, pause, seek or change positive simulated seconds per wall second for explicitly pinned comparison Result ids. independent changes one pane; synchronized uses both ids and their overlapping physical interval. Index/time seeks use the existing exact/nearest primary-frame protocol. Playback then holds each schedule at the physical playhead, showing actual held times even when they differ; no temporal interpolation or historical derived field is implied. Synchronized playback stops at the shorter endpoint; independent mode can explore the remainder. Display only; no Model or Journal change.', ComparisonPlaybackInput, (input, ctx) => comparisonHost(ctx).play(input)),
+  def('view.setComparisonLegend', 'sessionView', 'Set one explicitly identified comparison pane’s colormap or physical range. Bounds carry units; auto follows available data. Difference ranges describe difference amounts, so temperature conversion removes origin offsets. An obsolete pane/result id is refused; other panes and scientific fields are unchanged.', ComparisonLegendInput, (input, ctx) => comparisonHost(ctx).legend(input)),
+  def('view.setComparisonVisible', 'sessionView', 'Show or hide named Bodies only in one comparison pane identified by its retained Result id. Names belong to that solved surface, including stale Results. Other panes, the current Model and the Journal are unchanged; scientific difference coverage continues to describe the full target Mesh.', ComparisonVisibilityInput, (input, ctx) => comparisonHost(ctx).visible(input)),
+  def('view.pickComparison', 'sessionView', 'Pick the nearest visible retained surface entity at a unit-bearing world point, explicitly scoped to a pane and Result id. The readout uses that solve’s scientific field (or engine difference) and reports missing coverage as null. This never selects an editable object or spends a Properties pick target in the current Model.', ComparisonPickInput, (input, ctx) => comparisonHost(ctx).pick(input)),
+  def('view.fit', 'sessionView', 'Frame the camera on the whole mesh, or on the current selection when there is one. Browser Fit keeps the shape clear of visible viewer controls; ordinary resizing preserves the current camera. Use it after adding geometry or when the model has drifted out of view.', none, (_, ctx) => ctx.view.fit()),
+  def('view.setCamera', 'sessionView', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up` and dimensionless lens `zoom`. Comparison panes share this camera. Use `view.preset` for the standard views; this is for a reproducible screenshot angle and scale.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
   def('view.preset', 'sessionView', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
   def('view.setProjection', 'sessionView', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
   def('view.showField', 'sessionView', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
@@ -479,6 +492,11 @@ export const HOST_COMMANDS: HostDef[] = [
     await captured.replace(conversion.commands, conversion.report);
     return { report: conversion.report };
   }),
+  def('geometry.importStep', 'modelWrite', 'Import a STEP .step/.stp file (at most 16 MiB) as one named Body, or re-import that Body, using a lazy cancellable host converter. Omit path for a picker; paths are scoped to the open folder. Supply explicit linearDeflection (length, at least 0.0000001 m) and angularDeflection (positive angle, at most pi rad). STEP declared units become meters independently of display units. Every source mesh/face must convert completely; errors never silently drop geometry. Multiple meshes become one Body. Exact B-rep, CAD history, original face identities and CAD materials are not retained. The Journal stores one ordinary geometry.import with f64 ASCII triangles, replayable without the converter or source file. Captures session/state before I/O: a model edit or project switch rejects publication; view changes remain valid. A second pending STEP import conflicts. Use geometry.cancelStep with the same name before publication to terminate it. Returns the checked Ack and a conversion receipt. Name durable face targets with geometry.nameFace predicates before meshing.', StepImport, async (input, ctx) => {
+    if (!ctx.step) throw new FemError('unsupported', 'this host has no STEP converter', 'geometry.importStep', 'import in the browser, then replay its portable Journal on this host');
+    return ctx.step.import(input);
+  }),
+  def('geometry.cancelStep', 'control', 'Cancel the pending STEP conversion for the explicit Body name, terminating its dedicated Worker. Returns cancelled:false when that name has no pending conversion or publication has begun. No engine Command is recorded.', z.object({ name: z.string().min(1) }), ({ name }, ctx) => ({ cancelled: ctx.step?.cancel(name) ?? false })),
   def('geometry.importFile', 'modelWrite', 'Import a geometry file from disk as a Body: with the file picker, or from a `path` relative to the open project folder. The file is read here and handed to the engine\'s geometry.import, which carries it inline, so the Journal replays on any host without the file. STL only for now, ASCII or binary, up to 32 MiB. `unitLength` says what one unit in the file means and defaults to `1 mm`, which is what most CAD tools export; check the reported bounding box if you are not sure. `featureAngle` (degrees) and `simplifyBelow` (a length) are passed straight through. Name the faces you will reuse with geometry.nameFace predicates rather than the auto `face0` numbers, which move when the file does.', z.object({
     name: z.string(),
     path: z.string().optional(),
@@ -563,9 +581,9 @@ export const HOST_COMMANDS: HostDef[] = [
   def('account.signIn','control','Sign in for hosted AI with Google redirect or an email link. Requires an explicit user action; no password, token or provider key is accepted.',z.strictObject({method:z.enum(['google','email']),email:z.email().optional()}),({method,email},ctx)=>account(ctx).signIn(method,email),false),
   def('account.signOut','control','Sign out this tab session and stop its hosted Assistant access. Local models remain available anonymously.',none,(_input,ctx)=>account(ctx).signOut(),false),
   def('account.refresh','control','Refresh the verified account allowance and billing status from the service. Cannot select another account.',none,(_input,ctx)=>account(ctx).refresh(),false),
-  def('account.checkout','control','Open hosted checkout for a supported monthly plan. The server owns prices/customer identity; this Command does not grant credits or complete payment.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).checkout(plan),false),
-  def('account.portal','control','Open subscription/payment management for the signed-in account only. Requires an explicit user action; never an Assistant tool.',none,(_input,ctx)=>account(ctx).portal(),false),
-  def('account.changePlan','control','Schedule a supported paid plan for the next billing period. Current credits stay unchanged; the next paid invoice grants the new allowance.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).changePlan(plan),false),
+  def('account.checkout','control','Open hosted checkout for a supported monthly plan after the user declares personal or business use, fixed for this subscription. purchaseUse is required for Managed Checkout; omission is supported only for legacy direct billing. The server owns prices/customer identity; this Command does not grant credits or complete payment and is never an Assistant tool.',z.strictObject({plan:paidPlan,purchaseUse:z.enum(['personal','business']).optional()}),({plan,purchaseUse},ctx)=>account(ctx).checkout(plan,purchaseUse),false),
+  def('account.portal','control','Open cancellation/payment management for the signed-in account with an owned billing customer, including during a sales pause or financial review. Requires a configured service and an explicit user action; never an Assistant tool.',none,(_input,ctx)=>account(ctx).portal(),false),
+  def('account.changePlan','control','Schedule a supported paid plan for the next billing period. The subscription keeps its personal/business use. Current credits stay unchanged; the next paid invoice grants the new allowance.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).changePlan(plan),false),
   def('account.export','control','Request a private export of account, allowance and billing records. Local models and chat are not uploaded or included.',none,(_input,ctx)=>account(ctx).exportData(),false),
   def('account.delete','control','Request account deletion after explicit DELETE confirmation. Renewal must be canceled before identity removal; local model files remain in this browser.',z.strictObject({confirm:z.literal('DELETE')}),({confirm},ctx)=>account(ctx).deleteAccount(confirm),false),
   def('ai.acceptDisclosure','control','Acknowledge that hosted Assistant messages, selected model/project context, tool results and images go through FEM Lab to the provider. This tab/account consent is never journaled.',none,(_input,ctx)=>account(ctx).acceptDisclosure(),false),
@@ -573,9 +591,10 @@ export const HOST_COMMANDS: HostDef[] = [
 
 export const HOST_QUERIES: HostDef[] = [
   def('query.account','control','Read the current host account/login and allowance state, excluding credentials and payment customer IDs. Not exposed to Assistant tools or generated scripts.',none,(_input,ctx)=>ctx.account?.state()??EMPTY_ACCOUNT,false),
+  def('query.resultComparison', 'modelRead', 'Read comparison configuration, retained catalogue, independently selected Result summaries and actual frame ids/times, physical legends, pane visibility/picks, stale/current state, interpolation coverage, loading and structured errors. Playback reports independent or shared physical playheads, each held sample, speed/playing state and shared interval; unequal held times remain explicit. This is host view state; ordinary scientific fields and surfaces remain engine Queries. No Model or Journal mutation.', none, (_, ctx) => comparisonHost(ctx).state()),
   def('query.validateScript', 'workspace', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
-  def('query.screenshot', 'modelRead', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. A single dimension preserves the current aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
-  def('query.view', 'modelRead', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
+  def('query.screenshot', 'modelRead', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. Comparison captures contain each visible retained pane with its own Result identity and legend; side-by-side divides the requested total width between panes. A single dimension preserves the viewport aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
+  def('query.view', 'modelRead', 'The current camera: position, target and up in metres, plus dimensionless zoom when changed from one. Comparison panes share this camera. Hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
   def('query.capabilities', 'modelRead', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
     ...((await ctx.transport.query({ query: 'query.capabilities' })) as object),
     ...ctx.env,

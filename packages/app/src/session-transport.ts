@@ -152,6 +152,16 @@ export class SessionTransport implements EngineTransport {
       return this.accept(reply) as Ack;
     });
   }
+  /** A host conversion must retain admission from before its asynchronous input/conversion.
+   * In particular, queued writes and intervening reads must never refresh this expectedVersion. */
+  dispatchAtAdmission(input: Exclude<Command, { cmd: 'model.new' }>, admission: Stamp): Promise<Ack> {
+    const command = structuredClone(input); const captured = structuredClone(admission);
+    return this.ordered(async () => {
+      if (!sameSession(captured.session, this.stamp.session)) throw expired();
+      const reply = await this.channel.request({ op: 'dispatch', context: this.context(), expectedVersion: captured.stateVersion, command }, this.sink);
+      return this.accept(reply) as Ack;
+    });
+  }
   query(input: Query): Promise<QueryResult> {
     const query = structuredClone(input);
     return this.ordered(async () => {
@@ -180,7 +190,11 @@ export class SessionTransport implements EngineTransport {
     if (ack.output.type !== 'export') throw new FemError('internal', 'mesh.export did not return a file');
     return { filename: ack.output.filename, mime: ack.output.mime, bytes: new TextEncoder().encode(ack.output.text) };
   }
-  async exportFile(): Promise<ModelFile> { return (await this.snapshot()).file; }
+  async exportFile(): Promise<ModelFile> {
+    const document = await this.query({ query: 'query.document' });
+    if (!('file' in document)) throw new FemError('internal', 'query.document did not return a Model file');
+    return document.file;
+  }
   async importFile(file: ModelFile): Promise<ImportAck> {
     const next = await this.replaceWith({ kind: 'file', file: structuredClone(file) });
     const snapshot = await next.snapshot();

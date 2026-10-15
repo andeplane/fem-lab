@@ -358,7 +358,8 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <h1>
         <i /> FEM Lab
       </h1>
-      <p class="pitch">A finite-element editor and solver in a browser tab. No install, no server, nothing leaves this page.</p>
+      <p class="pitch">A finite-element editor and solver in a browser tab. Model, mesh and solve locally. Optional hosted AI sends the context needed for your request to the model provider.</p>
+      <Cmd dispatch={dispatch} cmd="account.open" class="tbutton outline">{s.account.uid ? 'Account and AI plans' : 'Sign in for AI'}</Cmd>
 
       <div class="ask">
         <input
@@ -405,7 +406,7 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             ))}
           </div>
         ) : (
-          <div class="faint no-projects">Projects you start are kept in this browser. Nothing is uploaded.</div>
+          <div class="faint no-projects">Projects you start are kept in this browser. Hosted AI processes the context needed for your request.</div>
         )}
       </div>
 
@@ -419,6 +420,11 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
           <b>Import Abaqus .inp</b>
           <span>Flat C3D4/C3D8 mesh or supported linear static model. Choose source Length and Force units explicitly.</span>
           <i class="mono cue-cyan">file.importAbaqus</i>
+        </Cmd>
+        <Cmd dispatch={dispatch} cmd="form.open" class="card" args={{ command: 'geometry.importStep', args: { name: 'body', linearDeflection: '0.1 mm', angularDeflection: '15 deg' } }} title="Import STEP geometry">
+          <b>Import STEP geometry</b>
+          <span>Convert CAD surfaces into one tessellated Body. Choose physical deflection, then name faces and mesh.</span>
+          <i class="mono cue-cyan">geometry.importStep</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'examples' }}>
           <b>Examples</b>
@@ -434,8 +440,9 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 
       <div class="caps mono">
         {s.ready ? '●' : '○'} {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'} · {s.hostCaps?.webgpu ? 'WebGPU available' : 'no WebGPU'} ·{' '}
-        {s.hostCaps?.crossOriginIsolated ? 'cross-origin isolated' : 'not isolated'} · {storageLine(s)} · no server · nothing leaves the tab
+        {s.hostCaps?.crossOriginIsolated ? 'cross-origin isolated' : 'not isolated'} · {storageLine(s)} · local modeling
       </div>
+      <nav class="account-policies" aria-label="FEM Lab policies"><a href={`${import.meta.env.BASE_URL}terms.html`} target="_blank" rel="noreferrer">Terms of service</a><a href={`${import.meta.env.BASE_URL}privacy.html`} target="_blank" rel="noreferrer">Privacy notice</a><a href="mailto:andershaf@gmail.com">Contact support</a></nav>
       {s.notes.length > 0 ? <div class="notes">{s.notes.join(' · ')}</div> : null}
       {s.lastError ? <div class="notes bad">{`${s.lastError.code}: ${s.lastError.cause}`}</div> : null}
     </div>

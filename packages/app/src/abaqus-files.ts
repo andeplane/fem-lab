@@ -2,11 +2,11 @@ import { ABAQUS_ACCEPT, FemError, type AbaqusFile, type AbaqusIo } from '@femlab
 import type { ProjectFolder } from './ai/project';
 
 /** The caller captures the folder at admission, before a file picker or disk read awaits. */
-export function browserAbaqusIo(doc: Pick<Document, 'createElement'>, crypto: Pick<Crypto, 'subtle'>, folder: ProjectFolder | null): AbaqusIo {
+export function browserAbaqusIo(doc: Pick<Document, 'createElement'>, crypto: Pick<Crypto, 'subtle'>, folder: ProjectFolder | null, accept = ABAQUS_ACCEPT): AbaqusIo {
   return {
     pick: () => new Promise<AbaqusFile | null>(resolve => {
       const input = doc.createElement('input');
-      input.type = 'file'; input.accept = ABAQUS_ACCEPT;
+      input.type = 'file'; input.accept = accept;
       input.oncancel = () => resolve(null);
       input.onchange = () => {
         const file = input.files?.[0];

@@ -33,11 +33,11 @@ Journal actually computes. Solve times are `femlab run <journal> --verify --cpu`
 core in a release build; all 27 together take a couple of seconds on an idle machine.
 
 Native tests use Cargo's level-1 test profile: debug assertions remain enabled, while sparse
-assembly and factorisation get enough optimisation for this full-catalogue check. The CPU and
-GPU coverage lanes explicitly restore level 0 because optimised inlining makes source-region
-counts unreliable. Reproduce the source-accurate CPU gate with
+assembly and factorisation get enough optimisation for this full-catalogue check. The full
+coverage measurement explicitly restores level 0 because optimised inlining makes source-region
+counts unreliable. Reproduce the full source-accurate coverage gate on a working GPU adapter with
 `CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry
---ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100
+--features gpu-tests --fail-under-lines 100 --fail-under-functions 100
 --fail-under-regions 100`. A paired warm-binary measurement on one Apple M4 Max core replayed
 the then-22 Journals, including every solve and hash comparison, in 170.86 s at level 0 and
 9.12 s at level 1. Those execution times exclude compilation and do not predict a CI runner's

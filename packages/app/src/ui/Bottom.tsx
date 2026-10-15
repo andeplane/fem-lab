@@ -231,7 +231,7 @@ export function Bottom({ s, store, dispatch, query }: { s: UiState; store: Store
   };
   return (
     <section class="bottom">
-      <div class="tabs" role="tablist" aria-label="results panel">
+      <div class="tabs" role="tablist" aria-label="results panel" onFocusCapture={(event) => (event.target as HTMLElement).scrollIntoView({ block: 'nearest', inline: 'nearest' })}>
         {TABS.map((t) => (
           <Cmd key={t} dispatch={dispatch} cmd="panel.toggle" class={s.tab === t ? 'tab active' : 'tab'} args={{ panel: t, open: true }} title={`panel.toggle ${t}`} role="tab" selected={s.tab === t}>
             {t}

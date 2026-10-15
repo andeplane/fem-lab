@@ -1,11 +1,17 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import Ajv from 'ajv/dist/2020';
 import { describe, expect, it, vi } from 'vitest';
-import { modelFileEncoder, type Command, type DocumentSnapshot, type ModelFilePublicationPolicy } from '@femlab/registry';
+import { HOST_COMMANDS, HOST_QUERIES, MAX_MODEL_FILE_BYTES, Registry, modelFileEncoder, type Ack, type Command, type DocumentSnapshot, type EngineSchema, type ModelFilePublicationPolicy } from '@femlab/registry';
+import schema from '../../registry/src/generated/engine.schema.json';
+import { fakeHost } from '../../registry/test/fakes';
 import { SessionRuntime } from '../src/session-runtime';
 import { SessionWorkspace } from '../src/session-workspace';
 import { SessionChannel, type SessionTransport } from '../src/session-transport';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
-const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
+const require = createRequire(import.meta.url);
+const wasm = require('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
 const fresh: Command = { cmd: 'model.new', name: 'same' };
 const body: Command = { cmd: 'geometry.addBox', name: 'shared', size: ['1 m', '1 m', '1 m'] };
 const remove: Command = { cmd: 'geometry.remove', name: 'shared' };
@@ -42,6 +48,139 @@ function setup() {
   });
   return { workspace, workers, publications };
 }
+
+function saveHost(transport: SessionTransport) {
+  const host = fakeHost(transport, true);
+  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS, hostQueries: HOST_QUERIES });
+  return { host, registry };
+}
+
+it('saves and exports the checked SI document under unreadable display units and bounds later oversized files before I/O', async () => {
+  const { workspace } = setup();
+  const commands = JSON.parse(readFileSync(require.resolve('../../../crates/engine/tests/fixtures/document-display-overflow.json'), 'utf8')) as Command[];
+  const initial = await workspace.start();
+  const transport = await workspace.replace(initial.transport, { kind: 'commands', commands: [commands[0]!] });
+  const { host, registry } = saveHost(transport);
+  try {
+    let ack: Ack | undefined;
+    for (const command of commands.slice(1)) ack = await transport.dispatch(command);
+    assert(ack);
+    const before = await transport.query({ query: 'query.document' });
+    assert('file' in before);
+    const validate = new Ajv({ strict: false }).compile(schema.queryResult);
+    expect(validate(JSON.parse(JSON.stringify(before))), JSON.stringify(validate.errors)).toBe(true);
+    expect(schema.queries.oneOf.find(q => q.properties.query.const === 'query.document')).toMatchObject({ 'x-execution': 'modelRead', 'x-returns': 'ModelDocument' });
+    expect(before.hash).toBe(ack.hash);
+    expect(before.revision).toBe(ack.revision);
+    expect(before.file.model.units).toMatchObject({ length: 'mm', force: 'mN' });
+    expect(before.file.model.loads).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'plus', total: [1e307, 0, 0] }), expect.objectContaining({ name: 'minus', total: [-1e307, 0, 0] })]));
+    const stamp = transport.stamp;
+    const retained = await transport.query({ query: 'query.results' });
+    for (const read of [() => transport.query({ query: 'query.model' }), () => transport.snapshot()]) {
+      await expect(read()).rejects.toMatchObject({ code: 'unit.display', where: 'displayUnits' });
+      expect(await transport.query({ query: 'query.document' })).toEqual(before);
+      expect(await transport.query({ query: 'query.results' })).toEqual(retained);
+      expect(transport.stamp).toEqual(stamp);
+    }
+    const detached = await transport.exportFile();
+    detached.model.name = 'detached reply';
+    detached.journal.entries.length = 0;
+    expect(await transport.exportFile()).toEqual(before.file);
+    await registry.dispatch({ cmd: 'file.save', name: 'recovery.femlab.json', to: 'folder' });
+    expect(host.folder.writeText).toHaveBeenCalledOnce();
+    const text = vi.mocked(host.folder.writeText).mock.calls[0]![1];
+    expect(JSON.parse(text)).toEqual(before.file);
+    expect(new TextEncoder().encode(text).byteLength).toBeLessThan(MAX_MODEL_FILE_BYTES);
+    expect(await transport.query({ query: 'query.document' })).toEqual(before);
+    const script = await transport.query({ query: 'query.script' });
+    assert('text' in script);
+    for (const format of ['journal', 'script'] as const) {
+      vi.mocked(host.folder.writeText).mockClear();
+      await expect(registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' })).resolves.toEqual({ name: `${before.file.model.name}.${format === 'journal' ? 'femlab.json' : 'ts'}`, to: 'folder' });
+      expect(host.folder.writeText).toHaveBeenCalledOnce();
+      const exported = vi.mocked(host.folder.writeText).mock.calls[0]![1];
+      if (format === 'journal') expect(JSON.parse(exported)).toEqual(before.file);
+      else expect(exported).toBe(script.text);
+      expect(await transport.query({ query: 'query.document' })).toEqual(before);
+      expect(await transport.query({ query: 'query.results' })).toEqual(retained);
+      expect(transport.stamp).toEqual(stamp);
+      await expect(transport.snapshot()).rejects.toMatchObject({ code: 'unit.display', where: 'displayUnits' });
+    }
+    // A legal post-admission edit can grow the Model+Journal over the save budget.
+    await transport.dispatch({ cmd: 'model.setName', name: 'x'.repeat(MAX_MODEL_FILE_BYTES / 2) });
+    vi.mocked(host.folder.writeText).mockClear();
+    await expect(registry.dispatch({ cmd: 'file.save', name: 'too-large.femlab.json', to: 'folder' })).rejects.toMatchObject({ code: 'schema', where: 'file' });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'journal' }, to: 'folder' })).rejects.toMatchObject({ code: 'schema', where: 'file' });
+    expect(host.folder.writeText).not.toHaveBeenCalled();
+    expect(host.files.download).not.toHaveBeenCalled();
+    expect(await transport.query({ query: 'query.results' })).toMatchObject({ records: expect.arrayContaining([expect.objectContaining({ id: 'result-1' })]) });
+  } finally { transport.channel.close(); }
+});
+
+it('refuses checked document save and exports from cancelled and replaced producers before file I/O', async () => {
+  const { workspace } = setup();
+  const active = await workspace.start();
+  const writer = await active.transport.fork();
+  const old = await writer.fork();
+  const cancelledSave = saveHost(active.transport);
+  const oldSave = saveHost(old);
+  await active.transport.release();
+  await expect(cancelledSave.registry.dispatch({ cmd: 'file.save', to: 'folder' })).rejects.toMatchObject({ code: 'cancelled' });
+  for (const format of ['journal', 'script']) await expect(cancelledSave.registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' })).rejects.toMatchObject({ code: 'cancelled' });
+  expect(cancelledSave.host.folder.writeText).not.toHaveBeenCalled();
+  expect(cancelledSave.host.files.download).not.toHaveBeenCalled();
+  const next = await workspace.replace(writer, { kind: 'commands', commands: [{ cmd: 'model.new', name: 'replacement' }] });
+  try {
+    const before = await next.exportFile();
+    await expect(oldSave.registry.dispatch({ cmd: 'file.save', to: 'folder' })).rejects.toMatchObject({ code: 'session.expired' });
+    for (const format of ['journal', 'script']) await expect(oldSave.registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' })).rejects.toMatchObject({ code: 'session.expired' });
+    expect(oldSave.host.folder.writeText).not.toHaveBeenCalled();
+    expect(oldSave.host.files.download).not.toHaveBeenCalled();
+    expect(await next.exportFile()).toEqual(before);
+  } finally { next.channel.close(); }
+});
+
+// #580/#592: preserve the error from the real checked Worker through Runtime and Transport.
+it('preserves display code, cause, location and recovery without changing session or scientific state', async () => {
+  const { workspace } = setup();
+  const initial = await workspace.start();
+  const transport = await workspace.replace(initial.transport, { kind: 'commands', commands: [{ cmd: 'model.new', name: 'checked display error' }] });
+  try {
+    const commands: Command[] = [
+      { cmd: 'geometry.addLine', name: 'shaft', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m']], divisions: 1, kind: 'beam' },
+      { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
+      { cmd: 'material.assign', material: 'steel', bodies: ['shaft'] },
+      { cmd: 'section.add', name: 'round', shape: { kind: 'circle', radius: '50 mm' } },
+      { cmd: 'section.assign', section: 'round', bodies: ['shaft'] },
+      { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' } },
+      { cmd: 'constraint.fix', name: 'root', on: 'shaft.p0' },
+      { cmd: 'load.force', name: 'tip', on: 'shaft.p1', total: ['1000 N', '0 N', '0 N'] },
+      { cmd: 'step.add', name: 'axial', procedure: 'static', constraints: ['root'], loads: ['tip'] },
+      { cmd: 'solve.run', step: 'axial', solver: 'cpu-direct' },
+      { cmd: 'load.moment', name: 'plus', on: 'shaft.p0', total: ['1e307 N m', '0 N m', '0 N m'] },
+      { cmd: 'load.moment', name: 'minus', on: 'shaft.p1', total: ['-1e307 N m', '0 N m', '0 N m'] },
+      { cmd: 'model.setUnits', units: { length: 'mm', force: 'mN', stress: 'Pa' } },
+    ];
+    for (const command of commands) await transport.dispatch(command);
+    const state = async () => ({
+      stamp: transport.stamp,
+      journal: await transport.query({ query: 'query.journal' }),
+      plus: await transport.query({ query: 'query.definition', kind: 'load', name: 'plus' }),
+      minus: await transport.query({ query: 'query.definition', kind: 'load', name: 'minus' }),
+      catalogue: await transport.query({ query: 'query.results' }),
+      result: await transport.query({ query: 'query.result', step: 'axial' }),
+    });
+    const before = await state();
+    await expect(transport.query({ query: 'query.model' })).rejects.toMatchObject({
+      code: 'unit.display',
+      cause: "cannot represent energy in display unit 'mN mm': quantity must be finite before and after unit conversion",
+      where: 'displayUnits',
+      suggestion: "model.setUnits with SI display units, for example length 'm', force 'N' and stress 'Pa'",
+    });
+    expect(await state()).toEqual(before);
+    expect(workspace.active.transport.channel).toBe(transport.channel);
+  } finally { transport.channel.close(); }
+});
 
 describe('session workspace using the checked WASM runtime', () => {
   it.each(['initiating', 'independent'] as const)('checks original replacement admission after the %s producer edits and a read refreshes the lease', async writerKind => {

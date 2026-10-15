@@ -10,15 +10,18 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Display name of the new empty Model.",
           "type": "string"
         },
         "description": {
+          "description": "Optional Model description or modelling assumptions retained with the Model.",
           "type": [
             "string",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.new` to select this operation.",
           "type": "string",
           "const": "model.new"
         }
@@ -30,13 +33,15 @@ const commands = {
       "x-execution": "replacement"
     },
     {
-      "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+      "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back. A scalar that cannot fit in the selected unit\nproduces `unit.display` when queried or reported, without altering its stored SI data.\nChoose larger or SI display units to read it; formatting never silently changes units.",
       "type": "object",
       "properties": {
         "units": {
+          "description": "Display units used by Queries and the UI; physical inputs still carry their own units and storage stays SI.",
           "$ref": "#/$defs/UnitSet"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.setUnits` to select this operation.",
           "type": "string",
           "const": "model.setUnits"
         }
@@ -52,9 +57,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "New nonblank display name; preserves geometry and current Results.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.setName` to select this operation.",
           "type": "string",
           "const": "model.setName"
         }
@@ -70,9 +77,11 @@ const commands = {
       "type": "object",
       "properties": {
         "idealisation": {
+          "description": "Dimensional model to solve: solid3d, plane stress with thickness, plane strain or axisymmetric, compatible\nwith the Bodies.",
           "$ref": "#/$defs/IdealisationSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.setIdealisation` to select this operation.",
           "type": "string",
           "const": "model.setIdealisation"
         }
@@ -88,15 +97,19 @@ const commands = {
       "type": "object",
       "properties": {
         "kind": {
+          "description": "Kind of existing object to rename, such as Body, Material, Constraint, Load or Step.",
           "$ref": "#/$defs/ObjectKind"
         },
         "name": {
+          "description": "Current name of the object of this kind.",
           "type": "string"
         },
         "to": {
+          "description": "Unused new name; references to the object are updated together.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.rename` to select this operation.",
           "type": "string",
           "const": "model.rename"
         }
@@ -114,15 +127,19 @@ const commands = {
       "type": "object",
       "properties": {
         "kind": {
+          "description": "Kind of existing object to copy.",
           "$ref": "#/$defs/ObjectKind"
         },
         "name": {
+          "description": "Existing object to copy, identified within its kind.",
           "type": "string"
         },
         "as": {
+          "description": "Unused name for the copy; a copied Step keeps references to the original Constraints and Loads.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `model.duplicate` to select this operation.",
           "type": "string",
           "const": "model.duplicate"
         }
@@ -140,9 +157,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Body name; reusing it replaces the box while preserving compatible assignments and cuts.",
           "type": "string"
         },
         "size": {
+          "description": "Positive x/y/z side lengths, each with length units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -151,6 +170,7 @@ const commands = {
           "maxItems": 3
         },
         "at": {
+          "description": "Global x/y/z coordinates of the minimum corner; omitted means the origin.",
           "type": [
             "array",
             "null"
@@ -162,6 +182,7 @@ const commands = {
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.addBox` to select this operation.",
           "type": "string",
           "const": "geometry.addBox"
         }
@@ -178,12 +199,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Cut name, also the prefix of the resulting hole face Sets.",
           "type": "string"
         },
         "from": {
+          "description": "Existing solid Body from which the box is removed.",
           "type": "string"
         },
         "size": {
+          "description": "Positive x/y/z lengths of the cutting box, each with length units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -192,6 +216,7 @@ const commands = {
           "maxItems": 3
         },
         "at": {
+          "description": "Global x/y/z coordinates of the cutting box minimum corner.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -200,6 +225,7 @@ const commands = {
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.subtractBox` to select this operation.",
           "type": "string",
           "const": "geometry.subtractBox"
         }
@@ -218,12 +244,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Body name; reusing it replaces the shape while preserving compatible assignments and cuts.",
           "type": "string"
         },
         "shape": {
+          "description": "Unit-bearing shape definition in global coordinates, compatible with the Model idealisation.",
           "$ref": "#/$defs/ShapeSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.add` to select this operation.",
           "type": "string",
           "const": "geometry.add"
         }
@@ -240,9 +269,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Line Body name; joint node Sets are named <name>.p0, <name>.p1 and so on.",
           "type": "string"
         },
         "points": {
+          "description": "Ordered global x/y/z joint coordinates, each component with length units.",
           "type": "array",
           "items": {
             "type": "array",
@@ -254,6 +285,7 @@ const commands = {
           }
         },
         "members": {
+          "description": "Pairs of zero-based point indices defining straight members; omitted means the chain 0-1, 1-2 and so on.",
           "type": [
             "array",
             "null"
@@ -270,6 +302,7 @@ const commands = {
           }
         },
         "divisions": {
+          "description": "Number of equal finite elements per member; omitted means one.",
           "type": [
             "integer",
             "null"
@@ -278,6 +311,7 @@ const commands = {
           "minimum": 0
         },
         "kind": {
+          "description": "Truss for axial pin-jointed bars or beam for Timoshenko members with rotations; omitted means truss.",
           "anyOf": [
             {
               "$ref": "#/$defs/LineKind"
@@ -288,6 +322,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.addLine` to select this operation.",
           "type": "string",
           "const": "geometry.addLine"
         }
@@ -304,15 +339,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Cut name, also the prefix of its generated face Sets.",
           "type": "string"
         },
         "from": {
+          "description": "Existing solid Body from which the shape is removed.",
           "type": "string"
         },
         "shape": {
+          "description": "Unit-bearing cutting shape positioned in global coordinates.",
           "$ref": "#/$defs/ShapeSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.subtract` to select this operation.",
           "type": "string",
           "const": "geometry.subtract"
         }
@@ -330,9 +369,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Imported Body name; reusing it replaces the geometry while preserving compatible assignments and cuts.",
           "type": "string"
         },
         "format": {
+          "description": "Geometry file format of data; the supported format is STL.",
           "$ref": "#/$defs/MeshFormat"
         },
         "data": {
@@ -340,6 +381,7 @@ const commands = {
           "type": "string"
         },
         "encoding": {
+          "description": "How data encodes the file; omitted means text, while binary STL requires base64.",
           "anyOf": [
             {
               "$ref": "#/$defs/DataEncoding"
@@ -380,6 +422,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.import` to select this operation.",
           "type": "string",
           "const": "geometry.import"
         }
@@ -398,15 +441,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Named face Set to create or replace, for use by Constraints and Loads.",
           "type": "string"
         },
         "of": {
+          "description": "Body whose actual mesh boundary is selected, including an implicit mapped or swept Body.",
           "type": "string"
         },
         "where": {
+          "description": "Geometric predicate selecting boundary faces; re-evaluated on each remesh.",
           "$ref": "#/$defs/FacePredicate"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.nameFace` to select this operation.",
           "type": "string",
           "const": "geometry.nameFace"
         }
@@ -424,12 +471,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Named region Set to create or replace, for Constraints, nodal Loads and probes.",
           "type": "string"
         },
         "where": {
+          "description": "Box or whole-Body region selecting mesh nodes and elements; include length units in coordinate bounds.",
           "$ref": "#/$defs/RegionPredicate"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.nameRegion` to select this operation.",
           "type": "string",
           "const": "geometry.nameRegion"
         }
@@ -446,9 +496,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Body, cut, named Set or point mass to remove; dependent references must be removed or retargeted\nfirst.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.remove` to select this operation.",
           "type": "string",
           "const": "geometry.remove"
         }
@@ -464,9 +516,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Point-mass name and node Set name; reusing it replaces that point mass.",
           "type": "string"
         },
         "at": {
+          "description": "Global x/y/z coordinates of the mass node, each with length units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
@@ -475,9 +529,11 @@ const commands = {
           "maxItems": 3
         },
         "mass": {
+          "description": "Positive lumped mass with mass units; attach the node with constraint.couple before solving.",
           "$ref": "#/$defs/Q_mass"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `geometry.addMass` to select this operation.",
           "type": "string",
           "const": "geometry.addMass"
         }
@@ -625,6 +681,7 @@ const commands = {
           "x-physics": "common"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `material.add` to select this operation.",
           "type": "string",
           "const": "material.add"
         }
@@ -636,19 +693,22 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Material to one or more Bodies. Every Body needs a Material before solving;\na Body without one is reported by query.model and blocks solve.run.",
+      "description": "Assign a Material to one or more Bodies. Imported element regions are editable Bodies;\nassigning the source owner supplies their default, while region assignments override it.\nEvery element-owning Body needs a Material before solving; a missing assignment is\nreported by query.model and blocks solve.run.",
       "type": "object",
       "properties": {
         "material": {
+          "description": "Existing Material name whose properties the target Bodies will use.",
           "type": "string"
         },
         "bodies": {
+          "description": "Names of Bodies to assign, including the Body defined by a mapped, swept or imported mesher.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `material.assign` to select this operation.",
           "type": "string",
           "const": "material.assign"
         }
@@ -665,9 +725,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing unassigned Material to remove; retarget its Bodies first if it is in use.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `material.remove` to select this operation.",
           "type": "string",
           "const": "material.remove"
         }
@@ -683,12 +745,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Section name; reusing it replaces the cross-section or shell definition.",
           "type": "string"
         },
         "shape": {
+          "description": "Line cross-section, homogeneous shell thickness or laminate ply stack compatible with the target Bodies.",
           "$ref": "#/$defs/SectionSpec"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `section.add` to select this operation.",
           "type": "string",
           "const": "section.add"
         }
@@ -701,19 +766,22 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
+      "description": "Assign a Section to one or more Bodies, including imported element regions. A region\noverrides the source owner Section; an unassigned region inherits that default.\nEvery line or shell Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A shell needs a shell thickness section, a line member needs a\ncross-section, and a solid gets its section from its geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it. For laminate shells, orientation instead selects the tangent projection\nof that global axis as the zero-angle ply direction. A normal axis is rejected.\nWithout it ply angles use the midsurface's first parametric direction.",
       "type": "object",
       "properties": {
         "section": {
+          "description": "Existing Section name to assign.",
           "type": "string"
         },
         "bodies": {
+          "description": "Line or shell Body names that will use this Section.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "orientation": {
+          "description": "Global reference axis for beam local z or the laminate zero-angle tangent direction; omitted uses the\ndocumented geometry-based convention.",
           "anyOf": [
             {
               "$ref": "#/$defs/Axis"
@@ -724,6 +792,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `section.assign` to select this operation.",
           "type": "string",
           "const": "section.assign"
         }
@@ -740,9 +809,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing unassigned Section to remove; retarget its Bodies first if it is in use.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `section.remove` to select this operation.",
           "type": "string",
           "const": "section.remove"
         }
@@ -758,9 +829,11 @@ const commands = {
       "type": "object",
       "properties": {
         "mesher": {
+          "description": "Meshing algorithm and its geometry/size settings; imported sources supply their authored nodes, elements and\nSets.",
           "$ref": "#/$defs/MesherSpec"
         },
         "order": {
+          "description": "Element interpolation order: 1 for linear or 2 for quadratic; omitted means 1, and imported sources require\n1.",
           "type": [
             "integer",
             "null"
@@ -770,6 +843,7 @@ const commands = {
           "maximum": 255
         },
         "formulation": {
+          "description": "Hex/quad formulation; omitted means incompatible modes for generated elements or full integration for\nimported sources. Simplex elements ignore this setting.",
           "anyOf": [
             {
               "$ref": "#/$defs/Formulation"
@@ -780,6 +854,7 @@ const commands = {
           ]
         },
         "simplices": {
+          "description": "Split generated hexes/quads into tetrahedra/triangles while preserving face names; omitted means false, and\nimported sources require false.",
           "type": [
             "boolean",
             "null"
@@ -797,6 +872,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `mesh.set` to select this operation.",
           "type": "string",
           "const": "mesh.set"
         }
@@ -812,15 +888,18 @@ const commands = {
       "type": "object",
       "properties": {
         "format": {
+          "description": "Output format for the host to save, such as vtu, msh, inp, stl or report.",
           "$ref": "#/$defs/ExportFormat"
         },
         "step": {
+          "description": "Step whose current Result fields are included for vtu or whose calculation note is exported for report;\nmesh-only formats ignore it.",
           "type": [
             "string",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `mesh.export` to select this operation.",
           "type": "string",
           "const": "mesh.export"
         }
@@ -836,12 +915,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set whose degrees of freedom are restrained.",
           "type": "string"
         },
         "dofs": {
+          "description": "Degrees of freedom held at zero; omitted clamps all translations and beam-joint rotations. Name components\nfor a roller or partial restraint.",
           "type": [
             "array",
             "null"
@@ -851,6 +933,7 @@ const commands = {
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.fix` to select this operation.",
           "type": "string",
           "const": "constraint.fix"
         }
@@ -867,12 +950,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set whose translations are fixed while beam-joint rotations remain free.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.pin` to select this operation.",
           "type": "string",
           "const": "constraint.pin"
         }
@@ -889,18 +975,23 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set receiving the prescribed displacement.",
           "type": "string"
         },
         "dof": {
+          "description": "Translational component ux, uy or uz to prescribe.",
           "$ref": "#/$defs/Dof"
         },
         "value": {
+          "description": "Prescribed displacement with length units; sign follows the chosen global component.",
           "$ref": "#/$defs/Q_length"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.prescribe` to select this operation.",
           "type": "string",
           "const": "constraint.prescribe"
         }
@@ -919,15 +1010,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set lying on the modelled symmetry plane.",
           "type": "string"
         },
         "normal": {
+          "description": "Global axis normal to the symmetry plane; restrains normal translation and the corresponding beam rotations.",
           "$ref": "#/$defs/Axis"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.symmetry` to select this operation.",
           "type": "string",
           "const": "constraint.symmetry"
         }
@@ -945,15 +1040,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Temperature Constraint name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Named Set held at the prescribed temperature.",
           "type": "string"
         },
         "value": {
+          "description": "Boundary temperature with temperature units; a transient Step scales it by its amplitude.",
           "$ref": "#/$defs/Q_temperature"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.temperature` to select this operation.",
           "type": "string",
           "const": "constraint.temperature"
         }
@@ -971,18 +1070,23 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Contact Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "master": {
+          "description": "Master face Set onto which slave nodes are projected; normally choose the coarser side.",
           "type": "string"
         },
         "slave": {
+          "description": "Slave face Set whose nodes are paired to the master; normally choose the finer side.",
           "type": "string"
         },
         "kind": {
+          "description": "Bonded for a linear tie or frictionless for unilateral normal contact that may open and slide.",
           "$ref": "#/$defs/ContactKind"
         },
         "tol": {
+          "description": "Maximum pairing gap for bonded contact or search distance for frictionless contact, with length units;\nomitted means 1e-4 of the Mesh diagonal.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_length"
@@ -993,6 +1097,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `contact.add` to select this operation.",
           "type": "string",
           "const": "contact.add"
         }
@@ -1011,22 +1116,28 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Cyclic Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "from": {
+          "description": "Source sector-face node Set; must match the rotated target mesh.",
           "type": "string"
         },
         "to": {
+          "description": "Target sector-face node Set reached by the specified rotation.",
           "type": "string"
         },
         "axis": {
+          "description": "Global rotation axis relating from to to.",
           "$ref": "#/$defs/Axis"
         },
         "angleDeg": {
+          "description": "Signed right-handed rotation from the source to the target face, in degrees.",
           "type": "number",
           "format": "double"
         },
         "through": {
+          "description": "Global x/y/z point on the rotation axis, with length units; omitted means the origin.",
           "type": [
             "array",
             "null"
@@ -1038,6 +1149,7 @@ const commands = {
           "maxItems": 3
         },
         "tol": {
+          "description": "Maximum node pairing distance, with length units; omitted means 1e-4 of the Mesh diagonal.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_length"
@@ -1048,6 +1160,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.cyclic` to select this operation.",
           "type": "string",
           "const": "constraint.cyclic"
         }
@@ -1067,18 +1180,23 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Coupling Constraint name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "point": {
+          "description": "Existing point-mass node Set created with geometry.addMass.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set coupled to the point displacement.",
           "type": "string"
         },
         "kind": {
+          "description": "Distributed for the face weighted mean displacement or rigid for equal point and face translations; neither\ntransmits a moment.",
           "$ref": "#/$defs/CoupleKind"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.couple` to select this operation.",
           "type": "string",
           "const": "constraint.couple"
         }
@@ -1097,9 +1215,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Constraint to remove; Steps must stop referencing it first.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `constraint.remove` to select this operation.",
           "type": "string",
           "const": "constraint.remove"
         }
@@ -1115,15 +1235,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set receiving the pressure.",
           "type": "string"
         },
         "value": {
+          "description": "Pressure with stress units; positive acts into the surface and negative pulls outward.",
           "$ref": "#/$defs/Q_stress"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.pressure` to select this operation.",
           "type": "string",
           "const": "load.pressure"
         }
@@ -1141,12 +1265,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set over which the resultant is distributed by area.",
           "type": "string"
         },
         "total": {
+          "description": "Total global x/y/z force on the entire Set, each component with force units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_force"
@@ -1155,6 +1282,7 @@ const commands = {
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.traction` to select this operation.",
           "type": "string",
           "const": "load.traction"
         }
@@ -1172,12 +1300,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Node Set over which the force is split equally.",
           "type": "string"
         },
         "total": {
+          "description": "Total global x/y/z force on the entire node Set, not a per-node value; each component carries force units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_force"
@@ -1186,6 +1317,7 @@ const commands = {
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.force` to select this operation.",
           "type": "string",
           "const": "load.force"
         }
@@ -1203,12 +1335,15 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "on": {
+          "description": "Node Set of beam joints carrying rotational degrees of freedom.",
           "type": "string"
         },
         "total": {
+          "description": "Total right-handed moment about global x/y/z, split equally over the Set, each component with torque units.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_torque"
@@ -1217,6 +1352,7 @@ const commands = {
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.moment` to select this operation.",
           "type": "string",
           "const": "load.moment"
         }
@@ -1234,9 +1370,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Acceleration Load name to create or replace, for listing in a Step.",
           "type": "string"
         },
         "g": {
+          "description": "Uniform global x/y/z acceleration with acceleration units; for example [0, 0, -9.81] m/s^2. Requires\nMaterial density.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_acceleration"
@@ -1245,6 +1383,7 @@ const commands = {
           "maxItems": 3
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.gravity` to select this operation.",
           "type": "string",
           "const": "load.gravity"
         }
@@ -1261,18 +1400,22 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Thermal-strain Load name to create or replace, for listing in a structural Step.",
           "type": "string"
         },
         "bodies": {
+          "description": "Body names receiving the temperature/reference assignment, including implicit mesher Bodies.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "value": {
+          "description": "Uniform temperature with temperature units; inherited heat Results replace this value when the Step\ncontinues a heat Step.",
           "$ref": "#/$defs/Q_temperature"
         },
         "reference": {
+          "description": "Stress-free reference temperature with temperature units; omitted means 293.15 K.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_temperature"
@@ -1283,6 +1426,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.temperature` to select this operation.",
           "type": "string",
           "const": "load.temperature"
         }
@@ -1300,18 +1444,23 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Convection Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set exchanging heat with its surroundings.",
           "type": "string"
         },
         "h": {
+          "description": "Positive heat-transfer coefficient with units such as W/(m^2 K).",
           "$ref": "#/$defs/Q_heat_transfer_coefficient"
         },
         "tInf": {
+          "description": "Surrounding fluid temperature with temperature units, used in h times the surface-to-fluid temperature\ndifference.",
           "$ref": "#/$defs/Q_temperature"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.convection` to select this operation.",
           "type": "string",
           "const": "load.convection"
         }
@@ -1330,15 +1479,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Heat-flux Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set receiving the prescribed heat flux.",
           "type": "string"
         },
         "q": {
+          "description": "Heat input per unit area with units such as W/m^2; negative removes heat.",
           "$ref": "#/$defs/Q_heat_flux"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.heatFlux` to select this operation.",
           "type": "string",
           "const": "load.heatFlux"
         }
@@ -1356,19 +1509,24 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Radiation Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set radiating to the specified surroundings.",
           "type": "string"
         },
         "emissivity": {
+          "description": "Dimensionless surface emissivity in (0, 1]; 1 is a black body.",
           "type": "number",
           "format": "double"
         },
         "tInf": {
+          "description": "Surrounding absolute temperature with temperature units; converted to kelvin for the fourth-power radiation\nlaw.",
           "$ref": "#/$defs/Q_temperature"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.radiation` to select this operation.",
           "type": "string",
           "const": "load.radiation"
         }
@@ -1387,18 +1545,22 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Heat-source Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "bodies": {
+          "description": "Body names receiving the volumetric source, including implicit mesher Bodies.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "q": {
+          "description": "Heat input per unit volume with units such as W/m^3; total power is this density times Body volume.",
           "$ref": "#/$defs/Q_heat_source"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.heatSource` to select this operation.",
           "type": "string",
           "const": "load.heatSource"
         }
@@ -1416,15 +1578,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Torque Load name to create or replace, for listing in an axisymmetric Step with twist.",
           "type": "string"
         },
         "on": {
+          "description": "Face Set receiving the circumferential traction.",
           "type": "string"
         },
         "total": {
+          "description": "Resultant torque about the symmetry axis, with torque units; the radial traction distribution preserves this\ntotal.",
           "$ref": "#/$defs/Q_torque"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.torque` to select this operation.",
           "type": "string",
           "const": "load.torque"
         }
@@ -1442,15 +1608,19 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Thermal contact Load name to create or replace, for listing in a heat Step.",
           "type": "string"
         },
         "of": {
+          "description": "Existing bonded Contact name whose perfect thermal tie is replaced by finite conductance.",
           "type": "string"
         },
         "conductance": {
+          "description": "Positive interface heat-transfer coefficient with units such as W/(m^2 K).",
           "$ref": "#/$defs/Q_heat_transfer_coefficient"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `contact.thermal` to select this operation.",
           "type": "string",
           "const": "contact.thermal"
         }
@@ -1468,9 +1638,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Load to remove; Steps must stop referencing it first.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `load.remove` to select this operation.",
           "type": "string",
           "const": "load.remove"
         }
@@ -1486,18 +1658,21 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Analysis Step name; reusing it replaces the Step definition.",
           "type": "string",
           "x-procedures": [
             "*"
           ]
         },
         "procedure": {
+          "description": "Analysis procedure to execute; its schema metadata identifies supported settings, required material physics\nand result fields.",
           "$ref": "#/$defs/Procedure",
           "x-procedures": [
             "*"
           ]
         },
         "constraints": {
+          "description": "Names of Constraints and mechanical Contacts active in this Step; an empty list activates none.",
           "type": "array",
           "items": {
             "type": "string"
@@ -1507,6 +1682,7 @@ const commands = {
           ]
         },
         "loads": {
+          "description": "Names of Loads active in this Step; an empty list activates none.",
           "type": "array",
           "items": {
             "type": "string"
@@ -1516,6 +1692,7 @@ const commands = {
           ]
         },
         "output": {
+          "description": "Result fields to retain; omitted uses the procedure defaults, including displacement, stress, von Mises and\nreactions for static analysis.",
           "type": [
             "array",
             "null"
@@ -1528,6 +1705,7 @@ const commands = {
           ]
         },
         "after": {
+          "description": "Earlier Step whose current Result this Step continues, such as heat temperature, structural prestress or a\nmodal basis.",
           "type": [
             "string",
             "null"
@@ -1537,6 +1715,7 @@ const commands = {
           ]
         },
         "nModes": {
+          "description": "Number of requested modes or buckling factors; omitted means six for modal or one for buckling.",
           "type": [
             "integer",
             "null"
@@ -1549,6 +1728,7 @@ const commands = {
           ]
         },
         "shift": {
+          "description": "Modal eigensolver shift in squared angular-frequency units; omit to use the automatic small negative shift.",
           "type": [
             "number",
             "null"
@@ -1575,6 +1755,7 @@ const commands = {
           ]
         },
         "tEnd": {
+          "description": "Final physical time for transient procedures, required for heat-transient/explicit/implicit; static and\nstatic-nonlinear nominal time defaults to 1 s.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_time"
@@ -1592,6 +1773,7 @@ const commands = {
           ]
         },
         "theta": {
+          "description": "Transient heat integration parameter in [0, 1]; omitted means 0.5 (Crank-Nicolson), while 1 is backward\nEuler.",
           "type": [
             "number",
             "null"
@@ -1602,6 +1784,7 @@ const commands = {
           ]
         },
         "outputEvery": {
+          "description": "Keep a frame every this many increments or harmonic frequencies; omitted means 1, and the final state is\nretained.",
           "type": [
             "integer",
             "null"
@@ -1628,6 +1811,7 @@ const commands = {
           ]
         },
         "amplitude": {
+          "description": "Time-dependent factor multiplying active Loads and driven boundary values; omit for their unscaled values.",
           "anyOf": [
             {
               "$ref": "#/$defs/AmplitudeSpec"
@@ -1644,6 +1828,7 @@ const commands = {
           ]
         },
         "initial": {
+          "description": "Uniform initial temperature of a heat-transient Step, with temperature units; omitted means 293.15 K.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_temperature"
@@ -1714,7 +1899,7 @@ const commands = {
           ]
         },
         "increments": {
-          "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.\nEqual load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+          "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
           "type": [
             "integer",
             "null"
@@ -1765,7 +1950,7 @@ const commands = {
           ]
         },
         "fStart": {
-          "description": "First frequency of a harmonic sweep, e.g. \"1 Hz\".",
+          "description": "First finite frequency of a harmonic sweep, e.g. \"1 Hz\"; positive for log spacing.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_frequency"
@@ -1805,7 +1990,7 @@ const commands = {
           ]
         },
         "sweep": {
-          "description": "Frequency spacing of a harmonic sweep; default linear.",
+          "description": "Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates\nlogarithms of positive finite endpoints without forming their ratio. Both endpoints\nremain exact; frequencies can repeat when spacing is below f64 resolution.",
           "anyOf": [
             {
               "$ref": "#/$defs/SweepSpacing"
@@ -1859,6 +2044,7 @@ const commands = {
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `step.add` to select this operation.",
           "type": "string",
           "const": "step.add"
         }
@@ -1877,9 +2063,11 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Existing Step to remove; dependent Steps must stop referencing it in after first.",
           "type": "string"
         },
         "cmd": {
+          "description": "Registered Command identifier; use `step.remove` to select this operation.",
           "type": "string",
           "const": "step.remove"
         }
@@ -1895,12 +2083,14 @@ const commands = {
       "type": "object",
       "properties": {
         "order": {
+          "description": "Every Step name exactly once in execution order, keeping each Step after its named prerequisite.",
           "type": "array",
           "items": {
             "type": "string"
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `step.reorder` to select this operation.",
           "type": "string",
           "const": "step.reorder"
         }
@@ -1912,13 +2102,15 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nModal solves verify every requested eigenpair's normwise backward residual against\n`tolerance` and return solve.stalled without storing a Result when `maxIterations`\nsubspace sweeps are exhausted. The reported residual is the largest requested-pair\nresidual; it certifies algebraic backward accuracy, not frequency or mesh accuracy.\nResolved Ritz values must also stabilize to relative change 1e-10. Values unresolved\nat the per-mode Rayleigh-contraction roundoff scale carry modal.unresolved-frequency\nwarnings; their backward residual passed, but relative frequency convergence is not certified.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
       "type": "object",
       "properties": {
         "step": {
+          "description": "Existing Step to solve; its procedure, active Constraints and Loads define the problem.",
           "type": "string"
         },
         "solver": {
+          "description": "Linear solver implementation; omitted means auto, which selects an available compatible backend.",
           "anyOf": [
             {
               "$ref": "#/$defs/Solver"
@@ -1929,6 +2121,7 @@ const commands = {
           ]
         },
         "tolerance": {
+          "description": "Positive finite residual tolerance; omitted means 1e-10. For modal, the maximum\nnormwise generalized-eigenpair backward residual. Separate Step settings control nonlinear convergence.",
           "type": [
             "number",
             "null"
@@ -1936,6 +2129,7 @@ const commands = {
           "format": "double"
         },
         "maxIterations": {
+          "description": "Linear iterative solver iteration budget, or modal subspace-sweep budget; omitted means 5000.\nA modal budget must be greater than zero.",
           "type": [
             "integer",
             "null"
@@ -1944,6 +2138,7 @@ const commands = {
           "minimum": 0
         },
         "cmd": {
+          "description": "Registered Command identifier; use `solve.run` to select this operation.",
           "type": "string",
           "const": "solve.run"
         }
@@ -1959,24 +2154,29 @@ const commands = {
       "type": "object",
       "properties": {
         "step": {
+          "description": "Existing supported Step to solve at every requested mesh size; Steps with after require explicit dependency\nsolves instead.",
           "type": "string"
         },
         "sizes": {
+          "description": "Positive global mesh lengths with units; use at least three distinct sizes to estimate a finite limit and\nconvergence rate.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Q_length"
           }
         },
         "quantity": {
+          "description": "Field extremum or point probe to measure at each mesh size, including its component and unit-bearing probe\nlocation.",
           "$ref": "#/$defs/QuantityOfInterest"
         },
         "restore": {
+          "description": "Whether to restore the original mesh settings after the study; omitted means true, while false retains the\nfinal solved mesh and Result.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `study.converge` to select this operation.",
           "type": "string",
           "const": "study.converge"
         }
@@ -1994,13 +2194,16 @@ const commands = {
       "type": "object",
       "properties": {
         "step": {
+          "description": "Existing static, heat-steady or heat-transient Step on a supported linear simplex mesh, with no after\ndependency.",
           "type": "string"
         },
         "targetError": {
+          "description": "Desired dimensionless global relative ZZ error estimate in (0, 1); this is an indicator rather than a\ncertified bound.",
           "type": "number",
           "format": "double"
         },
         "maxIterations": {
+          "description": "Maximum adaptive solve passes in 1..=100; omitted means 8.",
           "type": [
             "integer",
             "null"
@@ -2009,6 +2212,7 @@ const commands = {
           "minimum": 0
         },
         "maxElements": {
+          "description": "Positive cap on the final refined element count; omitted means 100000, and exceeding it rolls back the\nCommand.",
           "type": [
             "integer",
             "null"
@@ -2038,6 +2242,7 @@ const commands = {
           }
         },
         "cmd": {
+          "description": "Registered Command identifier; use `study.adapt` to select this operation.",
           "type": "string",
           "const": "study.adapt"
         }
@@ -2054,6 +2259,7 @@ const commands = {
       "type": "object",
       "properties": {
         "steps": {
+          "description": "Number of latest Commands to undo; omitted means 1.",
           "type": [
             "integer",
             "null"
@@ -2062,12 +2268,14 @@ const commands = {
           "minimum": 0
         },
         "expectedJournal": {
+          "description": "Optional complete-history hash from query.journal; undo proceeds only if the current Journal still matches\nit.",
           "type": [
             "string",
             "null"
           ]
         },
         "cmd": {
+          "description": "Registered Command identifier; use `journal.undo` to select this operation.",
           "type": "string",
           "const": "journal.undo"
         }
@@ -2082,6 +2290,7 @@ const commands = {
       "type": "object",
       "properties": {
         "steps": {
+          "description": "Number of undone Commands to reapply; omitted means 1.",
           "type": [
             "integer",
             "null"
@@ -2090,6 +2299,7 @@ const commands = {
           "minimum": 0
         },
         "cmd": {
+          "description": "Registered Command identifier; use `journal.redo` to select this operation.",
           "type": "string",
           "const": "journal.redo"
         }
@@ -2104,19 +2314,26 @@ const commands = {
       "type": "object",
       "properties": {
         "name": {
+          "description": "Plugin name under which the extension is registered.",
           "type": "string"
         },
         "kind": {
+          "description": "Extension Point implemented by this Plugin, such as a Material law, Element or Mesher.",
           "$ref": "#/$defs/PluginKind"
         },
         "language": {
+          "description": "Implementation language of the Plugin source: ts for TypeScript, wgsl for WGSL, or wasm.",
           "$ref": "#/$defs/PluginLanguage"
         },
         "source": {
+          "description": "Inline Plugin code or a URL plus the required content hash, retained for reproducible loading.",
           "$ref": "#/$defs/PluginSource"
         },
-        "manifest": true,
+        "manifest": {
+          "description": "Optional JSON metadata describing the Plugin and its configuration; Plugin loading remains an unsupported\nstub."
+        },
         "cmd": {
+          "description": "Registered Command identifier; use `plugin.load` to select this operation.",
           "type": "string",
           "const": "plugin.load"
         }
@@ -3604,6 +3821,18 @@ const commands = {
                 "$ref": "#/$defs/ImportedElement"
               }
             },
+            "regions": {
+              "description": "Disjoint named element regions. Keys are editable Body identities; memberships use\nauthored element labels. Elements outside regions belong to the source Body.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              }
+            },
             "nodeSets": {
               "type": "object",
               "additionalProperties": {
@@ -4145,12 +4374,70 @@ const commands = {
         },
         "conversionVersion": {
           "type": "string"
+        },
+        "sourceFiles": {
+          "description": "Immutable supplied-file manifest; paths are relative names, never host file handles.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "sourceName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodeIdentities": {
+          "description": "Original assembly identities keyed by the persistent global source label.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ImportedEntityIdentity"
+            }
+          }
+        },
+        "elementIdentities": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/ImportedEntityIdentity"
+            }
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "sha256",
         "conversionVersion"
+      ]
+    },
+    "ImportedEntityIdentity": {
+      "type": "object",
+      "properties": {
+        "sourceLabel": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "instance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "part": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sourceLabel"
       ]
     },
     "Formulation": {
@@ -4909,6 +5196,21 @@ const queries = {
       "x-returns": "ModelSummary"
     },
     {
+      "description": "The complete authoritative Model file and Journal in SI, with the real Model hash and\nrevision. Retains selected display-unit strings without formatting a display summary;\nuse this to save even when query.model reports unit.display. This read changes neither\nthe Model nor retained Results. Hosts apply their exact UTF-8 save encoder and byte limit\nbefore writing; this Query performs no I/O or replacement validation.",
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "const": "query.document"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "x-execution": "modelRead",
+      "x-returns": "ModelDocument"
+    },
+    {
       "description": "The complete upsert Command for an existing object's current definition, with exact\nSI quantities. Use it to populate an edit form; change its arguments and dispatch it\nto apply. Display summaries are rounded and must never be used to reconstruct edits.\nAuto-generated Sets and mesher-owned Bodies have no editable object definition.",
       "type": "object",
       "properties": {
@@ -4947,7 +5249,7 @@ const queries = {
       "x-returns": "MeshSummary"
     },
     {
-      "description": "What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure\nand corner-node centroid. Tet4/Hex8 volumes integrate the original Jacobian exactly\nup to roundoff. Linear 3D face areas use original shape/tangent quadrature; curved\nbilinear area is numerical and converges under refinement, not an exact skin measure.\nQuadratic-element measures still use corner geometry pending #524.\nFace Sets also report pressureArea from the load boundary quadrature,\nincluding thickness or radial weighting (plane strain: one metre of depth). Pressure\ntimes pressureArea is a scalar integral, not a net vector force. Shell pressureArea is\nthe original midsurface area without requiring Material/Section; curved physical shell\nloads use the Section's top/bottom offsets. Builds the Mesh if needed.",
+      "description": "What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure\nand corner-node centroid. Solid volumes integrate every original shape node, including\nTet10/Hex20 midside nodes: tetrahedron degree3 and tensor degree5 per coordinate are\nsufficient for their Jacobian determinants, up to f64 roundoff. Surface areas and edge\nlengths use original tangents. Linear triangles and lines are exact up to roundoff;\nbilinear faces use Gauss2. Curved norms are numerical, using Gauss3 for Quad8/Line3\nand symmetric triangle degree5 for Tri6.\nCurved area/length accuracy improves under refinement; no corner skin is substituted.\nFace Sets also report pressureArea from the load boundary quadrature,\nincluding thickness or radial weighting (plane strain: one metre of depth). Pressure\ntimes pressureArea is a scalar integral, not a net vector force. Shell pressureArea is\nthe original midsurface area without requiring Material/Section; curved physical shell\nloads use the Section's top/bottom offsets. Builds the Mesh if needed.\nThe centroid averages resolved node coordinates; authored imported NSETs include\nunused source labels. A bounded fixed-order fallback prevents a finite coordinate\nmean overflowing through rounding, while preserving existing finite mean results.",
       "type": "object",
       "properties": {
         "name": {
@@ -5036,7 +5338,7 @@ const queries = {
       "x-returns": "ResultSurface"
     },
     {
-      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+      "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal/buckling shapes owned by the Result\n(`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top\nfor laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses\nare global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without\nthat ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
       "type": "object",
       "properties": {
         "step": {
@@ -5067,7 +5369,7 @@ const queries = {
       "x-returns": "ResultField"
     },
     {
-      "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied.",
+      "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied. Each operand may independently select\na retained primary frame with the existing exact/nearest FrameSample protocol; resolved\nindices and physical times are returned. Historical derived fields are unavailable.\nOmitted samples preserve final-field comparison. There is no temporal interpolation.",
       "type": "object",
       "properties": {
         "left": {
@@ -5389,7 +5691,7 @@ const queries = {
       "x-returns": "ScriptText"
     },
     {
-      "description": "Convert a quantity to another unit of the same dimension (\"2 MPa\" to \"psi\"); an error\nnames the dimensions when they differ. Handy for checking inputs before using them.",
+      "description": "Convert a quantity to another unit of the same dimension (\"2 MPa\" to \"psi\"); an error\nnames the dimensions when they differ. Handy for checking inputs before using them.\nRejects nonfinite values and nonzero scaling that rounds to zero, including input\nscaling before adding a temperature offset. Surviving subnormals, ordinary f64\nrounding and affine zeros (273.15 K to 0 degC) remain valid.",
       "type": "object",
       "properties": {
         "quantity": {
@@ -5573,19 +5875,22 @@ const queries = {
       "format": "uint8",
       "minimum": 0,
       "maximum": 255
+    },
+    "sample": {
+      "description": "Omit for the final field. A sample selects only the retained primary field through\nquery.frame's exact/nearest resolver, with earlier ties and no extrapolation.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FrameSample"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
     "resultId",
     "field"
-  ]
-},
-    "DifferenceOnto": {
-  "description": "The retained Result whose Mesh receives the difference values.",
-  "type": "string",
-  "enum": [
-    "left",
-    "right"
   ]
 },
     "FrameSample": {
@@ -5639,6 +5944,14 @@ const queries = {
   "enum": [
     "exact",
     "nearest"
+  ]
+},
+    "DifferenceOnto": {
+  "description": "The retained Result whose Mesh receives the difference values.",
+  "type": "string",
+  "enum": [
+    "left",
+    "right"
   ]
 },
     "Field": commands.$defs["Field"],
@@ -5723,6 +6036,7 @@ const queries = {
     "ImportedElementKind": commands.$defs["ImportedElementKind"],
     "ImportedFace": commands.$defs["ImportedFace"],
     "ImportedProvenance": commands.$defs["ImportedProvenance"],
+    "ImportedEntityIdentity": commands.$defs["ImportedEntityIdentity"],
     "Formulation": commands.$defs["Formulation"],
     "LocalRefinementSpec": commands.$defs["LocalRefinementSpec"],
     "SizeBoxSpec": commands.$defs["SizeBoxSpec"],

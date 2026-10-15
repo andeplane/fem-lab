@@ -91,10 +91,6 @@ impl BatchEngine {
         self.lease.stamp = reply.stamp;
         Ok(reply.value)
     }
-    pub fn snapshot(&mut self) -> Result<DocumentSnapshot, femlab_engine::Error> {
-        let context = self.context();
-        self.owner.snapshot(&context)
-    }
     /// Converted Commands build a private candidate; no partial import touches the owner.
     pub async fn replace_commands(
         &mut self,
@@ -268,17 +264,26 @@ pub fn run(file: &Path, opts: RunOptions) -> i32 {
         return 0;
     }
     if opts.as_script || opts.journal {
-        return match engine.snapshot() {
-            Ok(snapshot) => {
+        return match engine.query(Query::Document {}) {
+            Ok(QueryResult::Document(document)) => {
                 if opts.as_script {
-                    print!("{}", snapshot.script);
+                    print!("{}", document.file.journal.as_script(&document.file.engine_version));
                 } else {
-                    println!("{}", serde_json::to_string_pretty(&snapshot.journal.entries).unwrap_or_default());
+                    println!("{}", serde_json::to_string_pretty(&document.file.journal.entries).unwrap_or_default());
                 }
                 0
             }
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
+                1
+            }
+            Ok(_) => {
+                let error = femlab_engine::Error::new(
+                    femlab_engine::ErrorCode::Internal,
+                    "query.document did not return a Model document",
+                )
+                .at("query.document");
+                eprintln!("{}", serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()));
                 1
             }
         };

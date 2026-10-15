@@ -343,10 +343,10 @@ textarea:focus {
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
    text labels while giving the flexible model and command fields the remaining room.
-   Keep the wide settings from 1900 px so the import receipt fits beside document actions. */
-@media (min-width: 1180px) and (max-width: 1899px) {
+   Keep the wide settings from 2100 px so the STEP receipt fits beside document actions. */
+@media (min-width: 1180px) and (max-width: 2099px) {
   .topbar {
-    gap: 4px;
+    gap: 2px;
     padding-inline: 8px;
   }
   .logo {
@@ -365,7 +365,7 @@ textarea:focus {
   /* File actions keep their labelled keyboard stops while the two import controls join
      the existing row. Full action names remain available in their labels and tooltips. */
   .topbar > .file-action {
-    width: 32px;
+    width: 28px;
   }
   .file-action-label {
     display: none;
@@ -392,8 +392,17 @@ textarea:focus {
    through 1399 px so Compare and the other fixed-width actions fit before it gives way. */
 @media (min-width: 1180px) and (max-width: 1399px) {
   .topbar {
-    gap: 1px;
+    gap: 0;
     padding-inline: 6px;
+  }
+  /* STEP adds an import action and a historical receipt beside the Abaqus actions.
+     Keep every labelled keyboard stop, with at least 24 px targets, in this row. */
+  .topbar > .tbutton {
+    min-width: 24px;
+    padding-inline: 2px;
+  }
+  .topbar > .file-action {
+    width: 24px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
      rather than the project name, which would otherwise collapse to nothing: the chip is
@@ -410,7 +419,7 @@ textarea:focus {
     min-width: 80px;
   }
   .topbar > .segmented button {
-    padding-inline: 5px;
+    padding-inline: 3px;
   }
 }
 
@@ -684,6 +693,8 @@ textarea:focus {
 .centre {
   display: grid;
   --bottom-used: min(var(--bottom-height, 252px), max(184px, calc(100% - 460px)));
+  /* The bottom tabs' min-content width must not widen the viewer over Properties. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(460px, 1fr) var(--bottom-used);
   position: relative;
   min-height: 0;
@@ -739,6 +750,45 @@ textarea:focus {
   width: 100%;
   height: 100%;
 }
+.result-workspace { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.comparison-canvases { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.comparison-canvases.paired { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--border-divider); }
+.comparison-pane canvas { width: calc(100% - 145px); }
+.comparison-controls { padding: 8px 10px; background: var(--bg-panel); border-bottom: 1px solid var(--border-divider); font-size: 11px; line-height: 16px; }
+.comparison-actions, .comparison-operands { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.comparison-actions .apply { flex: 0 0 auto; min-width: 72px; }
+.comparison-controls fieldset { display: flex; gap: 4px; border: 0; margin: 3px 0 0; padding: 0; min-width: 0; flex: 1; }
+.comparison-controls legend { float: left; padding: 4px 5px 0 0; color: var(--text-low); }
+.comparison-controls select { max-width: 100%; min-width: 0; font-size: 11px; padding: 3px; }
+.comparison-controls fieldset select:first-of-type { flex: 1; width: 100px; }
+.comparison-controls p { margin: 5px 0 0; color: var(--text-low); }
+.comparison-playback { padding: 6px 10px; background: var(--bg-panel); border-bottom: 1px solid var(--border-divider); font-size: 11px; min-width: 0; }
+.comparison-playback label, .comparison-shared-clock { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.comparison-frame-controls { display: flex; flex-wrap: wrap; gap: 10px; }
+.comparison-frame-controls fieldset { flex: 1; min-width: 180px; border: 0; margin: 3px 0 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.comparison-frame-controls legend { padding: 0; color: var(--text-low); overflow-wrap: anywhere; }
+.comparison-playback select, .comparison-playback input { min-width: 0; max-width: 100%; font-size: 11px; padding: 3px; }
+.comparison-frame-controls input[type=range] { flex: 1; min-width: 90px; }
+.comparison-time-seek { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.comparison-time-seek input { width: 80px; }
+.comparison-playback button { padding: 3px 6px; font-size: 11px; }
+.comparison-error, .comparison-warnings { color: var(--warn-text); overflow-wrap: anywhere; }
+.comparison-pane-title { position: absolute; top: 75px; left: 10px; right: 150px; display: flex; flex-direction: column; font-size: 11px; gap: 2px; pointer-events: none; overflow-wrap: anywhere; }
+.comparison-pane-title.stale { color: var(--warn-text); }
+.comparison-body-controls { position: absolute; bottom: 65px; left: 10px; display: flex; flex-wrap: wrap; gap: 3px; max-width: calc(100% - 160px); }
+.comparison-body-controls button { font-size: 10px; padding: 3px 6px; }
+.comparison-legend { position: absolute; top: 75px; right: 10px; width: 125px; background: #101218e8; padding: 7px; font-size: 10px; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.comparison-gradient { height: 70px; width: 12px; grid-column: 1; grid-row: 3; }
+.comparison-ticks { grid-column: 1; grid-row: 3; height: 70px; padding-left: 20px; display: flex; flex-direction: column; justify-content: space-between; font-family: var(--mono); }
+.comparison-colormaps { display: flex; gap: 3px; }
+.comparison-colormaps button { padding: 2px; flex: 1; }
+.comparison-colormaps i { display: block; width: 100%; height: 10px; }
+.comparison-legend form { display: flex; flex-wrap: wrap; gap: 3px; }
+.comparison-legend input { min-width: 0; width: calc(50% - 2px); padding: 2px; font-size: 10px; }
+.comparison-legend button { font-size: 10px; padding: 2px 5px; }
+.comparison-deform { max-width: calc(100% - 20px); font-size: 10px; flex-wrap: wrap; }
+.comparison-deform input { width: 55px; }
+.comparison-warnings { position: absolute; left: 10px; bottom: 100px; max-width: calc(100% - 155px); display: flex; flex-direction: column; font-size: 10px; }
 /* The legend starts at top 56, below the 28 px toolbar, so the toolbar may use the full width;
    only the selection chip under it has to keep clear of the legend. */
 .viewer-chrome {
@@ -870,6 +920,10 @@ textarea:focus {
   align-items: stretch;
   padding: 0 8px;
   border-bottom: 1px solid var(--border-divider);
+  overflow-x: auto;
+}
+.tabs :focus-visible {
+  outline-offset: -2px;
 }
 .tab {
   display: flex;
@@ -2246,6 +2300,11 @@ button.solve.stale {
 .export-row.off {
   color: var(--text-dim);
 }
+.export-resolution-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .export-row .ext {
   color: var(--text-low);
 }
@@ -2855,3 +2914,6 @@ input.model-name:focus {
 .account-panel{background:var(--bg-panel);border:1px solid var(--border-divider);border-radius:8px;box-shadow:0 24px 60px #000a;width:min(780px,94vw);max-height:88vh;overflow:auto;padding:28px;box-sizing:border-box}.account-heading,.account-identity{display:flex;gap:12px;align-items:center;justify-content:space-between}.account-heading h2{margin:8px 0}.account-login{display:grid;gap:14px;max-width:420px}.account-panel label{display:grid;gap:8px;margin:12px 0}.account-panel input{padding:10px;background:var(--surface,#101c24);color:inherit;border:1px solid var(--line,#31454e);border-radius:5px}.account-balance{display:grid;gap:9px;border:1px solid #33554d;padding:24px;margin:22px 0;border-radius:8px;background:#66ddaa08}.account-balance strong{font-size:40px;color:#84efce}.account-plans{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.account-plan{border:1px solid #30424e;border-radius:8px;padding:18px}.account-plan h3{margin-top:0}.account-panel small,.account-credit-note{color:#91a7b0}.account-panel details{margin-top:24px;border-top:1px solid #30424e;padding-top:16px}.account-panel .eyebrow{font:11px monospace;letter-spacing:.12em;color:#91a7b0}@media(max-width:600px){.account-plans{grid-template-columns:1fr}.account-identity{flex-wrap:wrap}.account-panel{padding:18px}}
 
 .account-button-icon{display:none}@media(min-width:1180px) and (max-width:1699px){.topbar>.account-button{width:32px;padding-inline:4px;flex:none}.account-button-label{display:none}.account-button-icon{display:inline}}
+
+.account-policies{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:24px;font-size:12px;color:#91a7b0}.account-policies a{color:#91cfc2;text-underline-offset:3px}.account-policies a:focus-visible{outline:2px solid #91cfc2;outline-offset:4px}
+.account-purchase-use select{padding:10px;max-width:100%;min-width:0;font:inherit;color:inherit;background:var(--surface,#101c24);border:1px solid var(--line,#31454e);border-radius:5px}

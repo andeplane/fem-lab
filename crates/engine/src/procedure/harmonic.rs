@@ -33,9 +33,11 @@ use crate::solve::SolveInfo;
 
 /// The frequencies a sweep evaluates, in Hz, ascending, with both endpoints exact.
 ///
-/// Linear spacing is `f0 + (f1 − f0) i/(n − 1)`; logarithmic is `f0 (f1/f0)^(i/(n−1))`, which
-/// needs `f0 > 0`. Both write the endpoints in directly rather than trusting the last
-/// multiplication to land on them, because a Benchmark that sweeps to 3 f_n wants 3 f_n.
+/// Linear spacing is `f0 + (f1 − f0) i/(n − 1)`; logarithmic spacing interpolates `ln(f)`
+/// and needs `f0 > 0`. Taking the endpoint logs separately avoids an overflowing ratio;
+/// exponentiating the interpolated log avoids an overflowing intermediate scale factor.
+/// Roundoff is bounded to the validated interval. Frequencies can repeat when its spacing
+/// is below f64 resolution. Both endpoints are written directly and remain exact.
 pub(crate) fn sweep_grid(f_start: f64, f_stop: f64, points: usize, spacing: SweepSpacing) -> Result<Vec<f64>, Error> {
     if points < 2 {
         return Err(Error::schema(format!("a harmonic sweep needs at least 2 points, got {points}"))
@@ -55,13 +57,19 @@ pub(crate) fn sweep_grid(f_start: f64, f_stop: f64, points: usize, spacing: Swee
             .suggest("step.add with fStart \"1 Hz\", or sweep \"linear\""));
     }
     let last = points - 1;
-    let ratio = libm::log(f_stop / f_start);
+    let (origin, span) = match spacing {
+        SweepSpacing::Linear => (f_start, f_stop - f_start),
+        SweepSpacing::Log => {
+            let start = libm::log(f_start);
+            (start, libm::log(f_stop) - start)
+        }
+    };
     let mut grid: Vec<f64> = (0..points)
         .map(|i| {
             let s = i as f64 / last as f64;
             match spacing {
-                SweepSpacing::Linear => f_start + s * (f_stop - f_start),
-                SweepSpacing::Log => f_start * libm::exp(s * ratio),
+                SweepSpacing::Linear => origin + s * span,
+                SweepSpacing::Log => libm::exp(origin + s * span).clamp(f_start, f_stop),
             }
         })
         .collect();
@@ -82,6 +90,23 @@ pub(crate) fn retained_indices(points: usize, output_every: usize) -> Vec<usize>
     let mut out = vec![0];
     out.extend((1..=last).filter(|i| i.is_multiple_of(every) || *i == last));
     out
+}
+
+/// `participation / (a + i b)`, without squaring large denominator components or
+/// losing a small numerator component before the final power-of-two rescaling.
+/// The normalized denominator lies in [1, 2] for a nonzero finite complex value.
+/// Its negligible smaller term may round to zero; each numerator component keeps
+/// its own exponent. A zero denominator or nonfinite inputs remain nonfinite, so
+/// the existing Result validation still refuses an unrepresentable response.
+fn modal_coefficient(participation: f64, a: f64, b: f64) -> (f64, f64) {
+    let scale = a.abs().max(b.abs());
+    let (ar, br) = (a / scale, b / scale);
+    let (pm, pe) = libm::frexp(participation);
+    let (am, ae) = libm::frexp(a);
+    let (bm, be) = libm::frexp(b);
+    let (sm, se) = libm::frexp(scale);
+    let denominator = sm * sm * (ar * ar + br * br);
+    (libm::scalbn(pm * am / denominator, pe + ae - 2 * se), libm::scalbn(-pm * bm / denominator, pe + be - 2 * se))
 }
 
 /// The modal Step this one continues has no Result, or the Step it names was not modal.
@@ -167,12 +192,11 @@ pub fn run(
         let w = 2.0 * std::f64::consts::PI * grid[i];
         let (mut re, mut im) = (vec![0.0; p.n_dofs()], vec![0.0; p.n_dofs()]);
         for (k, phi) in shapes.iter().enumerate() {
-            // 1 / ((ω_k² − ω²) + i 2 ζ_k ω_k ω), by the conjugate. Undamped and exactly on a
+            // 1 / ((ω_k² − ω²) + i 2 ζ_k ω_k ω). Undamped and exactly on a
             // natural frequency this is a divide by zero, and an infinite response is the
             // honest answer to driving an undamped resonance.
             let (a, b) = (omega[k] * omega[k] - w * w, 2.0 * zeta[k] * omega[k] * w);
-            let d = a * a + b * b;
-            let (cr, ci) = (participation[k] * a / d, -participation[k] * b / d);
+            let (cr, ci) = modal_coefficient(participation[k], a, b);
             for (j, &v) in phi.iter().enumerate() {
                 re[j] += v * cr;
                 im[j] += v * ci;
@@ -226,9 +250,67 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
-    use super::{retained_indices, sweep_grid};
+    use super::{modal_coefficient, retained_indices, sweep_grid};
     use crate::command::SweepSpacing;
     use crate::ErrorCode;
+    use proptest::prelude::*;
+
+    #[test]
+    fn modal_reciprocals_match_independent_rational_complex_quotients() {
+        for (p, a, b, real, imaginary) in [
+            (10.0, 2.0, 0.0, 5.0, 0.0),
+            (10.0, -2.0, 0.0, -5.0, 0.0),
+            (10.0, 0.0, 2.0, 0.0, -5.0),
+            (10.0, 0.0, -2.0, 0.0, 5.0),
+            (10.0, 3.0, 4.0, 1.2, -1.6),
+            (-10.0, 3.0, 4.0, -1.2, 1.6),
+        ] {
+            let actual = modal_coefficient(p, a, b);
+            assert!((actual.0 - real).abs() < 1e-15);
+            assert!((actual.1 - imaginary).abs() < 1e-15);
+        }
+        // p/(p+i p) is exactly (1-i)/2 at every nonzero scale, even when the
+        // unscaled squared denominator overflows or underflows.
+        for scale in [f64::from_bits(1), 1e-300, 1.0, 1e300, f64::MAX] {
+            assert_eq!(modal_coefficient(scale, scale, scale), (0.5, -0.5));
+        }
+    }
+
+    #[test]
+    fn modal_reciprocals_preserve_independently_scaled_small_components() {
+        let p = f64::from_bits((2046u64) << 52); // 2^1023
+        let tiny = f64::from_bits((23u64) << 52); // 2^-1000
+        let large = f64::from_bits((1523u64) << 52); // 2^500
+        let real = f64::from_bits((46u64) << 52); // 2^-977
+        let imaginary = f64::from_bits((1546u64) << 52); // 2^523
+                                                         // The exact denominator is 2^1000 (1+2^-3000); its correction cannot
+                                                         // change either rounded answer. A normalized tiny/large numerator is zero.
+        for sign in [-1.0, 1.0] {
+            assert_eq!(modal_coefficient(p, sign * tiny, large), (sign * real, -imaginary));
+            assert_eq!(modal_coefficient(p, large, sign * tiny), (imaginary, -sign * real));
+        }
+        // Even the smallest subnormal component must survive when multiplied by
+        // a large finite participation: 2^1023 * 2^-1074 / 2^2 = 2^-53.
+        let small_real = f64::from_bits((970u64) << 52); // 2^-53
+        let large_imaginary = f64::from_bits((2045u64) << 52); // 2^1022
+        assert_eq!(modal_coefficient(p, f64::from_bits(1), 2.0), (small_real, -large_imaginary));
+        assert_eq!(modal_coefficient(p, 2.0, f64::from_bits(1)), (large_imaginary, -small_real));
+    }
+
+    #[test]
+    fn singular_and_nonfinite_modal_coefficients_still_are_not_finite_responses() {
+        for (p, a, b) in [
+            (1.0, 0.0, 0.0),
+            (0.0, 0.0, 0.0),
+            (1.0, f64::INFINITY, 0.0),
+            (1.0, 0.0, f64::INFINITY),
+            (1.0, f64::NAN, 1.0),
+            (f64::INFINITY, 1.0, 1.0),
+        ] {
+            let (real, imaginary) = modal_coefficient(p, a, b);
+            assert!(!libm::hypot(real, imaginary).is_finite());
+        }
+    }
 
     #[test]
     fn a_linear_grid_hits_both_endpoints_and_steps_evenly() {
@@ -236,6 +318,10 @@ mod tests {
         assert_eq!(g, vec![10.0, 15.0, 20.0, 25.0, 30.0]);
         // Two points is the minimum, and it is exactly the endpoints.
         assert_eq!(sweep_grid(1.0, 2.0, 2, SweepSpacing::Linear).expect("two points"), vec![1.0, 2.0]);
+        assert_eq!(
+            sweep_grid(0.0, f64::MAX, 3, SweepSpacing::Linear).expect("the finite linear range"),
+            vec![0.0, f64::MAX / 2.0, f64::MAX]
+        );
     }
 
     #[test]
@@ -244,6 +330,84 @@ mod tests {
         assert_eq!((g[0], g[3]), (1.0, 1000.0));
         for i in 0..3 {
             assert!(libm::fabs(g[i + 1] / g[i] - 10.0) < 1e-12, "{g:?}");
+        }
+    }
+
+    #[test]
+    fn log_grids_match_independent_decimal_geometric_progressions() {
+        for expected in [
+            vec![1e-300, 1e-100, 1e100],
+            vec![1e-300, 1e-220, 1e-140, 1e-60, 1e20],
+            vec![1e100, 1e150, 1e200, 1e250, 1e300],
+        ] {
+            let last = expected.len() - 1;
+            let grid = sweep_grid(expected[0], expected[last], expected.len(), SweepSpacing::Log).unwrap();
+            assert_eq!((grid[0], grid[last]), (expected[0], expected[last]));
+            for (actual, exact) in grid.iter().zip(&expected) {
+                assert!((actual / exact - 1.0).abs() < 4e-13, "{actual} versus {exact}");
+            }
+        }
+    }
+
+    /// Exact binary powers, including subnormals, from their IEEE exponent/significand.
+    /// This oracle never evaluates a logarithm, endpoint ratio or exponential.
+    fn binary_power(exponent: i32) -> f64 {
+        if exponent >= -1022 {
+            f64::from_bits(((exponent + 1023) as u64) << 52)
+        } else {
+            f64::from_bits(1u64 << (exponent + 1074))
+        }
+    }
+
+    #[test]
+    fn a_full_range_binary_log_grid_preserves_quantiles_under_refinement() {
+        // 2^-1074 to 2^974 spans 2048 binary decades. Every tested quantile has an
+        // integer exponent, so its independent answer is an exactly representable power.
+        let (start, stop) = (binary_power(-1074), binary_power(974));
+        let mut coarse = Vec::new();
+        for intervals in [2usize, 4, 8, 16] {
+            let grid = sweep_grid(start, stop, intervals + 1, SweepSpacing::Log).unwrap();
+            assert_eq!((grid[0].to_bits(), grid[intervals].to_bits()), (start.to_bits(), stop.to_bits()));
+            for (i, actual) in grid.iter().enumerate() {
+                let exact = binary_power(-1074 + (2048 * i / intervals) as i32);
+                assert!((actual / exact - 1.0).abs() < 4e-13, "{actual} versus {exact}");
+            }
+            for (i, previous) in coarse.iter().enumerate() {
+                assert_eq!(grid[2 * i], *previous, "refinement preserves a shared quantile");
+            }
+            coarse = grid;
+        }
+    }
+
+    #[test]
+    fn log_grids_remain_bounded_when_the_interval_is_below_log_precision() {
+        for (start, stop) in [
+            (f64::from_bits(1), f64::from_bits(2)),
+            (f64::MIN_POSITIVE, f64::from_bits(f64::MIN_POSITIVE.to_bits() + 1)),
+            (f64::from_bits(1.0f64.to_bits() - 1), f64::from_bits(1.0f64.to_bits() + 1)),
+            (f64::from_bits(f64::MAX.to_bits() - 1), f64::MAX),
+        ] {
+            let grid = sweep_grid(start, stop, 19, SweepSpacing::Log).unwrap();
+            assert_eq!((grid[0].to_bits(), grid[18].to_bits()), (start.to_bits(), stop.to_bits()));
+            assert!(grid.iter().all(|f| f.is_finite() && *f >= start && *f <= stop));
+            assert!(grid.windows(2).all(|pair| pair[0] <= pair[1]));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn finite_positive_log_intervals_have_finite_ordered_in_range_grids(
+            bits_a in 1u64..=0x7fefffffffffffffu64,
+            bits_b in 1u64..=0x7fefffffffffffffu64,
+            points in 2usize..65,
+        ) {
+            let (lo, hi) = (bits_a.min(bits_b), bits_a.max(bits_b));
+            prop_assume!(lo < hi);
+            let (start, stop) = (f64::from_bits(lo), f64::from_bits(hi));
+            let grid = sweep_grid(start, stop, points, SweepSpacing::Log).unwrap();
+            prop_assert_eq!((grid[0].to_bits(), grid[points - 1].to_bits()), (lo, hi));
+            prop_assert!(grid.iter().all(|f| f.is_finite() && *f >= start && *f <= stop));
+            prop_assert!(grid.windows(2).all(|pair| pair[0] <= pair[1]));
         }
     }
 

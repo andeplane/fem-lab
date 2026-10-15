@@ -22,7 +22,7 @@ import { waitFor } from './wait-for';
 const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const result = (extremes: ResultSummary['extremes'] = []): ResultSummary =>
-  ({ resultId: 'result-1', step: 'static', revision: 9, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1, extremes, reactions: [], reactionQuantity: 'force', appliedTotal: [mm(0), mm(0), mm(0)], balance: 0 }) as ResultSummary;
+  ({ modeCount: 0, resultId: 'result-1', step: 'static', revision: 9, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1, extremes, reactions: [], reactionQuantity: 'force', appliedTotal: [mm(0), mm(0), mm(0)], balance: 0 }) as ResultSummary;
 const example = (name = 'cantilever'): ExampleEntry => ({
   name,
   commands: 10,
@@ -109,7 +109,7 @@ describe('benchmark comparison registry', () => {
 
   it('compares every modal frequency and rejects incompatible Result shapes', async () => {
     const comparison = BENCHMARK_COMPARISONS['cantilever-modal']!;
-    const modal = { ...result(), frequencies: [20.96, 41.91, 131.32, 262.66].map((value) => ({ value, unit: 'Hz' })) };
+    const modal = { ...result(), modeCount: 4, frequencies: [20.96, 41.91, 131.32, 262.66].map((value) => ({ value, unit: 'Hz' })) };
     expect((await readBenchmark(comparison, modal, async () => undefined)).percent).toBe(0);
     await expect(readBenchmark(comparison, result(), async () => undefined)).rejects.toThrow('expected 4 values');
     const wrongUnit: BenchmarkComparison = { ...comparison, reference: { ...comparison.reference, unit: 'kHz' } };

@@ -1,0 +1,55 @@
+import { render } from 'preact';
+import { act } from 'preact/test-utils';
+import { afterEach, expect, it, vi } from 'vitest';
+import { initialState, Store } from '../src/store';
+import { ImportStep, StepImportReport, STEP_IMPORT_DRAFT } from '../src/ui/ImportStep';
+import { STEP_CONVERTER_VERSION } from '@femlab/registry';
+import type { Dispatch } from '../src/ui/cmd';
+const root = document.createElement('div');
+afterEach(() => act(() => render(null, root)));
+const button = (title: string) => [...root.querySelectorAll('button')].find(b => b.title === title || b.textContent?.trim() === title)!;
+const draw = (store: Store, dispatch: Dispatch = vi.fn(async () => undefined)) => { act(() => render(<ImportStep s={store.state} dispatch={dispatch} />, root)); return dispatch; };
+it('opens explicit physical deflections and routes file import and each draft edit through Commands', () => {
+  const store = new Store(); const dispatch = vi.fn(async (command: { cmd: string } & Record<string, unknown>) => {
+    if (command.cmd === 'form.open') store.openForm(String(command['command']), command['args'] as Record<string, unknown>, true);
+  });
+  draw(store, dispatch); expect(root.textContent).toBe('');
+  store.set({ panels: { step: true }, form: { cmd: 'geometry.importStep', values: { ...STEP_IMPORT_DRAFT }, initial: {} } });
+  draw(store, dispatch);
+  expect(root.textContent).toContain('STEP’s declared length units');
+  expect(root.textContent).toContain('Exact B-rep');
+  const field = root.querySelector<HTMLInputElement>('[aria-label="Absolute linear deflection"]')!;
+  expect(field.value).toBe('0.1 mm');
+  act(() => { field.value = '0.01 mm'; field.dispatchEvent(new Event('input', { bubbles: true })); });
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'form.open', command: 'geometry.importStep', args: { ...STEP_IMPORT_DRAFT, linearDeflection: '0.01 mm' }, keepInitial: true });
+  draw(store, dispatch); act(() => button('Choose STEP file and import').click());
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'geometry.importStep', ...STEP_IMPORT_DRAFT, linearDeflection: '0.01 mm' });
+  expect(root.querySelector<HTMLAnchorElement>('a[download]')).toBeNull();
+  expect([...root.querySelectorAll('a')].map(a => a.href)).toEqual(expect.arrayContaining([expect.stringContaining('NOTICE.txt'), expect.stringContaining('corresponding-source.tar.gz')]));
+});
+it('keeps cancel callable during conversion and cannot restart or retract an admitted publication', () => {
+  const store = new Store(); store.set({ panels: { step: true }, form: { cmd: 'geometry.importStep', values: { ...STEP_IMPORT_DRAFT }, initial: {} }, stepImport: { name: 'pending', phase: 'loading/converting', cancellable: true } });
+  const dispatch = draw(store);
+  expect(button('Choose STEP file and import').disabled).toBe(true);
+  act(() => button('Cancel STEP import').click());
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'geometry.cancelStep', name: 'pending' });
+  expect(root.querySelector('[role="status"]')!.textContent).toContain('loading/converting');
+  store.set({ stepImport: { name: 'pending', phase: 'publishing', cancellable: false } }); draw(store, dispatch);
+  expect(button('Cancel STEP import').disabled).toBe(true);
+  act(() => button('Close STEP import').click());
+  expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'panel.toggle', panel: 'step', open: false });
+});
+it('renders scoped paths, Quantity drafts, errors and the successful source/SI receipt without CAD fidelity claims', () => {
+  const store = new Store(); store.set({ panels: { step: true }, form: { cmd: 'geometry.importStep', values: { name: '', path: 'part.step', linearDeflection: { value: 1, unit: 'mm' }, angularDeflection: '' }, initial: {} }, lastError: { code: 'schema', cause: 'bad deflection', where: 'linearDeflection', suggestion: null } });
+  draw(store);
+  expect(root.querySelector<HTMLInputElement>('[aria-label="Absolute linear deflection"]')!.value).toBe('1 mm');
+  expect(root.querySelector<HTMLInputElement>('[aria-label="Path inside project folder"]')!.value).toBe('part.step');
+  expect(button('Import STEP').disabled).toBe(true);
+  expect(root.querySelector('[role="alert"]')!.textContent).toContain('bad deflection');
+  const dispatch = vi.fn(async () => undefined);
+  act(() => render(<StepImportReport s={initialState} dispatch={dispatch} />, root)); expect(root.textContent).toBe('');
+  act(() => render(<StepImportReport s={{ ...initialState, panels: { stepReport: true }, stepReport: { name: 'part', sourceName: 'part.step', sourceBytes: 100, sourceSha256: 'a'.repeat(64), geometrySha256: 'b'.repeat(64), converter: STEP_CONVERTER_VERSION, outputUnit: 'm', linearDeflection: { value: 0.001, unit: 'm' }, angularDeflection: { value: 0.2, unit: 'rad' }, roots: 1, transferredRoots: 1, sourceRoots: 1, faces: 6, meshes: 1, triangles: 12, geometryBytes: 1000 } }} dispatch={dispatch} />, root));
+  expect(root.textContent).toContain('6 faces'); expect(root.textContent).toContain('12 triangles'); expect(root.textContent).toContain('0.001 m'); expect(root.textContent).toContain('0.2 rad');
+  expect(root.textContent).toContain('neither this file nor the converter');
+  act(() => button('Close STEP report').click()); expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'panel.toggle', panel: 'stepReport', open: false });
+});

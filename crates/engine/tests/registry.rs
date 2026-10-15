@@ -9,7 +9,7 @@ use femlab_engine::model::{Axial, Model};
 use femlab_engine::post::convergence::richardson;
 use femlab_engine::query::{AssumedMaterialProperty, Output, Query, QueryResult, Valued};
 use femlab_engine::report::ReportSection;
-use femlab_engine::units::{Quantity, Q};
+use femlab_engine::units::{Dim, Quantity, Q};
 use femlab_engine::{Command, Engine, Error, ErrorCode, Host, NoClock, Progress};
 
 struct Clock(f64);
@@ -1168,29 +1168,61 @@ fn material_library_aliases_are_stable_and_ambiguity_is_explicit() {
 }
 
 /// Shared with the Node wasm regression: rejected inputs cannot change the saved Model or
-/// Journal. The expected errors cover numeric, factor and dimension overflow independently.
+/// Journal or retained Result. The expected errors cover overflow and scaling underflow
+/// independently, and conversion oracles include exact signed subnormal ticks and affine zeros.
 #[test]
 fn invalid_quantities_preserve_the_model_and_journal() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/invalid-quantities.json")).unwrap();
     let mut e = engine();
-    ok(&mut e, r#"{"cmd":"model.new","name":"quantity validation"}"#);
-    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
     let before = serde_json::to_value(e.export_file()).unwrap();
     let hash = e.model_hash();
+    let result = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap();
+    let displacement = e.field(Some("static"), Field::Displacement).unwrap().clone();
     for case in fixture["commands"].as_array().unwrap() {
         let error = run(&mut e, &case["input"].to_string()).unwrap_err();
         assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
         assert!(error.where_.is_some());
+        if let Some(cause) = case["cause"].as_str() {
+            assert!(error.cause.contains(cause), "{error:?}");
+            assert!(error.suggestion.is_some());
+        }
         assert_eq!(e.model_hash(), hash);
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+        assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &displacement);
     }
     for case in fixture["queries"].as_array().unwrap() {
         let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
         let error = e.query(query).unwrap_err();
         assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
         assert!(error.where_.is_some());
+        if let Some(cause) = case["cause"].as_str() {
+            assert!(error.cause.contains(cause), "{error:?}");
+            assert!(error.suggestion.is_some());
+            assert_eq!(error.where_.as_deref(), Some("value"));
+        }
         assert_eq!(e.model_hash(), hash);
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+        assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &displacement);
+    }
+    for case in fixture["conversions"].as_array().unwrap() {
+        let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
+        let converted = serde_json::to_value(e.query(query).unwrap()).unwrap();
+        let value = converted["value"].as_f64().unwrap();
+        if let Some(bits) = case["bits"].as_str() {
+            assert_eq!(value.to_bits(), u64::from_str_radix(bits, 16).unwrap(), "{case}");
+        } else {
+            assert_eq!(value, case["value"].as_f64().unwrap(), "{case}");
+        }
+        assert_eq!(converted["unit"], case["input"]["to"]);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+        assert_eq!(e.field(Some("static"), Field::Displacement).unwrap(), &displacement);
     }
 }
 
@@ -4277,6 +4309,7 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
     let summary = result_of(&mut e, Some("modes"));
+    assert_eq!(summary.mode_count, 2);
     assert_eq!(summary.frequencies.len(), 2);
     assert_eq!(summary.frequencies[0].unit, "Hz");
     // A square section: the first two modes are the same bending frequency in two planes.
@@ -4401,6 +4434,8 @@ fn a_buckling_step_reports_load_factors_and_keeps_its_static_state() {
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"buckle","tolerance":1e-9}"#);
     let summary = result_of(&mut e, Some("buckle"));
+    assert_eq!(summary.mode_count, 1);
+    assert!(summary.static_equilibrium.is_none(), "an eigen Result must omit the static-only wrench ledger");
     // nModes defaulted to one, and a buckling Step reports factors rather than frequencies.
     assert_eq!(summary.buckling_factors.len(), 1);
     assert!(summary.frequencies.is_empty());
@@ -4425,6 +4460,7 @@ fn a_buckling_step_reports_load_factors_and_keeps_its_static_state() {
     assert!(md.contains("#### Buckling load factors"), "{md}");
     assert!(md.contains("| Mode | Load factor |"), "{md}");
     assert!(md.contains("not a safety factor"), "{md}");
+    assert!(!md.contains("Static moment balance"), "{md}");
 }
 
 /// The axisymmetric idealisation has no geometric stiffness written, so a buckling Step over one
@@ -4894,7 +4930,10 @@ fn a_chained_static_step_is_budgeted_before_its_history_is_allocated() {
     let frame_bytes = heat.retained_bytes / heat.retained_frames;
     let heat_fixed = heat.bytes.saturating_sub(heat.retained_bytes);
     let static_fixed = structural.bytes + nodes * 5 * 8;
-    assert!(static_fixed > heat_fixed, "the chained static budget must cost more fixed bytes than the heat Step's own for this test to isolate it: {static_fixed} vs {heat_fixed}");
+    assert!(
+        static_fixed > heat_fixed,
+        "the chained static budget must cost more fixed bytes than the heat Step's own for this test to isolate it: {static_fixed} vs {heat_fixed}"
+    );
     // Once "warm" is solved, its own retained History becomes a *resident* Result the chained
     // static budget must also carry (`with_records`), on top of the static Step's own new
     // History of the same frame count — so the chained check pays for two Histories' worth of
@@ -6943,13 +6982,13 @@ fn the_report_is_the_whole_analysis_in_order_and_reproducible() {
     assert!(md.contains("#### Extremes"), "{md}");
     assert!(md.contains("#### Reactions and applied load"), "{md}");
     assert!(md.contains("| **Σ applied** | 0 | 0 | -1 | kN |"), "{md}");
-    assert!(md.contains("Reaction balance |Σ reactions + Σ applied| / max|F| ="), "{md}");
+    assert!(md.contains("Reaction balance |Σ reactions + Σ applied| / force scale ="), "{md}");
     assert!(md.contains("— **pass** (tolerance 1e-9)."), "{md}");
     // verification: the checks, the verdict and the hand calculation next to the FEM number
     assert!(md.contains("- no element is inverted (min det J > 0 everywhere);"), "{md}");
     assert!(md.contains("### Hand calculation for step `static`"), "{md}");
     assert!(md.contains("$$\\delta = \\frac{P L^3}{3 E I}"), "{md}");
-    assert!(md.contains("with P = 1 kN, L = 1000 mm, b = 100 mm, h = 100 mm, E = 210000 MPa."), "{md}");
+    assert!(md.contains("with end load = total [0, 0, -1] kN, L = 1000 mm, b = 100 mm, h = 100 mm, E = 210000 MPa. F/P is the magnitude of the end load's sole nonzero component."), "{md}");
     assert!(md.contains("| Hand calculation | 0.19048 mm |"), "{md}");
     assert!(md.contains("| This analysis | 0.19012 mm |"), "{md}");
     // the Journal appendix: the entries as JSON and the same Journal as a script
@@ -7058,7 +7097,7 @@ fn the_hand_calculation_covers_the_one_case_it_claims() {
     let md = report(&mut e, None, None).markdown;
     assert!(md.contains("is a prismatic bar in uniaxial bar theory"), "{md}");
     assert!(md.contains("$$\\delta = \\frac{F L}{E A}$$"), "{md}");
-    assert!(md.contains("with F = 100 kN, L = 1000 mm, A = 10000 mm^2, E = 210000 MPa."), "{md}");
+    assert!(md.contains("with end load = total [100, 0, 0] kN, L = 1000 mm, A = 10000 mm^2, E = 210000 MPa. F/P is the magnitude of the end load's sole nonzero component."), "{md}");
     // δ = FL/EA = 100e3 · 1 / (210e9 · 0.01) = 47.62 µm
     assert!(md.contains("| Hand calculation | 0.047619 mm |"), "{md}");
     // a load that carries no total force is not a case the hook knows
@@ -7416,8 +7455,22 @@ fn a_harmonic_step_superposes_the_modes_of_the_step_it_continues() {
     let mut e = engine();
     harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":9,"dampingRatio":0.05"#);
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let modal = summary(&mut e, "modes");
+    let modal_field =
+        e.query(Query::Field { step: None, result_id: Some(modal.result_id.clone()), field: "mode:4".into() }).unwrap();
     ok(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
     let s = summary(&mut e, "sweep");
+    assert_eq!(s.mode_count, 0, "basis frequencies do not imply owned mode fields");
+    assert_eq!(summary(&mut e, "modes").mode_count, 4);
+    assert_eq!(e.field_named(Some("sweep"), "mode:1").unwrap_err().code, ErrorCode::NotFound);
+    assert!(e.field_named(Some("modes"), "mode:4").is_ok());
+    let retained = e.query(Query::Result { result_id: Some(modal.result_id.clone()), step: None }).unwrap();
+    assert_eq!(retained, QueryResult::Result(modal.clone()));
+    assert_eq!(
+        e.query(Query::Field { step: None, result_id: Some(modal.result_id), field: "mode:4".into() }).unwrap(),
+        modal_field
+    );
+    assert_eq!(s.frequencies, modal.frequencies);
     assert_eq!(s.sweep.len(), 9, "nine points, kept every one");
     assert_eq!((s.sweep[0].frequency.value, s.sweep[0].frequency.unit.as_str()), (800.0, "Hz"));
     assert_eq!((s.sweep[8].frequency.value, s.sweep[8].frequency.unit.as_str()), (2400.0, "Hz"));
@@ -7441,6 +7494,7 @@ fn a_harmonic_step_superposes_the_modes_of_the_step_it_continues() {
     assert!(e.field_named(Some("sweep"), "displacement").is_ok());
     // The sweep crosses to a host as JSON like every other summary member.
     let json = serde_json::to_value(&s).expect("a summary serialises");
+    assert_eq!(json["modeCount"], 0);
     assert_eq!(json["sweep"][0]["phase"]["unit"], "rad");
     let back: femlab_engine::query::ResultSummary = serde_json::from_value(json).expect("and round-trips");
     assert_eq!(back.sweep, s.sweep);
@@ -7467,6 +7521,247 @@ fn a_harmonic_sweep_strides_and_logs_like_the_schema_says() {
     assert!((s.sweep[1].frequency.value - 800.0 * 3.0f64.sqrt()).abs() < 1e-9);
     assert_eq!(s.sweep[2].frequency.value, 2400.0);
     assert!(s.sweep.iter().all(|r| r.amplitude.value > 0.0));
+}
+
+fn retained_harmonic_mode(e: &mut Engine, result_id: &str) -> serde_json::Value {
+    serde_json::to_value(
+        e.query(Query::Field { step: None, result_id: Some(result_id.into()), field: "mode:1".into() }).unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_extreme_log_sweep_keeps_its_finite_grid_and_retained_modal_result_on_replay() {
+    for (points, every) in [(3, 1), (9, 4)] {
+        let mut threaded_snapshot = None;
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            harmonic_bar(
+                &mut e,
+                &format!(
+                    r#","fStart":"1e-300 Hz","fStop":"1e100 Hz","points":{points},"outputEvery":{every},"dampingRatio":0,"sweep":"log""#
+                ),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+            let modal_before = summary(&mut e, "modes");
+            let mode_before = retained_harmonic_mode(&mut e, &modal_before.result_id);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+            let response = summary(&mut e, "sweep");
+            let frequencies: Vec<f64> = response.sweep.iter().map(|row| row.frequency.value).collect();
+            assert_eq!(frequencies.len(), 3);
+            assert_eq!((frequencies[0], frequencies[2]), (1e-300, 1e100));
+            assert!((frequencies[1] / 1e-100 - 1.0).abs() < 4e-13);
+            assert!(frequencies.iter().all(|f| f.is_finite() && *f > 0.0));
+            assert!(frequencies.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(response.sweep.iter().all(|row| row.frequency.unit == "Hz"));
+            assert_eq!(summary(&mut e, "modes"), modal_before);
+            assert_eq!(retained_harmonic_mode(&mut e, &modal_before.result_id), mode_before);
+            let catalogue = serde_json::to_value(e.query(Query::Results {}).unwrap()).unwrap();
+            assert_eq!(catalogue["records"].as_array().unwrap().len(), 2);
+            let saved = e.export_file();
+            let hash = e.model_hash();
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            let hashes = pollster::block_on(replayed.replay(&saved.journal.entries, false, true)).unwrap();
+            assert_eq!(hashes.last(), Some(&hash));
+            assert_eq!(replayed.export_file().model, saved.model);
+            let replay_response = summary(&mut replayed, "sweep");
+            assert_eq!(replay_response.sweep.iter().map(|row| row.frequency.value).collect::<Vec<_>>(), frequencies);
+            let replay_modal = summary(&mut replayed, "modes");
+            assert_eq!(replay_modal.frequencies, modal_before.frequencies);
+            let replay_mode = retained_harmonic_mode(&mut replayed, &replay_modal.result_id);
+            assert_eq!(replay_mode["values"], mode_before["values"]);
+            // This case proves the grid, retained modal basis and replay. The separate
+            // high-frequency complex-reciprocal concern is not a zero-response oracle.
+            let snapshot = serde_json::json!({
+                "hash":hash,"frequencies":frequencies,"modalFrequencies":modal_before.frequencies,
+                "mode":mode_before["values"]
+            });
+            if let Some(previous) = &threaded_snapshot {
+                assert_eq!(previous, &snapshot);
+            } else {
+                threaded_snapshot = Some(snapshot);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_ratio_overflowing_log_sweep_matches_the_guided_bar_response_under_grid_refinement() {
+    // Uniform axial displacement of the four guided tip nodes is an exact FE mode.
+    // Integrating its linear x/L shape gives M=rho*A*L/3; constrained transverse
+    // strain gives K=C11*A/L. The complete four-mode basis must give F/(K-M*w^2).
+    let (young, poisson, density, area, force) = (210e9, 0.3, 7800.0, 0.01, 10_000.0);
+    let stiffness = young * (1.0 - poisson) / ((1.0 + poisson) * (1.0 - 2.0 * poisson)) * area;
+    let mass = density * area / 3.0;
+    for threads in [1, 4] {
+        let mut previous_frequencies = Vec::new();
+        for points in [3, 5, 9, 17] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            harmonic_bar(
+                &mut e,
+                &format!(r#","fStart":"1e-300 Hz","fStop":"1e20 Hz","points":{points},"dampingRatio":0,"sweep":"log""#),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+            let result = summary(&mut e, "sweep");
+            assert_eq!(result.sweep.len(), points);
+            for (i, row) in result.sweep.iter().enumerate() {
+                let expected_frequency = 10.0f64.powi(-300 + (320 * i / (points - 1)) as i32);
+                assert!((row.frequency.value / expected_frequency - 1.0).abs() < 4e-13);
+                let omega = 2.0 * std::f64::consts::PI * row.frequency.value;
+                let dynamic_stiffness = stiffness - mass * omega * omega;
+                let expected_amplitude = force / dynamic_stiffness.abs();
+                assert!(
+                    (row.amplitude.value / expected_amplitude - 1.0).abs() < 1e-10,
+                    "{} Hz: {} versus {expected_amplitude}",
+                    row.frequency.value,
+                    row.amplitude.value
+                );
+                let phase = if dynamic_stiffness > 0.0 { 0.0 } else { std::f64::consts::PI };
+                assert!((row.phase.value.abs() - phase).abs() < 1e-12);
+            }
+            let frequencies: Vec<f64> = result.sweep.iter().map(|row| row.frequency.value).collect();
+            assert_eq!((frequencies[0], frequencies[points - 1]), (1e-300, 1e20));
+            for (i, previous) in previous_frequencies.iter().enumerate() {
+                assert_eq!(frequencies[2 * i], *previous);
+            }
+            previous_frequencies = frequencies;
+        }
+    }
+}
+
+#[test]
+fn harmonic_reciprocals_preserve_extreme_finite_response_phase_and_replay_under_refinement() {
+    // One guided full-integration hex has an exact uniform axial mode. Its complete
+    // four-mode basis must reproduce the independently integrated K, M and C.
+    let (young, poisson, density, area, force) = (210e9, 0.3, 7800.0, 0.01, 10_000.0);
+    let stiffness: f64 = young * (1.0 - poisson) / ((1.0 + poisson) * (1.0 - 2.0 * poisson)) * area;
+    let mass: f64 = density * area / 3.0;
+    for (start, stop) in [(800.0, 2400.0), (1e99, 1e100)] {
+        for damping in [0.0, 0.05, 0.8] {
+            let viscous = 2.0 * damping * (stiffness * mass).sqrt();
+            let mut previous_grid: Vec<f64> = Vec::new();
+            for points in [3, 5, 9] {
+                let mut thread_snapshot = None;
+                for threads in [1, 4] {
+                    let mut e = Engine::new(None, Box::new(NoClock), threads);
+                    harmonic_bar(
+                        &mut e,
+                        &format!(
+                            r#","fStart":"{start} Hz","fStop":"{stop} Hz","points":{points},"dampingRatio":{damping},"sweep":"linear""#
+                        ),
+                    );
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+                    let modal_before = summary(&mut e, "modes");
+                    let mode_before = e.field(Some("modes"), Field::Displacement).unwrap().data.clone();
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+                    let response = summary(&mut e, "sweep");
+                    assert_eq!(response.sweep.len(), points);
+                    let mut peak: f64 = 0.0;
+                    for (i, row) in response.sweep.iter().enumerate() {
+                        let expected_frequency = start + (stop - start) * i as f64 / (points - 1) as f64;
+                        assert!((row.frequency.value / expected_frequency - 1.0).abs() < 1e-15);
+                        let omega = 2.0 * std::f64::consts::PI * row.frequency.value;
+                        let dynamic_stiffness = stiffness - mass * omega * omega;
+                        let quadrature = viscous * omega;
+                        let expected = force / dynamic_stiffness.hypot(quadrature);
+                        assert!(expected.is_finite() && expected > 0.0);
+                        assert!(row.amplitude.value.is_finite() && row.amplitude.value > 0.0);
+                        assert!(
+                            (row.amplitude.value / expected - 1.0).abs() < 1e-10,
+                            "{start}..{stop}, damping {damping}, {} Hz: {} versus {expected}",
+                            row.frequency.value,
+                            row.amplitude.value
+                        );
+                        let phase = libm::atan2(quadrature, dynamic_stiffness);
+                        let phase_error = (row.phase.value - phase + std::f64::consts::PI)
+                            .rem_euclid(2.0 * std::f64::consts::PI)
+                            - std::f64::consts::PI;
+                        assert!(phase_error.abs() < 1e-12);
+                        assert_eq!((row.amplitude.unit.as_str(), row.phase.unit.as_str()), ("m", "rad"));
+                        peak = peak.max(expected);
+                    }
+                    let field = e.field(Some("sweep"), Field::Displacement).unwrap().data.clone();
+                    assert!(field.iter().all(|value| value.is_finite()));
+                    let field_max = field.iter().copied().fold(0.0f64, f64::max);
+                    assert!(field_max > 0.0 && (field_max / peak - 1.0).abs() < 1e-10);
+                    let probe = e
+                        .query(Query::Probe {
+                            result_id: Some(response.result_id.clone()),
+                            sample: None,
+                            step: None,
+                            field: Field::Displacement,
+                            component: Some(0),
+                            at: [Q::text("1 m"), Q::text("0.05 m"), Q::text("0.05 m")],
+                        })
+                        .unwrap();
+                    let probe_value = serde_json::to_value(&probe).unwrap();
+                    let amplitude = probe_value["value"]["value"].as_f64().unwrap();
+                    assert!(amplitude > 0.0 && (amplitude / peak - 1.0).abs() < 1e-10);
+                    assert_eq!(summary(&mut e, "modes"), modal_before);
+                    assert_eq!(e.field(Some("modes"), Field::Displacement).unwrap().data, mode_before);
+                    let grid: Vec<f64> = response.sweep.iter().map(|row| row.frequency.value).collect();
+                    if threads == 1 {
+                        for (i, previous) in previous_grid.iter().enumerate() {
+                            assert_eq!(grid[2 * i], *previous, "nested linear quantiles");
+                        }
+                        previous_grid = grid.clone();
+                    }
+                    let file = e.export_file();
+                    let hash = e.model_hash();
+                    let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+                    let hashes = pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+                    assert_eq!(hashes.last(), Some(&hash));
+                    assert_eq!(replayed.export_file().model, file.model);
+                    assert_eq!(summary(&mut replayed, "sweep").sweep, response.sweep);
+                    assert_eq!(replayed.field(Some("sweep"), Field::Displacement).unwrap().data, field);
+                    assert_eq!(replayed.field(Some("modes"), Field::Displacement).unwrap().data, mode_before);
+                    let snapshot = serde_json::json!({"hash":hash,"rows":response.sweep,"field":field,
+                        "mode":mode_before,"modalFrequencies":modal_before.frequencies,"probe":probe});
+                    if let Some(previous) = &thread_snapshot {
+                        assert_eq!(previous, &snapshot, "one/four-thread physical Results");
+                    } else {
+                        thread_snapshot = Some(snapshot);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn harmonic_nonfinite_reciprocals_do_not_publish_over_the_retained_finite_response() {
+    for threads in [1, 4] {
+        let mut e = Engine::new(None, Box::new(NoClock), threads);
+        harmonic_bar(&mut e, r#", "fStart":"800 Hz", "fStop":"2400 Hz", "points":3, "dampingRatio":0.05"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"step.add","name":"unrepresentable","procedure":"harmonic",
+            "constraints":["root","guide"],"loads":["pull"],"after":"modes",
+            "fStart":"1e200 Hz","fStop":"2e200 Hz","points":3,"dampingRatio":0.05}"#,
+        );
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"sweep","solver":"cpu-direct"}"#);
+        let file = e.export_file();
+        let hash = e.model_hash();
+        let revision = e.revision();
+        let catalogue = e.query(Query::Results {}).unwrap();
+        let modal = summary(&mut e, "modes");
+        let prior = summary(&mut e, "sweep");
+        let field = e.field(Some("sweep"), Field::Displacement).unwrap().data.clone();
+        let error = err(&mut e, r#"{"cmd":"solve.run","step":"unrepresentable","solver":"cpu-direct"}"#);
+        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::UnitDisplay, Some("displayUnits")));
+        assert!(error.suggestion.unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+        assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+        assert_eq!(summary(&mut e, "modes"), modal);
+        assert_eq!(summary(&mut e, "sweep"), prior);
+        assert_eq!(e.field(Some("sweep"), Field::Displacement).unwrap().data, field);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"modes","solver":"cpu-direct"}"#);
+        assert_eq!(summary(&mut e, "modes").result_id, "result-3");
+    }
 }
 
 #[test]
@@ -7805,6 +8100,79 @@ fn line_bodies_that_meet_at_a_joint_are_welded_into_one_node() {
     ok(&mut e, r#"{"cmd":"geometry.addLine","name":"c","points":[["0 m","1 m","0 m"],["1 m","1 m","0 m"]]}"#);
     let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
     assert_eq!((m.elements, m.nodes), (3, 5));
+}
+
+#[test]
+fn finite_extreme_line_translations_weld_and_replay_without_a_grid_neighbour_panic() {
+    for translation in [f64::MAX, -f64::MAX] {
+        let mut thread_results = Vec::new();
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            ok(&mut e, r#"{"cmd":"model.new","name":"translated-lines"}"#);
+            ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+            let at = |y, z| serde_json::json!([{"value":translation,"unit":"m"}, y, z]);
+            ok(
+                &mut e,
+                &serde_json::json!({"cmd":"geometry.addLine","name":"a","kind":"truss",
+                    "points":[at("0 m", "0 m"), at("1 m", "0 m"), at("2 m", "0 m")]})
+                .to_string(),
+            );
+            ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+            let original = mesh_summary(&mut e);
+            assert_eq!((original.nodes, original.elements), (3, 2));
+            assert_eq!(original.min_edge.value, 1.0);
+            assert_eq!(original.max_edge.value, 1.0);
+            // A second Body shares the middle joint; another is three metres away.
+            for (name, points) in
+                [("b", vec![at("1 m", "0 m"), at("3 m", "0 m")]), ("c", vec![at("0 m", "3 m"), at("1 m", "3 m")])]
+            {
+                ok(
+                    &mut e,
+                    &serde_json::json!({"cmd":"geometry.addLine","name":name,
+                    "kind":"truss","points":points})
+                    .to_string(),
+                );
+            }
+            let file = e.export_file();
+            let hash = e.model_hash();
+            let summary = mesh_summary(&mut e);
+            assert_eq!((summary.nodes, summary.elements), (6, 4));
+            assert_eq!(summary.bbox.clone().map(|v| v.value), [translation, 0., 0., translation, 3., 3.]);
+            assert_eq!(summary.min_edge.value, 1.0);
+            assert_eq!(summary.max_edge.value, 2.0);
+            let built = e.mesh().unwrap().clone();
+            assert_eq!(built.mesh.node(1), [translation, 1., 0.]);
+            assert_eq!(built.sets["a.p1"].nodes, [1]);
+            assert_eq!(built.sets["b.p0"].nodes, [1]);
+            assert_eq!(built.sets["b.p1"].nodes, [3]);
+            assert_eq!(built.sets["c.p0"].nodes, [4]);
+            assert_eq!(built.mesh.blocks[1].conn, [1, 3]);
+            assert_eq!(built.mesh.blocks[2].conn, [4, 5]);
+            assert_eq!(e.export_file(), file, "mesh reads do not change the Model or Journal");
+            assert_eq!(e.model_hash(), hash);
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&file.journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), hash);
+            assert_eq!(replayed.mesh().unwrap(), &built);
+            assert_eq!(mesh_summary(&mut replayed), summary);
+
+            let collapsed = serde_json::json!({"cmd":"geometry.addLine","name":"bad",
+                "points":[at("0 m", "0 m"), at("0 m", "0 m")]})
+            .to_string();
+            assert!(err(&mut e, &collapsed).cause.contains("zero length"));
+            assert_eq!(
+                err(
+                    &mut e,
+                    r#"{"cmd":"geometry.addLine","name":"bad","points":[["1e309 m","0 m","0 m"],["0 m","1 m","0 m"]]}"#
+                )
+                .code,
+                ErrorCode::Schema
+            );
+            assert_eq!(e.export_file(), file, "invalid geometry is still rejected before mutation");
+            thread_results.push((built, summary, hash));
+        }
+        assert_eq!(thread_results[0], thread_results[1]);
+    }
 }
 
 #[test]
@@ -9094,6 +9462,8 @@ fn frame_payload_time_selection_uses_the_same_resolver_as_sampled_probes() {
 
 #[path = "registry/retained_cases.rs"]
 mod retained_cases;
+#[path = "registry/transient_comparison.rs"]
+mod transient_comparison;
 
 const IMPLICIT_TEMPERATURE: &str =
     r#"{"cmd":"load.temperature","name":"heated","bodies":["sheet"],"value":"343.15 K","reference":"293.15 K"}"#;
@@ -10939,7 +11309,13 @@ fn a_loose_accepted_solve_fails_public_report_equilibrium_until_refined() {
         assert!(loose.balance > 1e-9);
         let before = serde_json::to_value(e.export_file()).unwrap();
         let note = report(&mut e, Some("static"), Some(vec![ReportSection::Results, ReportSection::Verification]));
-        assert_eq!(note.markdown.matches("**fail** (tolerance 1e-9)").count(), 2);
+        assert_eq!(
+            note.markdown
+                .lines()
+                .filter(|line| line.contains("Reaction balance") && line.contains("**fail** (tolerance 1e-9)"))
+                .count(),
+            2
+        );
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
 
         // The same physical model passes the report once the accepted answer is refined.
@@ -10949,7 +11325,20 @@ fn a_loose_accepted_solve_fails_public_report_equilibrium_until_refined() {
         assert!((refined.reactions[0].total[2].value - 1.0).abs() < 1e-9);
         assert!(refined.balance <= 1e-9);
         let note = report(&mut e, Some("static"), Some(vec![ReportSection::Results, ReportSection::Verification]));
-        assert_eq!(note.markdown.matches("**pass** (tolerance 1e-9)").count(), 2);
+        assert_eq!(
+            note.markdown
+                .lines()
+                .filter(|line| line.contains("Reaction balance") && line.contains("**pass** (tolerance 1e-9)"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            note.markdown
+                .lines()
+                .filter(|line| line.contains("Static moment balance") && line.contains("**pass** (tolerance 1e-9)"))
+                .count(),
+            2
+        );
         assert!(!note.markdown.contains("**fail**"));
     }
 }
@@ -11294,8 +11683,14 @@ mod geometry_namespace;
 #[path = "registry/abaqus.rs"]
 mod abaqus;
 
+#[path = "registry/equilibrium.rs"]
+mod equilibrium;
+
 #[path = "registry/abaqus_static.rs"]
 mod abaqus_static;
+
+#[path = "registry/vm142.rs"]
+mod vm142;
 /// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
 ///
 /// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at
@@ -12895,6 +13290,12 @@ fn random_vibration_registry_replays_psd_and_rejects_invalid_inputs() {
     assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"random"}"#).code, ErrorCode::NotFound);
     ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
     ok(&mut e, r#"{"cmd":"solve.run","step":"random"}"#);
+    let random = result_of(&mut e, Some("random"));
+    assert_eq!(random.mode_count, 0);
+    assert!(random.frequencies.is_empty());
+    assert_eq!(result_of(&mut e, Some("modes")).mode_count, 4);
+    assert_eq!(e.field_named(Some("random"), "mode:1").unwrap_err().code, ErrorCode::NotFound);
+    assert!(e.field_named(Some("modes"), "mode:4").is_ok());
     let displacement = e.field(Some("random"), Field::Displacement).unwrap().clone();
     assert!(displacement.data.iter().any(|v| *v > 0.0));
     assert!(e.field(Some("random"), Field::Stress).is_ok());
@@ -13180,6 +13581,100 @@ fn imported_far_unused_labels_keep_authored_extents_out_of_physical_bounds() {
 }
 
 #[test]
+fn imported_extreme_centroids_keep_finite_means_source_identity_and_retained_results() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/imported/centroid-extremes.json")).unwrap();
+    let mut outputs = Vec::new();
+    for threads in [1, 4] {
+        let mut e = Engine::new(None, Box::new(NoClock), threads);
+        for command in fixture["commands"].as_array().unwrap() {
+            ok(&mut e, &command.to_string());
+        }
+        let file = e.export_file();
+        let hash = e.model_hash();
+        let result = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap();
+        let reaction = e.field(Some("static"), Field::Reaction).unwrap().clone();
+        let mesh = mesh_summary(&mut e);
+        assert_eq!(mesh.bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+        assert_eq!(mesh.nodes, 4);
+        let source_labels = mesh.source_labels.unwrap();
+        assert_eq!(source_labels.nodes, [10, 77, 88, 301]);
+        assert_eq!(serde_json::to_value(source_labels.unused_nodes).unwrap(), fixture["unusedLabels"]);
+        let body = body_row(&mut e, 0);
+        assert_eq!(body.bbox.clone().map(|v| v.value), [0., 0., 0., 1., 1., 1.]);
+        assert!((body.measure.value - 1. / 6.).abs() < 1e-15);
+        let mut cases = Vec::new();
+        for case in fixture["cases"].as_array().unwrap() {
+            let set = set_info(&mut e, case["name"].as_str().unwrap());
+            assert_eq!(serde_json::to_value(&set.source_node_labels).unwrap(), case["labels"]);
+            assert_eq!(serde_json::to_value(&set.unused_source_node_labels).unwrap(), case["labels"]);
+            assert_eq!(set.count as usize, case["labels"].as_array().unwrap().len());
+            for (value, expected) in set.centroid.iter().zip(case["centroidBits"].as_array().unwrap()) {
+                assert!(value.value.is_finite());
+                assert_eq!(value.value.to_bits(), u64::from_str_radix(expected.as_str().unwrap(), 16).unwrap());
+                assert_eq!(value.unit, "m");
+            }
+            assert_eq!(e.export_file(), file);
+            assert_eq!(e.model_hash(), hash);
+            assert_eq!(e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap(), result);
+            assert_eq!(e.field(Some("static"), Field::Reaction).unwrap(), &reaction);
+            cases.push(set);
+        }
+        let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+        pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+        assert_eq!(replayed.export_file(), file);
+        for set in &cases {
+            assert_eq!(set_info(&mut replayed, &set.name), *set);
+        }
+        let mut opened = Engine::new(None, Box::new(NoClock), threads);
+        opened.import_file(file.clone()).unwrap();
+        assert_eq!(opened.export_file(), file);
+        for set in &cases {
+            assert_eq!(set_info(&mut opened, &set.name), *set);
+        }
+        // The finite centroid must still report a genuine requested-unit overflow.
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm"}}"#);
+        let before = e.export_file();
+        assert_eq!(
+            e.query(Query::Set { name: "part.nset_CONST_POS_3".into() }).unwrap_err().code,
+            ErrorCode::UnitDisplay
+        );
+        assert_eq!(e.export_file(), before);
+        outputs.push(cases);
+    }
+    assert_eq!(outputs[0], outputs[1]);
+}
+
+#[test]
+fn ordinary_set_centroids_preserve_constant_extremes_symmetry_and_subnormal_baselines() {
+    for (commands, expected) in [
+        (include_str!("fixtures/imported/centroid-ordinary.json"), [7.0, 0.0, f64::from_bits(3)]),
+        // Three distinct node members with constant MAX x, y = 0/1/2: exact mean [MAX,1,0].
+        // Set.count is two line elements, not the three nodes entering its centroid.
+        (include_str!("fixtures/imported/centroid-ordinary-extreme.json"), [f64::MAX, 1.0, 0.0]),
+    ] {
+        let commands: Vec<serde_json::Value> = serde_json::from_str(commands).unwrap();
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            for command in &commands {
+                ok(&mut e, &command.to_string());
+            }
+            let before = e.export_file();
+            let set = set_info(&mut e, "whole");
+            assert_eq!(set.centroid.clone().map(|v| v.value.to_bits()), expected.map(f64::to_bits));
+            assert_eq!(set.count, 2);
+            assert_eq!(set.source_node_labels, None);
+            assert!(set.unused_source_node_labels.is_empty());
+            assert_eq!(e.export_file(), before);
+            let mut replayed = Engine::new(None, Box::new(NoClock), threads);
+            pollster::block_on(replayed.replay(&before.journal.entries, true, true)).unwrap();
+            assert_eq!(set_info(&mut replayed, "whole"), set);
+            assert_eq!(replayed.export_file(), before);
+        }
+    }
+}
+
+#[test]
 fn imported_finite_coordinates_with_unrepresentable_jacobians_fail_atomically() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);
@@ -13334,11 +13829,11 @@ fn imported_source_malformed_inputs_and_settings_never_publish() {
         (&["simplices"], serde_json::json!(true)),
         (&["refinement"], serde_json::json!({"boxes": [], "maxElements": 10})),
         (&["mesher", "nodeTargets"], serde_json::json!([123])),
-        (&["mesher", "nodeSets"], serde_json::json!({"LOWERcase": [10]})),
+        (&["mesher", "nodeSets"], serde_json::json!({"CONTROL\n": [10]})),
         (&["mesher", "nodeSets"], serde_json::json!({"ABSENT": [55]})),
         (&["mesher", "elementSets"], serde_json::json!({"ABSENT": [55]})),
-        (&["mesher", "elementSets"], serde_json::json!({"bad": [409]})),
-        (&["mesher", "surfaces"], serde_json::json!({"bad": [{"element": 409, "face": 1}]})),
+        (&["mesher", "elementSets"], serde_json::json!({"CONTROL\n": [409]})),
+        (&["mesher", "surfaces"], serde_json::json!({"CONTROL\n": [{"element": 409, "face": 1}]})),
         (&["mesher", "surfaces"], serde_json::json!({"ABSENT": [{"element": 55, "face": 1}]})),
         (&["mesher", "surfaces"], serde_json::json!({"BAD": [{"element": 409, "face": 5}]})),
         (&["mesher", "surfaces"], serde_json::json!({"BAD": [{"element": 409, "face": 0}]})),
@@ -13545,7 +14040,7 @@ fn imported_source_survives_a_legal_empty_region_and_undo_recovers_its_preview()
 }
 
 #[test]
-fn imported_topology_rejects_nonmanifold_same_side_and_disconnected_tetrahedra() {
+fn imported_topology_rejects_nonmanifold_and_same_side_tetrahedra() {
     let mut e = engine();
     ok(&mut e, IMPORTED_TET);
     let before = e.export_file();
@@ -13570,7 +14065,6 @@ fn imported_topology_rejects_nonmanifold_same_side_and_disconnected_tetrahedra()
     for (connectivity, cause) in [
         (vec![vec![1, 2, 3, 4], vec![1, 2, 3, 5], vec![1, 3, 2, 6]], "nonmanifold face"),
         (vec![vec![1, 2, 3, 4], vec![1, 2, 3, 5]], "opposite cyclic connectivity"),
-        (vec![vec![1, 2, 3, 4], vec![7, 8, 9, 10]], "one face-connected mesh"),
     ] {
         let elements: Vec<_> = connectivity
             .into_iter()
@@ -14164,3 +14658,176 @@ fn original_bilinear_query_areas_converge_and_replay_independently_of_owner_and_
     }
     assert_eq!(thread_values[0], thread_values[1]);
 }
+
+#[path = "registry/quadratic_measures.rs"]
+mod quadratic_measures;
+
+#[path = "registry/display_units.rs"]
+mod display_units;
+
+/// #580: a Model read cannot silently label SI as the selected smaller stress unit.
+#[test]
+fn display_unit_overflow_rejects_model_and_report_without_mutating_the_journal() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"large finite material"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"finite","E":"1e308 Pa","nu":0}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"mPa"}}"#);
+    let file = e.export_file();
+    let hash = e.model_hash();
+    let revision = e.revision();
+    for query in [Query::Model {}, Query::Report { step: None, include: None }] {
+        let error = e.query(query).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert!(error.cause.contains("mPa"));
+        assert!(error.suggestion.as_deref().unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+    }
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"Pa"}}"#);
+    let summary = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(summary["materials"][0]["E"], serde_json::json!({"value":1e308,"unit":"Pa"}));
+}
+
+/// #582 is inseparable from validating the complete derived display-unit dimension.
+#[test]
+fn composite_length_units_keep_public_body_and_set_measures_dimensionally_correct() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"composite length"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m*s/s"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"box","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    let file = e.export_file();
+    let model = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(model["bodies"][0]["measure"], serde_json::json!({"value":1.0,"unit":"(m*s/s)*(m*s/s)*(m*s/s)"}));
+    let face = set_info(&mut e, "box.xmax");
+    assert_eq!(face.measure.unit, "(m*s/s)*(m*s/s)");
+    assert!((face.measure.value - 1.0).abs() < 1e-14);
+    assert_eq!(femlab_engine::units::parse_unit(&face.measure.unit).unwrap().dim, femlab_engine::units::Area::DIM);
+    assert_eq!(e.export_file(), file);
+}
+
+/// A real lazy mapped mesh fails while formatting the nearest empty-Set diagnostic.
+/// That unit failure must not become an omitted Body or omitted Mesh report section.
+#[test]
+fn mapped_empty_set_display_errors_survive_optional_geometry_and_report_paths() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"mapped display boundary"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"plate","blocks":[{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"outside","where":{"kind":"bbox","min":["2 m","0 m","0 m"],"max":["3 m","1 m","1 m"]}}"#,
+    );
+    // A genuine unbuildable implicit Mesh retains the existing optional-body behavior.
+    let before = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(before["bodies"], serde_json::json!([]));
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::SetEmpty);
+    // The geometry remains a unit square. The length factor 10^-315 is finite/nonzero,
+    // but its ordinary nearest-boundary coordinates cannot fit in that display unit.
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"nm^35/m^34"}}"#);
+    let file = e.export_file();
+    let hash = e.model_hash();
+    for query in [Query::Mesh {}, Query::Model {}, Query::Report { step: None, include: None }] {
+        let error = e.query(query).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert!(error.cause.contains("nm^35/m^34"));
+        // Context annotation is public error behavior; machine classification survives it.
+        assert_eq!(error.at("mesher.namedSets.outside").code, ErrorCode::UnitDisplay);
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+    }
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::SetEmpty);
+}
+
+/// The complete display summary is checked before any Result catalogue/sequence mutation.
+#[test]
+fn failed_candidate_summary_preserves_readable_result_and_consumes_no_result_identity() {
+    let mut e = engine();
+    for command in [
+        r#"{"cmd":"model.new","name":"display publication shaft"}"#,
+        r#"{"cmd":"geometry.addLine","name":"shaft","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]],"divisions":3,"kind":"beam"}"#,
+        r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#,
+        r#"{"cmd":"material.assign","material":"steel","bodies":["shaft"]}"#,
+        r#"{"cmd":"section.add","name":"round","shape":{"kind":"circle","radius":"50 mm"}}"#,
+        r#"{"cmd":"section.assign","section":"round","bodies":["shaft"]}"#,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#,
+        r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"shaft"}}"#,
+        r#"{"cmd":"constraint.fix","name":"held","on":"whole"}"#,
+        r#"{"cmd":"load.force","name":"tip","on":"shaft.p1","total":["1000 N","0 N","0 N"]}"#,
+        r#"{"cmd":"step.add","name":"axial","procedure":"static","constraints":["held"],"loads":["tip"]}"#,
+        r#"{"cmd":"solve.run","step":"axial","solver":"cpu-direct"}"#,
+        r#"{"cmd":"constraint.fix","name":"held","on":"shaft.p0"}"#,
+        r#"{"cmd":"model.setUnits","units":{"stress":"Pa*nm^34/m^34"}}"#,
+    ] {
+        ok(&mut e, command);
+    }
+    // The previous fully held shaft has exactly zero elastic stress and is still readable.
+    let selected = e.query(Query::Result { step: Some("axial".into()), result_id: None }).unwrap();
+    let catalogue = e.query(Query::Results {}).unwrap();
+    let file = e.export_file();
+    let revision = e.revision();
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"axial","solver":"cpu-direct"}"#);
+    assert_eq!(error.code, ErrorCode::UnitDisplay);
+    assert!(error.cause.contains("stress/pressure"));
+    assert_eq!(e.export_file(), file);
+    assert_eq!(e.revision(), revision);
+    assert_eq!(e.query(Query::Results {}).unwrap(), catalogue);
+    assert_eq!(e.query(Query::Result { step: Some("axial".into()), result_id: None }).unwrap(), selected);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"Pa"}}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"axial","solver":"cpu-direct"}"#);
+    let summary =
+        serde_json::to_value(e.query(Query::Result { step: Some("axial".into()), result_id: None }).unwrap()).unwrap();
+    assert_eq!(summary["resultId"], "result-2");
+    // Independent axial bar and conservation answers: FL/(EA), sigma=F/A, root=-F.
+    let area = std::f64::consts::PI * 0.05_f64.powi(2);
+    let displacement = probe_at(&mut e, "axial", Field::Displacement, Some(0), ["1 m", "0 m", "0 m"]);
+    assert!((displacement - 1000.0 / (2e11 * area)).abs() < 1e-16);
+    assert!((summary["reactions"][0]["total"][0]["value"].as_f64().unwrap() + 1000.0).abs() < 1e-8);
+    let stress = summary["extremes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["field"] == "stress" && row["component"] == 0)
+        .unwrap();
+    assert!((stress["max"]["value"].as_f64().unwrap() - 1000.0 / area).abs() < 1e-6);
+}
+
+#[test]
+fn display_unit_underflow_rejects_public_reads_without_changing_saved_state() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"subnormal modulus"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"small","E":"1e-320 Pa","nu":0}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"GPa"}}"#);
+    let file = e.export_file();
+    let hash = e.model_hash();
+    let revision = e.revision();
+    for query in [Query::Model {}, Query::Report { step: None, include: None }] {
+        let error = e.query(query).unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnitDisplay);
+        assert_eq!(error.where_.as_deref(), Some("displayUnits"));
+        assert!(error.cause.contains("GPa") && error.cause.contains("underflows to zero"));
+        assert!(error.suggestion.as_deref().unwrap().contains("model.setUnits"));
+        assert_eq!(e.export_file(), file);
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(e.revision(), revision);
+    }
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"Pa"}}"#);
+    let model = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    // Decimal 1e-320 rounds to 2024 ticks of 2^-1074; zero cannot satisfy this oracle.
+    assert_eq!(model["materials"][0]["E"]["value"].as_f64().unwrap().to_bits(), 2024);
+    assert_eq!(model["materials"][0]["E"]["unit"], "Pa");
+}
+
+#[path = "registry/modal_convergence.rs"]
+mod modal_convergence;
+
+#[path = "registry/modal_thread_determinism.rs"]
+mod modal_thread_determinism;
+
+#[path = "registry/imported_regions.rs"]
+mod imported_regions;

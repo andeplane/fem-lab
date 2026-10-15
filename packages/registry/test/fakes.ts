@@ -36,6 +36,7 @@ const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
+  modeCount: 0,
   resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
@@ -86,6 +87,11 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
   return {
     account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
     transport,
+    step: { import: vi.fn(async () => ({ cancelled: true as const })), cancel: vi.fn(() => true) },
+    resultComparison: {
+      configure: vi.fn(), play: vi.fn(), legend: vi.fn(), visible: vi.fn(), pick: vi.fn(() => null),
+      state: vi.fn(() => ({ configuration: { mode: 'single' as const }, viewMode: 'results' as const, catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null })),
+    },
     abaqus: { capture: vi.fn(() => ({
       io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },
       replace: vi.fn(async () => undefined),

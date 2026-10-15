@@ -1,3 +1,4 @@
+import { grantFreeFixture } from './free-fixture';
 import {randomUUID} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import pg from 'pg';
@@ -22,7 +23,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private exports and durable del
   beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_leases');clock=new Date('2026-10-14T12:00:00Z');recent=true;cancellationFails=false;vi.clearAllMocks();order.length=0;identity.remove.mockImplementation(async()=>{order.push('identity')})});
   afterAll(async()=>{await db.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end()});
   it('exports only the verified owner ledger and signs a URL for at most 15 minutes',async()=>{
-    const a=await owner('Bearer a'),b=await owner('Bearer b');await ledger.ensureFree(a.id);await ledger.ensureFree(b.id);
+    const a=await owner('Bearer a'),b=await owner('Bearer b');await grantFreeFixture(ledger, a.id, now());await grantFreeFixture(ledger, b.id, now());
     await expect(service.export('Bearer a',{accountId:b.id})).rejects.toMatchObject({code:'invalid-export'});
     expect(await service.export('Bearer a',{})).toEqual({status:'queued'});expect(await service.export('Bearer a',{})).toEqual({status:'queued'});
     expect((await service.recover()).exported).toBe(1);const call=objects.write.mock.calls[0] as unknown as [string,string,Date],data=JSON.parse(call[1]);expect(data.account.id).toBe(a.id);expect(JSON.stringify(data)).not.toContain('b@example.com');expect(data.credit_grants).toHaveLength(1);expect(data).not.toHaveProperty('prompts');
@@ -33,14 +34,14 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private exports and durable del
     const a=await owner('Bearer a');await expect(service.delete('Bearer a',{confirm:'DELETE',accountId:randomUUID()})).rejects.toMatchObject({code:'delete-confirmation-required'});recent=false;await expect(service.delete('Bearer a',{confirm:'DELETE'})).rejects.toMatchObject({code:'recent-login-required'});expect((await db.query('SELECT status FROM accounts WHERE id=$1',[a.id])).rows[0].status).toBe('active');
   });
   it('keeps the identity until renewal cancellation succeeds, then pseudonymizes without mutating grants',async()=>{
-    const a=await owner('Bearer a');await ledger.ensureFree(a.id);await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[a.id,'cus_a',now()]);
+    const a=await owner('Bearer a');await grantFreeFixture(ledger, a.id, now());await db.query('INSERT INTO billing_accounts(account_id,customer_id,updated_at) VALUES($1,$2,$3)',[a.id,'cus_a',now()]);
     expect(await service.delete('Bearer a',{confirm:'DELETE'})).toEqual({status:'queued'});await service.delete('Bearer a',{confirm:'DELETE'});expect((await db.query('SELECT * FROM account_deletions')).rows).toHaveLength(1);await expect(owner('Bearer a')).rejects.toMatchObject({code:'account-inactive'});
     cancellationFails=true;expect((await service.recover()).failed).toBe(1);expect(identity.remove).not.toHaveBeenCalled();expect((await db.query('SELECT state FROM account_deletions')).rows[0].state).toBe('queued');
     cancellationFails=false;expect((await service.recover()).deleted).toBe(1);expect(order).toEqual(['cancel','cancel','identity']);expect(payments.stopRenewal.mock.calls[0]).toEqual(payments.stopRenewal.mock.calls[1]);
     expect((await db.query('SELECT email,firebase_uid,status FROM accounts WHERE id=$1',[a.id])).rows[0]).toEqual({email:'',firebase_uid:`deleted:${a.id}`,status:'deleted'});expect((await db.query('SELECT * FROM credit_grants WHERE account_id=$1',[a.id])).rows).toHaveLength(1);expect((await service.recover()).deleted).toBe(0);
   });
   it('waits for accepted AI work and deletes a free account without requiring Stripe',async()=>{
-    const a=await owner('Bearer a');await ledger.ensureFree(a.id);
+    const a=await owner('Bearer a');await grantFreeFixture(ledger, a.id, now());
     const holds=reservations(db,now,randomUUID),request=await holds.prepare({accountId:a.id,key:'privacy-pending',digest:'a'.repeat(64),turnId:'t',round:0,model:'gpt-5.4-mini',maxOutput:128});
     const free=accountPrivacy({db,account:owner,recentIdentity:async()=>({uid:'a',email:'a@example.com'}),objects,identity,now,newId:randomUUID});
     await free.delete('Bearer a',{confirm:'DELETE'});expect((await free.recover()).pending).toBe(1);expect(identity.remove).not.toHaveBeenCalled();expect(payments.stopRenewal).not.toHaveBeenCalled();

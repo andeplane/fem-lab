@@ -8,7 +8,7 @@
 use femlab_geometry::Mesh;
 
 use crate::command::{Field, ObjectKind, Procedure, QuantityOfInterest, Solver};
-use crate::engine::{display, Engine, OnProgress};
+use crate::engine::{display, display_values, Engine, OnProgress};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
@@ -20,12 +20,12 @@ use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
-    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary,
-    StudyReport, StudyRow, SweepRow, Valued,
+    AssumedMaterialProperty, ContactRow, Extreme, HistoryRow, MomentReactionRow, Output, ReactionRow, ResultAssumption,
+    ResultSummary, StaticEquilibrium, StudyReport, StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
 use crate::units::{
-    Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
+    convert, Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
 };
 
 /// The three built-in laws a Model material resolves to; plugins add their own later.
@@ -271,7 +271,8 @@ fn build_problem_with_temperature<'a>(
             model
                 .body(body)
                 .and_then(|b| b.orientation)
-                .or_else(|| model.mesher_orientation.filter(|_| model.implicit_body() == Some(body)))
+                .or_else(|| model.imported_region_assignments.get(body).and_then(|a| a.orientation))
+                .or_else(|| model.mesher_orientation.filter(|_| model.mesher_body_names().contains(&body.as_str())))
                 .map(|axis| {
                     let mut v = [0.0; 3];
                     v[axis.index()] = 1.0;
@@ -365,7 +366,12 @@ fn build_problem_with_temperature<'a>(
             }
             LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
             LoadKind::HeatSource { bodies, q } => {
-                heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
+                let selected = if model.implicit_body().is_some_and(|root| bodies.iter().any(|b| b == root)) {
+                    bodies.iter().cloned().chain(model.meshed_body_names().into_iter().map(str::to_string)).collect()
+                } else {
+                    bodies.clone()
+                };
+                heat_loads.push(HeatLoad::Source { bodies: selected, q: *q });
             }
             LoadKind::Torque { on, total } => {
                 let j = face_set_polar_moment(&p, on)?;
@@ -394,7 +400,9 @@ fn thermal_field(
         let load = model.load(name).expect("step.add validated the Load names");
         if let LoadKind::Temperature { bodies, value, reference } = &load.kind {
             let nodal = assigned.get_or_insert_with(|| vec![None; built.mesh.n_nodes()]);
-            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| bodies.contains(body)) {
+            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| {
+                bodies.contains(body) || model.implicit_body().is_some_and(|root| bodies.iter().any(|b| b == root))
+            }) {
                 for &node in &built.mesh.blocks[b].conn {
                     let node = node as usize;
                     let delta = previous.map_or(*value, |t| t.data[node * t.comps]) - reference;
@@ -971,8 +979,8 @@ impl Engine {
             }
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        self.retain_result(step.name.clone(), result);
-        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
+        let summary = self.retain_result(step.name.clone(), result)?;
+        Ok(Output::Solve { summary: Box::new(summary) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -1035,7 +1043,7 @@ impl Engine {
         let mut unit = String::new();
         let mut last = None;
         for (i, &size) in h.iter().enumerate() {
-            let where_ = display(&self.model, size, Length::DIM);
+            let where_ = display(&self.model, size, Length::DIM)?;
             report(
                 &mut progress,
                 "study",
@@ -1073,7 +1081,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            self.retain_result(step.name, last.expect("at least two sizes ran"));
+            self.retain_result(step.name, last.expect("at least two sizes ran"))?;
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -1171,8 +1179,8 @@ impl Engine {
                 None => relative <= target || iteration + 1 == iterations as usize,
             };
             if done {
-                self.retain_result(step.name.clone(), result);
-                let result_id = self.result_summary(step_name).result_id;
+                let summary = self.retain_result(step.name.clone(), result)?;
+                let result_id = summary.result_id;
                 let report = crate::query::AdaptReport {
                     rows,
                     converged: relative <= target,
@@ -1285,7 +1293,7 @@ impl Engine {
                 Engine::pick(&v, component)
             }
         };
-        let d = display(&self.model, raw, field_dimension(field, res.reaction_quantity));
+        let d = display(&self.model, raw, field_dimension(field, res.reaction_quantity))?;
         Ok((d.value, d.unit))
     }
 
@@ -1355,14 +1363,25 @@ impl Engine {
 
     /// `query.result`: what the Step produced, in the Model's display units. The Step must
     /// have a Result: every caller has just stored one or resolved it through [`Engine::stored`].
-    pub(crate) fn result_summary(&self, step: &str) -> ResultSummary {
-        self.selected_summary(Some(step), None).expect("the caller resolved this Step")
+    pub(crate) fn result_summary(&self, step: &str) -> Result<ResultSummary, Error> {
+        self.selected_summary(Some(step), None)
     }
 
     pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
         let record = self.result_record(step, id)?;
+        let model = if id.is_some() { &record.model } else { &self.model };
+        self.summarize_record(record, model)
+    }
+
+    /// The same checked display boundary runs on private candidate records before retention.
+    pub(crate) fn summarize_record(
+        &self,
+        record: &crate::retained::ResultRecord,
+        m: &Model,
+    ) -> Result<ResultSummary, Error> {
         let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
-        let m = if id.is_some() { &record.model } else { &self.model };
+        // Preserve #445's scoped ledger diagnostics before the broader display boundary.
+        let static_equilibrium = checked_static_equilibrium(m, res.static_equilibrium.as_ref())?;
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
         for (_, r) in &res.reactions {
@@ -1383,81 +1402,108 @@ impl Engine {
             residual = (applied[0] - removed - storage).abs();
             biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
         }
-        Ok(ResultSummary {
-            result_id: record.id.clone(),
-            step: name.to_string(),
-            reaction_quantity: res.reaction_quantity,
-            storage_power: storage_power.map(|p| display(m, p, Power::DIM)),
-            yielded_fraction: res.scalars.get("yielded_fraction").copied(),
-            revision: record.revision,
-            stale: *hash != crate::hash::result_hash(&self.model),
-            solver: res.solver.solver.to_string(),
-            iterations: res.solver.iterations as u32,
-            residual: res.solver.rel_residual,
-            time_ms: res.solver.time_ms,
-            extremes: res
-                .extremes
-                .iter()
-                .map(|(f, e)| extreme(m, *f, e, res.reaction_quantity))
-                .chain(res.ply_stresses.iter().enumerate().flat_map(|(i, ply)| {
-                    ["bottom", "top"].into_iter().zip(&ply.extremes).flat_map(move |(side, extremes)| {
-                        extremes.iter().map(move |e| {
-                            let mut row = extreme(m, Field::Stress, e, res.reaction_quantity);
+        if let Some(ledger) = &res.static_equilibrium {
+            residual = crate::post::equilibrium::norm(ledger.force_residual);
+            biggest = ledger.force_scale;
+        }
+        // Keep the checked prefix in publication order before composing frequency output.
+        let storage_power = storage_power.map(|p| display(m, p, Power::DIM)).transpose()?;
+        let extremes = res
+            .extremes
+            .iter()
+            .map(|(f, e)| extreme(m, *f, e, res.reaction_quantity))
+            .chain(res.ply_stresses.iter().enumerate().flat_map(|(i, ply)| {
+                ["bottom", "top"].into_iter().zip(&ply.extremes).flat_map(move |(side, extremes)| {
+                    extremes.iter().map(move |e| {
+                        extreme(m, Field::Stress, e, res.reaction_quantity).map(|mut row| {
                             row.field = format!("stressPly:{}:{side}", i + 1);
                             row
                         })
                     })
-                }))
-                .collect(),
-            reactions: res
-                .reactions
-                .iter()
-                .map(|(n, r)| ReactionRow {
+                })
+            }))
+            .collect::<Result<_, Error>>()?;
+        let reactions = res
+            .reactions
+            .iter()
+            .map(|(n, r)| {
+                Ok(ReactionRow {
                     constraint: n.clone(),
-                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity)),
+                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity))?,
                 })
-                .collect(),
-            applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
-            assumptions: res.assumptions.clone(),
-            frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
-            prestress_from: res.prestress_from.clone(),
-            // Dimensionless, so no display conversion: a load factor is a load factor in any unit
-            // system the Model is written in.
-            buckling_factors: res.buckling_factors.clone(),
-            history: res
-                .history
-                .iter()
-                .flat_map(crate::procedure::heat::history_extremes)
-                .map(|(t, lo, hi)| {
-                    let dim = field_dimension(
-                        res.history.as_ref().map_or(Field::Temperature, |h| h.field),
-                        res.reaction_quantity,
-                    );
-                    HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
+            })
+            .collect::<Result<_, Error>>()?;
+        let applied_total = vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity))?;
+        res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect::<Result<_, Error>>().and_then(
+            |frequencies| {
+                Ok(ResultSummary {
+                    result_id: record.id.clone(),
+                    step: name.to_string(),
+                    reaction_quantity: res.reaction_quantity,
+                    storage_power,
+                    yielded_fraction: res.scalars.get("yielded_fraction").copied(),
+                    revision: record.revision,
+                    stale: *hash != crate::hash::result_hash(&self.model),
+                    solver: res.solver.solver.to_string(),
+                    iterations: res.solver.iterations as u32,
+                    residual: res.solver.rel_residual,
+                    time_ms: res.solver.time_ms,
+                    extremes,
+                    reactions,
+                    applied_total,
+                    static_equilibrium,
+                    assumptions: res.assumptions.clone(),
+                    mode_count: res.modes.len() as u32,
+                    frequencies,
+                    prestress_from: res.prestress_from.clone(),
+                    // Dimensionless, so no display conversion: a load factor is a load factor in any unit
+                    // system the Model is written in.
+                    buckling_factors: res.buckling_factors.clone(),
+                    history: res
+                        .history
+                        .iter()
+                        .flat_map(crate::procedure::heat::history_extremes)
+                        .map(|(t, lo, hi)| {
+                            let dim = field_dimension(
+                                res.history.as_ref().map_or(Field::Temperature, |h| h.field),
+                                res.reaction_quantity,
+                            );
+                            Ok(HistoryRow {
+                                time: display(m, t, Time::DIM)?,
+                                min: display(m, lo, dim)?,
+                                max: display(m, hi, dim)?,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    sweep: match &res.sweep {
+                        Some(sweep) => sweep_rows(m, sweep)?,
+                        None => Vec::new(),
+                    },
+                    balance: if biggest == 0.0 { 0.0 } else { residual / biggest },
+                    contacts: res
+                        .contacts
+                        .iter()
+                        .map(|c| {
+                            Ok(ContactRow {
+                                contact: c.name.clone(),
+                                active: c.active,
+                                paired: c.paired,
+                                active_fraction: c.active as f64 / c.paired.max(1) as f64,
+                                force: vec3(m, c.force, Force::DIM)?,
+                            })
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    warnings: res.warnings.clone(),
                 })
-                .collect(),
-            sweep: res.sweep.iter().flat_map(|s| sweep_rows(m, s)).collect(),
-            balance: residual / biggest,
-            contacts: res
-                .contacts
-                .iter()
-                .map(|c| ContactRow {
-                    contact: c.name.clone(),
-                    active: c.active,
-                    paired: c.paired,
-                    active_fraction: c.active as f64 / c.paired.max(1) as f64,
-                    force: vec3(m, c.force, Force::DIM),
-                })
-                .collect(),
-            warnings: res.warnings.clone(),
-        })
+            },
+        )
     }
 }
 
 /// A harmonic sweep as summary rows: per retained frequency, the largest nodal displacement
 /// amplitude and the phase of the very component that reached it. The first maximum wins, so
 /// two DOFs at the same amplitude give the same row at any thread count.
-fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Vec<SweepRow> {
+fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Result<Vec<SweepRow>, Error> {
     let mut rows = Vec::with_capacity(sweep.frequencies.len());
     for (i, hz) in sweep.frequencies.iter().enumerate() {
         let (amplitude, phase) = &(&sweep.amplitude[i], &sweep.phase[i]);
@@ -1468,30 +1514,90 @@ fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Vec<SweepRow> {
                 best
             }
         });
-        rows.push(SweepRow {
-            frequency: display(model, *hz, Frequency::DIM),
-            amplitude: display(model, at.1, Length::DIM),
-            // Radians are the SI angle and the Model has no display unit for one.
-            phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
-        });
+        rows.push(display(model, *hz, Frequency::DIM).and_then(|frequency| {
+            display(model, at.1, Length::DIM).map(|amplitude| SweepRow {
+                frequency,
+                amplitude,
+                // Radians are the SI angle and the Model has no display unit for one.
+                phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
+            })
+        })?);
     }
-    rows
+    Ok(rows)
 }
 
-fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {
-    [display(model, v[0], dim), display(model, v[1], dim), display(model, v[2], dim)]
+/// Preserve #445's scoped wrench diagnostics within the complete checked display summary.
+/// A preferred-unit overflow must never relabel SI as that unit.
+pub(crate) fn checked_static_equilibrium(
+    model: &Model,
+    source: Option<&crate::post::equilibrium::StaticEquilibrium>,
+) -> Result<Option<Box<StaticEquilibrium>>, Error> {
+    let Some(ledger) = source else { return Ok(None) };
+    let units = model.units.resolve();
+    // This fixed prefix contains 15 quantities; each Constraint adds three torque values.
+    // Convert in one fallible pass so every reported field has the same boundary policy.
+    let fields = [
+        ("reference", ledger.reference.as_slice(), Length::DIM),
+        ("characteristicLength", std::slice::from_ref(&ledger.characteristic_length), Length::DIM),
+        ("forceResidual", ledger.force_residual.as_slice(), Force::DIM),
+        ("forceScale", std::slice::from_ref(&ledger.force_scale), Force::DIM),
+        ("appliedMoment", ledger.applied_moment.as_slice(), Torque::DIM),
+        ("momentResidual", ledger.moment_residual.as_slice(), Torque::DIM),
+        ("momentScale", std::slice::from_ref(&ledger.moment_scale), Torque::DIM),
+    ];
+    let values: Vec<Valued> = fields
+        .into_iter()
+        .chain(ledger.reaction_moments.iter().map(|(_, values)| ("reactionMoments", values.as_slice(), Torque::DIM)))
+        .flat_map(|(field, values, dimension)| values.iter().map(move |value| (field, *value, dimension)))
+        .map(|(field, value, dimension)| {
+            let unit = units.unit(dimension);
+            convert(value, &unit, Some(dimension)).map(|value| Valued { value, unit: unit.clone() }).map_err(|_| {
+                Error::schema(format!("static equilibrium cannot be represented in display unit '{unit}'"))
+                    .at(format!("staticEquilibrium.{field}"))
+                    .suggest("model.setUnits with force 'N' and length 'm'")
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(Some(Box::new(StaticEquilibrium {
+        reference: ledger_vec3(&values, 0),
+        characteristic_length: values[3].clone(),
+        force_residual: ledger_vec3(&values, 4),
+        force_scale: values[7].clone(),
+        applied_moment: ledger_vec3(&values, 8),
+        reaction_moments: ledger
+            .reaction_moments
+            .iter()
+            .enumerate()
+            .map(|(row, (name, _))| MomentReactionRow {
+                constraint: name.clone(),
+                total: ledger_vec3(&values, 15 + 3 * row),
+            })
+            .collect(),
+        moment_residual: ledger_vec3(&values, 11),
+        moment_scale: values[14].clone(),
+        moment_balance: crate::post::equilibrium::relative(ledger.moment_residual, ledger.moment_scale),
+    })))
 }
 
-fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Extreme {
+/// Offsets refer to the fixed checked prefix/Constraint triples constructed above.
+fn ledger_vec3(values: &[Valued], offset: usize) -> [Valued; 3] {
+    std::array::from_fn(|c| values[offset + c].clone())
+}
+
+fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> Result<[Valued; 3], Error> {
+    display_values(model, v, dim)
+}
+
+fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Result<Extreme, Error> {
     let dim = field_dimension(field, reaction);
-    Extreme {
+    Ok(Extreme {
         field: field_name(field),
         component: e.component as u8,
-        min: display(model, e.min, dim),
-        min_at: vec3(model, e.min_at, Length::DIM),
-        max: display(model, e.max, dim),
-        max_at: vec3(model, e.max_at, Length::DIM),
-    }
+        min: display(model, e.min, dim)?,
+        min_at: vec3(model, e.min_at, Length::DIM)?,
+        max: display(model, e.max, dim)?,
+        max_at: vec3(model, e.max_at, Length::DIM)?,
+    })
 }
 
 /// The point fields `mesh.export` writes in SI. Thermal reactions are `ReactionPower_W`,

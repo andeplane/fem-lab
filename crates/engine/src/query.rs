@@ -35,6 +35,16 @@ pub enum Query {
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
 
+    /// The complete authoritative Model file and Journal in SI, with the real Model hash and
+    /// revision. Retains selected display-unit strings without formatting a display summary;
+    /// use this to save even when query.model reports unit.display. This read changes neither
+    /// the Model nor retained Results. Hosts apply their exact UTF-8 save encoder and byte limit
+    /// before writing; this Query performs no I/O or replacement validation.
+    #[serde(rename = "query.document")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "ModelDocument"))]
+    Document {},
+
     /// The complete upsert Command for an existing object's current definition, with exact
     /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
     /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
@@ -52,15 +62,21 @@ pub enum Query {
     Mesh {},
 
     /// What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
-    /// and corner-node centroid. Tet4/Hex8 volumes integrate the original Jacobian exactly
-    /// up to roundoff. Linear 3D face areas use original shape/tangent quadrature; curved
-    /// bilinear area is numerical and converges under refinement, not an exact skin measure.
-    /// Quadratic-element measures still use corner geometry pending #524.
+    /// and corner-node centroid. Solid volumes integrate every original shape node, including
+    /// Tet10/Hex20 midside nodes: tetrahedron degree3 and tensor degree5 per coordinate are
+    /// sufficient for their Jacobian determinants, up to f64 roundoff. Surface areas and edge
+    /// lengths use original tangents. Linear triangles and lines are exact up to roundoff;
+    /// bilinear faces use Gauss2. Curved norms are numerical, using Gauss3 for Quad8/Line3
+    /// and symmetric triangle degree5 for Tri6.
+    /// Curved area/length accuracy improves under refinement; no corner skin is substituted.
     /// Face Sets also report pressureArea from the load boundary quadrature,
     /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
     /// times pressureArea is a scalar integral, not a net vector force. Shell pressureArea is
     /// the original midsurface area without requiring Material/Section; curved physical shell
     /// loads use the Section's top/bottom offsets. Builds the Mesh if needed.
+    /// The centroid averages resolved node coordinates; authored imported NSETs include
+    /// unused source labels. A bounded fixed-order fallback prevents a finite coordinate
+    /// mean overflowing through rounding, while preserving existing finite mean results.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]
@@ -104,7 +120,8 @@ pub enum Query {
     },
 
     /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
-    /// Field names include mode:k for one-based modal shapes and stressPly:k:bottom/top
+    /// Field names include mode:k for one-based modal/buckling shapes owned by the Result
+    /// (`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top
     /// for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
     /// are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
     /// that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
@@ -123,7 +140,10 @@ pub enum Query {
     /// Subtract two explicitly retained nodal fields as `left - right` on either Result's
     /// Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
     /// null values; nonfinite arithmetic is a structured error. No current Result, display
-    /// conversion, or node-number pairing is implied.
+    /// conversion, or node-number pairing is implied. Each operand may independently select
+    /// a retained primary frame with the existing exact/nearest FrameSample protocol; resolved
+    /// indices and physical times are returned. Historical derived fields are unavailable.
+    /// Omitted samples preserve final-field comparison. There is no temporal interpolation.
     #[serde(rename = "query.difference", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "DifferenceField"))]
@@ -251,6 +271,9 @@ pub enum Query {
 
     /// Convert a quantity to another unit of the same dimension ("2 MPa" to "psi"); an error
     /// names the dimensions when they differ. Handy for checking inputs before using them.
+    /// Rejects nonfinite values and nonzero scaling that rounds to zero, including input
+    /// scaling before adding a temperature offset. Surviving subnormals, ordinary f64
+    /// rounding and affine zeros (273.15 K to 0 degC) remain valid.
     #[serde(rename = "query.convert", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "Converted"))]
@@ -740,6 +763,8 @@ pub struct ResultSummary {
     pub stale: bool,
     pub solver: String,
     pub iterations: u32,
+    /// The solver's measured residual. For modal Results, the maximum requested-pair normwise
+    /// generalized-eigenproblem backward residual, not a frequency or mesh error estimate.
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,
@@ -749,6 +774,14 @@ pub struct ResultSummary {
     /// Applied force vector or net thermal power (flux/source plus incoming minus outgoing
     /// convection and radiation) in component 0, with remaining thermal components zero.
     pub applied_total: [Valued; 3],
+    /// Retained force and moment accounting for linear Cartesian static Results only.
+    /// Absent for thermal, dynamic, eigen, nonlinear and axisymmetric procedures. A
+    /// nonrepresentable SI wrench or preferred-unit ledger rejects a solve or retaining
+    /// study before Result publication. If later display units cannot represent the
+    /// retained values, this Query returns a structured error; model.setUnits with
+    /// force N and length m restores readable SI quantities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_equilibrium: Option<Box<StaticEquilibrium>>,
     /// Thermal stored-energy rate in power display units (zero for steady heat). Transient
     /// power totals/reactions use the last θ-method integration stage; the temperature field
     /// itself is at the final time. Positive reactions remove heat: applied − removed = storage.
@@ -763,8 +796,13 @@ pub struct ResultSummary {
     /// Material omitted them. Empty when every solver-used property was explicit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<ResultAssumption>,
-    /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
-    /// shape is the Result field named `mode:k`.
+    /// Number of displacement mode shapes owned by this retained Result. Fields `mode:k`
+    /// are available for `1 <= k <= modeCount`; frequency metadata alone does not identify
+    /// available fields. Modal and buckling Results own shapes; harmonic and random-vibration
+    /// Results own response fields instead, even when they retain modal-basis metadata.
+    pub mode_count: u32,
+    /// Natural frequencies in ascending order for a modal Result, or its modal basis for a
+    /// harmonic response. Use `modeCount`, not the frequency count, to discover mode fields.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frequencies: Vec<Valued>,
     /// The preload Step whose stress state stiffened these frequencies, present only on a
@@ -788,7 +826,11 @@ pub struct ResultSummary {
     /// One row per retained frequency of a harmonic sweep; empty for every other procedure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sweep: Vec<SweepRow>,
-    /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+    /// Structural force equilibrium: |Σ reactions + Σ applied| / force scale. Linear
+    /// Cartesian static uses retained unaggregated nodal force/moment actions, with M/L
+    /// converting moments to force. Actual residuals and scales are in staticEquilibrium;
+    /// no residual is snapped to zero. Other structural procedures retain their existing
+    /// largest-force scale. Thermal
     /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
     /// Zero is perfect balance; values above 1e-9 fail the report's conservation check.
@@ -804,6 +846,47 @@ pub struct ResultSummary {
     /// open. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// Linear Cartesian static equilibrium, retained with the solved state in SI and displayed
+/// in the requested unit set. Moments use reference-configuration node coordinates.
+/// A passing force check alone is not moment conservation: translation-only bonded ties
+/// across a gap can transfer a force without its offset couple, leaving a real angular
+/// residual. This diagnostic exposes that model behavior without changing tie mechanics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticEquilibrium {
+    /// First retained Mesh node: the origin used by all applied/support moments.
+    pub reference: [Valued; 3],
+    /// Maximum node distance from reference; independent of element length, covariant under
+    /// rigid frame changes. A zero-span force-only ledger has no moment-derived force scale.
+    pub characteristic_length: Valued,
+    /// Actual vector Σ applied forces + Σ support forces, never rounded away.
+    pub force_residual: [Valued; 3],
+    /// max(Σ|F_applied,node|, Σ|F_support,node|, Σ|M_applied,node|/L, Σ|M_support,node|/L).
+    /// Each nodal moment includes its force lever arm plus rotational couple. Summing
+    /// magnitudes before Constraint grouping preserves scales for opposing actions.
+    pub force_scale: Valued,
+    /// Σ((x-reference)×F_applied + applied rotational couple).
+    pub applied_moment: [Valued; 3],
+    /// Each Constraint's support moment, including force lever arms and raw rotational
+    /// reactions; DOFs shared by Constraints belong to the first owner, as for reactions.
+    pub reaction_moments: Vec<MomentReactionRow>,
+    /// Actual vector Σ applied moments + Σ support moments about reference.
+    pub moment_residual: [Valued; 3],
+    /// max(Σ|M_applied,node|, Σ|M_support,node|, LΣ|F_applied,node|, LΣ|F_support,node|).
+    pub moment_scale: Valued,
+    /// |momentResidual| / momentScale. Exact zero action/residual gives zero; no epsilon.
+    /// The report checks this separately from force balance at its conservation tolerance.
+    pub moment_balance: f64,
+}
+
+/// One Constraint's support moment about the static equilibrium reference, in torque units.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MomentReactionRow {
+    pub constraint: String,
+    pub total: [Valued; 3],
 }
 
 /// One frictionless contact of a solved Step.
@@ -1151,6 +1234,7 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Document(ModelDocument),
     Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
@@ -1173,6 +1257,15 @@ pub enum QueryResult {
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// An owned SI document read. Execution identity belongs to the enclosing checked ReadReply,
+/// not to the portable file; display formatting is deliberately absent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelDocument {
+    pub file: crate::journal::ModelFile,
+    pub hash: String,
+    pub revision: u32,
 }
 
 /// Lossless input for editing one Model object through the same Command used to create it.
@@ -1426,6 +1519,10 @@ pub struct DifferenceOperand {
     pub field: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<u8>,
+    /// Omit for the final field. A sample selects only the retained primary field through
+    /// query.frame's exact/nearest resolver, with earlier ties and no extrapolation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<FrameSample>,
 }
 
 /// The retained Result whose Mesh receives the difference values.
@@ -1446,6 +1543,9 @@ pub struct ResolvedDifferenceOperand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<u8>,
     pub source_components: usize,
+    /// The actual retained frame used by this operand; absent for a final field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<ResolvedFrame>,
 }
 
 /// Nodewise coverage of the selected comparison Mesh by the other Mesh.

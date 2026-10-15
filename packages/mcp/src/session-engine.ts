@@ -1,6 +1,6 @@
 // One checked owner, with host serialization around wasm's exclusive mutable borrow. A new
 // MCP request explicitly acquires a lease; nested calls retain it across their own replacement.
-import { FemError, MAX_MODEL_FILE_BYTES, modelFileEncoder, type DocumentSnapshot, type RunLease, type Stamp, type WriteReply } from '@femlab/registry';
+import { FemError, MAX_MODEL_FILE_BYTES, modelFileEncoder, type DocumentSnapshot, type QueryResult, type ReadReply, type RunLease, type Stamp, type WriteReply } from '@femlab/registry';
 import type { PreparedEngine, SessionEngine } from '../../app/src/generated/wasm/femlab_engine_wasm';
 import type { EngineHandle, EngineProvider } from './engine';
 
@@ -48,11 +48,11 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
         const commands = structuredClone(input);
         return ordered(async () => { captured?.(); await replaceCommands(commands, expectedVersion); });
       };
-      const checkedQuery = (input: Record<string, unknown>, captured?: () => void): Promise<unknown> => {
+      const checkedQuery = (input: Record<string, unknown>, captured?: () => void): Promise<QueryResult> => {
         const query = structuredClone(input);
         return ordered(() => {
           captured?.();
-          const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as { stamp: Stamp; value: unknown };
+          const reply = JSON.parse(owner.query(JSON.stringify({ context: context(), query }))) as ReadReply;
           lease = { ...lease, stamp: reply.stamp };
           return reply.value;
         });
@@ -81,11 +81,11 @@ export function sessionEngine(wasm: CheckedModule, threads: number, epoch: strin
           // original authority. The checked owner compares this version at reservation.
           return { query: input => checkedQuery(input, active), replaceCommands: input => checkedReplace(input, active, admitted.stateVersion) };
         },
-        modelFile: () => ordered(() => {
-          const snapshot = JSON.parse(owner.snapshot(JSON.stringify(context()))) as DocumentSnapshot;
-          lease = { ...lease, stamp: snapshot.stamp };
-          return snapshot.file;
-        }),
+        modelFile: async () => {
+          const document = await checkedQuery({ query: 'query.document' });
+          if (!('file' in document)) throw new FemError('internal', 'query.document did not return a Model file');
+          return document.file;
+        },
         release: () => {
           revoked = true;
           return ordered(() => { try { owner.cancel_run(JSON.stringify(lease.stamp.session), lease.runId); } catch { /* replacement already revoked this lease */ } });

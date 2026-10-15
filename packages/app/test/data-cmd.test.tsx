@@ -72,6 +72,7 @@ const journal = (...commands: Record<string, unknown>[]): JournalDump =>
 
 const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
   ({
+    modeCount: 0,
     resultId: `r${producingSeq}`,
     step,
     revision: producingSeq + 1,
@@ -188,7 +189,7 @@ describe('the shell', () => {
     current.sets = [{ name: 'tip', kind: 'face', summary: 'beam.top' }];
     current.connections = [{ name: 'tie', kind: 'bonded', master: 'beam.xmin', slave: 'beam.xmax', summary: 'bonded' }];
     current.meshSettings = { mesher: { kind: 'lattice', size: 0.1 }, order: 1, formulation: 'incompatible-modes', simplices: false };
-    const solved = { ...result('static', false, 1), frequencies: [{ value: 83, unit: 'Hz' }] };
+    const solved = { ...result('static', false, 1), modeCount: 1, frequencies: [{ value: 83, unit: 'Hz' }] };
     const targets = new Map([
       ['beam', 'body:beam'], ['tip', 'set:tip'], ['steel', 'material:steel'],
       ['mesh', 'mesh:mesh'], ['fix', 'constraint:fix'], ['tie', 'constraint:tie'], ['p', 'load:p'],
@@ -729,7 +730,7 @@ describe('the shell', () => {
   });
 
   // Issue #41: the start screen leads with the assistant composer, then New project, then the
-  // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
+  // Recent list, then the import/example/tutorial cards. Each carries its registry Command.
   it('renders the start screen in the issue’s reading order before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
@@ -744,11 +745,13 @@ describe('the shell', () => {
     expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
     // The composer's field and the project-name field carry the Command they feed.
     expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'account.open',
       'chat.send',
       'chat.send',
       'project.new',
       'project.new',
       'file.open',
+      'form.open',
       'form.open',
       'panel.toggle',
       'panel.toggle',
