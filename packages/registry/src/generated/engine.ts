@@ -2407,7 +2407,7 @@ export type Command =
        */
       nonlinearMaxIterations?: number | null;
       /**
-       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       * First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
        */
       fStart?:
         | (
@@ -2435,7 +2435,9 @@ export type Command =
        */
       points?: number | null;
       /**
-       * Frequency spacing of a harmonic sweep; default linear.
+       * Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+       * logarithms of positive finite endpoints without forming their ratio. Both endpoints
+       * remain exact; frequencies can repeat when spacing is below f64 resolution.
        */
       sweep?: SweepSpacing | null;
       /**
@@ -6825,7 +6827,7 @@ export type QueryResult_Command =
        */
       nonlinearMaxIterations?: number | null;
       /**
-       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       * First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
        */
       fStart?:
         | (
@@ -6853,7 +6855,9 @@ export type QueryResult_Command =
        */
       points?: number | null;
       /**
-       * Frequency spacing of a harmonic sweep; default linear.
+       * Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+       * logarithms of positive finite endpoints without forming their ratio. Both endpoints
+       * remain exact; frequencies can repeat when spacing is below f64 resolution.
        */
       sweep?: SweepSpacing | null;
       /**
@@ -9647,7 +9651,7 @@ export type ModelFile_Command =
        */
       nonlinearMaxIterations?: number | null;
       /**
-       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       * First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
        */
       fStart?:
         | (
@@ -9675,7 +9679,9 @@ export type ModelFile_Command =
        */
       points?: number | null;
       /**
-       * Frequency spacing of a harmonic sweep; default linear.
+       * Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+       * logarithms of positive finite endpoints without forming their ratio. Both endpoints
+       * remain exact; frequencies can repeat when spacing is below f64 resolution.
        */
       sweep?: SweepSpacing | null;
       /**
@@ -12561,7 +12567,7 @@ export type ReadReply_Command =
        */
       nonlinearMaxIterations?: number | null;
       /**
-       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       * First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
        */
       fStart?:
         | (
@@ -12589,7 +12595,9 @@ export type ReadReply_Command =
        */
       points?: number | null;
       /**
-       * Frequency spacing of a harmonic sweep; default linear.
+       * Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+       * logarithms of positive finite endpoints without forming their ratio. Both endpoints
+       * remain exact; frequencies can repeat when spacing is below f64 resolution.
        */
       sweep?: SweepSpacing | null;
       /**
@@ -15278,7 +15286,7 @@ export type DocumentSnapshot_Command =
        */
       nonlinearMaxIterations?: number | null;
       /**
-       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       * First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
        */
       fStart?:
         | (
@@ -15306,7 +15314,9 @@ export type DocumentSnapshot_Command =
        */
       points?: number | null;
       /**
-       * Frequency spacing of a harmonic sweep; default linear.
+       * Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+       * logarithms of positive finite endpoints without forming their ratio. Both endpoints
+       * remain exact; frequencies can repeat when spacing is below f64 resolution.
        */
       sweep?: SweepSpacing | null;
       /**

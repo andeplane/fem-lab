@@ -1950,7 +1950,7 @@ const commands = {
           ]
         },
         "fStart": {
-          "description": "First frequency of a harmonic sweep, e.g. \"1 Hz\".",
+          "description": "First finite frequency of a harmonic sweep, e.g. \"1 Hz\"; positive for log spacing.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_frequency"
@@ -1990,7 +1990,7 @@ const commands = {
           ]
         },
         "sweep": {
-          "description": "Frequency spacing of a harmonic sweep; default linear.",
+          "description": "Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates\nlogarithms of positive finite endpoints without forming their ratio. Both endpoints\nremain exact; frequencies can repeat when spacing is below f64 resolution.",
           "anyOf": [
             {
               "$ref": "#/$defs/SweepSpacing"

@@ -2366,7 +2366,7 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["static-nonlinear", "heat-steady", "heat-transient"]))]
         nonlinear_max_iterations: Option<u32>,
-        /// First frequency of a harmonic sweep, e.g. "1 Hz".
+        /// First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["harmonic"]))]
         f_start: Option<Q<Frequency>>,
@@ -2378,7 +2378,9 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["harmonic"]))]
         points: Option<u32>,
-        /// Frequency spacing of a harmonic sweep; default linear.
+        /// Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates
+        /// logarithms of positive finite endpoints without forming their ratio. Both endpoints
+        /// remain exact; frequencies can repeat when spacing is below f64 resolution.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(extend("x-procedures" = ["harmonic"]))]
         sweep: Option<SweepSpacing>,

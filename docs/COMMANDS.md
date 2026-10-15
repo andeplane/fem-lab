@@ -1078,10 +1078,10 @@ amplitude at the frequency of peak response. Its Constraints may only hold DOFs 
 | maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear"]}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
 | nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double","x-procedures":["static-nonlinear","heat-steady","heat-transient"]}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
 | nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["static-nonlinear","heat-steady","heat-transient"]}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
-| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | First frequency of a harmonic sweep, e.g. "1 Hz". |
+| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | First finite frequency of a harmonic sweep, e.g. "1 Hz"; positive for log spacing. |
 | fStop | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Last frequency of a harmonic sweep; must be above fStart. |
 | points | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0,"x-procedures":["harmonic"]}</code> | How many frequencies the sweep evaluates, including both endpoints. At least 2. |
-| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Frequency spacing of a harmonic sweep; default linear. |
+| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}],"x-procedures":["harmonic"]}</code> | Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates logarithms of positive finite endpoints without forming their ratio. Both endpoints remain exact; frequencies can repeat when spacing is below f64 resolution. |
 | dampingRatio | no | <code>{"type":["number","null"],"format":"double","x-procedures":["harmonic","randomVibration"]}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused together with &#96;dampingRatios&#96; on the same Step. |
 | dampingRatios | no | <code>{"type":["array","null"],"items":{"type":"number","format":"double"},"x-procedures":["harmonic","randomVibration"]}</code> | Per-mode modal damping ratios &#96;[ζ₁, ζ₂, …]&#96; of a harmonic Step, e.g. &#96;[0.01, 0.02]&#96; for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past the end of the list holds the last entry, so a two-entry list on a five-mode basis gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly like &#96;dampingRatio&#96;. Refused together with &#96;dampingRatio&#96; on the same Step. |
 | psd | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/PsdPoint"},"x-procedures":["randomVibration"]}</code> | One-sided PSD table for randomVibration. All Loads form one spatial pattern multiplied by the same zero-mean stationary random process. Use density "1 s" (1/Hz) with physical force amplitudes on the Loads. Needs at least two knots, &#96;after&#96; naming a solved modal Step, identical constraints, and positive damping. Outputs are componentwise standard deviations, never a signed equilibrium state. |
@@ -7018,7 +7018,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "fStart": {
-          "description": "First frequency of a harmonic sweep, e.g. \"1 Hz\".",
+          "description": "First finite frequency of a harmonic sweep, e.g. \"1 Hz\"; positive for log spacing.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_frequency"
@@ -7058,7 +7058,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ]
         },
         "sweep": {
-          "description": "Frequency spacing of a harmonic sweep; default linear.",
+          "description": "Frequency spacing of a harmonic sweep; default linear. Log spacing interpolates\nlogarithms of positive finite endpoints without forming their ratio. Both endpoints\nremain exact; frequencies can repeat when spacing is below f64 resolution.",
           "anyOf": [
             {
               "$ref": "#/$defs/SweepSpacing"
