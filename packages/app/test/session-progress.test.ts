@@ -80,13 +80,9 @@ describe('Worker progress delivery stays usable during a dense solve', () => {
     ];
     try {
       const progress = progressOf(await h.send({ cmd: 'model.setName', name: 'phase boundaries' }, samples));
-      expect(progress).toContainEqual(samples[0]);
-      expect(progress).toContainEqual(samples[1]); // Last assembly message precedes the new phase.
-      expect(progress).toContainEqual(samples[2]);
-      expect(progress).toContainEqual(samples[4]);
-      expect(progress).toContainEqual(samples[5]);
-      expect(progress.at(-1)).toEqual(samples[6]);
-      expect(progress).not.toContainEqual(samples[3]);
+      // The final assembly sample must precede the first integration sample, while the
+      // redundant same-percentage integration update is omitted without reordering.
+      expect(progress).toEqual([samples[0], samples[1], samples[2], samples[4], samples[5], samples[6]]);
     } finally { h.dispose(); }
   });
 
