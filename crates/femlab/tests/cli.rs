@@ -98,8 +98,12 @@ fn abaqus_import_rejects_units_unsupported_decks_and_databases_without_overwriti
     std::fs::write(&saved, "prior project").unwrap();
     abaqus_import(&source, &saved).assert().code(1).stderr(contains("unitForce"));
     abaqus_import(&source, &saved).arg("--unit-force=-1 N").assert().code(1);
-    let bad = dir.join("assembly.inp");
-    std::fs::write(&bad, "*PART,NAME=P\n").unwrap();
+    let bad = dir.join("unsupported.inp");
+    std::fs::write(
+        &bad,
+        std::fs::read_to_string(&source).unwrap().replace("*MATERIAL", "*USER ELEMENT,TYPE=U1,NODES=4\n*MATERIAL"),
+    )
+    .unwrap();
     abaqus_import(&bad, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains("unsupported"));
     for extension in ["odb", "cae"] {
         let binary = dir.join(format!("results.{extension}"));
@@ -110,6 +114,91 @@ fn abaqus_import_rejects_units_unsupported_decks_and_databases_without_overwriti
     std::fs::File::create(&huge).unwrap().set_len(16 * 1024 * 1024 + 1).unwrap();
     abaqus_import(&huge, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains("16 MiB"));
     assert_eq!(std::fs::read_to_string(saved).unwrap(), "prior project");
+}
+
+#[test]
+fn abaqus_import_reads_nested_submission_includes_and_reopens_without_source_files() {
+    let dir = scratch("abaqus-includes");
+    std::fs::create_dir_all(dir.join("Parts")).unwrap();
+    let original = std::fs::read_to_string(engine_dir().join("tests/fixtures/abaqus-static/bar-hex-mm-n.inp")).unwrap();
+    let (mesh, physics) = original.split_once("*MATERIAL").unwrap();
+    // Abaqus resolves include names against the submission directory, including nested includes.
+    let root = "*INCLUDE,INPUT=Parts/Mesh.inp\n";
+    let mesh_file = format!("{mesh}*INCLUDE,INPUT=Physics.inp\n");
+    let physics_file = format!("*MATERIAL{physics}");
+    std::fs::write(dir.join("Root.inp"), root).unwrap();
+    std::fs::write(dir.join("Parts/Mesh.inp"), &mesh_file).unwrap();
+    std::fs::write(dir.join("Physics.inp"), &physics_file).unwrap();
+    let imported = abaqus_import(std::path::Path::new("Root.inp"), std::path::Path::new("saved.json"))
+        .current_dir(&dir)
+        .args(["--unit-force", "1 N", "--unit-time", "1 s"])
+        .assert()
+        .success();
+    let report: serde_json::Value = serde_json::from_slice(&imported.get_output().stdout).unwrap();
+    assert_eq!(report["sourceNodes"], 12);
+    assert_eq!(report["inputBytes"], root.len() + mesh_file.len() + physics_file.len());
+    let saved = dir.join("saved.json");
+    let file: serde_json::Value = serde_json::from_slice(&std::fs::read(&saved).unwrap()).unwrap();
+    let mesh_command = file["journal"]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| &entry["cmd"])
+        .find(|command| command["cmd"] == "mesh.set")
+        .unwrap();
+    let provenance = &mesh_command["mesher"]["provenance"];
+    assert_eq!(provenance["sourceName"], "Root.inp");
+    assert_eq!(provenance["sourceFiles"]["Parts/Mesh.inp"], femlab_engine::hash::sha256_hex(mesh_file.as_bytes()));
+    assert_eq!(provenance["sourceFiles"]["Physics.inp"], femlab_engine::hash::sha256_hex(physics_file.as_bytes()));
+    std::fs::remove_file(dir.join("Root.inp")).unwrap();
+    std::fs::remove_file(dir.join("Parts/Mesh.inp")).unwrap();
+    std::fs::remove_file(dir.join("Physics.inp")).unwrap();
+    femlab().arg("run").arg(&saved).args(["--cpu", "--verify", "--skip-solves"]).assert().success();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn abaqus_include_failures_keep_existing_output() {
+    let dir = scratch("abaqus-include-failures");
+    let source = dir.join("Root.inp");
+    let saved = dir.join("saved.json");
+    std::fs::write(&saved, "prior project").unwrap();
+    for (deck, diagnostic) in [
+        ("*INCLUDE,INPUT=missing.inp\n", "file.not-found"),
+        ("*INCLUDE,INPUT=../outside.inp\n", "submission"),
+        ("*INCLUDE,INPUT=Root.inp\n", "cycle"),
+    ] {
+        std::fs::write(&source, deck).unwrap();
+        abaqus_import(&source, &saved).args(["--unit-force", "1 N"]).assert().code(1).stderr(contains(diagnostic));
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), "prior project");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn abaqus_include_acquisition_refuses_outside_leaf_and_parent_links() {
+    use std::os::unix::fs::symlink;
+    let dir = scratch("abaqus-include-scope");
+    let outside = scratch("abaqus-outside-source");
+    let original = std::fs::read_to_string(engine_dir().join("tests/fixtures/abaqus-static/bar-hex-mm-n.inp")).unwrap();
+    std::fs::write(outside.join("bar.inp"), &original).unwrap();
+    symlink(outside.join("bar.inp"), dir.join("leaf.inp")).unwrap();
+    symlink(&outside, dir.join("parent")).unwrap();
+    let source = dir.join("Root.inp");
+    let saved = dir.join("saved.json");
+    std::fs::write(&saved, "prior project").unwrap();
+    for relative in ["leaf.inp", "parent/bar.inp"] {
+        std::fs::write(&source, format!("*INCLUDE,INPUT={relative}\n")).unwrap();
+        abaqus_import(&source, &saved).args(["--unit-force", "1 N"]).assert().code(1);
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), "prior project");
+    }
+    std::fs::write(dir.join("inside.inp"), original).unwrap();
+    symlink("inside.inp", dir.join("inside-link.inp")).unwrap();
+    std::fs::write(&source, "*INCLUDE,INPUT=inside-link.inp\n").unwrap();
+    abaqus_import(&source, &saved).args(["--unit-force", "1 N"]).assert().success();
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
 }
 
 #[test]
