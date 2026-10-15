@@ -20,8 +20,10 @@ owner registrations: Stripe controls collection. Per the
 its request enables `managed_payments` and omits `automatic_tax`, tax-ID collection
 and customer-update parameters. Direct requests retain those parameters. Both use
 hosted Checkout, server-owned prices, stable idempotency parameters and a fixed
-integration identifier. Portal, webhook and recovery access survive disabled new
-purchases.
+integration identifier. Disabled releases retain the provider bindings needed for
+webhook processing and invoice recovery. The current service gate still pauses
+interactive Portal access and pending plan changes; separate work addresses that
+behavior without treating SDK access as HTTP acceptance evidence.
 
 Managed activation requires recorded account enablement, product eligibility,
 classification and policy readiness. Production additionally needs terms acceptance
