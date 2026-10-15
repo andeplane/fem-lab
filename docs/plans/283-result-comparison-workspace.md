@@ -1,7 +1,7 @@
 # App Result comparison workspace
 
 Status: implemented and accepted. PR #604 merged as main `1a5fcf2b` (tree `012803b2`).
-Current main `eced67dd` also includes accepted transient integration #286.
+Accepted runtime baseline `eced67dd` also includes transient integration #286.
 Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
 
 Implementation issue: [#283](https://github.com/andeplane/fem-lab/issues/283).
@@ -135,7 +135,7 @@ are preserved. Seven comparison/Sheet/line production cases and all 27 exact 320
 thumbnails passed on the authentic composed parent runtime. The original first-entry cropping,
 first-solve layout movement and fractional-height thumbnail failures are resolved, not waived.
 
-Current main `eced67dd`, tested tree `0abc2e27`, adds #286’s accepted sampled fields/clocks.
+Accepted runtime baseline `eced67dd`, tested tree `0abc2e27`, includes #286’s sampled fields/clocks.
 The accepted source is main `eced67dd09906269c8bd946c442225846bcb99db`, whole tree
 `0abc2e2799c62f21c7128565a1b93a1a09efa66b`, identical to tested #286 head `79d9b7f5`.
 [Final fast CI](https://github.com/andeplane/fem-lab/actions/runs/38676074047) and

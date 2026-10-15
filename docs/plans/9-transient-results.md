@@ -1,7 +1,7 @@
 # Transient Results: retained fields, queries and playback
 
 Status: implemented through closed #243–#246, with retained comparison integrated by #286.
-Epic #9 remains open for its owner’s acceptance decision; this audit does not close it.
+Implementation is complete; final epic closeout is tracked on #9.
 Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
 Parent: [#9](https://github.com/andeplane/fem-lab/issues/9); design audit
 [#90](https://github.com/andeplane/fem-lab/issues/90).
@@ -189,5 +189,4 @@ fields remain explicitly unavailable; no final-time fallback or temporal interpo
 
 No unmet implementation requirement was found in this original acceptance list. Known limits
 remain deliberate: primary historical fields, eager budget-checked retention, no temporal interpolation,
-and an explicitly incomplete total host-memory estimate. Epic closure remains the #9 owner’s
-tracked acceptance decision; this documentation change closes only #612.
+and an explicitly incomplete total host-memory estimate. Final epic closeout is recorded on #9; this documentation change closes only #612.

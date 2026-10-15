@@ -1,7 +1,7 @@
 # Result and Journal comparison
 
-Status: implemented; all children #280–#286 are closed. Epic #16 awaits its owner’s
-acceptance decision, not an unimplemented comparison feature. Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
+Status: implementation complete; all children #280–#286 are closed.
+Final epic closeout is tracked on #16. Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-lab/issues/612).
 Parent: [#16](https://github.com/andeplane/fem-lab/issues/16), Plan 5.6 and 5.9,
 jobs J8.10, J12.1 and J12.4. Inspected baseline: `8b38f06` (2026-09-06).
 
@@ -94,7 +94,7 @@ tail, even when Command contents/hashAfter repeat or imported `seq` labels are n
 
 ## Completion gates
 
-#16 remains open until every child above is complete. Closing it requires the full J8.10 cases:
+Closing #16 requires every child above to be complete and the full J8.10 cases:
 before/after, two materials and unequal meshes, both side-by-side and as a difference field. It
 also requires typed current/saved/imported Journal comparison for J12.1 and J12.4. Result and
 Journal selectors, host Commands and Queries stay schema-first and callable by the UI, scripts and
@@ -137,5 +137,5 @@ from the other. The following public tests run in the completed final fast/stric
 | Registry/host parity, native/WASM hashes, schema and full coverage | The final gates above cover generated declarations and callable host definitions, registry 100%, actual native one/four-thread and Node-WASM replay, all Chromium paths and GPU-inclusive engine/geometry 100%. |
 
 No remaining original #16 implementation gate was identified. All #280–#286 children are closed,
-including the Journal half (#284/#285), and the final deployed acceptance has passed. The
-owner decides epic closeout after reviewing this audit; #612 does not automatically close #16.
+including the Journal half (#284/#285), and the final deployed acceptance has passed. Final
+epic closeout is recorded on #16; this documentation change closes only #612.

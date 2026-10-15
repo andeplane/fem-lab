@@ -6,15 +6,16 @@ Reconciliation: [status reconciliation #612](https://github.com/andeplane/fem-la
 Issue: [#286](https://github.com/andeplane/fem-lab/issues/286), child of
 [#16](https://github.com/andeplane/fem-lab/issues/16) and integration with #9.
 Parent plan: [Result and Journal comparison](16-result-journal-comparison.md).
-Inspected main: `946bb6a45a098d24b65bcaf60968f4584a787e26` (2026-10-15).
-Inspected comparison integration: #283 `4ace08f2`, then its status-fence successor
-`53dac14b`. Its final browser/host step must integrate before overlapping host edits.
+Historical inspected baseline: main `946bb6a45a098d24b65bcaf60968f4584a787e26`
+(2026-10-15), with #283 `4ace08f2` and its status-fence successor `53dac14b`.
+At that checkpoint the final #283 browser/host step had to integrate before overlapping edits;
+that prerequisite is now accepted in #604. The accepted runtime baseline is `eced67dd`.
 
 This covers sampled side-by-side and difference presentation, independent and synchronized
 scrubbing and playback, truthful primary-field availability, unequal meshes and time schedules,
 and the numerical/transport/browser gates. A plan commit is preparation, not completion.
 
-## Existing contracts and real prerequisites
+## Historical prerequisites and source baseline
 
 #243 and #246 are closed. `frames.rs` already owns `FrameSample`: zero-based retained
 `{kind:"frame",index}` or `{kind:"time",time:Quantity,sampling:"exact"|"nearest"}`.
