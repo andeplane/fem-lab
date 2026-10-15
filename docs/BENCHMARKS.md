@@ -3087,3 +3087,22 @@ the author values nor either declared tolerance is changed.
 The software-adapter GPU gate runs a uniaxial traction patch at 2, 4 and 8 Hex8 cells,
 checking the closed-form extension, Poisson contraction and recovered stress through the
 actual B-bar assembled operator, GPU preconditioner and mixed-precision refinement.
+
+## Fully prescribed affine Hex8 GPU solve (#740)
+
+`all_prescribed_affine_cube_gpu_preserves_recovery_and_journal` in `gpu_kernels.rs`
+uses a real injected adapter (lavapipe in CI) through the public Engine Commands.
+A full-integration unit Hex8 cube, E = 200 GPa and ν = 0.25, has all 24 DOFs
+prescribed by the six component face constraints:
+u = (0.001 x, −0.00025 y, −0.00025 z) m. The reduced system has zero equations;
+its exact solution is the empty vector, with zero iterations and zero f64 residual.
+The explicit solver remains `gpu-pcg`; there is no iterative work or CPU fallback.
+
+The independent Hooke-law oracle is ε = (0.001, −0.00025, −0.00025, 0, 0, 0),
+σ = (200 MPa, 0, 0, 0, 0, 0), with resultant x reactions −200 MN at xmin
+and +200 MN at xmax and zero remaining reaction components. The test checks
+prescribed displacement, recovered stress and every reaction, then replays the
+Journal at one thread against the original two-thread result. This is an exact
+patch/boundary case, not a convergence-rate or adapter timing benchmark.
+The adapter-free test also requires the existing structured `unsupported` error
+for an explicitly requested GPU solve with zero equations.
