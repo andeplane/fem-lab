@@ -199,3 +199,27 @@ receipt directory, with raw SHA-256 hashes and verified readback, before tempora
 installation cleanup. These raw provenance receipts are separate from the semantic
 runtime fingerprints used for resume comparison. Offline SDK/fake-host tests prove
 recovery and ledger behavior; they are not a live Assistant quality score.
+
+### Reusing the complete threaded runtime
+
+Threaded producer receipts declare four portable browser bindings, four Node bindings,
+and all nine threaded browser files, including package metadata, notices and the actual
+nested rayon worker module. Admission checks every byte/hash and the real JavaScript
+import, package-main and self-worker closure. The source classification must exhaustively
+partition the full immutable producer source inventory: compilation inputs remain exact;
+producer host/audit inputs may differ and their current hashes are recorded explicitly.
+Selected compiler dependencies such as Binaryen remain strict within an otherwise changed
+workspace lock. Historical eight-binding receipts keep their original full-source checks.
+
+For a threaded snapshot, set `FEMLAB_EVAL_NATIVE_MANIFESTS` to a JSON array of absolute
+helper and CLI component receipt paths. Both receipts must match the sealed source and
+include actual producer/artifact/archive identities and staged payload hashes. The current
+host helper and native CLI are checked before preparation; Linux producer support files
+remain separate and are never executed on another platform. The complete runtime/native
+receipt identity and host-input hashes enter the frozen configuration. Missing or changed
+nested helpers, notices, native files or compile inputs refuse reuse before a build starts.
+
+The authorized no-tools probe is an additional immutable parent: one Sol 6.1 generation
+charged $0.000124. Together with the two incomplete attempts, the original allowance has
+72 requests and $2.309226 held/charged, leaving $47.690774 and 328 requests. Include all
+three pinned artifacts in the lineage input for the eventual full run.
