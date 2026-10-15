@@ -110,6 +110,30 @@ class ReferenceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 corpus.total_reaction(changed, [0, 9, 0])
 
+    def test_force_balance_scale_handles_small_and_meganewton_roundoff(self):
+        for applied, rounding in [(9, 5e-8), (4e6, 3.1e-7)]:
+            field = {"components": 3, "unit": "N", "values": [0, -applied + rounding, 0]}
+            self.assertAlmostEqual(corpus.total_reaction(field, [0, applied, 0])[1], -applied + rounding)
+        for applied, error in [(9, 1e-5), (4e6, .001)]:
+            field = {"components": 3, "unit": "N", "values": [0, -applied + error, 0]}
+            with self.assertRaisesRegex(ValueError, "force balance failed"):
+                corpus.total_reaction(field, [0, applied, 0])
+        with self.assertRaisesRegex(ValueError, "force balance failed"):
+            corpus.total_reaction({"components": 3, "unit": "N", "values": [.001, -4e6, 0]}, [0, 4e6, 0])
+
+    def test_instance_reference_uses_original_labels_in_dense_solved_order(self):
+        mesh = {"sourceLabels": {"nodes": [900, 700]}}
+        commands = [{"cmd": "mesh.set", "mesher": {"provenance": {"nodeIdentities": {
+            "700": {"sourceLabel": 7, "instance": "BEAM-1"},
+            "900": {"sourceLabel": 205, "instance": "BEAM-1"}}}}}]
+        self.assertEqual(corpus.reference_label_order(mesh, commands, "BEAM-1"), [205, 7])
+        self.assertEqual(corpus.reference_label_order(mesh, commands, None), [900, 700])
+        with self.assertRaisesRegex(ValueError, "reference instance"):
+            corpus.reference_label_order(mesh, commands, "OTHER")
+        commands[0]["mesher"]["provenance"]["nodeIdentities"].pop("700")
+        with self.assertRaisesRegex(ValueError, "reference instance"):
+            corpus.reference_label_order(mesh, commands, "BEAM-1")
+
 
 class AcquisitionTests(unittest.TestCase):
     def test_export_inventory_requires_complete_mesh_keywords_and_provenance(self):

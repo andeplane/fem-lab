@@ -54,6 +54,12 @@ stress references are preserved but are **not** compared because that needs an i
 established integration-point ordering correspondence. The two meshes are cross-solver
 comparison cases, not a known-rate convergence study or a new completed numerical Benchmark.
 
+Force balance uses one vectorwise tolerance in N: `1e-7 + 1e-10 × max(|expected reaction|)`.
+This keeps the absolute floor for small loads while handling summation roundoff at large force
+scales: a 3e-7 N error on 4 MN is approximately 7.5e-14 relative. Tests accept that roundoff
+and reject missing loads and meaningful imbalance at both small and meganewton scales.
+This policy is separate from the displacement-reference tolerance, which is unchanged.
+
 The distribution is separate third-party reference data under GPL-2.0-only, not FEM Lab's MIT
 license. [Upstream](https://www.dhondt.de/) links its GPLv2 terms; the
 [Debian source copyright record](https://metadata.ftp-master.debian.org/changelogs/main/c/calculix-ccx/calculix-ccx_2.23-1_copyright)
@@ -132,6 +138,15 @@ exited 0 while warning about unsupported assembly/output content and produced on
 with no displacement DAT. That run is retained as a limitation, **not** a numerical oracle
 or an excuse to strip unsupported model data. Actual FEM Lab agreement remains pending the
 composed import/solve runtime.
+
+The first actual composed-import trial preserved all 275 nodes/160 elements, balanced the
+4 MN load and produced identical 1/4-thread public outputs, but **failed** the published U
+comparison: maximum absolute error `1.50033150347e-5 m`; 608 of 825 components exceeded this
+harness's fixed `7.16712e-10 m` tolerance. This remains a strict RED acceptance case.
+[Abaqus documents selectively reduced volumetric integration for its linear 3D elements](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-linbending.htm),
+while the initial FEM Lab Full Hex8 path integrates pointwise strain at all eight Gauss
+points. That formulation difference requires investigation; it does not justify changing
+the reference, tolerances or silently substituting another element. No equivalence is claimed.
 
 ## Authored assembly: two materials and two transformed instances
 

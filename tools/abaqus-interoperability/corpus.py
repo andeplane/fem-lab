@@ -279,11 +279,29 @@ def compare_displacements(labels, values, reference, scale, relative, absolute):
 def total_reaction(field, force):
     if field["components"] != 3 or field["unit"] != "N" or len(field["values"]) % 3:
         raise ValueError("reaction field has unexpected dimensions/units")
+    if len(force) != 3 or not all(math.isfinite(v) for v in force):
+        raise ValueError("applied force must be a finite three-vector")
     totals = [math.fsum(field["values"][d::3]) for d in range(3)]
+    tolerance = 1e-7 + 1e-10 * max(abs(v) for v in force)
     for actual, applied in zip(totals, force):
-        if not math.isfinite(actual) or abs(actual + applied) > 1e-7:
-            raise ValueError(f"force balance failed: reactions={totals}, applied={force}")
+        if not math.isfinite(actual) or abs(actual + applied) > tolerance:
+            raise ValueError(f"force balance failed: reactions={totals}, applied={force}, tolerance={tolerance} N")
     return totals
+
+
+def reference_label_order(mesh, commands, instance):
+    labels = mesh["sourceLabels"]["nodes"]
+    if instance is None:
+        return labels
+    source = next(command["mesher"] for command in commands if command["cmd"] == "mesh.set")
+    identities = source.get("provenance", {}).get("nodeIdentities", {})
+    original = []
+    for label in labels:
+        identity = identities.get(str(label))
+        if identity is None or identity.get("instance") != instance:
+            raise ValueError("solved source node is not identified in the reference instance")
+        original.append(identity["sourceLabel"])
+    return original
 
 
 def without_clock(value):
@@ -389,7 +407,8 @@ def compare(manifest, source, native, destination, selected):
                     raise ValueError("stress field has unexpected dimensions/units")
                 if "reference" in case:
                     reference = case_reference(case, source)
-                    comparison = compare_displacements(mesh["sourceLabels"]["nodes"], displacement["values"], reference,
+                    labels = reference_label_order(mesh, commands, case.get("referenceInstance"))
+                    comparison = compare_displacements(labels, displacement["values"], reference,
                                                        case["referenceDisplacementScaleToMetres"],
                                                        case["displacementRelativeTolerance"],
                                                        case["displacementAbsoluteToleranceMetres"])
