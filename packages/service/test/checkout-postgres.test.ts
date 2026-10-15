@@ -6,13 +6,14 @@ import {afterAll,beforeAll,beforeEach,describe,expect,it} from 'vitest';
 import {postgresAccounts} from '../src/accounts';
 import {creditLedger} from '../src/ledger';
 import {migrate} from '../src/migrations';
-import {checkoutService,type Payments,type PaymentSubscription} from '../src/checkout';
+import {CheckoutNotCreated,checkoutService,type Payments,type PaymentSubscription} from '../src/checkout';
 import {ServiceFailure} from '../src/errors';
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real Postgres',()=>{
   const schema=`checkout_${randomUUID().replaceAll('-','')}`,admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
   const db=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,options:`-c search_path=${schema}`,max:16});
-  const now=()=>new Date('2026-10-14T12:00:00Z'),accounts=postgresAccounts(db,now,randomUUID),ledger=creditLedger(db,now,randomUUID);
+  let clock=new Date('2026-10-14T12:00:00Z');
+  const now=()=>new Date(clock),accounts=postgresAccounts(db,now,randomUUID),ledger=creditLedger(db,now,randomUUID);
   let calls:{customer:number;checkout:number;portal:string[];schedule:string[];keys:string[]},customerId='cus_owner',redirect='https://checkout.stripe.com/c/fixture',currency='usd',subs:PaymentSubscription[]=[],scheduleFails=false;
   const sessions=new Map<string,{id:string;url:string|null;expiresAt:number;status:string|null}>();
   const paymentCalls:Parameters<Payments['checkout']>[0][]=[];
@@ -33,7 +34,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     const migrations=await Promise.all((await readdir(dir)).filter(name=>name.endsWith('.sql')).sort().map(async name=>({name,sql:await readFile(new URL(name,dir),'utf8')})));
     const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}
   });
-  beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_leases');calls={customer:0,checkout:0,portal:[],schedule:[],keys:[]};customerId='cus_owner';redirect='https://checkout.stripe.com/c/fixture';currency='usd';subs=[];scheduleFails=false;sessions.clear();paymentCalls.length=0;});
+  beforeEach(async()=>{clock=new Date('2026-10-14T12:00:00Z');await db.query('TRUNCATE accounts CASCADE');await db.query('TRUNCATE billing_leases');calls={customer:0,checkout:0,portal:[],schedule:[],keys:[]};customerId='cus_owner';redirect='https://checkout.stripe.com/c/fixture';currency='usd';subs=[];scheduleFails=false;sessions.clear();paymentCalls.length=0;});
   afterAll(async()=>{await db.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
   it('rejects client-selected customer/price/return authority and inactive billing before vendor calls',async()=>{
     for(const extra of [{customerId:'cus_other'},{priceId:'price_other'},{returnUrl:'https://evil.example'},{accountId:randomUUID()}])await expect(service.checkout('Bearer owner',{plan:'plus',...extra})).rejects.toMatchObject({code:'invalid-plan'});
@@ -51,6 +52,77 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     expect(paymentCalls[0]!.expiresAt-now().getTime()/1000).toBe(1860);
     await expect(service.checkout('Bearer owner',{plan:'pro'})).rejects.toMatchObject({code:'checkout-open'});
     expect((await db.query('SELECT * FROM credit_grants')).rows).toHaveLength(0); // checkout/redirect grants nothing
+  });
+  it('recovers a rejected creation after its expiry window ages and concurrent retries create one payable Session',async()=>{
+    let rejectConfiguration=true,created=0;
+    const attempts:Parameters<Payments['checkout']>[0][]=[];
+    const recovering=checkoutService(db,{...payments,async checkout(input){
+      attempts.push(input);
+      if(rejectConfiguration)throw new Error('Payment configuration rejected before creation');
+      if(input.expiresAt-now().getTime()/1000<1800)throw new CheckoutNotCreated('Expiry rejected before creation');
+      created++;const session={id:`cs_recovered_${created}`,url:`https://checkout.stripe.com/c/recovered_${created}`,expiresAt:input.expiresAt,status:'open'};
+      sessions.set(session.id,session);return session;
+    }},config,owner,now,randomUUID);
+    await expect(recovering.checkout('Bearer owner',{plan:'plus'})).rejects.toThrow('configuration rejected');
+    const original=(await db.query('SELECT * FROM checkout_intents')).rows[0]!;
+    expect(original.session_id).toBeNull();
+    clock=new Date(clock.getTime()+180000);rejectConfiguration=false;
+    const results=await Promise.allSettled(Array.from({length:16},()=>recovering.checkout('Bearer owner',{plan:'plus'})));
+    const fulfilled=results.filter(result=>result.status==='fulfilled');
+    expect(fulfilled.length).toBeGreaterThan(0);
+    for(const result of fulfilled)expect(result.value).toEqual({url:'https://checkout.stripe.com/c/recovered_1'});
+    expect(created).toBe(1);expect(sessions.size).toBe(1);expect(attempts).toHaveLength(3);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(attempts[2]!.key).not.toBe(attempts[0]!.key);
+    expect(attempts[2]!.expiresAt-now().getTime()/1000).toBe(1860);
+    const current=(await db.query('SELECT * FROM checkout_intents')).rows;
+    expect(current).toHaveLength(1);expect(current[0]!.id).not.toBe(original.id);expect(current[0]!.session_id).toBe('cs_recovered_1');
+    expect((await db.query('SELECT * FROM credit_grants')).rows).toHaveLength(0);
+  });
+  it('replays a timed-out successful creation with the exact original key and parameters after several minutes',async()=>{
+    let created=0;
+    const attempts:Parameters<Payments['checkout']>[0][]=[],saved=new Map<string,Awaited<ReturnType<Payments['checkout']>>>();
+    const uncertain=checkoutService(db,{...payments,async checkout(input){
+      attempts.push(input);
+      // Stripe API v1 returns a saved successful response before attempting a fresh creation.
+      const replay=saved.get(input.key);if(replay)return replay;
+      if(input.expiresAt-now().getTime()/1000<1800)throw new CheckoutNotCreated('Expiry rejected before creation');
+      created++;const session={id:`cs_uncertain_${created}`,url:`https://checkout.stripe.com/c/uncertain_${created}`,expiresAt:input.expiresAt,status:'open'};
+      saved.set(input.key,session);sessions.set(session.id,session);throw new Error('Connection lost after successful creation');
+    }},config,owner,now,randomUUID);
+    await expect(uncertain.checkout('Bearer owner',{plan:'plus'})).rejects.toThrow('Connection lost');
+    const original=(await db.query('SELECT * FROM checkout_intents')).rows[0]!;
+    expect(original.session_id).toBeNull();
+    clock=new Date(clock.getTime()+180000);
+    const results=await Promise.allSettled(Array.from({length:16},()=>uncertain.checkout('Bearer owner',{plan:'plus'})));
+    const fulfilled=results.filter(result=>result.status==='fulfilled');
+    expect(fulfilled.length).toBeGreaterThan(0);
+    for(const result of fulfilled)expect(result.value).toEqual({url:'https://checkout.stripe.com/c/uncertain_1'});
+    expect(created).toBe(1);expect(sessions.size).toBe(1);expect(attempts).toHaveLength(2);expect(attempts[1]).toEqual(attempts[0]);
+    const current=(await db.query('SELECT * FROM checkout_intents')).rows[0]!;
+    expect(current.id).toBe(original.id);expect(current.expires_at).toEqual(original.expires_at);expect(current.session_id).toBe('cs_uncertain_1');
+  });
+  it('bounds safe expiry recreation to one retry without granting credits',async()=>{
+    let attempts=0;
+    const rejected=checkoutService(db,{...payments,async checkout(){attempts++;throw new CheckoutNotCreated('Expiry rejected before creation');}},config,owner,now,randomUUID);
+    await expect(rejected.checkout('Bearer owner',{plan:'plus'})).rejects.toMatchObject({code:'checkout-unavailable'});
+    expect(attempts).toBe(2);expect((await db.query('SELECT * FROM checkout_intents')).rows).toHaveLength(0);
+    expect((await db.query('SELECT * FROM credit_grants')).rows).toHaveLength(0);
+  });
+  it.each(['recorded Session','replaced intent'])('preserves a concurrently %s instead of resetting it after rejection',async(change)=>{
+    let attempts=0;const replacement=randomUUID();
+    const changing=checkoutService(db,{...payments,async checkout(){
+      attempts++;
+      if(change==='recorded Session')await db.query("UPDATE checkout_intents SET session_id='cs_recorded',session_url='https://checkout.stripe.com/c/recorded'");
+      else await db.query('UPDATE checkout_intents SET id=$1',[replacement]);
+      throw new CheckoutNotCreated('Expiry rejected before creation');
+    }},config,owner,now,randomUUID);
+    await expect(changing.checkout('Bearer owner',{plan:'plus'})).rejects.toMatchObject({code:'checkout-unavailable'});
+    expect(attempts).toBe(1);
+    const current=(await db.query('SELECT * FROM checkout_intents')).rows;
+    expect(current).toHaveLength(1);
+    if(change==='recorded Session')expect(current[0]!.session_id).toBe('cs_recorded');
+    else expect(current[0]!.id).toBe(replacement);
   });
   it('opens only the authenticated customer portal and refuses a foreign customer link',async()=>{
     await expect(service.portal('Bearer other')).rejects.toMatchObject({code:'no-subscription'});

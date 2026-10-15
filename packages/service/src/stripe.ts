@@ -1,6 +1,6 @@
 import Stripe from 'stripe';
 import type {BillingEnvelope,BillingGateway} from './billing';
-import type {Payments} from './checkout';
+import {CheckoutNotCreated,type Payments} from './checkout';
 import {ServiceFailure} from './errors';
 
 export type BillingTaxMode='pending'|'automatic'|'not_collecting';
@@ -70,14 +70,22 @@ export function stripePayments(client:Stripe,portalConfiguration:string,projectI
     },
     async checkout(input) {
       if(taxMode==='pending')throw new ServiceFailure(503,'billing-tax-pending','Paid plans are unavailable until billing setup is complete.','billing');
-      const session=await client.checkout.sessions.create({mode:'subscription',customer:input.customer,client_reference_id:input.accountId,
-        line_items:[{price:input.price,quantity:1}],success_url:input.successUrl,cancel_url:input.cancelUrl,expires_at:input.expiresAt,
-        managed_payments:{enabled:false},
-        automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto',name:'auto'},billing_address_collection:'required',
-        tax_id_collection:{enabled:true},
-        consent_collection:{terms_of_service:'required'},allow_promotion_codes:false,
-        subscription_data:{metadata:{femlab_account_id:input.accountId,femlab_project:projectId}},
-      },{idempotencyKey:input.key});
+      let session:Stripe.Checkout.Session;
+      try {
+        session=await client.checkout.sessions.create({mode:'subscription',customer:input.customer,client_reference_id:input.accountId,
+          line_items:[{price:input.price,quantity:1}],success_url:input.successUrl,cancel_url:input.cancelUrl,expires_at:input.expiresAt,
+          managed_payments:{enabled:false},
+          automatic_tax:{enabled:taxMode==='automatic'},customer_update:{address:'auto',name:'auto'},billing_address_collection:'required',
+          tax_id_collection:{enabled:true},
+          consent_collection:{terms_of_service:'required'},allow_promotion_codes:false,
+          subscription_data:{metadata:{femlab_account_id:input.accountId,femlab_project:projectId}},
+        },{idempotencyKey:input.key});
+      } catch(error) {
+        // API v1 replays saved results; only explicit expiry validation proves no Session exists.
+        // https://docs.stripe.com/api/idempotent_requests
+        if(error instanceof Stripe.errors.StripeInvalidRequestError&&error.rawType==='invalid_request_error'&&error.statusCode===400&&error.param==='expires_at')throw new CheckoutNotCreated('Checkout expiry was rejected before creation.');
+        throw error;
+      }
       return {id:session.id,url:session.url,expiresAt:session.expires_at,status:session.status};
     },
     async session(id) {const session=await client.checkout.sessions.retrieve(id);return {id:session.id,url:session.url,expiresAt:session.expires_at,status:session.status};},
