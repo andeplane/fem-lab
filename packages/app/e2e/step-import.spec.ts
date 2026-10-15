@@ -188,6 +188,8 @@ test('@cpu STEP receipt and solved long-name header fit with native keyboard acc
     for (let i = 1; i < layout.items.length; i++) expect(layout.items[i - 1]!.rect.right).toBeLessThanOrEqual(layout.items[i]!.rect.left);
     layouts.push({ width, ...layout });
   }
+  await page.setViewportSize({ width: 1400, height: 1100 });
+  await page.screenshot({ path: info.outputPath('step-receipt-solved-header-1400.png') });
   await page.setViewportSize({ width: 1180, height: 1100 });
   await page.screenshot({ path: info.outputPath('step-receipt-solved-header-1180.png') });
   for (const name of ['STEP receipt', 'Import Abaqus .inp', 'Import STEP geometry']) {
