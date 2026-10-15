@@ -43,6 +43,7 @@ const MODEL: ModelSummary = {
 };
 
 const RESULT: ResultSummary = {
+  modeCount: 0,
   resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
@@ -64,6 +65,7 @@ const RESULT: ResultSummary = {
 const BUCKLING_RESULT: ResultSummary = {
   ...RESULT,
   step: 'buckle',
+  modeCount: 2,
   frequencies: [],
   bucklingFactors: [17.3996, 17.3996],
 };
@@ -386,7 +388,7 @@ describe('ResultsView', () => {
     expect(viewer.current.setSurface).toHaveBeenCalledTimes(calls);
   });
 
-  it('uses buckling factors when frequencies are empty for mode animation and fallback selection', async () => {
+  it('uses owned buckling modes for animation and fallback selection', async () => {
     expect(available('mode:99', BUCKLING_RESULT, false)).toBe('mode:1');
     const { store, viewer, results, transport } = harness(BUCKLING_RESULT);
     await results.animate({ step: 'buckle', mode: 2, playing: false, frame: 50 });
@@ -396,8 +398,20 @@ describe('ResultsView', () => {
     await expect(results.animate({ step: 'buckle', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
   });
 
+  it('refreshes a harmonic response after modal selection without fetching basis modes', async () => {
+    const harmonic = { ...RESULT, step: 'sweep', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const { store, results, transport } = harness(harmonic);
+    store.set({ fieldKey: 'mode:1' });
+    await results.refresh();
+    expect(store.state.fieldKey).toBe('vonMises');
+    expect(transport.field.mock.calls.every(call => call[1] !== 'mode:1')).toBe(true);
+    await expect(results.showField({ field: 'mode:1' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(results.animate({ step: 'sweep', mode: 1, playing: true })).rejects.toMatchObject({ code: 'not-found', where: 'view.animate.mode' });
+    expect(store.state.fieldKey).toBe('vonMises');
+  });
+
   it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
-    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
+    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', modeCount: 2, frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
     await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
     expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
     expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined, RESULT.resultId);
@@ -413,7 +427,7 @@ describe('ResultsView', () => {
   });
 
   it('keeps a newer pause when an older play finishes loading afterward', async () => {
-    const modal = { ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const modal = { ...RESULT, step: 'modes', modeCount: 1, frequencies: [{ value: 10, unit: 'Hz' }] };
     const { store, viewer, results, transport } = harness(modal);
     let finishLoad!: () => void;
     const loadPending = new Promise<void>((resolve) => { finishLoad = resolve; });

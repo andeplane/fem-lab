@@ -1445,6 +1445,7 @@ impl Engine {
                     applied_total,
                     static_equilibrium,
                     assumptions: res.assumptions.clone(),
+                    mode_count: res.modes.len() as u32,
                     frequencies,
                     prestress_from: res.prestress_from.clone(),
                     // Dimensionless, so no display conversion: a load factor is a load factor in any unit

@@ -4,7 +4,7 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber, hasDeformation } from '../fields';
+import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber, hasDeformation, modeCount } from '../fields';
 import { benchmarkProvenance } from '../benchmark';
 import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
@@ -403,15 +403,16 @@ export function Sweep({ s }: { s: UiState }) {
 }
 
 /**
- * A modal Step's natural frequencies, with the Command that puts each mode shape on screen.
- * Mode `k`'s shape is the Result field `mode:k` (crates/engine/src/solve_run.rs).
+ * Natural or modal-basis frequencies. Only shapes owned by this Result get a show Command;
+ * a response can keep its basis frequencies without owning any `mode:k` fields.
  */
 export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const f = s.result?.frequencies ?? [];
+  const modes = modeCount(s.result);
   if (f.length === 0) return null;
   return (
     <>
-      <div class="section-label">Natural frequencies</div>
+      <div class="section-label">{modes > 0 ? 'Natural frequencies' : 'Modal basis frequencies'}</div>
       <div class="rtable-wrap">
         <table class="rtable">
           <thead>
@@ -431,16 +432,16 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
                 </td>
                 <td class="mono n faint">{hz.value > 0 ? `${formatNumber(1 / hz.value)} s` : '—'}</td>
                 <td>
-                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                  {i < modes && <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
                     show
-                  </Cmd>
+                  </Cmd>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div class="rule-note">A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.</div>
+      <div class="rule-note">{modes > 0 ? 'A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.' : 'These frequencies describe the modal basis; this Result contains response fields.'}</div>
     </>
   );
 }
@@ -448,6 +449,7 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
 /** A buckling Step's critical load factors, with the Command that puts each mode shape on screen. */
 export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const factors = s.result?.bucklingFactors ?? [];
+  const modes = modeCount(s.result);
   if (factors.length === 0) return null;
   return (
     <>
@@ -467,9 +469,9 @@ export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatc
                 <td class="mono">{i + 1}</td>
                 <td class="mono n">λ {formatNumber(factor)}</td>
                 <td>
-                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                  {i < modes && <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
                     show
-                  </Cmd>
+                  </Cmd>}
                 </td>
               </tr>
             ))}

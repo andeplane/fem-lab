@@ -110,7 +110,8 @@ pub enum Query {
     },
 
     /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
-    /// Field names include mode:k for one-based modal shapes and stressPly:k:bottom/top
+    /// Field names include mode:k for one-based modal/buckling shapes owned by the Result
+    /// (`1 <= k <= query.result.modeCount`) and stressPly:k:bottom/top
     /// for laminate ply faces (k starts at 1, bottom to top within each Section). Ply stresses
     /// are global xx, yy, zz, xy, xz, yz in Pa, unaveraged per element node; elements without
     /// that ply carry zeros. Both sides of an interface remain distinct. Explicit ids use solved metadata;
@@ -780,8 +781,13 @@ pub struct ResultSummary {
     /// Material omitted them. Empty when every solver-used property was explicit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<ResultAssumption>,
-    /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
-    /// shape is the Result field named `mode:k`.
+    /// Number of displacement mode shapes owned by this retained Result. Fields `mode:k`
+    /// are available for `1 <= k <= modeCount`; frequency metadata alone does not identify
+    /// available fields. Modal and buckling Results own shapes; harmonic and random-vibration
+    /// Results own response fields instead, even when they retain modal-basis metadata.
+    pub mode_count: u32,
+    /// Natural frequencies in ascending order for a modal Result, or its modal basis for a
+    /// harmonic response. Use `modeCount`, not the frequency count, to discover mode fields.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frequencies: Vec<Valued>,
     /// The preload Step whose stress state stiffened these frequencies, present only on a

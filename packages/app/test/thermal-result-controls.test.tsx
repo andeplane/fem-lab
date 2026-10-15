@@ -10,6 +10,7 @@ const v = (value: number, unit: string) => ({ value, unit });
 const point = [v(0, 'm'), v(0, 'm'), v(0, 'm')] as const;
 const extreme = (field: string, unit: string): Extreme => ({ field, component: 0, min: v(0, unit), max: v(1, unit), minAt: [...point], maxAt: [...point] });
 const thermal: ResultSummary = {
+  modeCount: 0,
   resultId: 'thermal-1', step: 'retained', revision: 1, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1,
   extremes: [extreme('temperature', 'K')], reactionQuantity: 'power', reactions: [], appliedTotal: [v(0, 'W'), v(0, 'W'), v(0, 'W')], balance: 0,
 };
@@ -67,7 +68,7 @@ describe('retained Result deformation capabilities', () => {
   });
 
   it('offers a retained mode shape without requiring a static displacement extreme', () => {
-    const { root } = mount({ result: { ...mechanical, extremes: [], frequencies: [v(40, 'Hz')] }, fieldKey: 'mode:1', legend: { min: 0, max: 1, unit: 'm' } });
+    const { root } = mount({ result: { ...mechanical, modeCount: 1, extremes: [], frequencies: [v(40, 'Hz')] }, fieldKey: 'mode:1', legend: { min: 0, max: 1, unit: 'm' } });
     expect(root.querySelector('[aria-label="animation phase"]')).not.toBeNull();
     expect(root.querySelector('[aria-label="exaggeration"]')).not.toBeNull();
     expect(root.querySelector('.result-header')?.textContent).toContain('drawn at true scale');
