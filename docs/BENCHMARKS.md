@@ -3121,3 +3121,19 @@ tolerances unchanged. Device limits are tested independently for maxBufferSize a
 maxStorageBufferBindingSize, including a tiny valid matrix whose scalar scratch is larger
 than its matrix/vector buffers. Admission failures are structured and suggest a coarser mesh.
 No changed residual threshold, fallback solve or software-adapter timing claim is used.
+
+
+A separate 127-row diagonal-plus-SPD-block case has the exact solution u=1 for its
+closed-form row-sum loading. Its last block is [[d,.875],[.875,1]], with
+`d=f64::from_bits((49.0/16.0f64).to_bits()+8)` and positive determinant `d-.875²`.
+The prepared floating-point boundary makes its final smoothed transfer row zero;
+Rust setup asserts that structural fact, while a real GPU solve under an injected
+508-byte per-buffer limit must preserve the exact physical solution. Empty gathered
+rows use a dummy unused index/value so their storage bindings stay valid; row offsets
+retain zero-gather semantics. These regression checks remain pending execution.
+
+The adverse setup cases also distinguish losing one interpolation row from losing an
+entire aggregate's representable candidates. A 40-row SPD tridiagonal A=L Lᵀ, with
+L diagonal 2^-26 and first subdiagonal 1, has exact positive Cholesky pivots but an
+unrepresentable inverse factor: C[row,0]=(-1)^row 2^(26(row+1)). Setup must return a
+structured numerical-range failure without declaring this original f64 matrix indefinite.

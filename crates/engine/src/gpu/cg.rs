@@ -164,7 +164,11 @@ pub(crate) async fn solve_refined_with_space(
             .at("solve")
             .suggest("solve.run { solver: 'cpu-pcg' }")
     })?;
-    let mut inner = Inner::Gpu(Box::new(GpuCg::new_with_space(gpu, k, opts, pool, space).await?));
+    let device_solver = GpuCg::new_with_space(gpu, k, opts, pool, space).await?;
+    if !progress(Progress { phase: "solve", fraction: 0.5, message: device_solver.setup_message.clone() }) {
+        return Err(Error::cancelled());
+    }
+    let mut inner = Inner::Gpu(Box::new(device_solver));
     refine(k, b, &mut inner, "gpu-pcg", opts.rel_tol, opts.max_outer, progress).await
 }
 
@@ -177,6 +181,36 @@ const DEVICE_BYTES: u64 = 4 << 30;
 #[cfg(target_arch = "wasm32")]
 const DEVICE_BYTES: u64 = 1 << 30;
 
+#[derive(Debug, PartialEq)]
+struct FineAdmission {
+    device_bytes: u64,
+    remaining_device_bytes: u64,
+    setup_bytes: usize,
+}
+
+/// Cardinality-only admission precedes all scaled copies. Widening usize/u64 to u128
+/// makes every product exact on the supported 32/64-bit hosts; cast only after bounds.
+fn admit_fine_payload(n: usize, nnz: usize, setup_limit: usize, device_limit: u64) -> Result<FineAdmission, Error> {
+    let device_bytes = (n as u128) * 44 + (nnz as u128) * 8 + 8192;
+    if device_bytes > device_limit as u128 {
+        return Err(Error::new(ErrorCode::GpuTooLarge, "the fine GPU system exceeds its admitted payload budget")
+            .at("solve/aggregation")
+            .suggest("mesh.generate with a coarser size, or use a host with a larger admitted solve budget"));
+    }
+    let setup_bytes = (n as u128) * 24 + (nnz as u128) * 12 + 8192;
+    if setup_bytes > setup_limit as u128 {
+        return Err(Error::new(ErrorCode::SolveTooLarge, "scaled GPU input exceeds its construction budget")
+            .at("solve/aggregation")
+            .suggest("mesh.generate with a coarser size"));
+    }
+    let device_bytes = device_bytes as u64;
+    Ok(FineAdmission {
+        device_bytes,
+        remaining_device_bytes: device_limit - device_bytes,
+        setup_bytes: setup_bytes as usize,
+    })
+}
+
 fn setup_limits(k: &Csr, fine_setup_bytes: usize) -> Limits {
     let root = k.nnz().max(k.n);
     Limits {
@@ -187,6 +221,22 @@ fn setup_limits(k: &Csr, fine_setup_bytes: usize) -> Limits {
     }
 }
 
+/// Retained sizes, not a process/driver peak or timing estimate. Arithmetic is
+/// bounded by at most 16 setup levels and u32 sparse-entry admission at each level.
+fn hierarchy_message(k: &Csr, plan: &setup::Plan, payload_bytes: u64) -> String {
+    let mut rows = vec![k.n];
+    let mut operator_nnz = k.nnz() as u64;
+    let mut transfer_nnz = 0u64;
+    let mut level = plan;
+    while let setup::Plan::Fine { p, pt, coarse_operator, next, .. } = level {
+        rows.push(coarse_operator.n);
+        operator_nnz += coarse_operator.nnz() as u64;
+        transfer_nnz += p.vals.len() as u64 + pt.vals.len() as u64;
+        level = next;
+    }
+    format!("GPU preconditioner: rows {rows:?}, operator NNZ {operator_nnz}, transfer NNZ {transfer_nnz}; device payload bound {payload_bytes} bytes")
+}
+
 /// The scaled operator on the device, plus the two f32 buffers the f64 loop hands it.
 pub struct GpuCg<'a> {
     gpu: &'a Gpu,
@@ -195,6 +245,7 @@ pub struct GpuCg<'a> {
     scale: Vec<f64>,
     tol: f32,
     max_iters: usize,
+    setup_message: String,
     b32: Vec<f32>,
     x32: Vec<f32>,
     /// CG iterations over every outer step, for the Result and the Benchmark log.
@@ -216,20 +267,12 @@ impl<'a> GpuCg<'a> {
     ) -> Result<GpuCg<'a>, Error> {
         // Device capacity and construction payloads are independent admissions. Refuse
         // before allocating scaled copies or constructing the hierarchy; no CPU retry.
+        let FineAdmission {
+            device_bytes: fine_bytes,
+            remaining_device_bytes: remaining,
+            setup_bytes: fine_setup_bytes,
+        } = admit_fine_payload(k.n, k.nnz(), SETUP_BYTES, DEVICE_BYTES)?;
         CgContext::admit(gpu, k, opts.gpu_chunk_rows)?;
-        let fine_bytes =
-            (k.n as u64).saturating_mul(44).saturating_add((k.nnz() as u64).saturating_mul(8)).saturating_add(8192);
-        let remaining = DEVICE_BYTES.checked_sub(fine_bytes).ok_or_else(|| {
-            Error::new(ErrorCode::GpuTooLarge, "the fine GPU system exceeds its admitted payload budget")
-                .at("solve/aggregation")
-                .suggest("mesh.generate with a coarser size, or use a host with a larger admitted solve budget")
-        })?;
-        let fine_setup_bytes = k.nnz().saturating_mul(12).saturating_add(k.n.saturating_mul(24)).saturating_add(8192);
-        if fine_setup_bytes > SETUP_BYTES {
-            return Err(Error::new(ErrorCode::SolveTooLarge, "scaled GPU input exceeds its construction budget")
-                .at("solve/aggregation")
-                .suggest("mesh.generate with a coarser size"));
-        }
         let scale: Vec<f64> = inv_diagonal(k).into_iter().map(f64::sqrt).collect();
         let mut scaled = vec![0.0f64; k.nnz()];
         let mut vals = vec![0.0f32; k.nnz()];
@@ -241,16 +284,23 @@ impl<'a> GpuCg<'a> {
         }
         // A diagonal's symmetric Jacobi scaling already has the exact identity
         // preconditioner. This is an algebraic specialization, never a failure fallback.
-        let admitted = if setup::needs_aggregation(k) {
+        let (admitted, setup_message) = if setup::needs_aggregation(k) {
             let limits = setup_limits(k, fine_setup_bytes);
             let build = || setup::build(k, &scaled, &scale, space, limits);
             let plan = match pool {
                 Some(pool) => pool.install(build),
                 None => build(),
             }?;
-            Some(aggregation::admit(plan, remaining)?)
+            let message = hierarchy_message(k, &plan, fine_bytes.saturating_add(aggregation::device_bytes(&plan)));
+            (Some(aggregation::admit(plan, remaining, gpu.max_buffer_bytes())?), message)
         } else {
-            None
+            (
+                None,
+                format!(
+                    "GPU preconditioner: exact identity on {} equations; fine payload bound {fine_bytes} bytes",
+                    k.n
+                ),
+            )
         };
         let mut ctx = CgContext::new(gpu, k, &vals, opts.gpu_chunk_rows).await?;
         if let Some(plan) = admitted {
@@ -264,6 +314,7 @@ impl<'a> GpuCg<'a> {
             scale,
             tol: opts.inner_tol as f32,
             max_iters: opts.max_iterations,
+            setup_message,
             b32: vec![0.0; k.n],
             x32: vec![0.0; k.n],
             iterations: 0,
@@ -297,6 +348,13 @@ impl<'a> GpuCg<'a> {
             self.ctx.solve_report(self.gpu, &self.b32, self.tol, self.max_iters, &mut self.x32, progress).await?;
         self.iterations += report.iterations;
         report.check_correction(progress)?;
+        if !progress(Progress {
+            phase: "solve",
+            fraction: 0.5,
+            message: format!("GPU correction: {} updates ({} total), {} encoded, recurrence residual {:e}, stop {:?}; f64 acceptance pending", report.iterations, self.iterations, report.submitted_iterations, report.relative_residual, report.stop),
+        }) {
+            return Err(Error::cancelled());
+        }
         for (i, xi) in x.iter_mut().enumerate() {
             *xi = self.scale[i] * self.x32[i] as f64;
         }
@@ -378,7 +436,8 @@ fn split_rows(k: &Csr, max_nnz: usize, cap: usize) -> Vec<(usize, usize)> {
 
 impl CgContext {
     fn admit(gpu: &Gpu, k: &Csr, chunk_rows: Option<usize>) -> Result<Vec<(usize, usize)>, Error> {
-        gpu.check_size("the gpu conjugate gradient", (k.n as u64).saturating_mul(4))?;
+        gpu.check_size("the gpu conjugate gradient", (k.n as u64).saturating_mul(4))
+            .map_err(|error| error.at("solve"))?;
         let max_entries = gpu.max_buffer_bytes() / 4;
         let cap = max_entries.saturating_sub(1).min(u32::MAX as u64) as usize;
         let spans = split_rows(k, max_entries as usize, chunk_rows.unwrap_or(cap).min(cap).max(1));
@@ -386,7 +445,7 @@ impl CgContext {
         let biggest = spans.iter().fold((k.n as u64).saturating_mul(4).max(SCALARS * 4), |m, &(row0, rows)| {
             m.max((k.row_ptr[row0 + rows] - k.row_ptr[row0]) as u64 * 4).max((rows as u64 + 1) * 4)
         });
-        gpu.check_size("the gpu conjugate gradient", biggest)?;
+        gpu.check_size("the gpu conjugate gradient", biggest).map_err(|error| error.at("solve"))?;
         Ok(spans)
     }
 
@@ -601,7 +660,10 @@ impl CgContext {
     /// Every readback in this file, so a lost device is reported from one place. Only the
     /// device going away can fail here, which is the host's to handle, not the engine's.
     async fn read_f32(&self, gpu: &Gpu, src: &wgpu::Buffer, out: &mut [f32]) -> Result<(), Error> {
-        gpu.read_back(src, (out.len() * 4) as u64).await.map(|bytes| out.copy_from_slice(bytemuck::cast_slice(&bytes)))
+        gpu.read_back(src, (out.len() * 4) as u64)
+            .await
+            .map(|bytes| out.copy_from_slice(bytemuck::cast_slice(&bytes)))
+            .map_err(|error| error.at("solve/readback"))
     }
 
     /// `y = K̃ x` on the device, every chunk of the matrix, and nothing else — the one kernel
@@ -702,5 +764,29 @@ impl CgContext {
         let mut report = CgReport::from_scalars(&scalars, done, tol);
         report.iterations = updates;
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+
+    #[test]
+    fn fine_construction_and_device_limits_are_independent_exact_cardinality_guards() {
+        // Two rows/four entries: device 44n+8nnz+8192, setup 24n+12nnz+8192.
+        assert_eq!(
+            admit_fine_payload(2, 4, 8288, 8312).unwrap(),
+            FineAdmission { device_bytes: 8312, remaining_device_bytes: 0, setup_bytes: 8288 }
+        );
+        let device = admit_fine_payload(2, 4, 8288, 8311).unwrap_err();
+        assert_eq!(device.code, ErrorCode::GpuTooLarge);
+        assert_eq!(device.where_.as_deref(), Some("solve/aggregation"));
+        assert!(device.suggestion.unwrap().contains("coarser"));
+        let setup = admit_fine_payload(2, 4, 8287, 8312).unwrap_err();
+        assert_eq!(setup.code, ErrorCode::SolveTooLarge);
+        assert_eq!(setup.where_.as_deref(), Some("solve/aggregation"));
+        assert!(setup.suggestion.unwrap().contains("coarser"));
+        // No giant Vec or invalid CSR is needed to prove widened products fail closed.
+        assert_eq!(admit_fine_payload(usize::MAX, usize::MAX, 1024, 1024).unwrap_err().code, ErrorCode::GpuTooLarge);
     }
 }

@@ -38,8 +38,10 @@ r·z/ r·r PCG reductions. Static procedures carry original-node groups and redu
 modes through the existing solver boundary; public matrix-only entry points remain wrappers.
 Exact diagonals retain their algebraic identity specialization. ADR0038 records the tradeoff.
 
-This checkpoint is **uncompiled and unaccepted** pending remote compiler and actual GPU
-checks. No local build/device run is authorized during the shared disk resource window.
+The first aggregation producer (`796e58cd`) compiled for WASM and the native Linux CLI;
+its macOS lint stage identified two source-shape warnings now repaired. The follow-up
+admission, device-loss and adverse-case changes remain **uncompiled and unaccepted**
+pending remote compiler and actual GPU checks. No local build/device run is authorized during the shared disk resource window.
 The bounded independent CPU probes guide selection only. The 66k and asserted 780,300 cases
 remain required; the latter will not be allocated until a real peak/capacity estimate and
 compute lease are agreed. The branch is rebased from the original 1986 candidate onto merged

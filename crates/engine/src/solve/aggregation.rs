@@ -60,6 +60,10 @@ pub(crate) struct RectCsr {
 
 /// A zero-initialized, fixed V-cycle. Smoothing runs `weights` before the coarse correction
 /// and in reverse order afterwards, using the same diagonal and operator both times.
+// Every Fine node needs these fields; only the single coarse leaf pays the enum's
+// padding. Boxing Fine would add an allocation per level to save that one leaf.
+// At most Limits.max_levels nodes exist, and Budget charges each complete Plan.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 pub(crate) enum Plan {
     Coarse {
@@ -314,7 +318,7 @@ fn diagonal(a: Matrix<'_>, budget: &mut Budget) -> Result<(Vec<f64>, f64, f64), 
             sum = (sum + a.vals[e].abs()).next_up();
             uploaded_sum = (uploaded_sum + (a.vals[e] as f32 as f64).abs()).next_up();
         }
-        if *d <= 0.0 || !d.is_finite() || !(sum / *d).is_finite() {
+        if *d <= 0.0 || !(sum / *d).is_finite() {
             return Err(stalled("a level has a nonpositive diagonal or nonfinite row bound"));
         }
         high = high.max((sum / *d).next_up());
@@ -461,12 +465,13 @@ fn local_basis(indices: &[usize], basis: &[Vec<f64>], budget: &mut Budget) -> Re
     Ok(q)
 }
 
-fn tentative(
-    n: usize,
-    aggregates: &[Vec<usize>],
-    basis: &[Vec<f64>],
-    budget: &mut Budget,
-) -> Result<(RectCsr, Vec<Vec<f64>>, Vec<u32>), Error> {
+struct Tentative {
+    matrix: RectCsr,
+    coarse_basis: Vec<Vec<f64>>,
+    coarse_groups: Vec<u32>,
+}
+
+fn tentative(n: usize, aggregates: &[Vec<usize>], basis: &[Vec<f64>], budget: &mut Budget) -> Result<Tentative, Error> {
     budget.vector::<Vec<f64>>(basis.len())?;
     let mut coarse_basis = vec![Vec::new(); basis.len()];
     let mut coarse_groups = Vec::new();
@@ -515,7 +520,7 @@ fn tentative(
             return Err(stalled("near-space scaling lost a row of tentative interpolation"));
         }
     }
-    Ok((t, coarse_basis, coarse_groups))
+    Ok(Tentative { matrix: t, coarse_basis, coarse_groups })
 }
 
 fn empty_rect(n_rows: usize, n_cols: usize, budget: &mut Budget) -> Result<RectCsr, Error> {
@@ -804,7 +809,7 @@ fn level(
     let (diag, high, uploaded_high) = diagonal(a, budget)?;
     let groups = groups(node_of_row, budget)?;
     let aggregates = aggregates(a, &groups, budget)?;
-    let (t, coarse_basis, coarse_groups) = tentative(a.n_rows, &aggregates, basis, budget)?;
+    let Tentative { matrix: t, coarse_basis, coarse_groups } = tentative(a.n_rows, &aggregates, basis, budget)?;
     let p = smooth_interpolation(a, &t, &diag, 0.8 / high, budget)?;
     let pt = transpose(&p, Entries::Interpolation, budget)?;
     let coarse_operator = galerkin(a, &p, &pt, budget)?;
@@ -876,7 +881,8 @@ mod tests {
     fn aggregate_local_qr_prunes_dependencies_and_reproduces_affine_candidates() {
         let basis = vec![vec![1.0; 8], vec![2.0; 8], (0..8).map(|i| i as f64).collect()];
         let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
-        let (t, coarse, _) = tentative(8, &[vec![7, 2, 0, 6, 1, 3, 5, 4]], &basis, &mut budget).unwrap();
+        let Tentative { matrix: t, coarse_basis: coarse, .. } =
+            tentative(8, &[vec![7, 2, 0, 6, 1, 3, 5, 4]], &basis, &mut budget).unwrap();
         assert_eq!(t.n_cols, 2);
         for (original, reduced) in basis.iter().zip(&coarse) {
             let reproduced = rect_mv(&t, reduced);
@@ -1040,6 +1046,50 @@ mod tests {
         let mut lost_row = vec![1e-308; a.n];
         lost_row[0] = 1e308;
         assert_eq!(build(&a, &a.vals, &lost_row, None, limits()).unwrap_err().code, ErrorCode::SolveStalled);
+    }
+
+    #[test]
+    fn candidate_underflow_and_missing_positive_diagonal_fail_before_upload() {
+        let a = poisson(127);
+        let mut scale = vec![1e-308; a.n];
+        scale[..8].fill(1e308);
+        // The first full eight-row aggregate becomes exactly zero when the root
+        // candidates are normalized against the rest, rather than losing one T row.
+        let error = build(&a, &a.vals, &scale, None, limits()).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveStalled);
+        assert!(error.cause.contains("no representable near-space candidate"));
+        let mut zero_diagonal = a.clone();
+        zero_diagonal.vals[0] = 0.0;
+        let error = build(&zero_diagonal, &zero_diagonal.vals, &vec![1.0; a.n], None, limits()).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveStalled);
+        assert!(error.cause.contains("nonpositive diagonal"));
+    }
+
+    #[test]
+    fn an_exact_positive_cholesky_can_have_an_unrepresentable_inverse_factor() {
+        // A=L Lᵀ exactly, where L has diagonal2^-26 and first subdiagonal1.
+        // Every pivot is positive2^-52, proving SPD independently of the setup.
+        // C[row,0]=(-1)^row 2^(26(row+1)): row38 is finite; row39 overflows.
+        let eps = 2.0f64.powi(-26);
+        let mut a = poisson(40);
+        for row in 0..a.n {
+            for e in a.row_ptr[row] as usize..a.row_ptr[row + 1] as usize {
+                a.vals[e] = if a.col_idx[e] as usize == row {
+                    if row == 0 {
+                        eps * eps
+                    } else {
+                        1.0 + eps * eps
+                    }
+                } else {
+                    eps
+                };
+            }
+        }
+        assert!(2.0f64.powi(26 * 39).is_finite());
+        assert!(2.0f64.powi(26 * 40).is_infinite());
+        let error = build(&a, &a.vals, &vec![1.0; a.n], None, limits()).unwrap_err();
+        assert_eq!(error.code, ErrorCode::SolveStalled);
+        assert!(error.cause.contains("inverse Cholesky factor is nonfinite"));
     }
 
     #[test]

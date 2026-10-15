@@ -320,6 +320,42 @@ fn gpu_cg_preserves_exact_convergence_through_the_rest_of_a_batch() {
     }
 }
 
+/// Actual device loss at each public solve readback boundary must be a structured
+/// failure. The outer scope owns validation from commands sent after destruction;
+/// the readback owns its separate scope and mapping failure. No numeric oracle is
+/// replaced by a device-loss fixture.
+#[test]
+fn gpu_cg_reports_device_loss_before_initial_batch_and_correction_readbacks() {
+    for budget in [0, 25, 50] {
+        let g = gpu();
+        let k = poisson(127);
+        let vals: Vec<f32> = k.vals.iter().map(|&v| v as f32).collect();
+        let ctx = pollster::block_on(CgContext::new(&g, &k, &vals, None)).unwrap();
+        let load = data(k.n, 0.31).0;
+        let scope = g.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        if budget == 0 {
+            g.device.destroy();
+        }
+        let mut destroyed_between_submissions = 0;
+        let mut destroy = |progress: Progress| {
+            assert!(progress.message.starts_with("gpu cg "));
+            g.device.destroy();
+            destroyed_between_submissions += 1;
+            true
+        };
+        let error = pollster::block_on(ctx.solve_report(&g, &load, 0.0, budget, &mut vec![0.0; k.n], &mut destroy))
+            .unwrap_err();
+        // Lost devices need not also emit Validation: consume the typed scope in
+        // either case; the solve's own structured readback failure is mandatory.
+        let _ = pollster::block_on(scope.pop());
+        assert_eq!(error.code, ErrorCode::Internal);
+        assert_eq!(error.where_.as_deref(), Some("solve/readback"));
+        let bytes = if budget == 25 { 4 * k.n } else { 36 };
+        assert!(error.cause.contains(&format!("gpu readback of {bytes} bytes failed")), "{error:?}");
+        assert_eq!(destroyed_between_submissions, usize::from(budget > 0));
+    }
+}
+
 /// A9: Jacobi scaling turns every positive diagonal into an identity. The oracle is b_i/d_i,
 /// including the whole f64 refinement path and both CPU thread counts, never another solver.
 #[test]
@@ -556,6 +592,51 @@ fn aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes() {
     assert_eq!(info.solver, "gpu-pcg");
 }
 
+/// A valid smoothed interpolation row may cancel exactly. Tight injected device
+/// limits put this final row in a separate chunk: zero gathers still require a
+/// nonempty storage binding for the unused value/index arrays.
+#[test]
+fn gpu_aggregation_zero_interpolation_chunk_keeps_the_exact_spd_solution() {
+    let mut g = gpu();
+    g.limits.max_buffer_size = 508;
+    g.limits.max_storage_buffer_binding_size = 508;
+    let n = 127;
+    let diagonal = f64::from_bits((49.0 / 16.0f64).to_bits() + 8);
+    // Identity plus the exact SPD2x2 block[[d,.875],[.875,1]], determinantd-.875²>0.
+    assert!(diagonal - 0.875f64.powi(2) > 0.0);
+    let mut k = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+    for row in 0..n {
+        if row == n - 1 {
+            k.col_idx.push((n - 2) as u32);
+            k.vals.push(0.875);
+        }
+        k.col_idx.push(row as u32);
+        k.vals.push(if row == n - 2 { diagonal } else { 1.0 });
+        if row == n - 2 {
+            k.col_idx.push((n - 1) as u32);
+            k.vals.push(0.875);
+        }
+        k.row_ptr.push(k.vals.len() as u32);
+    }
+    let mut rhs = vec![1.0; n];
+    rhs[n - 2] = diagonal + 0.875;
+    rhs[n - 1] = 1.875;
+    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let (answer, info) = pollster::block_on(solve(&k, &rhs, &opts, &Pool::new(2), Some(&g), &mut nop)).unwrap();
+    assert_eq!(info.solver, "gpu-pcg");
+    assert!(info.rel_residual < 100.0 * opts.rel_tol);
+    for x in answer {
+        assert!((x - 1.0).abs() < 1e-8, "exact SPD solution1, got{x}");
+    }
+}
+
+fn log_solver_diagnostics(progress: Progress) -> bool {
+    if progress.phase == "solve" {
+        println!("{}", progress.message);
+    }
+    true
+}
+
 /// Exercise the public procedure, including its physical reduced near-space handoff.
 /// Matrix-only tests above deliberately have no geometry metadata.
 fn solve_cantilever_model(e: &mut Engine, n: [usize; 3]) -> femlab_engine::query::ResultSummary {
@@ -571,7 +652,7 @@ fn solve_cantilever_model(e: &mut Engine, n: [usize; 3]) -> femlab_engine::query
         r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["tip"]}"#,
         r#"{"cmd":"solve.run","step":"s","solver":"gpu-pcg"}"#,
     ] {
-        pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut nop)).unwrap();
+        pollster::block_on(e.dispatch(serde_json::from_str(command).unwrap(), &mut log_solver_diagnostics)).unwrap();
     }
     serde_json::from_value(
         serde_json::to_value(e.query(Query::Result { step: None, result_id: None }).unwrap()).unwrap(),
@@ -657,11 +738,13 @@ fn the_sixty_six_thousand_dof_cantilever_matches_the_direct_solver() {
     let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
     let diff: Vec<f64> = got.iter().zip(&want).map(|(a, b)| a - b).collect();
     assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
-    println!("D5 CI sibling: {} equations, {} refinement steps, residual {:e}; GPU {gpu_ms:.0} ms, direct {cpu_ms:.0} ms on {adapter}", red.k_ff.n,result.iterations,result.residual);
+    println!("D5 CI sibling: {} equations, {} refinement steps, residual {:e}; public-model total {gpu_ms:.0} ms, reduced direct-solve only {cpu_ms:.0} ms on {adapter}", red.k_ff.n,result.iterations,result.residual);
     // Rebuild via the same public procedure at a second CPU pool size. Setup and
     // same-adapter device arithmetic must retain the complete displacement bits.
     drop(e);
-    let mut again = Engine::new(Some(gpu()), Box::new(NoClock), 4);
+    let same_adapter = gpu();
+    assert_eq!(same_adapter.adapter, adapter);
+    let mut again = Engine::new(Some(same_adapter), Box::new(NoClock), 4);
     let repeated = solve_cantilever_model(&mut again, [50, 20, 20]);
     check_cantilever_reference(&mut again, &repeated);
     assert_eq!(full, cantilever_displacement(&mut again));
@@ -702,7 +785,7 @@ fn the_million_dof_cantilever_meets_b1_and_the_f64_residual() {
     assert_eq!(displacement.len(), 101 * 51 * 51 * 3);
     assert_eq!(displacement.len() - 51 * 51 * 3, 780_300);
     println!(
-        "D5: 780300 equations, {} refinement steps, f64 residual {:e}, {:.1} s on {adapter}",
+        "D5: 780300 equations, {} refinement steps, f64 residual {:e}, public-model total {:.1} s on {adapter}",
         result.iterations,
         result.residual,
         t.elapsed().as_secs_f64()
@@ -716,18 +799,39 @@ fn the_gpu_solver_reports_a_matrix_too_big_for_the_device_and_obeys_a_cancel() {
     let mut g = gpu();
     let (k, f) = cantilever([16, 4, 4]);
     let pool = Pool::new(2);
-    // an inner tolerance f32 cannot reach, so the cancel lands between submissions and not at
-    // the end of a converged inner solve
+    // Both actual hierarchy construction and a completed inner correction are cancellable.
     let opts = SolveOptions { solver: Solver::GpuPcg, inner_tol: 1e-9, ..SolveOptions::default() };
 
-    // `solve` asks once, `refine` asks once, and the third asker is the conjugate gradient
-    let mut calls = 0;
-    let mut stop = |_p: Progress| {
-        calls += 1;
-        calls <= 2
+    // Cancellation is defined by actual phases, not by an incidental callback count.
+    for phase in ["GPU preconditioner:", "GPU correction:"] {
+        let mut reached = false;
+        let mut stop = |progress: Progress| {
+            if progress.message.starts_with(phase) {
+                reached = true;
+                false
+            } else {
+                true
+            }
+        };
+        let error = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut stop)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Cancelled);
+        assert!(reached, "never reached {phase}");
+    }
+    // Plain CG on a generic Laplacian load cannot finish in its first 25 iterations:
+    // exercise cancellation at the actual submission boundary independently of AMG.
+    let plain = poisson(127);
+    let vals: Vec<f32> = plain.vals.iter().map(|&v| v as f32).collect();
+    let ctx = pollster::block_on(CgContext::new(&g, &plain, &vals, None)).unwrap();
+    let load = data(plain.n, 0.31).0;
+    let mut reached = false;
+    let mut stop = |progress: Progress| {
+        reached = progress.message.starts_with("gpu cg ");
+        false
     };
-    let e = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut stop)).expect_err("cancelled");
-    assert_eq!(e.code, ErrorCode::Cancelled);
+    let error =
+        pollster::block_on(ctx.solve_report(&g, &load, 0.0, 500, &mut vec![0.0; plain.n], &mut stop)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Cancelled);
+    assert!(reached);
 
     g.limits.max_buffer_size = 1024;
     g.limits.max_storage_buffer_binding_size = 1024;
