@@ -3,7 +3,7 @@ import type {PurchaseUse} from '@femlab/registry';
 import type {UiState} from '../store';
 import {Cmd,type Dispatch} from './cmd';
 import {useDialogFocus} from './Dialog';
-const PLANS=[{id:'plus',name:'Plus',price:49,credits:4_000_000},{id:'pro',name:'Pro',price:149,credits:16_000_000},{id:'studio',name:'Studio',price:499,credits:50_000_000}] as const;
+const PLANS=[{id:'plus',name:'Plus',price:49,credits:10_000_000},{id:'pro',name:'Pro',price:149,credits:16_000_000},{id:'studio',name:'Studio',price:499,credits:50_000_000}] as const;
 export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
   const [email,setEmail]=useState(''),[confirmation,setConfirmation]=useState('');
   const ref=useRef<HTMLDivElement>(null),a=s.account;

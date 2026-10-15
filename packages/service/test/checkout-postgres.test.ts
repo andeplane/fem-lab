@@ -183,7 +183,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('account-owned checkout on real 
     subs=[{id:'sub_one',customerId:'cus_owner',status:'active',priceId:'price_plus',start:now().getTime()/1000,end:end.getTime()/1000,scheduleId:null}];
     await expect(service.checkout('Bearer owner',{plan:'pro'})).rejects.toMatchObject({code:'subscription-exists'});
     expect(await service.change('Bearer owner',{plan:'pro'})).toEqual({plan:'pro',effectiveAt:end.toISOString()});expect(calls.schedule).toEqual(['price_pro']);
-    expect((await ledger.balance(account.id)).availableCredits).toBe(4000000);
+    expect((await ledger.balance(account.id)).availableCredits).toBe(10000000);
     expect((await service.status(account.id)).scheduledPlan).toEqual({plan:'pro',effectiveAt:end.toISOString(),processing:false});
     await service.change('Bearer owner',{plan:'studio'});await service.change('Bearer owner',{plan:'pro'});
     expect(calls.schedule).toEqual(['price_pro','price_studio','price_pro']);
