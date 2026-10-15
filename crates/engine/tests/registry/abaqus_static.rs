@@ -1099,3 +1099,178 @@ fn abaqus_author_cae_c3d8_reference_matches_every_node_and_replays_at_one_and_fo
         }
     }
 }
+
+#[test]
+fn abaqus_static_adverse_density_pressure_and_control_inputs_preserve_the_installed_model() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-direct"}"#);
+    let before = e.export_file();
+    let stress = e.field(Some("static"), Field::Stress).unwrap().clone();
+    for (from, to, location) in [
+        ("*BOUNDARY\n", "*BOUNDARY,EXTRA=YES\n", "*BOUNDARY EXTRA"),
+        ("*BOUNDARY\n", "*BOUNDARY,OP\n", "*BOUNDARY OP"),
+        ("*CLOAD\n", "*CLOAD,OP\n", "*CLOAD OP"),
+        ("*CLOAD\nTIP,1,250", "*DLOAD,AMPLITUDE=A\n418,P4,1", "*DLOAD AMPLITUDE"),
+        ("*STATIC\n", "*DLOAD\n418,P4,1\n*STATIC\n", "*DLOAD step"),
+        ("*CLOAD\nTIP,1,250", "*DLOAD,OP=BAD\n418,P4,1", "*DLOAD OP"),
+        ("*CLOAD\nTIP,1,250", "*DLOAD", "*DLOAD data"),
+        ("*CLOAD\nTIP,1,250", "*DLOAD\n418,P4", "*DLOAD record"),
+        ("*CLOAD\nTIP,1,250", "*DLOAD\n418,P4,BAD", "*DLOAD pressure"),
+        ("*CLOAD\nTIP,1,250", "*DLOAD\nMISSING,P4,1", "*DLOAD target"),
+        ("*MATERIAL,NAME=STEEL", "*MATERIAL,NAME=STEEL\n*MATERIAL,NAME=STEEL", "*MATERIAL NAME"),
+        ("*MATERIAL,NAME=STEEL", "*DENSITY\n1\n*MATERIAL,NAME=STEEL", "*DENSITY material"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY,TEMPERATURE=YES\n1\n*ELASTIC", "*DENSITY TEMPERATURE"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n1\n*DENSITY\n1\n*ELASTIC", "*DENSITY data"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n1\n2\n*ELASTIC", "*DENSITY data"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n*ELASTIC", "*DENSITY data"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n1,2\n*ELASTIC", "*DENSITY record"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\nBAD\n*ELASTIC", "*DENSITY density"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n0\n*ELASTIC", "*DENSITY density"),
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n-1\n*ELASTIC", "*DENSITY density"),
+        ("*STATIC\n", "*OUTPUT,FIELD\n*STATIC\n", "*OUTPUT step"),
+        ("*STATIC\n", "*RESTART,WRITE\n*STATIC\n", "*RESTART step"),
+        ("*END STEP", "*RESTART,FREQUENCY=0\n*END STEP", "*RESTART mode"),
+        ("*STEP,NAME=AXIAL,NLGEOM=NO", "*STEP,NAME=AXIAL,PERTURBATION", "*STEP PERTURBATION"),
+        ("NLGEOM=NO", "NLGEOM=NO,INC", "*STEP INC"),
+        ("NLGEOM=NO", "NLGEOM=NO,AMPLITUDE", "*STEP AMPLITUDE"),
+        ("*STATIC\n", "*STATIC,STABILIZE=1e-4\n", "*STATIC STABILIZE"),
+    ] {
+        let text = HEX.replace(from, to);
+        assert_ne!(text, HEX, "test replacement must change the source");
+        let mut value = serde_json::to_value(request(&text, "1 mm", "1 N")).unwrap();
+        value["unitTime"] = json!("1 s");
+        let error = e.query(serde_json::from_value(value).unwrap()).unwrap_err();
+        assert!(error.where_.as_deref().unwrap().contains(location), "{to}: {error:?}");
+        assert!(error.suggestion.is_some());
+        assert_eq!(e.export_file(), before);
+        assert_eq!(e.field(Some("static"), Field::Stress).unwrap(), &stress);
+    }
+}
+
+#[test]
+fn abaqus_static_generated_targets_avoid_source_names_and_preserve_resultant_load() {
+    let text = bar(2, false, false)
+        .replace("*MATERIAL", "*NSET,NSET=FEMLAB_IMPORT_TARGET_4\nROOT\n*SURFACE,NAME=FEMLAB_IMPORT_PRESSURE_5,TYPE=ELEMENT\n401,S6\n*MATERIAL")
+        .replace("*STEP,NAME=AXIAL,NLGEOM=NO", "*STEP,NAME=AXIAL,NLGEOM=NO,INC=10,AMPLITUDE=RAMP")
+        .replace("TIP,1,250", &format!("{},1,500\n*CLOAD\n{},1,500\n*DLOAD\n418,P4,-100000", node(2,0,0), node(2,1,0)));
+    let mut e = engine();
+    let conversion = convert(&mut e, &text, "1 m", "1 N").unwrap();
+    let source = serde_json::to_value(&conversion.commands[2]).unwrap();
+    assert_eq!(source["mesher"]["nodeSets"]["FEMLAB_IMPORT_TARGET_4"], json!([101, 114, 127, 140]));
+    assert_eq!(source["mesher"]["nodeSets"]["FEMLAB_IMPORT_TARGET_4_"], json!([205, 218]));
+    assert_eq!(source["mesher"]["surfaces"]["FEMLAB_IMPORT_PRESSURE_5"], json!([{"element":401,"face":6}]));
+    assert_eq!(source["mesher"]["surfaces"]["FEMLAB_IMPORT_PRESSURE_5_"], json!([{"element":418,"face":4}]));
+    install(&mut e, &conversion);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"AXIAL","solver":"cpu-direct"}"#);
+    let reaction: f64 = e.field(Some("AXIAL"), Field::Reaction).unwrap().data.chunks_exact(3).map(|r| r[0]).sum();
+    // Two 500 N point loads and 100 kPa tensile pressure over 0.01 m².
+    assert!((reaction + 2000.0).abs() < 1e-8);
+    let step_amplitude = text.replace("AMPLITUDE=RAMP", "AMPLITUDE=STEP");
+    let stepped = convert(&mut engine(), &step_amplitude, "1 m", "1 N").unwrap();
+    assert_eq!(
+        serde_json::to_value(&conversion.report.analyses).unwrap(),
+        serde_json::to_value(&stepped.report.analyses).unwrap()
+    );
+}
+
+#[test]
+fn abaqus_static_included_analysis_failures_keep_the_original_file_and_line() {
+    let mut e = engine();
+    let before = e.export_file();
+    let root = "*INCLUDE,INPUT=analysis.inp\n";
+    for (from, to, expected) in [
+        ("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n*ELASTIC", "*DENSITY data"),
+        ("MATERIAL=STEEL", "MATERIAL=MISSING", "*SOLIDSECTION MATERIAL"),
+        (
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL\n1.0",
+            "*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL\n1.0\n*SOLID SECTION,ELSET=SOLID,MATERIAL=STEEL",
+            "*SOLIDSECTION ELSET",
+        ),
+        ("*ELASTIC,TYPE=ISOTROPIC\n200000,0\n", "", "*MATERIAL ELASTIC"),
+        ("*END STEP\n", "", "*STEP end"),
+    ] {
+        let included = HEX.replace(from, to);
+        let mut value = serde_json::to_value(request(root, "1 mm", "1 N")).unwrap();
+        value["unitTime"] = json!("1 s");
+        value["sourceName"] = json!("main.inp");
+        value["sourceFiles"] = json!({"analysis.inp":included});
+        let error = e.query(serde_json::from_value(value).unwrap()).unwrap_err();
+        assert!(error.where_.as_deref().unwrap().starts_with("analysis.inp: line "), "{error:?}");
+        assert!(error.where_.as_deref().unwrap().contains(expected), "{error:?}");
+        assert_eq!(e.export_file(), before);
+    }
+    // Unit choices belong to the registry boundary, not an arbitrary included line.
+    let included = HEX.replace("*ELASTIC,TYPE=ISOTROPIC", "*DENSITY\n1\n*ELASTIC");
+    let mut value = serde_json::to_value(request(root, "1 mm", "1 N")).unwrap();
+    value["sourceFiles"] = json!({"analysis.inp":included});
+    let error = e.query(serde_json::from_value(value).unwrap()).unwrap_err();
+    assert_eq!(error.where_.as_deref(), Some("unitTime"));
+}
+
+#[test]
+fn abaqus_static_inherited_snapshots_obey_the_retained_assignment_limit() {
+    let mut text = mesh_text(100, false, false);
+    text.push_str("*NSET,NSET=ALL\n");
+    for x in 0..=100 {
+        text.push_str(&format!("{},{},{},{}\n", node(x, 0, 0), node(x, 1, 0), node(x, 0, 1), node(x, 1, 1)));
+    }
+    text.push_str(&material_text(false, 0.0));
+    text.push_str("*BOUNDARY\nALL,ENCASTRE\n");
+    // The source is small, but each complete case retains 1,212 prescribed DOFs
+    // plus its material and section. Reject before cloning assignment 1,000,001.
+    for index in 0..824 {
+        text.push_str(&format!("*STEP,NAME=HELD_{index}\n*STATIC\n*END STEP\n"));
+    }
+    let mut e = engine();
+    let before = e.export_file();
+    let error = convert(&mut e, &text, "1 m", "1 N").unwrap_err();
+    assert!(error.cause.contains("inherited analysis state exceeds 1000000"), "{error:?}");
+    assert!(error.where_.as_deref().unwrap().contains("*ENDSTEP expanded analysis state"));
+    assert_eq!(e.export_file(), before);
+}
+
+#[test]
+fn abaqus_static_generated_target_memberships_are_rechecked_after_mesh_admission() {
+    let mut text = mesh_text(100, false, false);
+    text.push_str("*NSET,NSET=ALL\n");
+    let labels: Vec<_> = (0..=100).flat_map(|x| [node(x, 0, 0), node(x, 1, 0), node(x, 0, 1), node(x, 1, 1)]).collect();
+    for label in &labels {
+        text.push_str(&format!("{label}\n"));
+    }
+    // 112 original memberships + 404 in ALL + 2,473×404 aliases + 392 = 1,000,000.
+    // Named Set references keep the source compact while exercising the real public cap.
+    for index in 0..2473 {
+        text.push_str(&format!("*NSET,NSET=ALIAS_{index}\nALL\n"));
+    }
+    text.push_str("*NSET,NSET=PARTIAL\n");
+    for label in &labels[..392] {
+        text.push_str(&format!("{label}\n"));
+    }
+    let mut e = engine();
+    let before = e.export_file();
+    let mut value = serde_json::to_value(request(&text, "1 m", "1 N")).unwrap();
+    value["mode"] = json!("mesh");
+    value.as_object_mut().unwrap().remove("unitForce");
+    let mesh = e.query(serde_json::from_value(value).unwrap()).unwrap();
+    let admitted: AbaqusConversion = serde_json::from_value(serde_json::to_value(mesh).unwrap()).unwrap();
+    let source = serde_json::to_value(&admitted.commands[2]).unwrap();
+    let nodes: usize =
+        source["mesher"]["nodeSets"].as_object().unwrap().values().map(|v| v.as_array().unwrap().len()).sum();
+    let elements: usize =
+        source["mesher"]["elementSets"].as_object().unwrap().values().map(|v| v.as_array().unwrap().len()).sum();
+    assert_eq!(nodes + elements, 1_000_000);
+    drop(source);
+    drop(admitted);
+    text.push_str(&material_text(false, 0.0));
+    text.push_str(&format!(
+        "*BOUNDARY\nROOT,ENCASTRE\n*STEP\n*STATIC\n*CLOAD\n{},1,500\n{},1,500\n*END STEP\n",
+        node(100, 0, 0),
+        node(100, 1, 0)
+    ));
+    // Two numeric targets and their generated two-node grouping cannot escape the cap.
+    let error = convert(&mut e, &text, "1 m", "1 N").unwrap_err();
+    assert_eq!(error.where_.as_deref(), Some("mesher"));
+    assert!(error.cause.contains("1000000 memberships"), "{error:?}");
+    assert_eq!(e.export_file(), before);
+}

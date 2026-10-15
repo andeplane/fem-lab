@@ -109,7 +109,7 @@ impl Analysis {
         }
         Ok(())
     }
-    fn operation(&mut self, key: &Keyword, family: u8) -> Result<(), Error> {
+    fn operation(&mut self, key: &Keyword, family: u8) -> Result<bool, Error> {
         let op = key.value("OP")?.unwrap_or("MOD");
         if op != "MOD" && op != "NEW" {
             return Err(unsupported(key.line, &key.name, "OP", "OP must be MOD or NEW"));
@@ -133,10 +133,24 @@ impl Analysis {
                 }
             }
         }
-        Ok(())
+        Ok(op == "NEW")
     }
-    fn active_nodes(deck: &NormalizedDeck, block: &DeckBlock, text: &str, line: usize) -> Result<Vec<u32>, Error> {
-        let nodes = deck.node_target(&block.scope, text, line, &block.keyword.name)?;
+    fn active_nodes(
+        deck: &NormalizedDeck,
+        block: &DeckBlock,
+        text: &str,
+        line: usize,
+    ) -> Result<(Vec<u32>, bool), Error> {
+        // Resolve a named Set once. The normalized mapping points at checked source
+        // memberships; numeric references still need label/instance validation.
+        let set = deck
+            .node_set_target(&block.scope, text, line, &block.keyword.name)
+            .map_err(|error| error.at(format!("line {line} *{} target", block.keyword.name)))?;
+        let numeric = set.is_none();
+        let nodes = match set {
+            Some(name) => deck.mesh.source.node_sets[&name].clone(),
+            None => deck.node_target(&block.scope, text, line, &block.keyword.name)?,
+        };
         for label in &nodes {
             if deck.mesh.source_labels.nodes.binary_search(label).is_err() {
                 return Err(malformed(
@@ -147,7 +161,7 @@ impl Analysis {
                 ));
             }
         }
-        Ok(nodes)
+        Ok((nodes, numeric))
     }
     fn boundary(&mut self, deck: &NormalizedDeck, block: &DeckBlock) -> Result<(), Error> {
         let key = &block.keyword;
@@ -156,7 +170,7 @@ impl Analysis {
             return Err(unsupported(key.line, &key.name, "TYPE", "only TYPE=DISPLACEMENT is supported"));
         }
         let model = !self.history_started;
-        if model {
+        let new = if model {
             if key.value("OP")?.is_some() {
                 return Err(unsupported(
                     key.line,
@@ -165,20 +179,21 @@ impl Analysis {
                     "OP is history data and cannot be used on model-data BOUNDARY",
                 ));
             }
+            false
         } else {
             self.history(key)?;
-            self.operation(key, 0)?;
-        }
+            self.operation(key, 0)?
+        };
         if block.records.is_empty() {
-            if !model && key.value("OP")? == Some("NEW") {
+            if new {
                 return Ok(());
             }
             return Err(malformed(key.line, &key.name, "data", "BOUNDARY needs a data record"));
         }
         for record in &block.records {
             let values = data(record, &key.name, 2, 4)?;
-            let nodes = Self::active_nodes(deck, block, values[0], record.line)?;
-            if deck.node_set_target(&block.scope, values[0], record.line, &key.name)?.is_none() {
+            let (nodes, numeric) = Self::active_nodes(deck, block, values[0], record.line)?;
+            if numeric {
                 self.numeric_nodes.extend(nodes.iter().copied());
             }
             let symbolic = values[1].to_ascii_uppercase();
@@ -246,17 +261,17 @@ impl Analysis {
         let key = &block.keyword;
         key.only(&["OP"])?;
         self.history(key)?;
-        self.operation(key, 1)?;
+        let new = self.operation(key, 1)?;
         if block.records.is_empty() {
-            if key.value("OP")? == Some("NEW") {
+            if new {
                 return Ok(());
             }
             return Err(malformed(key.line, &key.name, "data", "CLOAD needs a data record"));
         }
         for record in &block.records {
             let fields = data(record, &key.name, 3, 3)?;
-            let nodes = Self::active_nodes(deck, block, fields[0], record.line)?;
-            if deck.node_set_target(&block.scope, fields[0], record.line, &key.name)?.is_none() {
+            let (nodes, numeric) = Self::active_nodes(deck, block, fields[0], record.line)?;
+            if numeric {
                 self.numeric_nodes.extend(nodes.iter().copied());
             }
             let axis = dof(fields[1], record.line, &key.name, "DOF")?;
@@ -289,9 +304,9 @@ impl Analysis {
         key.only(&["OP"])?;
         self.history(key)?;
         let family = if key.name == "DLOAD" { 2 } else { 3 };
-        self.operation(key, family)?;
+        let new = self.operation(key, family)?;
         if block.records.is_empty() {
-            if key.value("OP")? == Some("NEW") {
+            if new {
                 return Ok(());
             }
             return Err(malformed(key.line, &key.name, "data", "pressure needs a data record"));
@@ -453,9 +468,10 @@ impl Analysis {
             "SOLIDSECTION" => {
                 self.model_data(key)?;
                 key.only(&["ELSET", "MATERIAL"])?;
-                let source = name(key.required("ELSET")?, key.line, &key.name, "ELSET")?;
+                let target = key.required("ELSET")?;
+                let source = name(target, key.line, &key.name, "ELSET")?;
                 let elements = deck
-                    .element_target(&block.scope, key.required("ELSET")?, key.line, &key.name)
+                    .element_target(&block.scope, target, key.line, &key.name)
                     .map_err(|error| error.at(format!("line {} *{} ELSET", key.line, key.name)))?;
                 let material = name(key.required("MATERIAL")?, key.line, &key.name, "MATERIAL")?;
                 if block.records.len() > 1 {
@@ -714,10 +730,8 @@ fn install_nodal_set(mesh: &mut abaqus::MeshDeck, nodes: Vec<u32>, ordinal: usiz
 
 fn located(mut error: Error, source: Option<&str>) -> Error {
     if let Some(source) = source {
-        if let Some(location) = &error.where_ {
-            if location.starts_with("line ") {
-                error.where_ = Some(format!("{source}: {location}"));
-            }
+        if error.where_.as_deref().is_some_and(|location| location.starts_with("line ")) {
+            error.where_ = Some(format!("{source}: {}", error.where_.as_deref().expect("checked source location")));
         }
     }
     error
