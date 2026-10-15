@@ -9,6 +9,8 @@ export const CheckoutInput=z.strictObject({plan:z.enum(['plus','pro','studio'])}
 export type PaidPlan=Exclude<PlanId,'free'>;
 export interface PaymentPrice {id:string;active:boolean;currency:string;amount:number|null;interval:string|null;intervalCount:number|null}
 export interface PaymentSession {id:string;url:string|null;expiresAt:number;status:string|null}
+/** The payment provider confirmed expiry validation failed before a Session was created. */
+export class CheckoutNotCreated extends Error {}
 export interface PaymentSubscription {id:string;customerId:string;status:string;priceId:string;start:number;end:number;scheduleId:string|null}
 export interface Payments {
   customer(account:Account,key:string):Promise<string>;
@@ -82,16 +84,28 @@ export function checkoutService(db:Database,payments:Payments,config:CheckoutCon
             intent=undefined;
           }
         } else intent=undefined;
-        if(!intent) {
-          const id=newId();
-          await db.query(`INSERT INTO checkout_intents(account_id,id,plan,expires_at,created_at) VALUES($1,$2,$3,$4,$5)
-            ON CONFLICT(account_id) DO UPDATE SET id=EXCLUDED.id,plan=EXCLUDED.plan,session_id=NULL,session_url=NULL,expires_at=EXCLUDED.expires_at,created_at=EXCLUDED.created_at`,[caller.id,id,parsed.data.plan,new Date(now().getTime()+1860000),now()]);
-          intent=(await db.query('SELECT * FROM checkout_intents WHERE account_id=$1',[caller.id])).rows[0]!;
+        for(let retry=0;;retry++) {
+          if(!intent) {
+            const id=newId();
+            await db.query(`INSERT INTO checkout_intents(account_id,id,plan,expires_at,created_at) VALUES($1,$2,$3,$4,$5)
+              ON CONFLICT(account_id) DO UPDATE SET id=EXCLUDED.id,plan=EXCLUDED.plan,session_id=NULL,session_url=NULL,expires_at=EXCLUDED.expires_at,created_at=EXCLUDED.created_at`,[caller.id,id,parsed.data.plan,new Date(now().getTime()+1860000),now()]);
+            intent=(await db.query('SELECT * FROM checkout_intents WHERE account_id=$1',[caller.id])).rows[0]!;
+          }
+          let session:PaymentSession;
+          try {
+            session=await payments.checkout({customer:customerId,price,accountId:caller.id,successUrl:returnUrl+'?billing=success',cancelUrl:returnUrl+'?billing=canceled',expiresAt:Math.floor((intent.expires_at as Date).getTime()/1000),key:`femlab-checkout:${intent.id}`});
+          } catch(error) {
+            // An uncertain result must keep its original key AND parameters for provider replay.
+            if(!(error instanceof CheckoutNotCreated))throw error;
+            const removed=await db.query('DELETE FROM checkout_intents WHERE account_id=$1 AND id=$2 AND session_id IS NULL RETURNING id',[caller.id,intent.id]);
+            if(!removed.rows.length||retry===1)throw new ServiceFailure(503,'checkout-unavailable','Checkout could not start. Try again shortly.','billing','account.open');
+            intent=undefined;
+            continue;
+          }
+          const url=redirect(session.url,'checkout.stripe.com');
+          await db.query('UPDATE checkout_intents SET session_id=$2,session_url=$3,expires_at=$4 WHERE account_id=$1 AND id=$5',[caller.id,session.id,url,new Date(session.expiresAt*1000),intent.id]);
+          return {url};
         }
-        const session=await payments.checkout({customer:customerId,price,accountId:caller.id,successUrl:returnUrl+'?billing=success',cancelUrl:returnUrl+'?billing=canceled',expiresAt:Math.floor((intent.expires_at as Date).getTime()/1000),key:`femlab-checkout:${intent.id}`});
-        const url=redirect(session.url,'checkout.stripe.com');
-        await db.query('UPDATE checkout_intents SET session_id=$2,session_url=$3,expires_at=$4 WHERE account_id=$1 AND id=$5',[caller.id,session.id,url,new Date(session.expiresAt*1000),intent.id]);
-        return {url};
       });
     },
     async portal(header:string|undefined,body:unknown={}) {
