@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ComponentProps, VNode } from 'preact';
 import type { App } from '../src/ui/App';
+import type { Progress } from '@femlab/registry';
 import type { Viewer, CameraState } from '../src/viewer/viewer';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import { SessionRuntime } from '../src/session-runtime';
@@ -27,9 +28,14 @@ class LocalWorker {
   onerror = null;
   private owner: InstanceType<typeof wasm.SessionEngine> | undefined;
   private closed = false;
-  private runtime = new SessionRuntime(async (_options, epoch) => this.owner = new wasm.SessionEngine(1, epoch), wasm.PreparedEngine.create);
+  progressSample: Progress | null = null;
+  private runtime = new SessionRuntime(async (_options, epoch) => this.owner = new wasm.SessionEngine(1, epoch), wasm.PreparedEngine.create, () => 0);
   constructor() { workers.push(this); }
   postMessage(request: SessionRequest) {
+    // Typed public transport fixture; the real checked owner still executes the Command.
+    if (request.op === 'dispatch' && this.progressSample) {
+      this.onmessage?.({ data: { id: request.id, context: request.context, progress: this.progressSample } } as MessageEvent<SessionResponse>);
+    }
     void this.runtime.accept(structuredClone(request), (reply, raw = []) => {
       if (!this.closed) this.onmessage?.({ data: structuredClone(reply, { transfer: raw }) } as MessageEvent<SessionResponse>);
     });
@@ -66,7 +72,14 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect((await initial.query.model()).name).toBeTruthy();
   expect(initial.registry.list().commands.length).toBeGreaterThan(50);
   const first = await initial.dispatch({ cmd: 'project.new', name: 'first' }) as { id: string };
+  const sample: Required<Progress> = { phase: 'solve', fraction: 0.5, message: 'refinement 2: relative residual 2.5e-6' };
+  workers.at(-1)!.progressSample = sample;
+  const received: unknown[] = [];
+  const store = mounted.props!.store;
+  const stop = store.subscribe(() => received.push(store.state.progress));
   await initial.dispatch({ cmd: 'geometry.addBox', name: 'body', size: ['1 m', '1 m', '1 m'] });
+  stop(); workers.at(-1)!.progressSample = null;
+  expect(received).toContainEqual(sample);
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
   await expect(appHost.prepareAccountNavigation()).rejects.toMatchObject({ code: 'unsupported', suggestion: 'project.save' });
   const saved = await initial.dispatch({ cmd: 'project.save' }) as { commands: number };

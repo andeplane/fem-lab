@@ -11,9 +11,9 @@ function success(reply: SessionResponse): asserts reply is Extract<SessionRespon
 }
 const progressOf = (messages: SessionResponse[]): Progress[] => messages.flatMap(message => 'progress' in message ? [message.progress] : []);
 
-async function actualRuntime() {
+async function actualRuntime(now: () => number = () => 0) {
   const engine = new wasm.SessionEngine(1, 'progress-owner');
-  const runtime = new SessionRuntime(async () => engine, wasm.PreparedEngine.create);
+  const runtime = new SessionRuntime(async () => engine, wasm.PreparedEngine.create, now);
   const bootstrap: SessionResponse[] = [];
   await runtime.accept({ id: 1, op: 'create', epoch: 'progress-owner', options: { gpu: false, threads: 1 } }, reply => bootstrap.push(reply));
   const created = bootstrap.at(-1)!; success(created);
@@ -49,6 +49,43 @@ async function actualRuntime() {
 }
 
 describe('Worker progress delivery stays usable during a dense solve', () => {
+  it('delivers changed measured messages at fixed 50% with a bounded monotonic-clock rate', async () => {
+    let time = 0;
+    const h = await actualRuntime(() => time);
+    function* measured(): Iterable<Progress> {
+      for (let i = 0; i < 100_000; i++) {
+        time = Math.floor(i / 100); // 100,000 callbacks across exactly 0..999 ms.
+        yield { phase: 'solve', fraction: 0.5, message: `refinement ${i}: relative residual ${1 / (i + 1)}` };
+      }
+    }
+    try {
+      const messages = await h.send({ cmd: 'model.setName', name: 'measured progress' }, measured());
+      const shown = progressOf(messages);
+      expect(shown.map(sample => sample.message)).toEqual([
+        ...Array.from({ length: 10 }, (_, index) => index * 10_000), 99_999,
+      ].map(i => `refinement ${i}: relative residual ${1 / (i + 1)}`));
+      expect(shown.every(sample => sample.fraction === 0.5 && sample.phase === 'solve')).toBe(true);
+      expect(h.counts()).toEqual({ callbackCalls: 100_000, continued: 100_000 });
+      expect(messages.at(-2)).toHaveProperty('progress', shown.at(-1));
+      success(messages.at(-1)!);
+    } finally { h.dispose(); }
+  });
+
+  it('does not repeat an unchanged measured message just because host time advances', async () => {
+    let time = 0;
+    const h = await actualRuntime(() => time);
+    function* unchanged(): Iterable<Progress> {
+      for (let i = 0; i < 1_000; i++) { time += 100; yield { phase: 'solve', fraction: 0.5, message: 'stepping in time' }; }
+    }
+    try {
+      const messages = await h.send({ cmd: 'model.setName', name: 'unchanged progress' }, unchanged());
+      expect(progressOf(messages)).toEqual([
+        { phase: 'solve', fraction: 0.5, message: 'stepping in time' },
+        { phase: 'solve', fraction: 0.5, message: 'stepping in time' },
+      ]);
+    } finally { h.dispose(); }
+  });
+
   it('bounds same-phase UI notifications and flushes the actual final sample before the real Ack', async () => {
     const h = await actualRuntime();
     function* dense(): Iterable<Progress> {

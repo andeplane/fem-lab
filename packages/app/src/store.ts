@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, Progress, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/registry';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
@@ -151,7 +151,7 @@ export interface UiState {
   notes: string[];
   console: ConsoleLine[];
   lastError: LastError | null;
-  progress: { phase: string; fraction: number } | null;
+  progress: (Progress & { fraction: number }) | null;
   /** Availability changed in the private completed-file cache; contains no file bytes. */
   completedFilesVersion: number;
   theme: 'dark' | 'light';
