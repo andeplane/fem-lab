@@ -247,6 +247,7 @@ jobs:
       # The first build is the real app the supported-Chromium thumbnail pass drives. That pass
       # writes fixed 320×180 viewer canvases into public/examples; the final build packages them.
       - run: npm run build -w packages/app
+      - run: node tools/test-built-linkage.mjs
       - name: playwright version for thumbnails
         id: thumbnail-pw
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
