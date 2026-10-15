@@ -3249,7 +3249,7 @@ fn certificate_covers_tet_pairs_and_supported_mixed_contacts_without_skin_substi
         certify_imported_geometry(&unsupported).unwrap_err(),
         ImportedCertificateError::Inconclusive {
             elements: vec![0],
-            cause: "original-geometry certificate supports only Tet4 and Hex8".into(),
+            cause: "original-geometry certificate supports only Tet4, Tet10, Hex8 and Hex20".into(),
         }
     );
 }

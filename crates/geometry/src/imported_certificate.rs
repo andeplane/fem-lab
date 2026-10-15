@@ -363,9 +363,9 @@ fn source_shapes(kind: ElementKind) -> Vec<Polynomial> {
                 .find(|&k| HEX_BITS[a as usize][k] != HEX_BITS[b as usize][k])
                 .expect("edge varies along one axis");
             let mut shape = xyz[axis].mul(&one.sub(&xyz[axis])).scale(&fraction(4, 1));
-            for k in 0..3 {
+            for (k, factor) in linear[a as usize].iter().enumerate() {
                 if k != axis {
-                    shape = shape.mul(&linear[a as usize][k]);
+                    shape = shape.mul(factor);
                 }
             }
             shape
@@ -413,6 +413,16 @@ impl Cell {
         Self { element, kind, nodes, points, map, lo, hi }
     }
 
+    fn is_affine_tetrahedron(&self) -> bool {
+        (self.kind == ElementKind::Tet4 || self.kind == ElementKind::Tet10)
+            && self.map.iter().all(|p| {
+                p.coefficients
+                    .iter()
+                    .enumerate()
+                    .all(|(i, c)| exponents(p.degree, i).iter().sum::<usize>() <= 1 || rat_is_zero(c))
+            })
+    }
+
     fn certify_injective(&self) -> Result<(), ImportedCertificateError> {
         if self.kind == ElementKind::Tet4 {
             if orient3d_r(&self.points[0], &self.points[1], &self.points[2], &self.points[3]) != Sign::Pos {
@@ -436,7 +446,10 @@ impl Cell {
                     if Sign::of_rat(&determinant(&sample)) != Sign::Pos {
                         return Err(ImportedCertificateError::Invalid {
                             elements: vec![self.element],
-                            cause: format!("solid has a nonpositive exact Jacobian at reference [{x}/2,{y}/2,{z}/2]"),
+                            cause: format!(
+                                "{:?} has a nonpositive exact Jacobian at reference [{x}/2,{y}/2,{z}/2]",
+                                self.kind
+                            ),
                         });
                     }
                 }
@@ -517,14 +530,14 @@ struct ImplicitFace {
     origin: R3,
     linear: R3,
     product: Option<(R3, R3)>,
-    quadratic: Option<Polynomial>,
+    implicit: Option<Polynomial>,
 }
 
 impl ImplicitFace {
     fn new(cell: &Cell, face: usize) -> Self {
         let mut result = Self::corner_separator(cell, face);
         if cell.kind == ElementKind::Tet10 || cell.kind == ElementKind::Hex20 {
-            result.quadratic = implicit_quadric(cell, face);
+            result.implicit = implicit_surface(cell, face, if cell.kind == ElementKind::Tet10 { 3 } else { 2 });
         }
         result
     }
@@ -536,20 +549,20 @@ impl ImplicitFace {
         let c = cell.points[local[cell.kind.face_kind().n_corners() - 1] as usize].sub(&origin);
         let normal = b.cross(&c);
         if cell.kind == ElementKind::Tet4 || cell.kind == ElementKind::Tet10 {
-            return Self { origin, linear: normal, product: None, quadratic: None };
+            return Self { origin, linear: normal, product: None, implicit: None };
         }
         let d = cell.points[local[2] as usize].sub(&origin).sub(&b).sub(&c);
         let u = c.cross(&d);
         let determinant = b.dot(&u);
         if rat_is_zero(&determinant) {
-            Self { origin, linear: normal, product: None, quadratic: None }
+            Self { origin, linear: normal, product: None, implicit: None }
         } else {
-            Self { origin, linear: normal.scale(&determinant), product: Some((u, d.cross(&b))), quadratic: None }
+            Self { origin, linear: normal.scale(&determinant), product: Some((u, d.cross(&b))), implicit: None }
         }
     }
 
     fn evaluate(&self, point: &R3) -> Rational {
-        if let Some(quadratic) = &self.quadratic {
+        if let Some(quadratic) = &self.implicit {
             return quadratic.evaluate(&[point.x.clone(), point.y.clone(), point.z.clone()]);
         }
         let relative = point.sub(&self.origin);
@@ -561,7 +574,7 @@ impl ImplicitFace {
     }
 
     fn compose(&self, map: &[Polynomial; 3]) -> Polynomial {
-        if let Some(quadratic) = &self.quadratic {
+        if let Some(quadratic) = &self.implicit {
             return quadratic.compose(map);
         }
         let origin = [&self.origin.x, &self.origin.y, &self.origin.z];
@@ -592,10 +605,12 @@ fn reference_nodes(kind: ElementKind) -> Vec<[usize; 3]> {
     result
 }
 
-/// Recover an implicit quadric only when its composition with the complete
-/// original quadratic face is identically zero. Nodal fitting alone is insufficient.
-/// Faces beyond degree-two implicit geometry retain the conservative separator path.
-fn implicit_quadric(cell: &Cell, face: usize) -> Option<Polynomial> {
+/// Recover a bounded implicit polynomial only when its composition with the
+/// complete original face is identically zero. Tet10 uses at most twenty cubic
+/// monomials (at most 49 bivariate tensor coefficient rows); Hex20 retains ten quadratic
+/// monomials. Nodal fitting alone is insufficient. Higher implicit degree remains
+/// inconclusive. The first free column selects the lowest available total degree.
+fn implicit_surface(cell: &Cell, face: usize, maximum_degree: usize) -> Option<Polynomial> {
     let reference: Vec<[usize; 3]> = if cell.kind == ElementKind::Tet10 {
         vec![[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
     } else {
@@ -611,10 +626,31 @@ fn implicit_quadric(cell: &Cell, face: usize) -> Option<Polynomial> {
             .add(&Polynomial::coordinate(1).scale(&(fraction(b[k], 1) - fraction(origin[k], 1))))
     });
     let face_map: [Polynomial; 3] = std::array::from_fn(|k| cell.map[k].compose(&uv));
-    let powers =
-        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [2, 0, 0], [1, 1, 0], [1, 0, 1], [0, 2, 0], [0, 1, 1], [0, 0, 2]];
+    let powers = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+        [2, 0, 0],
+        [1, 1, 0],
+        [1, 0, 1],
+        [0, 2, 0],
+        [0, 1, 1],
+        [0, 0, 2],
+        [3, 0, 0],
+        [2, 1, 0],
+        [2, 0, 1],
+        [1, 2, 0],
+        [1, 1, 1],
+        [1, 0, 2],
+        [0, 3, 0],
+        [0, 2, 1],
+        [0, 1, 2],
+        [0, 0, 3],
+    ];
     let basis: Vec<_> = powers
         .iter()
+        .filter(|power| power.iter().sum::<usize>() <= maximum_degree)
         .map(|&power| {
             let mut p = Polynomial::zero(power);
             p.coefficients[index(power, power)] = rat_one();
@@ -622,7 +658,7 @@ fn implicit_quadric(cell: &Cell, face: usize) -> Option<Polynomial> {
         })
         .collect();
     let columns: Vec<_> = basis.iter().map(|p| p.compose(&face_map)).collect();
-    let degree = std::array::from_fn(|k| columns.iter().map(|p| p.degree[k]).max().expect("quadric basis"));
+    let degree = std::array::from_fn(|k| columns.iter().map(|p| p.degree[k]).max().expect("bounded implicit basis"));
     let mut rows: Vec<Vec<Rational>> = (0..count(degree))
         .map(|i| {
             let e = exponents(degree, i);
@@ -649,12 +685,12 @@ fn implicit_quadric(cell: &Cell, face: usize) -> Option<Polynomial> {
         for value in &mut rows[row] {
             *value /= &scale;
         }
-        for r in 0..rows.len() {
+        let pivot_values = rows[row].clone();
+        for (r, values) in rows.iter_mut().enumerate() {
             if r != row {
-                let factor = rows[r][column].clone();
-                for c in column..basis.len() {
-                    let value = &rows[row][c] * &factor;
-                    rows[r][c] -= value;
+                let factor = values[column].clone();
+                for (value, pivot) in values[column..].iter_mut().zip(&pivot_values[column..]) {
+                    *value -= pivot * &factor;
                 }
             }
         }
@@ -690,7 +726,13 @@ fn certify_side(face: &ImplicitFace, cell: &Cell, remaining: &mut usize) -> Opti
         return None;
     }
     let zero: Vec<_> = values.iter().enumerate().filter(|(_, value)| rat_is_zero(value)).map(|(i, _)| i).collect();
-    if cell.kind == ElementKind::Tet4 {
+    let quadratic = face.implicit.as_ref().is_none_or(|p| {
+        p.coefficients
+            .iter()
+            .enumerate()
+            .all(|(i, c)| rat_is_zero(c) || exponents(p.degree, i).iter().sum::<usize>() <= 2)
+    });
+    if cell.kind == ElementKind::Tet4 && quadratic {
         // Degree-two simplex Bernstein coefficients: vertices plus six edges.
         // Nonnegative coefficients and positive vertex coefficients away from Z
         // prove q>0 outside hull(Z). Coefficients within Z must all be zero.
@@ -711,7 +753,7 @@ fn certify_side(face: &ImplicitFace, cell: &Cell, remaining: &mut usize) -> Opti
         if sign == Sign::Neg {
             polynomial = polynomial.scale(&-rat_one());
         }
-        let simplex = cell.kind == ElementKind::Tet10;
+        let simplex = cell.kind == ElementKind::Tet4 || cell.kind == ElementKind::Tet10;
         if zero.is_empty() {
             let domain = if simplex { polynomial.on_simplex() } else { polynomial };
             if !prove_positive(&domain, remaining) {
@@ -801,7 +843,10 @@ fn intersect_labels(current: &mut Vec<u32>, other: &[u32]) {
 /// coefficient of its Tri6/Quad8 interpolation, and hence the complete shared map.
 fn matching_entity(a: &Cell, b: &Cell, common: &[u32]) -> bool {
     if common.len() == 1 {
-        return true;
+        // With asymmetric zero entities, a singleton must still be a COMPLETE
+        // entity of both cells: a vertex on the other's midside node is hanging.
+        return a.nodes[..a.kind.n_corners()].contains(&common[0])
+            && b.nodes[..b.kind.n_corners()].contains(&common[0]);
     }
     let entities = |cell: &Cell| {
         let mut result = Vec::new();
@@ -858,6 +903,62 @@ fn matching_entity(a: &Cell, b: &Cell, common: &[u32]) -> bool {
     false
 }
 
+fn zero_vertex<'a>(cell: &'a Cell, zero: &[u32]) -> Option<&'a R3> {
+    if zero.len() != 1 {
+        return None;
+    }
+    cell.nodes[..cell.kind.n_corners()].iter().position(|node| *node == zero[0]).map(|i| &cell.points[i])
+}
+
+/// Discover bounded candidate separating planes at a shared tetrahedral corner.
+/// The six oriented corner rays require n·ray>0. Any feasible strict cone can
+/// be scaled to n·ray>=1; a full-rank three-dimensional feasible polyhedron has
+/// a vertex at three active planes. Enumerate its at most 20 exact triples.
+/// Corner feasibility ONLY chooses a direction: the ordinary exact original-map
+/// sign/zero-entity proof remains the sole geometric admission criterion. Try
+/// every corner-feasible candidate within the shared proof budget; a curved
+/// bulge may invalidate the first while a later plane succeeds.
+fn vertex_cone_planes(a: &Cell, b: &Cell, common: &[u32]) -> Vec<ImplicitFace> {
+    if a.kind.n_corners() != 4 || b.kind.n_corners() != 4 {
+        return Vec::new();
+    }
+    let Some(origin) = zero_vertex(a, common).cloned() else {
+        return Vec::new();
+    };
+    if zero_vertex(b, common).is_none() {
+        return Vec::new();
+    }
+    let mut rays = Vec::with_capacity(6);
+    for (node, p) in a.nodes[..4].iter().zip(&a.points[..4]) {
+        if *node != common[0] {
+            rays.push(origin.sub(p));
+        }
+    }
+    for (node, p) in b.nodes[..4].iter().zip(&b.points[..4]) {
+        if *node != common[0] {
+            rays.push(p.sub(&origin));
+        }
+    }
+    let mut planes = Vec::new();
+    for i in 0..rays.len() {
+        for j in i + 1..rays.len() {
+            for k in j + 1..rays.len() {
+                let jk = rays[j].cross(&rays[k]);
+                let det = rays[i].dot(&jk);
+                if rat_is_zero(&det) {
+                    continue;
+                }
+                // Cramer's rule for rows ray_i,ray_j,ray_k and right-hand side 1.
+                let normal = jk.add(&rays[k].cross(&rays[i])).add(&rays[i].cross(&rays[j])).scale(&(rat_one() / det));
+                if rays.iter().all(|ray| Sign::of_rat(&ray.dot(&normal)) == Sign::Pos) {
+                    planes.push(ImplicitFace { origin: origin.clone(), linear: normal, product: None, implicit: None });
+                }
+            }
+        }
+    }
+    planes
+}
+
 fn certify_pair(a: &Cell, b: &Cell) -> bool {
     let mut common: Vec<_> = a.nodes.iter().filter(|node| b.nodes.contains(node)).copied().collect();
     common.sort_unstable();
@@ -866,41 +967,43 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
     zero_a.sort_unstable();
     zero_b.sort_unstable();
     let mut remaining = MAX_BOXES;
-    for owner in [a, b] {
-        for face_index in 0..owner.kind.n_faces() {
-            let face = ImplicitFace::new(owner, face_index);
-            let side_a = certify_side(&face, a, &mut remaining);
-            let side_b = certify_side(&face, b, &mut remaining);
-            if let (Some(sa), Some(sb)) = (side_a, side_b) {
-                if sa.sign == sb.sign {
-                    continue;
-                }
-                // Every common physical point must be a zero of every proven
-                // separator. Intersections of reference entities are reference
-                // entities because each cell has already proved injectivity.
-                intersect_labels(&mut zero_a, &sa.zero_nodes);
-                intersect_labels(&mut zero_b, &sb.zero_nodes);
-                // Both original maps have proved injectivity. Exact entity
-                // correspondence below also checks quadratic mid-edge incidence.
-                // Each Hex zero set is a Cartesian reference entity; their
-                // intersections contain 0/1/2/4 vertices. Tet zero sets are
-                // simplex entities with at most 3 vertices. Thus matched
-                // nonempty sets are a point, an edge, or two Hex quad faces.
-                // Shared labels fix the same point/linear edge. For quads, a
-                // successful separator is the owner's actual face equation,
-                // and the other zero-face restriction is identically zero.
-                // A planar injective bilinear face is a convex quadrilateral.
-                // On a nonplanar face q=D²*(W-U*V), diagonal chords have
-                // q(midpoint)=±D²/4, so the other face's straight boundary
-                // edges must use the same four ruling edges. Both cases force
-                // the same D4 corner cycle and the same bilinear patch. No
-                // additional edge/cycle/count fallback can reject this state.
-                if zero_a.is_empty()
-                    || zero_b.is_empty()
-                    || (zero_a == common && zero_b == common && matching_entity(a, b, &common))
-                {
-                    return true;
-                }
+    let faces =
+        [a, b].into_iter().flat_map(|owner| (0..owner.kind.n_faces()).map(move |face| ImplicitFace::new(owner, face)));
+    for face in faces.chain(vertex_cone_planes(a, b, &common)) {
+        let side_a = certify_side(&face, a, &mut remaining);
+        let side_b = certify_side(&face, b, &mut remaining);
+        if let (Some(sa), Some(sb)) = (side_a, side_b) {
+            if sa.sign == sb.sign {
+                continue;
+            }
+            // Every common physical point must be a zero of every proven
+            // separator. Intersections of reference entities are reference
+            // entities because each cell has already proved injectivity.
+            intersect_labels(&mut zero_a, &sa.zero_nodes);
+            intersect_labels(&mut zero_b, &sb.zero_nodes);
+            // Both original maps have proved injectivity. If either zero
+            // entity is precisely the complete common labelled entity, the
+            // physical intersection is already contained in that entity;
+            // the other zero entity can be larger. Complete correspondence
+            // below proves both cells parameterize that SAME entity,
+            // including all quadratic mid-edge incidence. Requiring BOTH
+            // zero entities to be minimal would reject valid vertex/edge
+            // contacts between otherwise exactly separated curved cells.
+            // Injectivity makes intersections of the reference entities
+            // exact; complete cyclic/edge incidence determines their
+            // linear or quadratic interpolation under reparameterization.
+            // Nonempty localized entities can also have empty PHYSICAL
+            // intersection: two distinct exact vertices are disjoint even
+            // though both lists contain a node. Coincident differently
+            // labelled vertices deliberately fail this check.
+            let distinct_vertices =
+                zero_vertex(a, &zero_a).zip(zero_vertex(b, &zero_b)).is_some_and(|(pa, pb)| pa != pb);
+            if zero_a.is_empty()
+                || zero_b.is_empty()
+                || distinct_vertices
+                || ((zero_a == common || zero_b == common) && matching_entity(a, b, &common))
+            {
+                return true;
             }
         }
     }
@@ -957,8 +1060,15 @@ pub fn certify_imported_geometry(mesh: &Mesh) -> Result<(), ImportedCertificateE
                 continue;
             }
             let elements = vec![cell.element.min(other.element), cell.element.max(other.element)];
-            if cell.kind == ElementKind::Tet4 && other.kind == ElementKind::Tet4 {
-                if !crate::mesh_validation::tet_pair_is_conforming(mesh, cell.element, other.element) {
+            if cell.is_affine_tetrahedron() && other.is_affine_tetrahedron() {
+                // The complete all-node map is exactly affine, so the existing
+                // convex-tetrahedron intersection proof checks its ORIGINAL image.
+                // This changes only the proof, never interpolation or source data.
+                let mut common: Vec<_> = cell.nodes.iter().filter(|n| other.nodes.contains(n)).copied().collect();
+                common.sort_unstable();
+                if !crate::mesh_validation::tet_pair_is_conforming(mesh, cell.element, other.element)
+                    || (!common.is_empty() && !matching_entity(cell, other, &common))
+                {
                     return Err(ImportedCertificateError::Invalid {
                         elements,
                         cause: "tetrahedra overlap or meet outside their shared labelled entity".into(),
@@ -981,6 +1091,105 @@ pub fn certify_imported_geometry(mesh: &Mesh) -> Result<(), ImportedCertificateE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounded_original_shared_tet_face_requires_a_cubic_identity() {
+        // Actual unmodified CalculiX beam10p cells 50/60. The binary midpoint
+        // difference x163-y163 is 1/2+2^-55, so the original face has NO quadric.
+        let first = [
+            [0., 0., 2.],
+            [0., 0., 4.],
+            [1., 0., 4.],
+            [0.499871, 0.499871, 3.99987],
+            [0., 0., 3.],
+            [0.5, 0., 4.],
+            [0.5, 0., 3.],
+            [0.249935, 0.249935, 2.99994],
+            [0.249935, 0.249935, 3.99994],
+            [0.749935, 0.249935, 3.99994],
+        ];
+        let second = [
+            [0., 0., 2.],
+            [1., 0., 2.],
+            [0.499871, 0.499871, 3.99987],
+            [1., 0., 4.],
+            [0.5, 0., 2.],
+            [0.749935, 0.249935, 2.99994],
+            [0.249935, 0.249935, 2.99994],
+            [0.5, 0., 3.],
+            [1., 0., 3.],
+            [0.749935, 0.249935, 3.99994],
+        ];
+        let mut points = Vec::new();
+        let mut conn = Vec::new();
+        for point in first.into_iter().chain(second) {
+            let node = if let Some(i) = points.iter().position(|p| *p == point) {
+                i
+            } else {
+                points.push(point);
+                points.len() - 1
+            };
+            conn.push(node as u32);
+        }
+        let mesh = Mesh {
+            dim: 3,
+            coords: points.into_iter().flatten().collect(),
+            blocks: vec![crate::ElementBlock { kind: ElementKind::Tet10, conn, first_elem: 0 }],
+            node_sets: Default::default(),
+            elem_sets: Default::default(),
+            face_sets: Default::default(),
+        };
+        let a = Cell::new(&mesh, 0);
+        let b = Cell::new(&mesh, 1);
+        let face =
+            (0..4).find(|&f| a.kind.face_nodes(f).iter().all(|&i| b.nodes.contains(&a.nodes[i as usize]))).unwrap();
+        assert!(implicit_surface(&a, face, 2).is_none());
+        let cubic = implicit_surface(&a, face, 3).unwrap();
+        let degree = cubic
+            .coefficients
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| !rat_is_zero(c))
+            .map(|(i, _)| exponents(cubic.degree, i).iter().sum::<usize>())
+            .max()
+            .unwrap();
+        assert_eq!(degree, 3);
+        assert!(certify_pair(&a, &b));
+        assert!(certify_pair(&b, &a));
+    }
+
+    #[test]
+    fn cubic_separators_on_tet4_require_whole_polynomial_signs() {
+        let kind = ElementKind::Tet4;
+        let mesh = Mesh {
+            dim: 3,
+            coords: reference_nodes(kind).into_iter().flatten().map(|x| x as f64 / 2.).collect(),
+            blocks: vec![crate::ElementBlock { kind, conn: vec![0, 1, 2, 3], first_elem: 0 }],
+            node_sets: Default::default(),
+            elem_sets: Default::default(),
+            face_sets: Default::default(),
+        };
+        let cell = Cell::new(&mesh, 0);
+        let mut p = Polynomial::zero([3, 0, 0]);
+        p.coefficients = vec![rat_zero(), rat_one(), rat_zero(), rat_one()];
+        let mut face = ImplicitFace {
+            origin: cell.points[0].clone(),
+            linear: cell.points[0].clone(),
+            product: None,
+            implicit: Some(p),
+        };
+        let mut remaining = MAX_BOXES;
+        assert!(certify_side(&face, &cell, &mut remaining).is_some());
+        // q=x-62x²/25+3x³/2 has positive corner and quadratic-edge shortcut
+        // coefficients, but q(4/5)=-12/625. A cubic may not use that shortcut.
+        face.implicit.as_mut().unwrap().coefficients = vec![rat_zero(), rat_one(), -fraction(62, 25), fraction(3, 2)];
+        assert_eq!(
+            face.implicit.as_ref().unwrap().evaluate(&[fraction(4, 5), rat_zero(), rat_zero()]),
+            -fraction(12, 625)
+        );
+        let mut remaining = MAX_BOXES;
+        assert!(certify_side(&face, &cell, &mut remaining).is_none());
+    }
 
     #[test]
     fn hex20_retains_the_serendipity_total_degree_four_term() {
@@ -1029,6 +1238,9 @@ mod tests {
                 face_sets: Default::default(),
             };
             let cell = Cell::new(&mesh, 0);
+            assert_eq!(zero_vertex(&cell, &[cell.nodes[0]]), Some(&cell.points[0]));
+            assert!(zero_vertex(&cell, &[cell.nodes[kind.n_corners()]]).is_none());
+            assert!(zero_vertex(&cell, &cell.nodes[..2]).is_none());
             let at = [fraction(1, 4), fraction(1, 8), fraction(1, 8)];
             assert_eq!(cell.map[0].evaluate(&at), fraction(1, 4));
             assert_eq!(cell.map[1].evaluate(&at), fraction(1, 8));

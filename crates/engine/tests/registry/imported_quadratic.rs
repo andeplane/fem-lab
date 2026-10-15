@@ -278,3 +278,43 @@ fn imported_original_curved_hex20_area_refines_with_the_known_fourth_order_rate(
         previous = Some(error);
     }
 }
+
+#[test]
+fn imported_mixed_quadratic_blocks_keep_global_source_order_and_region_identity() {
+    let mut command = curved_source(true);
+    let mut other = curved_source(false);
+    let first_nodes = command["mesher"]["nodes"].as_array_mut().unwrap();
+    for node in other["mesher"]["nodes"].as_array_mut().unwrap() {
+        node["label"] = json!(node["label"].as_u64().unwrap() + 10000);
+        let x: f64 = node["at"][0].as_str().unwrap().split_whitespace().next().unwrap().parse().unwrap();
+        node["at"][0] = json!(format!("{} m", x + 3.));
+        first_nodes.push(node.clone());
+    }
+    for element in other["mesher"]["elements"].as_array_mut().unwrap() {
+        element["label"] = json!(element["label"].as_u64().unwrap() + 1);
+        for node in element["nodes"].as_array_mut().unwrap() {
+            *node = json!(node.as_u64().unwrap() + 10000);
+        }
+        command["mesher"]["elements"].as_array_mut().unwrap().push(element.clone());
+    }
+    command["mesher"]["regions"] = json!({"tetrahedra":[101,114],"hexahedra":[102,115]});
+    let mut e = engine();
+    ok(&mut e, &command.to_string());
+    let mesh = e.mesh().unwrap().clone();
+    assert_eq!(mesh.source_labels.elements, [101, 102, 114, 115]);
+    assert_eq!(mesh.body_of_block, ["tetrahedra", "hexahedra", "tetrahedra", "hexahedra"]);
+    assert_eq!(
+        mesh.mesh.blocks.iter().map(|b| b.kind).collect::<Vec<_>>(),
+        [
+            femlab_geometry::ElementKind::Tet10,
+            femlab_geometry::ElementKind::Hex20,
+            femlab_geometry::ElementKind::Tet10,
+            femlab_geometry::ElementKind::Hex20
+        ]
+    );
+    let file = e.export_file();
+    let mut reopened = engine();
+    reopened.import_file(file.clone()).unwrap();
+    assert_eq!(reopened.mesh().unwrap(), &mesh);
+    assert_eq!(reopened.export_file(), file);
+}

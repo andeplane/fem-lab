@@ -2979,3 +2979,13 @@ original-polynomial volume n sin(δ)(4−cos(δ)), δ=π/(4n). It converges to 3
 with known fourth-order geometry error (observed rate required 3.9–4.1). No geometric
 mesher/exporter supplies this source. This is geometry convergence, separate from
 field approximation and from external-solver comparison corpus #656.
+
+The exact source certificate also checks a genuinely cubic shared interface. For
+`G(u,v,w)=((1+u)(1+v/8),v+v²/8,2+2u+w)`,
+`det DG=(1+v/8)(1+v/4)>0`. Let `U=2x-z,V=z/8`; the cubic
+`q=U²/8+UV-yV²` composes exactly to
+`-w(1+v/8)[(1+u)(1+v/4)/4+w*v/64]`. Its bracket stays positive
+on the paired tetrahedra (`u,v>=0`, `|w|<=1`), so its zero set is precisely their
+unchanged curved common face. The original CalculiX beam10p cells 50/60 provide a
+separate rounded-coordinate regression: no exact quadric exists through their
+whole common Tri6 polynomial, while a cubic identity does.

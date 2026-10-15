@@ -106,8 +106,11 @@ fn conforming_pair(a: &Tet, b: &Tet) -> bool {
     true
 }
 
-/// The all-kind imported certificate shares this narrow phase while retaining
-/// the original mesh's dense element IDs for its structured diagnostics.
+/// The imported certificate shares this narrow phase while retaining the original
+/// mesh's dense element IDs. For Tet10, the caller MUST first prove that every
+/// nonlinear coefficient of its complete all-node map is exactly zero and check
+/// complete labelled entity correspondence, including midside nodes. Only under
+/// those conditions is this corner tetrahedron the original geometry itself.
 pub(crate) fn tet_pair_is_conforming(mesh: &Mesh, a: u32, b: u32) -> bool {
     conforming_pair(&Tet::new(mesh, a), &Tet::new(mesh, b))
 }
