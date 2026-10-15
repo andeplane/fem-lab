@@ -122,3 +122,9 @@ it('distinguishes absent, rejected, nonstring and unreadable codes without copyi
   const inaccessible = new Proxy({}, { has() { throw new Error('private has trap'); } });
   expect(providerDiagnostic(inaccessible, 'input-count', undefined, 0).error).toEqual({ kind: 'UnknownError', codePresent: null, codeType: 'unreadable', codeRecognized: false });
 });
+
+it.each(['UND_ERR_HEADERS_OVERFLOW', 'UND_ERR_RESPONSE_STATUS_CODE', 'UND_ERR_INVALID_ARG', 'UND_ERR_INVALID_RETURN_VALUE', 'UND_ERR_INFO', 'UND_ERR_REQ_CONTENT_LENGTH_MISMATCH', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH', 'UND_ERR_NOT_SUPPORTED', 'UND_ERR_BPL_MISSING_UPSTREAM', 'UND_ERR_RES_EXCEEDED_MAX_SIZE', 'UND_ERR_REQ_RETRY', 'UND_ERR_PRX_TLS', 'EACCES', 'EPERM', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EHOSTDOWN', 'ENETDOWN', 'ERR_SSL_WRONG_VERSION_NUMBER', 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR'])('recognizes exact public code %s without copying private properties', code => {
+  const diagnostic = providerDiagnostic({ code, message: 'private', url: 'private', headers: { authorization: 'private' } }, 'input-count', undefined, 1);
+  expect(diagnostic.error).toMatchObject({ code, codePresent: true, codeType: 'string', codeRecognized: true });
+  expect(JSON.stringify(diagnostic)).not.toContain('private');
+});
