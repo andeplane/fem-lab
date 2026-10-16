@@ -4,7 +4,7 @@ import { panelsReducer, type Store } from '../store';
 
 export const TOUR_DISMISSED_KEY = 'femlab.tour.dismissed';
 export const TOUR_STOPS = [
-  { title: 'Add geometry', panel: 'tree.geometry', target: '.tree [data-opens="geometry.addBox"]', text: 'Start with a Body. Choose + add body in Geometry and pick box. Fill its dimensions in Properties, check the translucent preview, then Apply. Nothing is added until Apply; include units such as mm or m.' },
+  { title: 'Add geometry', panel: 'tree.geometry', target: '.tree [data-opens="geometry.addBox"]', text: 'Start with a Body. Choose + add body in Geometry and pick box. Fill its dimensions in Properties, check the translucent preview, then choose Add body. Nothing is added until Add body; include units such as mm or m.' },
   { title: 'Define and assign a Material', panel: 'tree.materials', target: '.tree [data-opens="material.add"]', text: 'Add the material properties your analysis needs, then assign that Material to your Body. Creating a Material alone does not assign it. The cantilever tutorial shows both operations.' },
   { title: 'Choose a Mesh', panel: 'tree.mesh', target: '.tree [data-opens="mesh.set"]', text: 'Choose a mesher, element size and order. Start with a modest mesh, inspect its coverage, and refine later to check how the answer changes.' },
   { title: 'Restrain the intended motion', panel: 'tree.constraints', target: '.tree [data-opens="constraint.fix"]', text: 'Add Constraints on named faces or Sets. A static model needs enough support to stop rigid motion. Fix a support face rather than every node of the Body.' },
