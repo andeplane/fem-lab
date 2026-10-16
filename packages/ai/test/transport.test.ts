@@ -93,7 +93,7 @@ it('bounds adversarial cause chains and never accesses messages, headers, reques
 });
 
 
-it.each(['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'])('retains the explicit safe TLS code %s from a genuine SDK count failure', async code => {
+it.each(['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'ERR_SSL_SSL/TLS_ALERT_BAD_RECORD_MAC'])('retains the explicit safe TLS code %s from a genuine SDK count failure', async code => {
   const secret = 'private-key-url-and-payload';
   const failure = Object.assign(new Error(secret), { code });
   const offlineFetch: typeof fetch = vi.fn(async () => { throw new TypeError(secret, { cause: failure }); });

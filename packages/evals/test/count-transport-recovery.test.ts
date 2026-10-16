@@ -123,7 +123,22 @@ it.each(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ENETRESET', 'ENETUNREACH', 'EHO
   for (const phase of ['input-count', 'request', 'stream'] as const) expect(retryableTransport([{ phase, abortOrigin: 'none', elapsedMs: 0, error: { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true } }])).toBe(true);
 });
 
-it.each(['ETIMEDOUT', 'ENOTFOUND', 'ECONNABORTED', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_DESTROYED', 'UND_ERR_CLOSED'])('does not expand retry eligibility to %s', code => {
+it.each(['ERR_SSL_SSL/TLS_ALERT_BAD_RECORD_MAC', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNABORTED', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_DESTROYED', 'UND_ERR_CLOSED'])('does not expand retry eligibility to %s', code => {
   expect(retryableTransport([{ phase: 'input-count', abortOrigin: 'none', elapsedMs: 0, error: { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true } }])).toBe(false);
   for (const phase of ['input-count', 'request', 'stream'] as const) expect(retryableTransport([{ phase, abortOrigin: 'none', elapsedMs: 0, error: { kind: 'AggregateError', errors: [{ kind: 'Error', code: 'ECONNRESET' }, { kind: 'Error', code, codePresent: true, codeType: 'string', codeRecognized: true }] } }])).toBe(false);
+});
+
+
+it('retains the public bad-record TLS alert from actual SDK counting and vetoes its transient sibling', async () => {
+  const code = 'ERR_SSL_SSL/TLS_ALERT_BAD_RECORD_MAC';
+  const run = setup(async () => {
+    throw new TypeError('offline fetch failure', { cause: new AggregateError([
+      Object.assign(new Error('offline network sibling'), { code: 'ECONNRESET' }),
+      Object.assign(new Error('offline TLS peer alert'), { code }),
+    ], 'offline aggregate') });
+  });
+  expect(await collect(run.provider.chat(request))).toEqual([{ type: 'error', message: 'Connection error.' }]);
+  expect(run.stages).toEqual(['count']); expect(run.fetch).toHaveBeenCalledOnce(); expect(run.factory).not.toHaveBeenCalled();
+  expect(run.receipts).toMatchObject([{ attempt: 0, outcome: 'stopped', diagnostics: [{ phase: 'input-count', abortOrigin: 'none', error: { cause: { cause: { errors: [{ code: 'ECONNRESET' }, { code, codeRecognized: true }] } } } }], discardedEvents: 0, unknownUsageRetained: false }]);
+  expect(run.budget.snapshot()).toMatchObject({ requests: 0, chargedOrReservedUsd: 0, inFlightRequests: 0, retainedUnknown: [] });
 });
