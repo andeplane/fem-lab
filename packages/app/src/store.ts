@@ -89,6 +89,7 @@ export interface UiState {
   account: AccountState;
   projectSync:ProjectSyncState;
   anonymousProjects:ProjectMeta[];
+  projectFiles:{id:string;role:'input'|'output';name:string;mime:string;bytes:number}[];
   projectArtifactError:string|null;
   /** Two immutable solve presentations; never serialized into the Model or Journal. */
   resultComparison: import('@femlab/registry').ResultComparisonState;
@@ -250,7 +251,7 @@ export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] }
 
 export const initialState: UiState = {
   account: structuredClone(EMPTY_ACCOUNT),
-  projectSync:{uid:null,projects:{},storage:null,refreshing:false,error:null},anonymousProjects:[],projectArtifactError:null,
+  projectSync:{uid:null,projects:{},storage:null,refreshing:false,error:null},anonymousProjects:[],projectArtifactError:null,projectFiles:[],
   assistantVerifications: [],
 
   autosave: null,

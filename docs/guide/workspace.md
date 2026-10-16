@@ -8,7 +8,7 @@ When signed out, the home screen introduces FEM Lab and offers local modeling, e
 
 When signed in, home welcomes you with your actual account email and a workspace overview, including plan/allowance information when available. The header's avatar/email control opens your profile menu, where you can open **Account & AI settings**, refresh account state or sign out. Account settings organize your identity, AI allowance, subscriptions and account records. Values that are loading or unavailable are shown as status information, not invented zero balances.
 
-Both home states lead to the same local modeling workspace. Recent projects belong to this browser/profile; signing in does not upload or synchronize them. Save a portable Model file for a backup or another device. See [accounts](./accounts-billing.md) and [projects/storage](./projects-storage.md).
+Both home states lead to the same local modeling workspace. New signed-in projects save to a private account cache and queue cloud sync; existing anonymous projects stay local unless you explicitly upload a copy. Signing out hides account projects and returns to the independent anonymous list. Check saved/sync status and keep a portable backup. See [accounts](./accounts-billing.md) and [projects/storage](./projects-storage.md).
 
 ## Follow the tree
 

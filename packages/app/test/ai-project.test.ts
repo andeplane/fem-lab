@@ -1,8 +1,10 @@
 // PLAN 4.12 and 4.13 against an in-memory `FileSystemDirectoryHandle`: what the folder lists, what
 // AGENTS.md becomes, which skills override which, and that nothing outside the folder is reachable.
 import { describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
-import { kindOf, pickFolder, ProjectFolder, projectSkills, watchAgents } from '../src/ai/project';
+import { forgetHandle, kindOf, pickFolder, ProjectFolder, projectSkills, watchAgents, recentFolder, recallHandle, rememberHandle, rememberedFolder, type Breadcrumbs, type DirHandle } from '../src/ai/project';
+import { browserProjectAccessFor } from '../src/project-host';
 
 import { fakeDir } from './project-fake';
 
@@ -17,6 +19,64 @@ const FILES = {
   'node_modules/pkg/index.js': 'ignored',
   '.git/config': 'ignored',
 };
+
+describe('account-owned remembered project folders', () => {
+  const directory = (name: string): DirHandle => ({ kind: 'directory', name }) as DirHandle;
+  function breadcrumbs() {
+    const values = new Map<string, string>();
+    const crumbs: Breadcrumbs = { getItem: key => values.get(key) ?? null, setItem: vi.fn((key, value) => { values.set(key, value); }), removeItem: key => { values.delete(key); } };
+    return { values, crumbs };
+  }
+
+  it('preserves legacy anonymous folders while list, recall and forget stay private to each owner', async () => {
+    const factory = new IDBFactory(); const { crumbs } = breadcrumbs();
+    await rememberHandle(directory('anonymous'), factory, () => 1, crumbs);
+    await rememberHandle(directory('private A'), factory, () => 2, crumbs, 'A');
+    await rememberHandle(directory('private B'), factory, () => 3, crumbs, 'B');
+    expect(await recentFolder(factory)).toEqual({ name: 'anonymous' });
+    expect(await rememberedFolder(factory, 'A')).toEqual({ name: 'private A', at: 2 });
+    expect(await recentFolder(factory, 'missing')).toBeNull();
+    expect(await recallHandle(factory, crumbs, 'A')).toEqual(directory('private A'));
+    expect(await recallHandle(factory, crumbs, 'B')).toEqual(directory('private B'));
+    expect(await recallHandle(factory, crumbs)).toEqual(directory('anonymous'));
+    await forgetHandle(factory, crumbs, 'A');
+    expect(await recallHandle(factory, crumbs, 'A')).toBeNull();
+    expect(await recentFolder(factory, 'B')).toEqual({ name: 'private B' });
+    expect(await recentFolder(factory)).toEqual({ name: 'anonymous' });
+    const injectedOwner = '\0femlab:folder-owner:v1:' + JSON.stringify(['B', 'folder']);
+    expect(await recallHandle(factory, crumbs, injectedOwner)).toBeNull();
+    expect(await recallHandle(factory, crumbs, 'B')).toEqual(directory('private B'));
+  });
+
+  it('isolates restore crash breadcrumbs even when owners remember identically named folders', async () => {
+    const factory = new IDBFactory(); const { values, crumbs } = breadcrumbs();
+    await rememberHandle(directory('same name'), factory, () => 1, crumbs, 'A');
+    await rememberHandle(directory('same name'), factory, () => 1, crumbs, 'B');
+    await recallHandle(factory, crumbs, 'A');
+    const guard = vi.mocked(crumbs.setItem).mock.calls[0]![0]; values.set(guard, 'same name');
+    expect(await recallHandle(factory, crumbs, 'B')).toEqual(directory('same name'));
+    expect(values.get(guard)).toBe('same name');
+    await expect(recallHandle(factory, crumbs, 'A')).rejects.toMatchObject({ code: 'file.not-found' });
+    expect(await rememberedFolder(factory, 'A')).toBeNull();
+    expect(await rememberedFolder(factory, 'B')).toEqual({ name: 'same name', at: 1 });
+    expect(values.has(guard)).toBe(false);
+  });
+
+  it('captures the owner of browser access before an asynchronous remember completes', async () => {
+    const factory = new IDBFactory(); const { crumbs } = breadcrumbs();
+    vi.stubGlobal('indexedDB', factory); vi.stubGlobal('localStorage', crumbs);
+    try {
+      const a = browserProjectAccessFor('A'); let active = a;
+      const pending = active.remember(directory('late A'));
+      active = browserProjectAccessFor('B'); await active.remember(directory('current B')); await pending;
+      expect(await a.recall()).toEqual(directory('late A'));
+      expect(await active.recall()).toEqual(directory('current B'));
+      expect(await browserProjectAccessFor(null).recent()).toBeNull();
+      await active.forget();
+      expect(await a.recent()).toEqual({ name: 'late A' }); expect(await active.recent()).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
 
 describe('the project folder', () => {
   it('lists the files it should and skips the ones nobody wants in a prompt', async () => {

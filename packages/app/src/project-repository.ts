@@ -12,8 +12,11 @@ export interface ProjectRecord {
   version: StateVersion;
   meta: ProjectMeta | null;
   cmds: ShareCommand[];
+  journal?:ModelFile['journal'];
   artifact?:Uint8Array;
   artifactTag?:string;
+  artifactError?:string;
+  saveSequence?:number;
   cloud?:ProjectCloudRecord;
 }
 export interface AtomicProjects {
@@ -40,10 +43,10 @@ export function memoryAtomicProjects(): AtomicProjects {
   };
 }
 
-interface StoredJournal { id: string; cmds: ShareCommand[]; generation?: string; version?: StateVersion; deleted?: boolean;artifact?:Uint8Array;artifactTag?:string;cloud?:ProjectCloudRecord }
+interface StoredJournal { id: string; cmds: ShareCommand[];journal?:ModelFile['journal']; generation?: string; version?: StateVersion; deleted?: boolean;artifact?:Uint8Array;artifactTag?:string;artifactError?:string;saveSequence?:number;cloud?:ProjectCloudRecord }
 const record = (meta: ProjectMeta | undefined, journal: StoredJournal | undefined): ProjectRecord | null => {
   if (!journal && !meta) return null;
-  return { id: meta?.id ?? journal!.id, generation: journal?.generation ?? null, version: journal?.version ?? '0', meta: journal?.deleted ? null : meta ?? null, cmds: journal?.cmds ?? [],...(journal?.artifact?{artifact:journal.artifact,artifactTag:journal.artifactTag}:{}),...(journal?.cloud?{cloud:journal.cloud}:{}) };
+  return { id: meta?.id ?? journal!.id, generation: journal?.generation ?? null, version: journal?.version ?? '0', meta: journal?.deleted ? null : meta ?? null, cmds: journal?.cmds ?? [],...(journal?.journal?{journal:journal.journal}:{}),...(journal?.artifactError?{artifactError:journal.artifactError}:{}),...(journal?.saveSequence!==undefined?{saveSequence:journal.saveSequence}:{}),...(journal?.artifact?{artifact:journal.artifact,artifactTag:journal.artifactTag}:{}),...(journal?.cloud?{cloud:journal.cloud}:{}) };
 };
 /** Existing version-3 records acquire a generation on first activation, without rewriting history. */
 export function indexedDbAtomicProjects(factory: IDBFactory): AtomicProjects {
@@ -67,7 +70,7 @@ export function indexedDbAtomicProjects(factory: IDBFactory): AtomicProjects {
         const next = change ? change(previous) : previous;
         if (change && next) {
           if (next.meta) metas.put(next.meta); else metas.delete(id);
-          journals.put({ id, cmds: next.cmds, generation: next.generation, version: next.version, deleted: next.meta === null,artifact:next.artifact,artifactTag:next.artifactTag,cloud:next.cloud });
+          journals.put({ id, cmds: next.cmds,journal:next.journal, generation: next.generation, version: next.version, deleted: next.meta === null,artifact:next.artifact,artifactTag:next.artifactTag,artifactError:next.artifactError,saveSequence:next.saveSequence,cloud:next.cloud });
         }
         await committed;
         return next;
@@ -95,6 +98,8 @@ export interface SaveJob {
   readonly journal: ModelFile['journal'];
   readonly artifact?:Uint8Array;
   readonly artifactTag?:string;
+  readonly artifactError?:string;
+  readonly sequence:number;
 }
 export class ProjectRepository {
   constructor(private readonly storage: AtomicProjects, private readonly generation: () => string) {}
@@ -104,14 +109,16 @@ export class ProjectRepository {
     if (!row?.meta) throw new FemError('not-found', `project '${id}' is not saved in this browser`, 'project');
     return row;
   }
-  async claim(meta: ProjectMeta, snapshot: DocumentSnapshot, expected: ProjectRecord | null, restored:Pick<ProjectRecord,'artifact'|'artifactTag'|'cloud'>={}): Promise<ProjectBinding> {
+  async claim(meta: ProjectMeta, snapshot: DocumentSnapshot, expected: ProjectRecord | null, restored:Pick<ProjectRecord,'artifact'|'artifactTag'|'artifactError'|'cloud'>&{restoreDeleted?:boolean}={}): Promise<ProjectBinding> {
     const generation = this.generation();
     const captured = clone(snapshot);
     let previousClaim: ProjectRecord | null = null;
     const claimed = await this.storage.update(meta.id, previous => {
-      if (expected === null ? previous !== null : !previous?.meta || previous.generation !== expected.generation || previous.version !== expected.version || identity(previous.cmds) !== identity(expected.cmds) || previous.artifactTag!==expected.artifactTag || previous.meta.name!==expected.meta?.name || previous.cloud?.remote?.revision!==expected.cloud?.remote?.revision) throw conflict();
+      if(expected===null){if(previous!==null)throw conflict();}
+      else if(!previous||previous.meta===null&&!restored.restoreDeleted||Boolean(previous.meta)!==Boolean(expected.meta)||previous.generation!==expected.generation||previous.version!==expected.version||identity(previous.cmds)!==identity(expected.cmds)||previous.artifactTag!==expected.artifactTag||previous.meta?.name!==expected.meta?.name||previous.cloud?.remote?.revision!==expected.cloud?.remote?.revision||identity(previous.cloud?.conflict)!==identity(expected.cloud?.conflict))throw conflict();
       previousClaim = clone(previous);
-      return { ...previous,...clone(restored),id: meta.id, generation, version: captured.stamp.stateVersion, meta: { ...clone(meta), commands: captured.file.journal.entries.length, hash: captured.model.hash }, cmds: captured.file.journal.entries.map(entry => entry.cmd as ShareCommand) };
+      const {restoreDeleted:_restoreDeleted,...payload}=restored;
+      return { ...previous,...clone(payload),saveSequence:0,id: meta.id, generation, version: captured.stamp.stateVersion, journal:captured.file.journal,meta: { ...clone(meta), commands: captured.file.journal.entries.length, hash: captured.model.hash }, cmds: captured.file.journal.entries.map(entry => entry.cmd as ShareCommand) };
     });
     return new ProjectBinding(this, clone(meta), generation, captured.stamp.session, async () => {
       const tombstoneGeneration = this.generation();
@@ -127,9 +134,10 @@ export class ProjectRepository {
       if (!previous?.meta || previous.generation !== captured.generation || later(previous.version, captured.version)) throw conflict();
       if (previous.version === captured.version) {
         if (identity(previous.cmds) !== identity(captured.cmds)) throw conflict();
-        if (previous.meta.thumbnail === captured.meta.thumbnail && previous.artifactTag===captured.artifactTag) return previous;
+        if (previous.meta.thumbnail === captured.meta.thumbnail && previous.artifactTag===captured.artifactTag&&previous.artifactError===captured.artifactError) return previous;
       }
-      return { ...previous,id: captured.id, generation: captured.generation, version: captured.version, meta: { ...captured.meta, name: previous.meta.name }, cmds: captured.cmds,artifact:captured.artifact,artifactTag:captured.artifactTag,cloud:previous.cloud?{...previous.cloud,dirty:true}:undefined };
+      if((previous.saveSequence??0)>captured.sequence)throw conflict();
+      return { ...previous,id: captured.id, generation: captured.generation, version: captured.version, meta: { ...captured.meta, name: previous.meta.name }, cmds: captured.cmds,journal:captured.journal,artifact:captured.artifactError?previous.artifact:captured.artifact,artifactTag:captured.artifactError?previous.artifactTag:captured.artifactTag,artifactError:captured.artifactError,saveSequence:captured.sequence,cloud:previous.cloud?{...previous.cloud,dirty:true}:undefined };
     });
     return saved.meta!;
   }
@@ -150,12 +158,13 @@ export class ProjectRepository {
 }
 /** The binding has no pointer to a current project, so late saves cannot choose a new target. */
 export class ProjectBinding {
+  private sequence=0;
   constructor(private readonly repository: ProjectRepository, readonly meta: ProjectMeta, readonly generation: string, private readonly session: SessionRef, private readonly rollbackClaim: () => Promise<void>) {}
   /** Only an unpublished activation may give its durable ownership back. */
   abandon(): Promise<void> { return this.rollbackClaim(); }
   capture(snapshot: DocumentSnapshot, at: number, thumbnail: string | null = this.meta.thumbnail): SaveJob {
     if (snapshot.stamp.session.backendEpoch !== this.session.backendEpoch || snapshot.stamp.session.sessionId !== this.session.sessionId) throw conflict();
-    return clone({ id: this.meta.id, generation: this.generation, version: snapshot.stamp.stateVersion,
+    return clone({ sequence:++this.sequence,id: this.meta.id, generation: this.generation, version: snapshot.stamp.stateVersion,
       meta: { ...this.meta, at, thumbnail, commands: snapshot.file.journal.entries.length, hash: snapshot.model.hash },
       journal: snapshot.file.journal, cmds: snapshot.file.journal.entries.map(entry => entry.cmd as ShareCommand) });
   }

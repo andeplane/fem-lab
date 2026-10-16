@@ -79,7 +79,7 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`immutable acco
     expect(await a.scan()).toEqual([tombstone]);
     expect(await b.scan()).toEqual([row('same', 'B')]);
     expect(await anonymous.scan()).toEqual([]);
-    await expect(repo.save({ id: 'same', generation: captured.generation!, version: captured.version, meta: captured.meta!, cmds: captured.cmds, journal: { entries: [] } } as Parameters<ProjectRepository['save']>[0])).rejects.toMatchObject({ code: 'session.conflict' });
+    await expect(repo.save({ sequence: 1, id: 'same', generation: captured.generation!, version: captured.version, meta: captured.meta!, cmds: captured.cmds, journal: { entries: [] } } as Parameters<ProjectRepository['save']>[0])).rejects.toMatchObject({ code: 'session.conflict' });
     expect(await a.read('same')).toEqual(tombstone);
     expect(await b.read('same')).toEqual(row('same', 'B'));
     expect(await anonymous.read('same')).toBeNull();
@@ -103,7 +103,7 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`immutable acco
     await a.update('same', () => original);
     await b.update('same', () => row('same', 'B'));
     const repo = new ProjectRepository(a, () => 'unused');
-    const job = { id: original.id, generation: original.generation!, version: original.version, meta: original.meta!, cmds: original.cmds, journal: { entries: [] } } as Parameters<ProjectRepository['save']>[0];
+    const job = { sequence: 1, id: original.id, generation: original.generation!, version: original.version, meta: original.meta!, cmds: original.cmds, journal: { entries: [] } } as Parameters<ProjectRepository['save']>[0];
     const newer = { ...original, version: '12345678901234567891' };
     await a.update('same', previous => {
       expect(previous).toEqual(original);

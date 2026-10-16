@@ -6,6 +6,7 @@ export interface SessionResources {
   dispose(): void;
   abandon?(): Promise<void>;
   prepareToLeave?(): Promise<void>;
+  prepareIdentityReset?():Promise<void>;
   recoverySource?(source: ReplacementSource): Promise<ReplacementSource>;
   recoveryFailed?(error: unknown): void;
 }
@@ -83,6 +84,23 @@ export class SessionWorkspace<T extends SessionResources> {
       } finally { this.finished(); }
     }
   }
+  /** Account changes revoke the old document before this fresh, empty session is created.
+   * Does not reserve or replay a retired/failed owner's engine, including failed recovery. */
+  async reset():Promise<ActiveSession<T>> {
+    if(this.preparing)throw new FemError('session.transitioning','a previous session transition is still settling');
+    const expected=this.active;this.preparing=true;
+    let candidate:SessionTransport|undefined,resources:T|undefined,published=false;
+    try {
+      // The host may persist already-captured private bytes; reset must never replay them.
+      await expected.resources.prepareIdentityReset?.();
+      candidate=await this.create();
+      const initial=await candidate.snapshot();resources=await this.options.build(candidate,initial);
+      if(this.current!==expected)throw new FemError('session.conflict','the active session changed during account reset');
+      const next={transport:candidate,initial,resources};this.current=next;published=true;this.recoveryRequested=false;
+      try{this.options.publish(next);}finally{expected.transport.channel.close();expected.resources.dispose();}
+      return next;
+    }finally{try{if(!published){candidate?.channel.close();try{await resources?.abandon?.();}finally{resources?.dispose();}}}finally{this.finished();}}
+  }
   async recover(origin: SessionTransport): Promise<void> {
     const expected = this.active;
     if (!sameSession(origin.stamp.session, expected.transport.stamp.session)) throw new FemError('session.expired', 'recovery belongs to an inactive session');
@@ -104,8 +122,9 @@ export class SessionWorkspace<T extends SessionResources> {
       try { this.options.publish(next); } finally { expected.resources.dispose(); }
     } catch (error) { expected.resources.recoveryFailed?.(error); throw error; }
     finally {
-      this.finished();
-      if (!published) { candidate?.channel.close(); try { await resources?.abandon?.(); } finally { resources?.dispose(); } }
+      try {
+        if (!published) { candidate?.channel.close(); try { await resources?.abandon?.(); } finally { resources?.dispose(); } }
+      } finally { this.finished(); }
     }
   }
   async replace(origin: SessionTransport, source: ReplacementSource, admission?: Stamp): Promise<SessionTransport> {
@@ -138,15 +157,18 @@ export class SessionWorkspace<T extends SessionResources> {
       finally { expected.transport.channel.close(); expected.resources.dispose(); }
       return initiating;
     } finally {
-      this.finished();
-      if (!published) {
-        candidate?.channel.close();
-        try { await resources?.abandon?.(); }
-        finally {
-          resources?.dispose();
-          if (ticket !== undefined) await origin.channel.request({ op: 'abandon', ticket }).catch(() => undefined);
+      try {
+        if (!published) {
+          candidate?.channel.close();
+          try { await resources?.abandon?.(); }
+          finally {
+            try { resources?.dispose(); }
+            finally { if (ticket !== undefined) await origin.channel.request({ op: 'abandon', ticket }).catch(() => undefined); }
+          }
         }
-        if (this.recoveryRequested) {
+      } finally {
+        this.finished();
+        if (!published && this.recoveryRequested) {
           this.recoveryRequested = false;
           void this.recover(expected.transport).catch(error => expected.resources.recoveryFailed?.(error));
         }

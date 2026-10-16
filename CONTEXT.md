@@ -397,3 +397,15 @@ formulation: eight-point integration with physical-volume-averaged volumetric st
 It preserves deviatoric/shear strain and uses the ordinary material extension point.
 Abaqus C3D8 imports select it; other supported source kinds retain full integration.
 Existing `full` Journals keep pointwise full integration. See ADR 0034.
+
+**Owner partition** — A browser cache/history/folder destination captured for one
+Account UID or for anonymous work. It does not follow a later login. Authentication
+epochs additionally fence A → B → A callbacks. Anonymous adoption is an explicit
+copy into an account, preserving its browser original. See ADR 0044.
+
+**Project bundle** — The host's `femlab-project-bundle/1` bounded binary archive:
+a portable engine artifact with retained Results plus exact captured input and
+completed output files. It is separate from a `femlab/1` Model file, directory
+capabilities and the cloud's opaque chunk manifest. An incomplete archive leaves a
+newer recoverable Journal and a marked prior backup; it cannot silently replace
+that Journal or upload old bytes as current work. See ADR 0044.

@@ -9,6 +9,30 @@ import { SessionRuntime } from '../src/session-runtime';
 import { FileDelivery, FileArtifactMetadata } from '@femlab/registry';
 import { fakeDir } from './project-fake';
 import { IDBFactory } from 'fake-indexeddb';
+import type { AccountController, AuthPort, Identity } from '../src/account/controller';
+import { indexedDbAtomicProjects } from '../src/project-repository';
+import { partitionedAtomicProjects } from '../src/project-partitions';
+import { decodeProjectArtifact } from '../src/project-artifact';
+
+const identityFixture = vi.hoisted(() => ({ changed: null as ((identity: Identity | null) => void) | null, account: null as AccountController | null, beforeLeave: (async () => undefined) as () => Promise<void> }));
+vi.mock('../src/account/browser', async () => {
+  const { AccountController } = await import('../src/account/controller');
+  const auth: AuthPort = {
+    initialize: async changed => { identityFixture.changed = changed; changed(null); return { emailLinkPending: false }; },
+    signIn: async () => 'signed-in', signOut: async () => undefined,
+    token: async uid => `test-token-${uid}`,
+  };
+  const account = new AccountController({ auth, googleEnabled: true, origin: 'https://test-account.invalid',
+    fetch: async (_url, options) => {
+      const token = new Headers(options?.headers).get('Authorization')!;
+      const uid = token.replace('Bearer test-token-', '');
+      return new Response(JSON.stringify({ id: uid, email: `${uid}@example.test`, createdAt: '2026-10-16T12:00:00Z', status: 'active', billingAvailable: false }), { status: 200 });
+    }, beforeLeave: () => identityFixture.beforeLeave(), navigate: () => undefined,
+  });
+  identityFixture.account = account;
+  return { accounts: account, accountLeaveHook: (hook: () => Promise<void>) => { identityFixture.beforeLeave = hook; } };
+});
+function emitIdentity(uid: string | null): void { identityFixture.changed!(uid === null ? null : { uid, email: `${uid}@example.test` }); }
 
 const mounted = vi.hoisted(() => ({ props: null as ActiveAppProps | null, makeViewer: null as ((props: ActiveAppProps) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
 vi.mock('preact', async original => ({ ...await original<typeof import('preact')>(), render: (node: VNode<ComponentProps<typeof App>>) => {
@@ -52,12 +76,13 @@ function drawing(onBounds: () => void) {
     hasSurface: true,
     setGeometryDraft: vi.fn<Viewer['setGeometryDraft']>(),
     setSurface: surface, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), animate: vi.fn(),
+    autoScale: vi.fn<Viewer['autoScale']>(() => 1), setColormap: vi.fn<Viewer['setColormap']>(),
     getCamera: () => structuredClone(camera), setCamera: (next: CameraState) => { camera = structuredClone(next); },
     fit: vi.fn(() => {
       expect(surface.mock.lastCall?.[0].positions.length).toBeGreaterThan(0);
       camera = { position: [1.5,1.5,1.5], target: [0.5,0.5,0.5], up: [0,0,1] };
     }),
-  } satisfies Pick<Viewer, 'hasSurface' | 'setGeometryDraft' | 'setSurface' | 'setField' | 'setDeformed' | 'setDim' | 'setMode' | 'animate' | 'getCamera' | 'setCamera' | 'fit'>;
+  } satisfies Pick<Viewer, 'hasSurface' | 'setGeometryDraft' | 'setSurface' | 'setField' | 'setDeformed' | 'setDim' | 'setMode' | 'animate' | 'autoScale' | 'setColormap' | 'getCamera' | 'setCamera' | 'fit'>;
   return viewer;
 }
 
@@ -67,6 +92,11 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const drawings: ReturnType<typeof drawing>[] = [];
   mounted.makeViewer = props => { const next = drawing(() => props.viewer.onBounds?.()); drawings.push(next); return next as unknown as Viewer; };
   vi.stubGlobal('Worker', LocalWorker);
+  const localDb = new IDBFactory();
+  vi.stubGlobal('indexedDB', localDb);
+  // Hosted storage is deliberately offline here. This test exercises real local ownership,
+  // engine snapshots and account epochs; resumable HTTP is covered by the typed API tests.
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => { throw new TypeError('test cloud storage offline'); }));
   const appHost = await import('../src/main');
   await vi.waitFor(() => expect(mounted.props?.store.state.ready).toBe(true));
   const initial = window.fem;
@@ -88,7 +118,7 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect(saved.commands).toBe(2);
   const beforeLogin = await window.fem.query.journal();
   await appHost.prepareAccountNavigation();
-  expect(sessionStorage.getItem('femlab.accountReturnProject')).toBe(first.id);
+  expect(JSON.parse(sessionStorage.getItem('femlab.accountReturnProject')!)).toEqual({ id: first.id, owner: null });
   expect((await window.fem.query.journal()).hash).toBe(beforeLogin.hash);
   sessionStorage.removeItem('femlab.accountReturnProject');
   await initial.dispatch({ cmd: 'project.rename', id: first.id, name: 'renamed' });
@@ -152,7 +182,6 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect(repeated.id).toBe(file.id);
   expect(await payloads.at(-1)!.text()).toBe(originalBytes);
   expect((await window.fem.query.model()).name).toBe('changed after delivery');
-  vi.stubGlobal('indexedDB', new IDBFactory());
   await window.fem.dispatch({ cmd: 'folder.open', handle: fakeDir({}, 'other') });
   expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: file.id })).toEqual({ file: null });
   const beforeFileVersion = mounted.props!.store.state.completedFilesVersion;
@@ -171,4 +200,113 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   const engineeringError = mounted.props!.store.state.lastError;
   await expect(window.fem.dispatch({ cmd: 'file.download', id: beforeNew.id })).rejects.toMatchObject({ code: 'file.not-found' });
   expect(mounted.props!.store.state.lastError).toBe(engineeringError);
+  // Account boundaries exercise the actual AccountController and main/session resources,
+  // including a complete portable project containing authored inputs and delivered outputs.
+  const anonymousStorage = indexedDbAtomicProjects(localDb);
+  const failedArchive = await window.fem.dispatch({ cmd: 'project.new', name: 'anonymous archive recovery' }) as { id: string };
+  await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'older_backup_body', size: ['1 m', '1 m', '1 m'] });
+  await window.fem.dispatch({ cmd: 'file.save', to: 'download' });
+  await window.fem.dispatch({ cmd: 'project.save' });
+  const oldComplete = (await anonymousStorage.read(failedArchive.id))!;
+  await window.fem.dispatch({ cmd: 'geometry.remove', name: 'older_backup_body' });
+  await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'latest_journal_body', size: ['2 m', '2 m', '2 m'] });
+  await window.fem.dispatch({ cmd: 'project.save' });
+  const anonymous = await window.fem.dispatch({ cmd: 'project.new', name: 'anonymous legacy' }) as { id: string };
+  await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'anonymous-only', size: ['1 m', '1 m', '1 m'] });
+  await window.fem.dispatch({ cmd: 'project.save' });
+  const archiveError = 'A completed output exceeded the project archive capacity.';
+  const anonymousRecovery = await anonymousStorage.update(failedArchive.id, previous => ({ ...previous!, artifact: oldComplete.artifact, artifactTag: oldComplete.artifactTag, artifactError: archiveError }));
+  const anonymousUi = mounted.props!;
+  emitIdentity('A');
+  expect(anonymousUi.store.state.model).toBeNull(); expect(anonymousUi.store.state.projects).toEqual([]);
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(anonymousUi); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(mounted.props!.store.state.projects).toEqual([]);
+  await expect(anonymousUi.query!({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.expired' });
+  await window.fem.dispatch({ cmd: 'account.uploadProject', id: failedArchive.id });
+  const adoptedId = mounted.props!.store.state.project!.id;
+  expect(adoptedId).not.toBe(failedArchive.id);
+  expect((await window.fem.query.model()).bodies.map(body => body.name)).toEqual(['latest_journal_body']);
+  expect(await window.fem.registry.query({ query: 'query.results' })).toMatchObject({ records: [] });
+  expect(mounted.props!.store.state.projectArtifactError).toBe(archiveError);
+  const backedUpFiles = decodeProjectArtifact(oldComplete.artifact!).files;
+  expect(mounted.props!.store.state.projectFiles.map(file => file.id)).toEqual(backedUpFiles.map(file => file.id));
+  await window.fem.dispatch({ cmd: 'project.save' });
+  const adoptedStorage = partitionedAtomicProjects(anonymousStorage, 'A');
+  const adopted = (await adoptedStorage.read(adoptedId))!;
+  expect(adopted.artifactError).toBe(archiveError); expect(adopted.artifact).toEqual(oldComplete.artifact);
+  expect(adopted.cmds).toEqual(anonymousRecovery.cmds); expect(adopted.cloud?.dirty).toBe(true);
+  await vi.waitFor(() => expect(mounted.props!.store.state.projectSync.projects[adoptedId]?.phase).toBe('error'));
+  expect(await anonymousStorage.read(failedArchive.id)).toEqual(anonymousRecovery);
+  await window.fem.dispatch({ cmd: 'project.new', name: 'private A å' });
+  for (const command of [
+    { cmd: 'geometry.addLine', name: 'shaft', points: [['0 m', '0 m', '0 m'], ['1 m', '0 m', '0 m']], divisions: 1, kind: 'beam' },
+    { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3 },
+    { cmd: 'material.assign', material: 'steel', bodies: ['shaft'] },
+    { cmd: 'section.add', name: 'round', shape: { kind: 'circle', radius: '50 mm' } },
+    { cmd: 'section.assign', section: 'round', bodies: ['shaft'] },
+    { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' } },
+    { cmd: 'constraint.fix', name: 'root', on: 'shaft.p0' },
+    { cmd: 'load.force', name: 'tip', on: 'shaft.p1', total: ['1000 N', '0 N', '0 N'] },
+    { cmd: 'step.add', name: 'axial', procedure: 'static', constraints: ['root'], loads: ['tip'] },
+    { cmd: 'solve.run', step: 'axial', solver: 'cpu-direct' },
+  ]) await window.fem.dispatch(command);
+  const checked = await window.fem.registry.query({ query: 'query.document' });
+  expect(typeof checked === 'object' && checked !== null && 'file' in checked).toBe(true);
+  const originalInput = JSON.stringify((checked as { file: unknown }).file) + '\r\n';
+  const folderFiles = { 'original-A.femlab.json': originalInput };
+  await window.fem.dispatch({ cmd: 'folder.open', handle: fakeDir(folderFiles, 'A-only folder') });
+  await window.fem.dispatch({ cmd: 'file.open', path: 'original-A.femlab.json' });
+  await window.fem.dispatch({ cmd: 'solve.run', step: 'axial', solver: 'cpu-direct' });
+  const aId = mounted.props!.store.state.project!.id;
+  const outputText = 'Exact A output å\r\n';
+  const aFile = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.write', path: 'output-A.txt', text: outputText }));
+  await window.fem.dispatch({ cmd: 'project.save' });
+  const aUi = mounted.props!; const aConsole = window.fem;
+  const aFiles = structuredClone(aUi.store.state.projectFiles);
+  expect(aFiles).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'input', name: 'original-A.femlab.json' }), expect.objectContaining({ role: 'output', name: 'output-A.txt' })]));
+  expect(aUi.store.state.folder?.name).toBe('A-only folder');
+  const aResults = await window.fem.registry.query({ query: 'query.results' });
+  expect(aResults).toMatchObject({ records: expect.arrayContaining([expect.objectContaining({ step: 'axial' })]) });
+  emitIdentity('B');
+  expect(aUi.store.state.model).toBeNull(); expect(aUi.store.state.result).toBeNull(); expect(aUi.store.state.project).toBeNull();
+  expect(aUi.store.state.projectFiles).toEqual([]); expect(aUi.store.state.folder).toBeNull(); expect(aUi.store.state.projects).toEqual([]);
+  await expect(aUi.dispatch({ cmd: 'file.download', id: aFile.id })).rejects.toMatchObject({ code: 'session.expired' });
+  await expect(aConsole.query.model()).rejects.toMatchObject({ code: 'session.expired' });
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(aUi); expect(mounted.props!.store.state.account.uid).toBe('B'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(mounted.props!.store.state.projects).toEqual([]); expect(mounted.props!.store.state.projectFiles).toEqual([]);
+  expect((await window.fem.query.model()).bodies).toEqual([]);
+  expect(await window.fem.registry.query({ query: 'query.results' })).toMatchObject({ records: [] });
+  const bProject = await window.fem.dispatch({ cmd: 'project.new', name: 'private B' }) as { id: string };
+  await window.fem.dispatch({ cmd: 'folder.open', handle: fakeDir({}, 'B-only folder') });
+  await window.fem.dispatch({ cmd: 'file.write', path: 'B-output.txt', text: 'B-only output' });
+  await window.fem.dispatch({ cmd: 'project.save' });
+  const bUi = mounted.props!;
+  emitIdentity('A');
+  expect(bUi.store.state.projectFiles).toEqual([]);
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(bUi); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); expect(mounted.props!.store.state.projects.some(row => row.id === aId)).toBe(true); });
+  expect(mounted.props!.store.state.projects.some(row => row.id === bProject.id)).toBe(false);
+  expect(mounted.props!.store.state.projects.some(row => row.id === anonymous.id)).toBe(false);
+  await window.fem.dispatch({ cmd: 'project.open', id: aId });
+  expect((await window.fem.query.model()).bodies).toHaveLength(1);
+  expect(await window.fem.registry.query({ query: 'query.results' })).toEqual(aResults);
+  expect(mounted.props!.store.state.projectFiles).toEqual(aFiles);
+  expect(mounted.props!.store.state.projectFiles.some(file => file.name === 'B-output.txt')).toBe(false);
+  for (const [name, expectedBytes] of [['original-A.femlab.json', originalInput], ['output-A.txt', outputText]]) {
+    const asset = mounted.props!.store.state.projectFiles.find(file => file.name === name)!;
+    await window.fem.dispatch({ cmd: 'project.downloadAsset', id: asset.id });
+    expect(await payloads.at(-1)!.text()).toBe(expectedBytes);
+  }
+  const beforeAba = mounted.props!; const oldAbaConsole = window.fem;
+  emitIdentity('B'); emitIdentity('A');
+  expect(beforeAba.store.state.projectFiles).toEqual([]); expect(beforeAba.store.state.model).toBeNull();
+  await expect(oldAbaConsole.query.model()).rejects.toMatchObject({ code: 'session.expired' });
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(beforeAba); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); });
+  expect(mounted.props!.store.state.projectFiles).toEqual([]); expect((await window.fem.query.model()).bodies).toEqual([]);
+  expect(mounted.props!.store.state.projects.some(row => row.id === aId)).toBe(true);
+  const beforeSignOut = mounted.props!; emitIdentity(null);
+  expect(beforeSignOut.store.state.projects).toEqual([]);
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(beforeSignOut); expect(mounted.props!.store.state.account.uid).toBeNull(); expect(mounted.props!.store.state.ready).toBe(true); expect(mounted.props!.store.state.projects.some(row => row.id === anonymous.id)).toBe(true); });
+  expect(mounted.props!.store.state.projects.some(row => row.id === aId || row.id === bProject.id)).toBe(false);
+  await window.fem.dispatch({ cmd: 'project.open', id: anonymous.id });
+  expect((await window.fem.query.model()).bodies).toHaveLength(1);
 }, 30000);

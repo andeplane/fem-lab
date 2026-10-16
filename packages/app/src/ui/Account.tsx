@@ -5,6 +5,7 @@ import {Cmd,type Dispatch} from './cmd';
 import {useDialogFocus} from './Dialog';
 import {formatAiCredits} from '../account/credits';
 import './account.css';
+import {CloudStorage} from './CloudProjects';
 const PLANS=[{id:'plus',name:'Plus',price:49,credits:PUBLIC_PLAN_CREDITS.plus},{id:'pro',name:'Pro',price:149,credits:PUBLIC_PLAN_CREDITS.pro},{id:'studio',name:'Studio',price:499,credits:PUBLIC_PLAN_CREDITS.studio}] as const;
 const FREE_STATUS:Record<FreeAllowance['status'],string>={
   'review-required':'Free monthly AI requires an eligibility review. Contact support to request a review.',
@@ -64,8 +65,9 @@ export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
       {billing?.cancelAtPeriodEnd?<p>Your subscription ends at the end of the current paid period.</p>:null}
       {billing?.reviewRequired?<p>Paid AI access is under billing review. Contact support before making another purchase.</p>:null}
       </section>
+      <CloudStorage s={s} dispatch={dispatch}/>
       <section class="profile-data-section" aria-label="Account records and deletion"><span class="eyebrow">YOUR DATA</span>
-      <Cmd dispatch={dispatch} cmd="panel.toggle" args={{panel:'account.data'}} class="tbutton profile-data-toggle" expanded={Boolean(s.panels['account.data'])} controls="profile-account-data">Account data and deletion</Cmd>{s.panels['account.data']?<div id="profile-account-data" class="account-data"><p>Models and conversations stay in your browser. Account records include usage, free-eligibility and claim history, and payment references. Pseudonymous abuse-prevention markers and required financial records remain after deletion.</p><Cmd dispatch={dispatch} cmd="account.export" class="tbutton">Export account records</Cmd><label>Type DELETE to request account deletion<input value={confirmation} onInput={e=>setConfirmation(e.currentTarget.value)} autoComplete="off" /></label><Cmd dispatch={dispatch} cmd="account.delete" args={{confirm:'DELETE'}} disabled={confirmation!=='DELETE'} class="tbutton profile-danger">Delete account and cancel renewal</Cmd></div>:null}
+      <Cmd dispatch={dispatch} cmd="panel.toggle" args={{panel:'account.data'}} class="tbutton profile-data-toggle" expanded={Boolean(s.panels['account.data'])} controls="profile-account-data">Account data and deletion</Cmd>{s.panels['account.data']?<div id="profile-account-data" class="account-data"><p>Account projects sync to cloud storage. Browser-only originals remain separate until explicitly uploaded. Conversations remain in your browser. Account records include usage, free-eligibility and claim history, and payment references. Pseudonymous abuse-prevention markers and required financial records remain after deletion.</p><Cmd dispatch={dispatch} cmd="account.export" class="tbutton">Export account records</Cmd><label>Type DELETE to request account deletion<input value={confirmation} onInput={e=>setConfirmation(e.currentTarget.value)} autoComplete="off" /></label><Cmd dispatch={dispatch} cmd="account.delete" args={{confirm:'DELETE'}} disabled={confirmation!=='DELETE'} class="tbutton profile-danger">Delete account and cancel renewal</Cmd></div>:null}
       </section>
     </>}
     {a.status==='loading'?<p role="status">Connecting to your account…</p>:null}{a.message?<p role="status">{a.message}</p>:null}{a.error?<p class="error" role="alert">{a.error}</p>:null}

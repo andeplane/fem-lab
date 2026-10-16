@@ -589,19 +589,19 @@ export const HOST_COMMANDS: HostDef[] = [
   def('folder.close', 'workspace', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules and retained completed-file bytes are dropped, saves go back to downloads.', none, (_, ctx) => { ctx.files.completed?.clear(); return ctx.folder.close(); }),
   def('folder.refresh', 'workspace', 'Re-list the open folder on disk and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.folder.refresh()),
   def('project.new', 'replacement',
-    'Start a new project: an empty Model and Journal under `name`, kept in this browser and saved after every Command from now on. The project that was open is left exactly as it was and stays in Recent projects, so starting another one loses nothing.',
+    'Start a new project: an empty Model and Journal under `name`, saved in this browser after every Command. Browser hosts may also queue private cloud sync for newly created signed-in projects. The project that was open is left exactly as it was and stays in Recent projects, so starting another one loses nothing.',
     z.object({ name: z.string().optional() }), (i, ctx) => ctx.projects.new(i.name)),
   def('project.open', 'replacement',
-    'Open a saved project by id (query.projects lists them) and replay its Journal, so the Model, its history and its undo stack come back as they were left. Replaces whatever is open, which has already been saved under its own id.',
+    'Open a saved project by id (query.projects lists them) and restore its complete artifact when available, including retained solved Results without re-solving. Legacy browser saves recover by Journal replay. Replaces whatever is open, which has already been saved under its own id.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.open(id)),
   def('project.rename', 'modelWrite',
     'Rename a saved project, by default the one that is open. The name appears in the Projects dialog and Recent projects list. This changes browser-project metadata only; use model.setName to edit the Model name shown in the top bar and saved in its Journal.',
     z.object({ id: z.string().optional(), name: z.string() }), ({ id, name }, ctx) => ctx.projects.rename(id, name)),
   def('project.delete', 'workspace',
-    'Delete a saved project and its Journal from this browser for good. There is no undo and nothing was ever uploaded anywhere, so use file.save first if the model might be wanted again. Not a tool: deleting a person\u2019s work is theirs to do.',
+    'Delete a saved project from this browser and queue deletion of its owned cloud revision when one exists. A newer remote revision causes a visible conflict and is never forcibly overwritten. Download an independent backup first; there is no undo. Not a tool: deleting a person\u2019s work is theirs to do.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.delete(id), false),
   def('project.save', 'modelRead',
-    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. A late completion never changes the saved baseline of a replacement Model. Use file.save to write a `femlab/1` file instead.',
+    'Save the open project now rather than waiting for background autosave. Browser hosts retain a complete portable artifact with solved Results and captured files, plus the recoverable Journal; signed-in saves queue private cloud sync. Storage or artifact limits are reported separately from the local Journal save. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. A late completion never changes the saved baseline of a replacement Model. Use file.save to write a `femlab/1` file instead.',
     none, async (_, ctx) => {
       const completeSave = ctx.files.beginSave();
       const saved = await ctx.projects.save();

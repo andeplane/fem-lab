@@ -12,10 +12,10 @@
   <header><a href="./">FEM LAB</a><nav aria-label="Policies"><a href="privacy.html">Privacy</a><a href="mailto:andershaf@gmail.com">Contact support</a></nav></header>
   <main>
     <h1>Terms of service</h1>
-    <p class="updated">Effective 15 October 2026</p>
-    <p class="lead">FEM Lab is provided by Hafreager kode &amp; koblinger. These terms cover the browser application and optional hosted AI subscriptions.</p>
+    <p class="updated">Effective 16 October 2026</p>
+    <p class="lead">FEM Lab is provided by Hafreager kode &amp; koblinger. These terms cover the browser application, private account project storage and optional hosted AI subscriptions.</p>
     <address>Seller and FEM Lab operator: Hafreager kode &amp; koblinger · Norwegian sole proprietorship<br>Organisation number: NO938680582<br>Registered business address: Gunnar Schjelderups vei 19B, 0485 Oslo, Norway<br>Support: <a href="mailto:andershaf@gmail.com">andershaf@gmail.com</a></address>
-    <div class="summary">Model, mesh and solve without an account. Hosted AI requires a verified account and an available AI allowance. A subscription buys AI usage; local modeling remains free.</div>
+    <div class="summary">Model, mesh and solve without an account. Hosted AI requires a verified account and an available AI allowance. A subscription includes AI usage and larger cloud project storage; local modeling remains free.</div>
 
     <h2>Who sells your subscription</h2>
     <p>Hafreager kode &amp; koblinger sells and provides your FEM Lab subscription, whether you purchase directly or through Stripe Managed Payments.</p>
@@ -30,17 +30,22 @@
     <h2>Subscriptions and included usage</h2>
     <table>
       <caption>Monthly single-account subscriptions</caption>
-      <thead><tr><th scope="col">Plan</th><th scope="col">Price</th><th scope="col">AI credits per paid period</th></tr></thead>
-      <tbody><tr><td>Plus</td><td>$49 USD / month</td><td>7,500</td></tr><tr><td>Pro</td><td>$149 USD / month</td><td>12,000</td></tr><tr><td>Studio</td><td>$499 USD / month</td><td>37,500</td></tr></tbody>
+      <thead><tr><th scope="col">Plan</th><th scope="col">Price</th><th scope="col">AI credits per paid period</th><th scope="col">Cloud storage</th></tr></thead>
+      <tbody><tr><td>Plus</td><td>$49 USD / month</td><td>7,500</td><td>2 GB</td></tr><tr><td>Pro</td><td>$149 USD / month</td><td>12,000</td><td>10 GB</td></tr><tr><td>Studio</td><td>$499 USD / month</td><td>37,500</td><td>50 GB</td></tr></tbody>
     </table>
     <p>The prices above are listed in USD and exclude applicable tax. Checkout shows the final currency, tax and total before you pay. Subscriptions renew automatically each month until canceled. Your allowance is issued after payment is confirmed and lasts for that paid period. Studio is a single-account plan; it does not include shared seats.</p>
     <p>AI credits track model usage. Larger models and generated output consume more credits; context, tool results, images and model reasoning can also contribute to usage. The app shows the available models, remaining balance and charged credits, rounded to at most two decimal places. Usage is recorded precisely; display rounding does not change the amount charged. Unused credits expire at the end of their period and do not roll over or have a cash value.</p>
     <p>There are no automatic overage charges. If your allowance is exhausted, hosted AI stops until an allowance is available. A request reserves its maximum estimated cost before it starts and is settled from provider usage. Stopping a request does not make already processed usage free; uncertain usage can remain reserved while it is reconciled. Local modeling remains available.</p>
 
+    <h2>Private cloud project storage</h2>
+    <p>Local modeling without an account remains available. New projects created while signed in save in your account's browser cache and queue a private cloud copy. Existing anonymous projects stay local unless you explicitly choose to upload a copy. A cloud project can include the portable Model, Journal and retained Results, captured original import files and completed generated outputs. Selecting a folder does not upload its unrelated files. Review the <a href="privacy.html">privacy notice</a> before using account project sync for sensitive content.</p>
+    <p>Free accounts have 100 MB of cloud project space; the paid plan quotas are listed above. Storage quotas use decimal units (1 MB = 1,000,000 bytes; 1 GB = 1,000,000,000 bytes), independently of AI credits or free-AI eligibility. The server enforces the current quota. Browser project bundles also have separate limits: 128 MiB total, 64 MiB of engine JSON, 32 MiB per input/output file and at most 256 files (1 MiB = 1,048,576 bytes).</p>
+    <p>Cloud sync depends on connectivity, authentication and available storage. Pending, offline, quota or error status is not confirmation of a cloud save. Keep an independent downloaded backup of important work. Conflicting revisions require an explicit choice rather than automatic merging. A downgrade does not automatically delete projects; reads and deletion remain available, while new writes may stop until usage fits the current quota.</p>
+
     <h2>Plan changes and cancellation</h2>
     <p>Open Account to change your plan for the next paid period, or choose “Manage subscription and payment” to cancel renewal and manage payment details in Stripe. Cancellation stops the next renewal; your current paid allowance remains available until its expiry. Plan changes do not add a second allowance to the current period. Your account shows a scheduled change or cancellation.</p>
     <p>For a Managed Payments purchase, you can also use the order-management and payment-support links on your receipt. These payment services are separate from your FEM Lab account.</p>
-    <p>Requesting account deletion stops new AI use and queues cancellation of renewal before the login is deleted. Export account records before deleting your account. Deletion does not erase local models or conversations from your browser; remove those in the app or browser separately.</p>
+    <p>Requesting account deletion immediately freezes cloud access/sync and new AI use. It queues cancellation of renewal and purges cloud project objects and metadata before the login can be deleted. Failed cleanup keeps deletion pending; no completion deadline is guaranteed. Export account records and download complete projects separately first: the account-record JSON includes project metadata, not project files or Results. Deletion does not erase every browser cache, anonymous project, conversation or downloaded file; remove those separately.</p>
 
     <h2>Withdrawal, refunds and complaints</h2>
     <p>If you are a consumer in Norway or the EEA, you can notify Hafreager kode &amp; koblinger within 14 days of entering the initial subscription agreement to exercise your statutory right of withdrawal. Accepting these terms does not waive that right. For both direct and Managed Payments purchases, email <a href="mailto:andershaf@gmail.com?subject=FEM%20Lab%20withdrawal">andershaf@gmail.com</a> with a clear statement that you wish to withdraw, your account email and the subscription purchase date. You may use this wording:</p>

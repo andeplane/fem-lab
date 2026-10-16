@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PROJECT_CHUNK_BYTES, type CloudProject, type CloudStorageStatus, type ProjectMeta } from '@femlab/registry';
+import { createRequire } from 'node:module';
+import { PROJECT_CHUNK_BYTES, type CloudProject, type CloudStorageStatus, type ProjectMeta, type DocumentSnapshot, type RunLease } from '@femlab/registry';
 import { CloudProjectError, type CloudActor } from '../src/cloud-project-api';
-import { memoryAtomicProjects, type AtomicProjects, type ProjectRecord } from '../src/project-repository';
+import { memoryAtomicProjects, ProjectRepository, type AtomicProjects, type ProjectRecord } from '../src/project-repository';
 import { partitionedAtomicProjects } from '../src/project-partitions';
 import { ProjectSync, type CloudProjectTransport, type ProjectSyncEnvironment } from '../src/project-sync';
 
@@ -12,9 +13,19 @@ const remote = (patch: Partial<CloudProject> = {}): CloudProject => ({ id: REMOT
 const quota: CloudStorageStatus = { available: true, plan: 'plus', limitBytes: 2_000_000_000, usedBytes: 7, reservedBytes: 5, pendingBytes: 3, overQuota: false, maxChunkBytes: PROJECT_CHUNK_BYTES };
 const meta = (id: string): ProjectMeta => ({ id, name: `Browser ${id}`, at: 1, createdAt: 0, commands: 1, hash: 'hash', thumbnail: null });
 const local = (id = 'local', patch: Partial<ProjectRecord> = {}): ProjectRecord => ({ id, generation: 'generation', version: '1', meta: meta(id), cmds: [{ cmd: 'model.setName', name: 'beam' }], artifact: new Uint8Array([1, 2, 3]), artifactTag: 'snapshot-1', ...patch });
+function snapshot(): DocumentSnapshot {
+  const { SessionEngine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
+  const engine = new SessionEngine(1, 'sync-save-regression');
+  try {
+    const session = JSON.parse(engine.stamp()).session;
+    const lease = JSON.parse(engine.begin_run(JSON.stringify(session))) as RunLease;
+    return JSON.parse(engine.snapshot(JSON.stringify({ session, runId: lease.runId, operationId: 'capture' }))) as DocumentSnapshot;
+  } finally { engine.free(); }
+}
 const controllers: ProjectSync[] = [];
 afterEach(() => { for (const controller of controllers.splice(0)) controller.activate(null); });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+const pendingFirstUpload = (id = 'original'): ProjectRecord => local(id, { cloud: { remote: null, dirty: true, deleted: false, upload: { key: 'original-operation-key', tag: 'snapshot-1', name: `Browser ${id}`, baseRevision: null, bytes: new Uint8Array([1, 2, 3]) } } });
 function setup() {
   const base = memoryAtomicProjects(); const partitions = new Map<string | null, AtomicProjects>();
   const storage = (owner: string | null) => {
@@ -47,12 +58,80 @@ function setup() {
 }
 
 describe('durable account-owned project sync', () => {
+  it('reconciles a lost first-commit receipt by original key without associating projects by filename', async () => {
+    const f = setup(); const original = pendingFirstUpload(); const receipt = remote({ name: 'Matching file name' });
+    const unrelated = local('same-name-unrelated', { meta: { ...meta('same-name-unrelated'), name: receipt.name }, cloud: { remote: null, dirty: false, deleted: false } });
+    await f.seed(original); await f.seed(unrelated); f.remotes.set('A', [receipt]);
+    const gate = deferred<CloudProject>(); f.upload.mockImplementationOnce(() => gate.promise);
+    f.activate(); await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+    expect((await f.storage('A').read('original'))?.cloud?.remote).toBeNull();
+    expect((await f.storage('A').read(`cloud-${REMOTE}`))?.meta).not.toBeNull();
+    gate.resolve(receipt); await f.settled();
+    expect(f.upload.mock.calls[0]![1]).toEqual({ id: undefined, name: 'Browser original', baseRevision: null, key: 'original-operation-key', bytes: new Uint8Array([1, 2, 3]) });
+    const rows = await f.storage('A').scan();
+    expect(rows.filter(row => row.meta && row.cloud?.remote?.id === REMOTE).map(row => row.id)).toEqual(['original']);
+    expect((await f.storage('A').read(`cloud-${REMOTE}`))?.meta).toBeNull();
+    expect((await f.storage('A').read('original'))?.artifact).toEqual(original.artifact);
+    expect((await f.storage('A').read('original'))?.cloud).toMatchObject({ remote: receipt, dirty: false });
+    expect(await f.storage('A').read('same-name-unrelated')).toEqual(unrelated);
+    expect(f.controller.current.projects[`cloud-${REMOTE}`]).toBeUndefined();
+  });
+
+  it.each(['generation', 'artifact', 'journal', 'commands', 'dirty', 'open'] as const)('preserves an %s placeholder and both conflicts when the authoritative first receipt arrives', async changed => {
+    const f = setup(); const original = pendingFirstUpload(); const receipt = remote(); const id = `cloud-${REMOTE}`;
+    const placeholder: ProjectRecord = { id, generation: null, version: '0', meta: meta(id), cmds: [], cloud: { remote: receipt, dirty: false, deleted: false } };
+    if (changed === 'generation') placeholder.generation = 'opened-generation';
+    if (changed === 'artifact') { placeholder.artifact = new Uint8Array([77, 88, 99]); placeholder.artifactTag = 'duplicate private files'; }
+    if (changed === 'journal') placeholder.journal = snapshot().file.journal;
+    if (changed === 'commands') placeholder.cmds = [{ cmd: 'model.setName', name: 'edited duplicate' }];
+    if (changed === 'dirty') placeholder.cloud!.dirty = true;
+    if (changed === 'open') f.open.add(`A/${id}`);
+    await f.seed(original); await f.seed(placeholder); f.remotes.set('A', [receipt]); f.activate(); await f.settled();
+    expect(f.upload).toHaveBeenCalledOnce();
+    expect(await f.storage('A').read(id)).toEqual({ ...placeholder, cloud: { ...placeholder.cloud!, conflict: remote({ name: 'Browser original' }) } });
+    const keptOriginal = (await f.storage('A').read('original'))!;
+    expect(keptOriginal.artifact).toEqual(original.artifact); expect(keptOriginal.cloud?.conflict).toEqual(remote({ name: 'Browser original' }));
+    expect(f.controller.current.projects.original?.phase).toBe('conflict'); expect(f.controller.current.projects[id]?.phase).toBe('conflict');
+    await f.controller.flush(); expect(f.upload).toHaveBeenCalledOnce();
+  });
+
+  it('cancels only an explicitly deleted terminal expired first upload without rotating its key', async () => {
+    const f = setup(); const original = pendingFirstUpload(); original.meta = null; original.cmds = []; original.cloud!.deleted = true;
+    await f.seed(original); const nextId = vi.spyOn(f.env, 'nextId');
+    f.upload.mockRejectedValueOnce(new CloudProjectError(410, 'upload-expired', 'The never-committed upload expired.'));
+    f.activate(); await f.settled();
+    const cancelled = (await f.storage('A').read(original.id))!;
+    expect(cancelled.meta).toBeNull(); expect(cancelled.artifact).toBeUndefined(); expect(cancelled.artifactTag).toBeUndefined();
+    expect(cancelled.cloud).toMatchObject({ remote: null, deleted: true, dirty: false }); expect(cancelled.cloud?.upload).toBeUndefined();
+    expect(f.upload).toHaveBeenCalledOnce(); expect(f.upload.mock.calls[0]![1].key).toBe('original-operation-key');
+    expect(nextId).not.toHaveBeenCalled(); expect(f.remove).not.toHaveBeenCalled();
+    await f.controller.flush(); expect(f.upload).toHaveBeenCalledOnce(); expect(f.controller.current.projects).toEqual({});
+  });
+
+  it.each(['live', 'other-code', 'other-status'] as const)('preserves the original pending request for a %s expiration response', async kind => {
+    const f = setup(); const original = pendingFirstUpload();
+    if (kind !== 'live') { original.meta = null; original.cmds = []; original.cloud!.deleted = true; }
+    await f.seed(original); const nextId = vi.spyOn(f.env, 'nextId');
+    f.upload.mockRejectedValueOnce(new CloudProjectError(kind === 'other-status' ? 400 : 410, kind === 'other-code' ? 'project.not-found' : 'upload-expired', 'The request was rejected.'));
+    f.activate(); await f.settled();
+    expect(await f.storage('A').read(original.id)).toEqual(original);
+    expect(f.upload).toHaveBeenCalledOnce(); expect(f.upload.mock.calls[0]![1].key).toBe('original-operation-key'); expect(nextId).not.toHaveBeenCalled();
+    expect(f.controller.current.projects.original?.phase).toBe('error');
+  });
+
+  it('marks a remote tombstone conflict explicitly while preserving the live browser artifact', async () => {
+    const f = setup(); const original = local('local', { cloud: { remote: remote(), dirty: true, deleted: false } });
+    const deleted = remote({ revision: '2', bytes: 0, deletedAt: time }); await f.seed(original); f.remotes.set('A', [deleted]); f.activate(); await f.settled();
+    expect(f.controller.current.projects.local).toMatchObject({ phase: 'conflict', remoteDeleted: true, deleted: false });
+    expect((await f.storage('A').read('local'))?.artifact).toEqual(original.artifact); expect(f.upload).not.toHaveBeenCalled();
+  });
+
   it('merges another browser’s remote projects and authoritative quota without importing anonymous rows', async () => {
     const f = setup(); await f.seed(local('anonymous'), null); f.remotes.set('A', [remote()]);
     f.activate(); await f.settled();
     const id = `cloud-${REMOTE}`;
     expect((await f.storage('A').read(id))?.cloud?.remote).toEqual(remote());
-    expect(f.controller.current.projects).toEqual({ [id]: { phase: 'remote', message: null } });
+    expect(f.controller.current.projects).toEqual({ [id]: { phase: 'remote', message: null, name: 'Cloud beam', deleted: false } });
     expect(f.controller.current.storage).toEqual(quota);
     expect(await f.storage('A').read('anonymous')).toBeNull();
     const exposed = f.controller.current; exposed.storage!.usedBytes = 999;
@@ -79,6 +158,23 @@ describe('durable account-owned project sync', () => {
     f.online(); await f.controller.refresh(); await f.settled();
     expect(f.upload).toHaveBeenCalledOnce();
     expect((await f.storage('A').read('local'))?.cloud?.dirty).toBe(false);
+  });
+
+  it('shows the durable conflict after an offline edit meets a newer cloud revision on reconnect', async () => {
+    const f = setup(); const base = remote();
+    await f.seed(local('local', { cloud: { remote: base, dirty: false, deleted: false } })); f.remotes.set('A', [base]);
+    f.activate(); await f.settled(); f.offline();
+    await f.storage('A').update('local', previous => ({ ...previous!, version: '2', cmds: [{ cmd: 'model.setName', name: 'offline model edit' }], artifact: new Uint8Array([7, 8, 9]), artifactTag: 'offline snapshot' }));
+    await f.controller.changed('A', 'local'); await f.settled();
+    expect(f.controller.current.projects.local?.phase).toBe('offline'); expect(f.upload).not.toHaveBeenCalled();
+    const offline = (await f.storage('A').read('local'))!;
+    const changed = remote({ revision: '2', changeVersion: '2', name: 'Edited in another browser' }); f.remotes.set('A', [changed]);
+    f.online(); await f.controller.refresh(); await f.settled();
+    expect(f.controller.current.projects.local).toMatchObject({ phase: 'conflict', message: 'The cloud project changed. Both versions are preserved.' });
+    const conflicted = (await f.storage('A').read('local'))!;
+    expect(conflicted.artifact).toEqual(offline.artifact); expect(conflicted.artifactTag).toBe(offline.artifactTag); expect(conflicted.cmds).toEqual(offline.cmds);
+    expect(conflicted.cloud).toMatchObject({ remote: base, conflict: changed, dirty: true });
+    await f.controller.flush(); expect(f.upload).not.toHaveBeenCalled(); expect(await f.storage('A').read('local')).toEqual(conflicted);
   });
 
   it('refreshes authoritative storage usage after upload without silently merging that page’s newer metadata', async () => {
@@ -170,6 +266,29 @@ describe('durable account-owned project sync', () => {
     expect(f.upload).toHaveBeenCalledOnce();
   });
 
+  it('does not upload an older artifact as the newer Journal when archiving a required output failed', async () => {
+    const f = setup();
+    const saved = local('local', { version: '2', artifactError: 'An output exceeds the project archive capacity.', cloud: { remote: remote(), dirty: true, deleted: false } });
+    await f.seed(saved); f.activate(); await f.settled();
+    expect(f.upload).not.toHaveBeenCalled();
+    expect(f.controller.current.projects.local).toMatchObject({ phase: 'error', message: expect.stringContaining('Browser Journal saved; cloud upload is paused.') });
+    expect(await f.storage('A').read('local')).toEqual(saved);
+    await f.controller.flush(); expect(f.upload).not.toHaveBeenCalled();
+  });
+
+  it('retains the newer archive failure when an older complete upload finishes meanwhile', async () => {
+    const f = setup(); await f.seed(local()); f.activate(); await f.settled();
+    const gate = deferred<CloudProject>(); f.upload.mockImplementationOnce(() => gate.promise);
+    await f.controller.changed('A', 'local'); await vi.waitFor(() => expect(f.upload).toHaveBeenCalledOnce());
+    await f.storage('A').update('local', previous => ({ ...previous!, version: '2', cmds: [{ cmd: 'model.setName', name: 'new Journal' }], artifactError: 'New output archive is full.' }));
+    await f.controller.changed('A', 'local'); gate.resolve(remote({ name: 'Browser local' })); await f.settled();
+    expect(f.upload).toHaveBeenCalledOnce();
+    const saved = (await f.storage('A').read('local'))!;
+    expect(saved.artifactError).toBe('New output archive is full.'); expect(saved.cloud?.dirty).toBe(true);
+    expect(f.controller.current.projects.local?.phase).toBe('error');
+    expect(saved.cmds).toEqual([{ cmd: 'model.setName', name: 'new Journal' }]);
+  });
+
   it('applies a remote tombstone without resurrecting a clean browser project', async () => {
     const f = setup(); const deleted = remote({ revision: '2', bytes: 0, deletedAt: time });
     await f.seed(local('local', { cloud: { remote: remote(), dirty: false, deleted: false } })); f.remotes.set('A', [deleted]);
@@ -216,6 +335,41 @@ describe('durable account-owned project sync', () => {
     expect(f.upload).not.toHaveBeenCalled(); expect(f.controller.current.projects.local!.phase).toBe('conflict');
   });
 
+  it('revokes an already captured save when a clean closed project advances remotely', async () => {
+    const f = setup(); const original = local('local', { cloud: { remote: remote(), dirty: false, deleted: false } }); await f.seed(original);
+    const repo = new ProjectRepository(f.storage('A'), () => 'bound-generation'); const document = snapshot();
+    const binding = await repo.claim(original.meta!, document, original);
+    const delayed = { ...binding.capture(document, 10), artifact: new Uint8Array([9]), artifactTag: 'delayed old model' };
+    const advanced = remote({ revision: '2', name: 'Advanced elsewhere' }); f.remotes.set('A', [advanced]);
+    f.activate(); await f.settled(); const before = (await f.storage('A').read('local'))!;
+    expect(before.generation).not.toBe(binding.generation); expect(before.cloud?.remote).toEqual(advanced);
+    await expect(binding.save(delayed)).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(await f.storage('A').read('local')).toEqual(before); expect(before.artifact).toBeUndefined();
+  });
+
+  it('revokes a captured save after keeping a conflict copy, preserving both resolved records', async () => {
+    const f = setup(); f.offline(); const original = local('local', { cloud: { remote: remote(), dirty: true, deleted: false, conflict: remote({ revision: '2' }) } }); await f.seed(original);
+    const repo = new ProjectRepository(f.storage('A'), () => 'bound-generation'); const document = snapshot();
+    const binding = await repo.claim(original.meta!, document, original);
+    const delayed = { ...binding.capture(document, 10), artifact: new Uint8Array([9]), artifactTag: 'late original' };
+    f.activate(); await f.settled(); const copy = await f.controller.keepCopy('local');
+    const resolved = (await f.storage('A').read('local'))!;
+    expect(resolved.generation).not.toBe(binding.generation);
+    await expect(binding.save(delayed)).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(await f.storage('A').read('local')).toEqual(resolved); expect(await f.storage('A').read(copy.id)).toEqual(copy);
+  });
+
+  it('keeps a rejected pending delete visible with both cloud metadata and its conflict', async () => {
+    const f = setup(); const changed = remote({ revision: '2', name: 'Changed before deletion' });
+    await f.seed(local('local', { meta: null, cloud: { remote: remote(), dirty: true, deleted: true } }));
+    f.remove.mockRejectedValueOnce(new CloudProjectError(409, 'project.conflict', 'Cloud model changed.', changed));
+    f.activate(); await f.settled();
+    expect(f.controller.current.projects.local).toMatchObject({ phase: 'conflict', deleted: true, name: 'Cloud beam', message: 'Cloud model changed.' });
+    const row = (await f.storage('A').read('local'))!;
+    expect(row.meta).toBeNull(); expect(row.cloud?.remote?.revision).toBe('1'); expect(row.cloud?.conflict).toEqual(changed);
+    await f.controller.flush(); expect(f.remove).toHaveBeenCalledOnce();
+  });
+
   it('durably saves a separate conflict copy before clearing the original cache', async () => {
     const f = setup(); f.offline(); const changed = remote({ revision: '2', name: 'Remote newest' });
     const original = local('local', { cloud: { remote: remote(), dirty: true, deleted: false, conflict: changed } }); await f.seed(original);
@@ -250,5 +404,16 @@ describe('durable account-owned project sync', () => {
     expect(await f.storage('A').read('local')).toEqual(before);
     const localCandidate = await f.controller.prepareOpen('local'); localCandidate.bytes.fill(99);
     expect((await f.storage('A').read('local'))?.artifact).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it('refuses an incomplete newer artifact on normal open, requiring explicit cloud restoration', async () => {
+    const f = setup(); const remoteVersion = remote();
+    const original = local('local', { artifactError: 'A required output could not be archived.', cloud: { remote: remoteVersion, dirty: true, deleted: false } });
+    await f.seed(original); f.remotes.set('A', [remoteVersion]); f.activate(); await f.settled();
+    await expect(f.controller.prepareOpen('local')).rejects.toThrow('explicitly choose the cloud version');
+    expect(f.download).not.toHaveBeenCalled(); expect(await f.storage('A').read('local')).toEqual(original);
+    const candidate = await f.controller.prepareOpen('local', true);
+    expect(f.download).toHaveBeenCalledOnce(); expect(candidate.bytes).toEqual(new Uint8Array([8, 8, 8])); expect(candidate.remote).toEqual(remoteVersion);
+    expect(await f.storage('A').read('local')).toEqual(original);
   });
 });

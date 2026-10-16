@@ -36,6 +36,72 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`project owners
     expect(before.cmds).toHaveLength(1);
     doc.close();
   });
+  it('rejects a delayed equal-engine-version save after a newer complete project snapshot', async () => {
+    const { repo, storage } = setup(); const doc = document();
+    const binding = await repo.claim(meta('same-version'), doc.snapshot(), null);
+    const older = { ...binding.capture(doc.snapshot(), 1), artifact: new Uint8Array([1]), artifactTag: 'old files' };
+    const newer = { ...binding.capture(doc.snapshot(), 2), artifact: new Uint8Array([2, 3]), artifactTag: 'new files' };
+    expect(older.version).toBe(newer.version); expect(newer.sequence).toBeGreaterThan(older.sequence);
+    await binding.save(newer); const before = await storage.read('same-version');
+    await expect(binding.save(older)).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(await storage.read('same-version')).toEqual(before);
+    expect(before?.artifact).toEqual(new Uint8Array([2, 3])); expect(before?.saveSequence).toBe(newer.sequence);
+    doc.close();
+  });
+  it('acknowledges an identical older capture without reverting newer metadata, sequence or clean sync status', async () => {
+    const { repo, storage } = setup(); const doc = document();
+    try {
+      const binding = await repo.claim(meta('identical'), doc.snapshot(), null);
+      const older = { ...binding.capture(doc.snapshot(), 1, 'same thumbnail'), artifact: new Uint8Array([1, 2, 3]), artifactTag: 'stable content digest' };
+      const newer = { ...binding.capture(doc.snapshot(), 2, 'same thumbnail'), artifact: new Uint8Array([1, 2, 3]), artifactTag: 'stable content digest' };
+      await binding.save(newer);
+      await storage.update('identical', previous => ({ ...previous!, meta: { ...previous!.meta!, name: 'newer metadata', at: 99 }, cloud: { remote: null, dirty: false, deleted: false } }));
+      const before = (await storage.read('identical'))!;
+      expect(newer.sequence).toBeGreaterThan(older.sequence);
+      expect(await binding.save(older)).toEqual(before.meta);
+      expect(await storage.read('identical')).toEqual(before);
+      expect(before.saveSequence).toBe(newer.sequence); expect(before.cloud?.dirty).toBe(false);
+      await expect(binding.save({ ...older, meta: { ...older.meta, thumbnail: 'different old image' } })).rejects.toMatchObject({ code: 'session.conflict' });
+      await expect(binding.save({ ...older, artifactError: 'older incomplete archive' })).rejects.toMatchObject({ code: 'session.conflict' });
+      expect(await storage.read('identical')).toEqual(before);
+    } finally { doc.close(); }
+  });
+  it('requires an explicit, current tombstone restoration and fences its previous save binding', async () => {
+    const { repo, storage } = setup(); const doc = document();
+    const old = await repo.claim(meta('deleted'), doc.snapshot(), null); const delayed = old.capture(doc.snapshot(), 1);
+    await repo.delete('deleted'); const tombstone = (await storage.read('deleted'))!;
+    await expect(repo.claim(meta('deleted'), doc.snapshot(), tombstone)).rejects.toMatchObject({ code: 'session.conflict' });
+    await expect(repo.claim(meta('deleted'), doc.snapshot(), null, { restoreDeleted: true })).rejects.toMatchObject({ code: 'session.conflict' });
+    await expect(repo.claim(meta('deleted'), doc.snapshot(), { ...tombstone, generation: 'stale' }, { restoreDeleted: true })).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(await storage.read('deleted')).toEqual(tombstone);
+    const restored = await repo.claim(meta('deleted'), doc.snapshot(), tombstone, { restoreDeleted: true, artifact: new Uint8Array([7]), artifactTag: 'restored' });
+    expect(restored.generation).not.toBe(old.generation);
+    const before = await repo.read('deleted');
+    await expect(old.save(delayed)).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(await repo.read('deleted')).toEqual(before); expect(before.artifact).toEqual(new Uint8Array([7]));
+    doc.close();
+  });
+  it('saves the newer Journal with a durable archive error while retaining the previous complete artifact', async () => {
+    const { repo, storage } = setup(); const doc = document();
+    try {
+      const original = new Uint8Array([1, 2, 3]);
+      const binding = await repo.claim(meta('archive-error'), doc.snapshot(), null, { artifact: original, artifactTag: 'complete-1' });
+      await doc.write({ cmd: 'model.setName', name: 'new Journal despite output capacity' });
+      const failed = { ...binding.capture(doc.snapshot(), 1), artifactError: 'The output archive exceeds 128 MiB.' };
+      await binding.save(failed);
+      const saved = (await storage.read('archive-error'))!;
+      expect(saved.version).toBe(failed.version); expect(saved.cmds).toEqual(failed.cmds); expect(saved.cmds).toHaveLength(1);
+      expect(saved.artifact).toEqual(original); expect(saved.artifactTag).toBe('complete-1'); expect(saved.artifactError).toBe(failed.artifactError);
+      expect((await storage.scan())[0]!.artifactError).toBe(failed.artifactError);
+      const complete = { ...binding.capture(doc.snapshot(), 2), artifact: new Uint8Array([4, 5, 6, 7]), artifactTag: 'complete-2' };
+      await binding.save(complete);
+      const recovered = (await storage.read('archive-error'))!;
+      expect(recovered.artifact).toEqual(complete.artifact); expect(recovered.artifactTag).toBe('complete-2'); expect(recovered.artifactError).toBeUndefined();
+      expect(recovered.cmds).toEqual(failed.cmds);
+      await expect(binding.save(failed)).rejects.toMatchObject({ code: 'session.conflict' });
+      expect(await storage.read('archive-error')).toEqual(recovered);
+    } finally { doc.close(); }
+  });
   it('revokes delayed saves across same-content reopen and deletion, retaining tombstones', async () => {
     const { repo, storage } = setup(); const a = document('a'); const b = document('b');
     const old = await repo.claim(meta('same'), a.snapshot(), null);
