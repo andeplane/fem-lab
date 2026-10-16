@@ -415,7 +415,11 @@ fn normalize(v: &mut [f64]) {
 
 fn norm(v: &[f64]) -> f64 {
     let max = v.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-    if max == 0.0 { 0.0 } else { max * v.iter().map(|x| (x / max) * (x / max)).sum::<f64>().sqrt() }
+    if max == 0.0 {
+        0.0
+    } else {
+        max * v.iter().map(|x| (x / max) * (x / max)).sum::<f64>().sqrt()
+    }
 }
 
 fn diagonal(a: Matrix<'_>, budget: &mut Budget) -> Result<(Vec<f64>, f64, f64), Error> {
@@ -1316,8 +1320,15 @@ mod tests {
         let mut a = poisson(40);
         for row in 0..a.n {
             for e in a.row_ptr[row] as usize..a.row_ptr[row + 1] as usize {
-                a.vals[e] =
-                    if a.col_idx[e] as usize == row { if row == 0 { eps * eps } else { 1.0 + eps * eps } } else { eps };
+                a.vals[e] = if a.col_idx[e] as usize == row {
+                    if row == 0 {
+                        eps * eps
+                    } else {
+                        1.0 + eps * eps
+                    }
+                } else {
+                    eps
+                };
             }
         }
         assert!(2.0f64.powi(26 * 39).is_finite());
