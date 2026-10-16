@@ -2,7 +2,7 @@
 // (issue #41), the examples gallery and the ⌘K command palette. The palette is the registry made
 // visible — every row is one Command with its doc string, which is also the AI's tool description.
 import type { CommandDef, ObjectRef, ProjectMeta } from '@femlab/registry';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { StartState } from '../startup';
 import type { ExampleEntry } from '../benchmark';
 export type { ExampleEntry } from '../benchmark';
@@ -11,6 +11,7 @@ import type { ExampleDifficulty, ExampleFilter, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 import { useDialogFocus } from './Dialog';
 import { humanise } from './schema';
+import { browserLandingPrompt, type LandingPrompt } from '../landing-prompt';
 
 /** Substring-in-order match, the cheapest fuzzy filter that still feels like one. */
 export function fuzzy(query: string, text: string): boolean {
@@ -335,61 +336,126 @@ export function storageLine(s: Pick<UiState, 'project'>): string {
   return 'projects saved in this browser';
 }
 
-/**
- * The start screen of issue #41, in the issue's own reading order: say what you want in words,
- * start a project, come back to one, open a file, browse examples, take a tutorial.
- *
- * The composer is a real input rather than a card that toggles a panel, because describing the
- * part is the thing a person is most likely to want. It opens the drawer and sends the line as
- * two Commands; with no API key the drawer answers by opening its Settings, and the line stays
- * here in the composer so nothing typed is lost.
- */
-export function Start({ s, dispatch }: { s: StartState; dispatch: Dispatch }) {
+/** Public introduction and local workspace entry; hosted AI starts with an unsent draft. */
+export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = browserLandingPrompt }: { s: StartState; dispatch: Dispatch; hosted?: boolean; promptStore?: LandingPrompt }) {
+  const instance = useId();
   const [name, setName] = useState('model');
-  const [ask, setAsk] = useState('');
+  const [ask, setAsk] = useState(() => promptStore.read(s.account.uid));
+  const [draftWarning, setDraftWarning] = useState('');
   const [all, setAll] = useState(false);
+  const previousOwner = useRef(s.account.uid);
+  const identity = useRef({ uid: s.account.uid, status: s.account.status });
+  if (identity.current.uid !== s.account.uid || identity.current.status !== s.account.status) identity.current = { uid: s.account.uid, status: s.account.status };
+  useLayoutEffect(() => {
+    // An anonymous sign-in draft belongs to its first authenticated owner only. A later
+    // sign-out/switch clears it, like the Assistant's own identity boundary.
+    if (s.account.uid !== null) {
+      const restored = promptStore.bind(s.account.uid);
+      if (previousOwner.current !== null && previousOwner.current !== s.account.uid) setAsk(restored);
+      else if (restored) setAsk(value => value || restored);
+    } else if (previousOwner.current !== null) {
+      setAsk('');
+      promptStore.clear();
+    }
+    previousOwner.current = s.account.uid;
+  }, [s.account.uid, promptStore]);
   const recent = all ? s.projects : s.projects.slice(0, 6);
+  const needsSignIn = hosted && s.account.status !== 'active';
+  const openAccount = (): void => {
+    if (ask.trim()) setDraftWarning(promptStore.save(ask, s.account.uid) ? '' : 'Your browser blocked draft storage. Copy your request before leaving this page to sign in.');
+    void dispatch({ cmd: 'account.open' }).catch(() => undefined);
+  };
   const send = (): void => {
     if (!s.ready || !ask.trim()) return;
-    void dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true })
-      .then(() => dispatch({ cmd: 'chat.send', text: ask.trim() }))
-      .catch(() => undefined);
+    if (needsSignIn) {
+      openAccount();
+      return;
+    }
+    const owner = identity.current;
+    void (async () => {
+      await dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true });
+      if (hosted && identity.current !== owner) return;
+      await dispatch({ cmd: hosted ? 'chat.setDraft' : 'chat.send', text: ask.trim() });
+      if (!hosted || identity.current === owner) promptStore.clear();
+    })().catch(() => undefined);
   };
+  const docs = `${import.meta.env.BASE_URL}docs/`;
   return (
     <div class="start">
-      <h1>
-        <i /> FEM Lab
-      </h1>
-      <p class="pitch">A finite-element editor and solver in a browser tab. Model, mesh and solve locally. Optional hosted AI sends the context needed for your request to the model provider.</p>
+      <a class="landing-skip" href={`#start-workspace-${instance}`}>Skip to your projects</a>
+      <header class="landing-header">
+        <span class="landing-brand"><i aria-hidden="true" /> FEM Lab</span>
+        <nav aria-label="Main navigation">
+          <a href={docs} target="_blank" rel="noreferrer">Documentation</a>
+          <Cmd dispatch={dispatch} cmd="panel.toggle" args={{ panel: 'examples' }} disabled={!s.ready} class="tbutton">Examples</Cmd>
+          <Cmd dispatch={dispatch} cmd="account.open" disabled={!s.ready} class="tbutton outline" onRun={openAccount}>{s.account.uid ? 'Account and AI plans' : 'Sign in for AI'}</Cmd>
+        </nav>
+      </header>
+      <section class="landing-hero" aria-labelledby={`landing-title-${instance}`}>
+        <div class="landing-intro">
+          <span class="landing-eyebrow">SIMULATION, IN YOUR BROWSER</span>
+          <h1 id={`landing-title-${instance}`}>Understand how<br />your design behaves.</h1>
+          <p class="pitch">FEM Lab is a finite-element modeling and simulation tool. Build a model, apply loads, and explore how it bends, vibrates, or transfers heat.</p>
+          <p class="landing-local">Model, mesh and solve locally — free, with no account required. Optional hosted AI can help you build and inspect your analysis.</p>
+          <div class="landing-actions">
+            <Cmd dispatch={dispatch} cmd="project.new" args={{ name }} disabled={!s.ready} class="landing-primary" title="Start a local model without signing in">Start modeling — free <span aria-hidden="true">↗</span></Cmd>
+            <a href={`${docs}getting-started/`} target="_blank" rel="noreferrer" class="landing-secondary">Your first simulation <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="landing-browser">For Chromium browsers · Projects stay in this browser · Export files to keep a backup</p>
+        </div>
+        <figure class="landing-analysis">
+          <div class="analysis-label"><span class="analysis-live" /> FROM A QUESTION TO AN ANALYSIS <span class="mono">01 / 03</span></div>
+          <svg viewBox="0 0 480 285" role="img" aria-label="Illustration of a meshed cantilever fixed at one end and bending under a downward force">
+            <defs>
+              <linearGradient id={`landing-field-${instance}`} x1="0" x2="1"><stop offset="0" stop-color="#4b9fb3" /><stop offset=".5" stop-color="#efb16f" /><stop offset="1" stop-color="#e77638" /></linearGradient>
+              <pattern id={`landing-grid-${instance}`} width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="#b7c5d4" stroke-opacity=".07" /></pattern>
+            </defs>
+            <rect width="480" height="285" fill={`url(#landing-grid-${instance})`} />
+            <path d="M75 72V215 M60 78l15-6 M60 96l15-6 M60 114l15-6 M60 132l15-6 M60 150l15-6 M60 168l15-6 M60 186l15-6 M60 204l15-6" stroke="#8a9baa" stroke-width="2" />
+            <path d="M77 105H395V158H77Z" stroke="#8a9baa" stroke-dasharray="5 5" fill="none" opacity=".5" />
+            <path d="M77 105 C180 105 285 122 395 175 L395 223 C285 171 180 153 77 153Z" fill={`url(#landing-field-${instance})`} fill-opacity=".4" stroke="#e6c8aa" stroke-width="1.5" />
+            <g stroke="#d2cbc4" stroke-opacity=".65" fill="none" stroke-width=".9">
+              <path d="M77 129 C180 129 285 146 395 199 M116 106v49 M156 110v48 M196 115v48 M236 124v48 M276 134v48 M316 147v48 M356 161v48" />
+              <path d="M77 105l39 50 40-45 40 53 40-39 40 58 40-35 40 62 39-34 M77 153l39-47 40 52 40-43 40 57 40-38 40 61 40-34 39 62" />
+            </g>
+            <path d="M395 92v57 M387 140l8 10 8-10" fill="none" stroke="#e97738" stroke-width="2.5" />
+            <text x="408" y="111" fill="#e8b18b" font-size="12" font-family="monospace">Load</text>
+            <text x="77" y="244" fill="#9aa9b8" font-size="11" font-family="monospace">Fixed support</text>
+            <text x="282" y="251" fill="#9aa9b8" font-size="11" font-family="monospace">Deformed shape</text>
+          </svg>
+          <figcaption><span>Cantilever under load</span><span>Workflow illustration · deformation exaggerated</span></figcaption>
+          <ol class="analysis-stages"><li><b>01</b> Model</li><li><b>02</b> Mesh</li><li><b>03</b> Solve & explore</li></ol>
+        </figure>
+      </section>
+      <section class="landing-workflow" aria-label="How FEM Lab works">
+        <div><span>01</span><h2>Define your problem</h2><p>Create geometry or import a supported file. Choose materials, supports and loads.</p></div>
+        <div><span>02</span><h2>Run the analysis</h2><p>Generate finite elements, select an analysis Step, and solve using the local engine.</p></div>
+        <div><span>03</span><h2>Check your answer</h2><p>Inspect fields and plots, compare results, and refine the mesh to check convergence.</p></div>
+      </section>
       {s.startup ? <div class="startup-status" role="status" aria-live="polite"><span>
         {s.startup.phase === 'starting' ? 'Loading the simulation engine… You can edit drafts and browse Recent projects.' : s.startup.phase === 'cancelling' ? 'Cancelling workspace startup…' : s.startup.phase === 'cancelled' ? 'Workspace startup cancelled.' : 'Could not start the workspace.'}
         </span><div class="startup-actions"><Cmd dispatch={dispatch} cmd="workspace.cancelStartup" disabled={s.startup.phase !== 'starting'}>Cancel startup</Cmd>
         <Cmd dispatch={dispatch} cmd="workspace.retryStartup" disabled={s.startup.phase === 'starting' || s.startup.phase === 'cancelling'}>Retry startup</Cmd></div>
       </div> : null}
-      <Cmd dispatch={dispatch} cmd="account.open" disabled={!s.ready} class="tbutton outline">{s.account.uid ? 'Account and AI plans' : 'Sign in for AI'}</Cmd>
-
-      <div class="ask">
-        <input
-          class="ask-field"
-          aria-label="describe the part"
-          data-cmd="chat.send"
-          placeholder="Describe the part — a 1 m steel cantilever, 50×100 mm, 10 kN at the tip…"
-          value={ask}
-          onInput={(e) => setAsk((e.target as HTMLInputElement).value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.preventDefault(), send());
-          }}
-        />
-        <Cmd dispatch={dispatch} cmd="chat.send" class="ask-send" args={{ text: ask }} disabled={!s.ready || ask.trim() === ''} title="chat.send" onRun={send}>
-          Send
-        </Cmd>
-      </div>
-      <div class="ask-note">the Assistant builds it as visible Commands; you can take over at any step</div>
-
+      <section class="landing-ai" aria-labelledby={`landing-ai-title-${instance}`}>
+        <div class="landing-ai-heading"><div><span class="landing-eyebrow">OPTIONAL AI ASSISTANCE</span><h2 id={`landing-ai-title-${instance}`}>Describe the analysis you have in mind.</h2></div><a href={`${docs}assistant/`} target="_blank" rel="noreferrer">How the assistant works ↗</a></div>
+        <p>{hosted ? 'Hosted AI requires sign-in, accepted data-use disclosure and available credits. Local modeling is always free.' : 'This development build can use your own provider key. The public hosted service requires sign-in and credits.'}</p>
+        <div class="ask">
+          <input type="text" name="analysis-description" autoComplete="off" class="ask-field" aria-label="describe the part" aria-describedby={`landing-ai-note-${instance}`} data-cmd={hosted ? 'chat.setDraft' : 'chat.send'} placeholder="For example: a steel cantilever with a downward load at the tip…" value={ask}
+            onInput={(e) => { const text = (e.target as HTMLInputElement).value; setAsk(text); if (!text.trim()) promptStore.clear(); else if (promptStore.read(s.account.uid)) promptStore.save(text, s.account.uid); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.preventDefault(), send()); }} />
+          <Cmd dispatch={dispatch} cmd={needsSignIn ? 'account.open' : hosted ? 'chat.setDraft' : 'chat.send'} class="ask-send" args={{ text: ask }} disabled={!s.ready || ask.trim() === ''} onRun={send}>
+            {needsSignIn ? 'Sign in to continue' : hosted ? 'Review in assistant' : 'Send'}
+          </Cmd>
+        </div>
+        <p class="ask-note" id={`landing-ai-note-${instance}`}>{hosted ? 'This is an unsent draft. Nothing goes to AI until you choose Send in the assistant. AI changes appear as visible Commands you can inspect and undo.' : 'The Assistant builds it as visible Commands; you can take over at any step.'}</p>
+        {draftWarning ? <p class="notes" role="status">{draftWarning}</p> : null}
+      </section>
+      <div id={`start-workspace-${instance}`} class="workspace-intro"><div><span class="landing-eyebrow">YOUR WORKSPACE</span><h2>Pick up a project. Or start something new.</h2></div><a href={`${docs}projects-storage/`} target="_blank" rel="noreferrer">Saving & files ↗</a></div>
       <div class="section">
         <span class="section-head">New project</span>
         <div class="new-project">
-          <input class="mono new-name" aria-label="project name" data-cmd="project.new" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+          <input type="text" name="project-name" autoComplete="off" class="mono new-name" aria-label="project name" data-cmd="project.new" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
           <Cmd dispatch={dispatch} cmd="project.new" opens="model.new" class="apply" args={{ name }} disabled={!s.ready} title="project.new">
             New project
           </Cmd>
@@ -421,27 +487,27 @@ export function Start({ s, dispatch }: { s: StartState; dispatch: Dispatch }) {
         <Cmd dispatch={dispatch} cmd="file.open" class="card" disabled={!s.ready} args={{ picker: true }} title="file.open">
           <b>Open a file</b>
           <span>A femlab/1 file saved from here or from the CLI; it becomes a project when you edit it.</span>
-          <i class="mono cue-cyan">file.open(picker)</i>
+          <i class="cue-cyan">Continue from a saved model →</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="form.open" class="card" disabled={!s.ready} args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp">
           <b>Import Abaqus .inp</b>
           <span>Solid meshes and linear static models with C3D4, C3D8, C3D10 or C3D20 elements, including assemblies. Choose source Length and Force units explicitly.</span>
-          <i class="mono cue-cyan">file.importAbaqus</i>
+          <i class="cue-cyan">Bring a supported analysis →</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="form.open" class="card" disabled={!s.ready} args={{ command: 'geometry.importStep', args: { name: 'body', linearDeflection: '0.1 mm', angularDeflection: '15 deg' } }} title="Import STEP geometry">
           <b>Import STEP geometry</b>
           <span>Convert CAD surfaces into one tessellated Body. Choose physical deflection, then name faces and mesh.</span>
-          <i class="mono cue-cyan">geometry.importStep</i>
+          <i class="cue-cyan">Start from existing geometry →</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" disabled={!s.ready} args={{ panel: 'examples' }}>
           <b>Examples</b>
           <span>Worked benchmarks with reference values, each opened as its own Journal.</span>
-          <i class="mono cue-cyan">panel.toggle(examples)</i>
+          <i class="cue-cyan">Explore worked analyses →</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" disabled={!s.ready} args={{ panel: 'tutorial' }}>
           <b>Tutorials</b>
           <span>Nine guided walks, one Command at a time with the reason for each: a cantilever, a plate with a hole, heat, modes, a convergence study.</span>
-          <i class="mono">panel.toggle(tutorial)</i>
+          <i>Learn by doing →</i>
         </Cmd>
       </div>
 

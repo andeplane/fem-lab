@@ -48,6 +48,15 @@
         ]
       },
       {
+        "source": "/docs/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
         "source": "/signin.html",
         "headers": [
           {

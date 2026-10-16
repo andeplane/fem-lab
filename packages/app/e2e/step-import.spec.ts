@@ -174,7 +174,7 @@ test('@cpu STEP receipt and solved long-name header fit with native keyboard acc
   await expect(page.locator('.saved-chip')).toContainText('saved');
   await expect(page.getByRole('button', { name: 'STEP receipt', exact: true })).toBeVisible();
   const layouts = [];
-  for (const width of [1180, 1199, 1200, 1280, 1399, 1400, 1599, 1699, 1700, 1800, 1899, 1900, 2000, 2099, 2100]) {
+  for (const width of [1180, 1199, 1200, 1280, 1399, 1400, 1599, 1699, 1700, 1800, 1899, 1900, 2000, 2099, 2100, 2199, 2200, 2300]) {
     await page.setViewportSize({ width, height: 1100 });
     const layout = await page.locator('.topbar').evaluate(header => ({
       client: header.clientWidth, scroll: header.scrollWidth,

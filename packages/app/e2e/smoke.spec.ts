@@ -350,13 +350,13 @@ test.describe('@cpu the shell', () => {
       expect((await label.boundingBox())!.width, `command label has no useful room at ${width}px`).toBeGreaterThan(18);
     }
 
-    // Undoing the solve makes Redo an enabled keyboard stop; now every top-bar button can be
-    // reached in DOM order, including actions whose disabled state normally removes them.
+    // Undoing the solve makes Redo an enabled keyboard stop. Walk every native top-bar
+    // control in DOM order, including the editable model name and the Docs navigation link.
     await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
     await expect(page.locator('button[data-cmd="journal.redo"]')).toBeEnabled();
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
-      const stops = page.locator('.topbar button:not(:disabled)');
+      const stops = page.locator('.topbar :is(button, a[href], input:not([type="hidden"]), select):not(:disabled):not([tabindex="-1"]):visible');
       const stopCount = await stops.count();
       await stops.first().focus();
       for (let i = 0; i < stopCount; i++) {
