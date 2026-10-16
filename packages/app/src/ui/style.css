@@ -2896,7 +2896,8 @@ input.model-name:focus-visible {
     order: -1;
     flex: none;
     min-height: 520px;
-    grid-template-rows: minmax(320px, 1fr) 200px;
+    /* Wrapped comparison/status controls belong above the canvas, never over the tabs. */
+    grid-template-rows: minmax(320px, max-content) 200px;
   }
   .panel.tree,
   .panel.props {
@@ -2940,7 +2941,7 @@ input.model-name:focus-visible {
   }
   .centre {
     min-height: 500px;
-    grid-template-rows: minmax(280px, 1fr) 190px;
+    grid-template-rows: minmax(280px, max-content) 190px;
   }
   .panel.tree {
     max-height: 250px;

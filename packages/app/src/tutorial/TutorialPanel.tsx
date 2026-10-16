@@ -235,7 +235,8 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
           </button>
         </div>
         {tourLink}
-        <div class="tutorial-content">
+        {/* A different explanation starts at the top; same-step rerenders keep reading position. */}
+        <div key={`${runner.tutorial.id}:${runner.step}`} class="tutorial-content">
           <h3 class="tutorial-step-title">{step.title}</h3>
           <p class="tutorial-explain">{step.explain}</p>
           {fallback && step.expect ? (
