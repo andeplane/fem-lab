@@ -19,9 +19,19 @@ A 2D idealisation requires compatible sheet geometry; it is not a view setting t
 
 The Geometry add menu is generated from the shape schema. It includes boxes, cylinders, spheres, sheets, extruded sketches, revolved sketches, unions, subtraction, intersection and transformations. `geometry.addBox` is a convenient box Command; `geometry.add` accepts a general shape definition. Coordinates and sizes require [length units](./units.md).
 
+In Properties, the **Shape kind** buttons form an aligned grid that adapts to the panel width. The selected kind stays highlighted; use Tab to reach a choice and Space or Enter to select it. Choosing a kind shows its fields underneath, with nested shapes indented. These edits update the draft through `form.open`; **Add body** records one geometry Command after the required fields are complete.
+
 ```ts
 await fem.geometry.addBox({ name: 'block', size: ['80 mm', '40 mm', '20 mm'] });
 ```
+
+### Preview and place a draft
+
+In **geometry** view, opening `geometry.addBox` or `geometry.add` in Properties draws a cyan, translucent Body with a dashed outline when its arguments are valid. **Draft · not added** identifies this temporary drawing. It uses the same engine geometry as the committed Body, including inline unions, cuts, intersections and transforms. A 2D sheet still requires the matching Model idealisation.
+
+Edit unit-bearing **at** coordinates to position boxes, cylinders and spheres. For rotated or scaled geometry, use the **transform** shape and its translation, rotation in degrees and scale. These edits use `form.open`; they change neither the active Model nor its Journal. The camera remains where you put it while editing. Use **Fit** to frame the draft and existing Bodies together, and orbit to inspect placement.
+
+**Add body** commits exactly one geometry Command. **Cancel** discards the draft; **Revert** restores the form's original values. Changing selection, opening a different form or committing a Model edit clears the old preview. Drafts are view state and are not saved or synced as project geometry. Invalid or incomplete inputs clear the old drawing and show a structured explanation; correct Properties to preview again. Preview calculation runs locally on the CPU in a separate Worker, stops after five seconds, and never runs a Mesh or solve. Complex drafts may exceed that preview limit even when the engine can ultimately add them. Drag handles are not available; use the explicit coordinates and transform fields.
 
 Boxes expose `xmin`, `xmax`, `ymin`, `ymax`, `zmin` and `zmax` face names prefixed by the Body name. Cylinders have side/top/bottom faces. Prefer these names when they express your intended target.
 

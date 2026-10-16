@@ -1,4 +1,5 @@
 import { AccountPanel } from './Account';
+import {ProfileControl} from './Profile';
 // The shell of docs/design/README.md: top bar, blocker banner, Model tree, viewer, Properties,
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
@@ -81,6 +82,11 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   if (e.defaultPrevented) return;
   const meta = e.metaKey || e.ctrlKey;
   const key = e.key.toLowerCase();
+  if(panels['profile']){
+    if(meta&&key==='k'){e.preventDefault();void dispatch({cmd:'panel.toggle',panel:'palette',open:true}).catch(()=>undefined);}
+    else if(e.key==='Escape'){e.preventDefault();void dispatch({cmd:'panel.toggle',panel:'profile',open:false}).catch(()=>undefined);}
+    return;
+  }
   const camera = e.shiftKey && !meta && !e.altKey && !e.repeat && !isEditableTarget(e.target)
     ? CAMERA_SHORTCUTS[e.code as keyof typeof CAMERA_SHORTCUTS]
     : undefined;
@@ -181,7 +187,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         Tutorials
       </Cmd>
       <a class="tbutton docs-link" href={`${import.meta.env.BASE_URL}docs/`} target="_blank" rel="noreferrer">Docs</a>
-      <Cmd dispatch={dispatch} cmd="account.open" class="tbutton account-button" title="Login, AI allowance and subscription" label={s.account.uid ? 'Account' : 'Sign in'}><span class="account-button-label">{s.account.uid ? 'Account' : 'Sign in'}</span><span class="account-button-icon" aria-hidden="true">◉</span></Cmd>
+      <ProfileControl account={s.account} dispatch={dispatch} compact open={s.panels['profile']===true}/>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton outline" args={{ panel: 'assistant' }} pressed={s.panels['assistant'] === true}>
         ✳ Assistant
       </Cmd>
@@ -543,8 +549,10 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
           }
           const legend = parent.querySelector('.legend')?.getBoundingClientRect();
           if (legend?.width) right = Math.min(right, legend.left - box.left - 12);
-          const deformation = parent.querySelector('.deform-bar')?.getBoundingClientRect();
-          if (deformation?.height) bottom = Math.min(bottom, deformation.top - box.top - 12);
+          for (const selector of ['.deform-bar', '.geometry-draft-note']) {
+            const overlay = parent.querySelector(selector)?.getBoundingClientRect();
+            if (overlay?.height) bottom = Math.min(bottom, overlay.top - box.top - 12);
+          }
           return right > 24 && bottom > top + 12 ? { width: box.width, height: box.height, left: 12, right, top, bottom } : null;
         });
       } catch (e) {
@@ -668,9 +676,13 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
       </div> : null}
       {side === 'left' ? <><SolvingCard s={s} dispatch={dispatch} /><ErrorCard s={s} dispatch={dispatch} /></> : null}
       {!comparing ? <div class="probe mono">{probe}</div> : null}
+      {side === 'left' && s.geometryDraft.status !== 'idle' ? <div class={`geometry-draft-note ${s.geometryDraft.status}`} role="status">
+        <strong>{s.geometryDraft.status === 'ready' ? 'Draft · not added' : s.geometryDraft.status === 'pending' ? 'Preparing draft…' : 'Draft unavailable'}</strong>
+        <span>{s.geometryDraft.status === 'error' ? `${s.geometryDraft.error.code}: ${s.geometryDraft.error.cause}${s.geometryDraft.error.where ? ` (${s.geometryDraft.error.where})` : ''}. Correct Properties to preview again.` : 'Edit size and position in Properties. Fit frames the preview. Add body commits it.'}</span>
+      </div> : null}
       {broken ? (
         <div class="hint">{broken}</div>
-      ) : (s.model?.bodies.length ?? 0) === 0 ? (
+      ) : (s.model?.bodies.length ?? 0) === 0 && s.geometryDraft.status === 'idle' ? (
         <div class="hint">
           <b>No geometry yet</b>
           <span>Add a box in Properties, or ask the Assistant. The banner above always says what is missing before Solve can run.</span>
@@ -766,7 +778,10 @@ function DocumentApp(props: AppProps) {
   const started = !!s && s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => active?.query ?? (async () => ({ value: 0, unit: '' })), [active?.query]);
   useEffect(() => {
-    if (started && s && !s.form) store?.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
+    // This runs after paint. A script or first geometry Command may have populated the
+    // Model since the empty workspace rendered; never invent a starter draft over it.
+    const current = store?.state;
+    if (started && current?.model?.bodies.length === 0 && !current.form) store?.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
   }, [started, s?.form, store]);
   useEffect(() => {
     if (!active || !s) return;
@@ -784,8 +799,9 @@ function DocumentApp(props: AppProps) {
   return (
     <>
       {started ? (
-        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
+        <div class={`shell${s.panels['tour'] ? ' with-tour' : ''}`} style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
+          <Tour store={store} dispatch={dispatch} />
           <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
@@ -825,8 +841,6 @@ function DocumentApp(props: AppProps) {
       <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
-      {/* The tour's stops are shell regions, so it waits for the shell. */}
-      {started ? <Tour store={store} /> : null}
     </>
   );
 }

@@ -4,9 +4,13 @@ Local modeling, meshing and solving do not require an account or AI subscription
 
 ## Sign in and review your allowance
 
-Open **Sign in for AI** or **Account and AI plans**. Choose Google or enter your email and open the newest sign-in link in the requesting browser. If the link opens elsewhere, complete the email prompt as needed. A completed login verifies account access; it does not automatically approve free eligibility or establish a unique person.
+Use the sign-in action on home or in the header. Choose Google or enter your email and open the newest sign-in link in the requesting browser. If the link opens elsewhere, complete the email prompt as needed. A completed login verifies account access; it does not automatically approve free eligibility or establish a unique person.
 
-The Account panel shows available, total and reserved credits, the allowance expiry and current billing status. Refresh reads authoritative service state. A disabled claim or purchase button should be read with the accompanying status; repeated clicks or account recreation do not bypass it.
+After sign-in, the home screen becomes your workspace overview, showing your account email and available plan/allowance information alongside local projects. Use the avatar/email control in the header to open your profile menu, then **Account & AI settings** for your identity, AI allowance, subscription and account records. **Sign out** ends hosted access without removing local projects.
+
+The account overview shows available, total and reserved credits, the allowance expiry and current billing status when those values have loaded. Refresh reads authoritative service state. Loading, a failed refresh or missing account data is not a zero-credit balance or proof of a free plan: read the status and retry the refresh before interpreting your allowance. A disabled claim or purchase button should be read with the accompanying status; repeated clicks or account recreation do not bypass it.
+
+Signing in does not synchronize your Models or Recent projects to an account cloud. They remain in this browser/profile unless you save or share files yourself. You can start or reopen local work without signing in; see [projects and storage](./projects-storage.md).
 
 ## What an AI credit means
 

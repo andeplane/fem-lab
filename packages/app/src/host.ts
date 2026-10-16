@@ -26,12 +26,13 @@ import type { TransientInput } from './transient';
 import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
 import type { AbaqusIo } from '@femlab/registry';
 import { browserAbaqusIo } from './abaqus-files';
+import { tourCommands } from './tutorial/tour-state';
 
 /** Static form metadata is shared with the unavailable startup control; no form runs early. */
 export const FORM_OPEN = {
       name: 'form.open',
       execution: 'sessionView',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. For geometry.add/addBox, valid arguments also draw a dashed uncommitted preview in geometry view; edit unit-bearing coordinates or inline transforms to place it, and use view.fit to frame it. An empty command closes the form and discards the preview. Preview never writes the active Model or Journal; Apply remains one engine Command. Use it to propose a Command rather than perform one.',
       schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
       tool: true,
 } satisfies Omit<HostDef, 'run'>;
@@ -502,6 +503,13 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
+    ...tourCommands(store, {
+      preferences: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
+      openCantilever: async () => {
+        const { tutorialHash } = await import('./tutorial/runner');
+        location.hash = tutorialHash('cantilever', 0);
+      },
+    }),
     {
       name: 'palette.resolve',
       execution: 'sessionView',

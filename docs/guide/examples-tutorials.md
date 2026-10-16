@@ -2,6 +2,12 @@
 
 **Examples** load complete bundled Journals, often including a solve. **Tutorials** guide you through Commands and explain why each one is used. They are complementary: inspect an example to see a complete definition, then build a similar Model through a tutorial.
 
+## The modeling tour
+
+The first local workspace entry shows an eight-stage **Modeling tour**, unless you previously dismissed it in this browser. It explains what to build and in which order. Choose **Tutorials → Modeling tour** to reopen it, including from an active tutorial. This pauses the tutorial panel; the tour's final **Build the cantilever tutorial** action starts the cantilever guide at its first step without applying old Journal entries as completed work. No modeling Command runs just from opening either guide.
+
+Dismiss the tour with **Continue on my own**, its close button, or **Escape**. Dismissal never removes a Model or draft. If you already dismissed the older tour, the updated tour does not silently reset that preference; use the Tutorials action to see it.
+
 ## A practical learning path
 
 1. Start with **Cantilever beam** and the cantilever tutorial. Learn Body, Material, face Set, support, Load and Step.

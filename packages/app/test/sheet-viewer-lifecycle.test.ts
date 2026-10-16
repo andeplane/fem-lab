@@ -323,3 +323,34 @@ it.each(['lines', 'triangles'] as const)('uses arriving %s bounds for orthograph
   viewer.resize();
   check(24, 4);
 });
+
+it('keeps draft geometry dashed and outside committed bounds, with deterministic cleanup', () => {
+  const { viewer, objects } = setup();
+  const beforeSurface = objects.mesh.geometry;
+  const camera = viewer.getCamera();
+  const shifted = { ...surface, source: 'geometry' as const, positions: Float32Array.from([10,20,0, 11,20,0, 10,21,0]) };
+  viewer.setGeometryDraft(shifted);
+  const internal = viewer as unknown as { draft: import('three').Group | null; box: import('three').Box3 };
+  const group = internal.draft!;
+  const mesh = group.children[0] as Mesh;
+  const edges = group.children[1] as LineSegments;
+  expect(mesh.material).toMatchObject({ transparent: true, opacity: 0.16, depthWrite: false });
+  expect((edges.material as import('three').Material).type).toBe('LineDashedMaterial');
+  expect(edges.geometry.getAttribute('lineDistance').count).toBeGreaterThan(0);
+  expect(viewer.getCamera()).toEqual(camera);
+  expect(objects.mesh.geometry).toBe(beforeSurface);
+  expect(internal.box.max.x).toBe(1);
+  viewer.fit(); expect(viewer.getCamera().target[0]).toBeGreaterThan(1);
+  const disposeGeometry = vi.spyOn(mesh.geometry, 'dispose');
+  const disposeMaterial = vi.spyOn(mesh.material as import('three').Material, 'dispose');
+  const disposeEdges = vi.spyOn(edges.geometry, 'dispose');
+  viewer.setGeometryDraft(null);
+  expect(internal.draft).toBeNull();
+  expect(disposeGeometry).toHaveBeenCalledOnce(); expect(disposeMaterial).toHaveBeenCalledOnce(); expect(disposeEdges).toHaveBeenCalledOnce();
+  viewer.fit(); expect(viewer.getCamera().target).toEqual([0.5,0.5,0]);
+  viewer.setGeometryDraft({ ...shifted, indices: new Uint32Array() });
+  const outline = internal.draft!.children[1] as LineSegments;
+  expect(outline.geometry.getAttribute('position').count).toBe(6);
+  expect(outline.geometry.getAttribute('position').getX(0)).toBe(10);
+  viewer.setGeometryDraft(null);
+});

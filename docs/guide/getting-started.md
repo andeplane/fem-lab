@@ -2,6 +2,16 @@
 
 You can complete a local analysis without signing in or paying for AI. Open FEM Lab in current Chromium, let the engine finish starting, and keep the capability notes visible if it reports a CPU or single-threaded path. See [browser requirements](./browser-troubleshooting.md) if startup fails.
 
+## Start modeling with the workflow tour
+
+Choose **Start modeling — free** to open a local project. On your first workspace entry in this browser, the **Modeling tour** explains Geometry → Material → Mesh → Constraints → Loads → Step → Solve → Results. Its outlined control stays available in the workspace; the tour does not create engineering definitions or run AI.
+
+An empty new local Model opens the starter Body form with an uncommitted preview. If your Model already contains geometry—because you opened a project, an example or ran a geometry Command—FEM Lab does not add another starter draft. Choose **+ add body** when you want another Body; existing Properties edits are preserved.
+
+Use **Next** and **Back** at your own pace. **Continue on my own**, the close button, or **Escape** dismisses it. That preference is remembered when browser storage is available. To revisit it, choose **Tutorials → Modeling tour**. Reopening does not reset your saved dismissal preference or change the Model.
+
+The final **Build the cantilever tutorial** action opens the existing tutorial at its first step. It runs no modeling Commands until you explicitly choose **Do it for me** or perform the action yourself. Use a new project before starting the tutorial if you want to keep an existing Model; its first step creates a new Model. All of this works without an account or AI.
+
 ## Inspect a solved example
 
 1. Choose **Examples** and open **Cantilever beam** (`cantilever`). Opening an example creates a local project from its Journal; the included solve produces Results.
