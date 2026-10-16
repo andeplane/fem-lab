@@ -6,7 +6,9 @@ import importlib.util
 from pathlib import Path
 import signal
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 spec = importlib.util.spec_from_file_location('gpu_large_preflight', Path(__file__).with_name('gpu-large-preflight.py'))
@@ -130,6 +132,135 @@ class FakeBoundary:
 
 
 class PreflightGuards(unittest.TestCase):
+    def test_exit_observation_reserves_leader_identity_until_cleanup(self):
+        process = SimpleNamespace(pid=42, args=['metadata'], wait=mock.Mock())
+        info = SimpleNamespace(si_code=1, si_status=0)
+        with mock.patch.multiple(probe.os, waitid=mock.Mock(return_value=info),
+                                 P_PID=1, WEXITED=4, WNOHANG=1, WNOWAIT=16, CLD_EXITED=1,
+                                 create=True):
+            self.assertEqual(probe.observe_exit(process, 1), 0)
+            probe.os.waitid.assert_called_once_with(1, 42, 4 | 1 | 16)
+        process.wait.assert_not_called()
+
+    def test_capture_cleans_pipe_holding_descendant_after_leader_exit_and_at_eof(self):
+        for mode in ['pipe-held-until-timeout', 'eof']:
+            with self.subTest(mode=mode):
+                events = []
+                descendant = {'running': True}
+                process = SimpleNamespace(pid=42, args=['metadata'], returncode=None,
+                                          stdout=mock.Mock(), poll=mock.Mock(side_effect=AssertionError('must not reap')))
+                def kill(pgid, sig):
+                    self.assertEqual((pgid, sig), (42, signal.SIGKILL))
+                    events.append('kill-owned-group')
+                    descendant['running'] = False
+                def reap(timeout):
+                    self.assertFalse(descendant['running'])
+                    self.assertEqual(timeout, 2)
+                    events.append('reap-owned-leader')
+                    process.returncode = 0
+                process.wait = mock.Mock(side_effect=reap)
+                selector = mock.Mock()
+                selector.select.return_value = [(None, None)]
+                clock = mock.Mock(side_effect=[0, 2, 2]) if mode != 'eof' else mock.Mock(return_value=0)
+                with mock.patch.object(probe.subprocess, 'Popen', return_value=process), \
+                     mock.patch.object(probe.selectors, 'DefaultSelector', return_value=selector), \
+                     mock.patch.object(probe.time, 'monotonic', clock), \
+                     mock.patch.object(probe.os, 'getpgid', return_value=42), \
+                     mock.patch.object(probe.os, 'getsid', return_value=42), \
+                     mock.patch.object(probe.os, 'killpg', side_effect=kill), \
+                     mock.patch.object(probe.os, 'read', return_value=b''), \
+                     mock.patch.object(probe, 'observe_exit', return_value=0) as observed, \
+                     mock.patch.object(probe, 'group_running', side_effect=lambda pid: descendant['running']):
+                    result = probe.capture(['metadata'], 1, 16)
+                self.assertEqual(events, ['kill-owned-group', 'reap-owned-leader'])
+                self.assertEqual(result['timed_out'], mode != 'eof')
+                self.assertEqual(result['exit_code'], 0)
+                self.assertNotIn('cleanup_error', result)
+                self.assertEqual(observed.call_count, int(mode == 'eof'))
+                process.poll.assert_not_called()
+                process.stdout.close.assert_called_once()
+
+    def test_cleanup_refuses_reaped_or_foreign_session_identity(self):
+        for code, pgid, sid in [(0, 42, 42), (None, 99, 42), (None, 42, 99)]:
+            process = SimpleNamespace(pid=42, returncode=code)
+            with mock.patch.object(probe.os, 'getpgid', return_value=pgid), \
+                 mock.patch.object(probe.os, 'getsid', return_value=sid), \
+                 mock.patch.object(probe.os, 'killpg') as kill, self.assertRaises(probe.Forbidden):
+                probe.stop_owned(process)
+            kill.assert_not_called()
+
+    def test_group_observation_distinguishes_live_owned_zombie_and_foreign_members(self):
+        for state, pgid, sid, expected in [('S', 42, 42, True), ('Z', 42, 42, False),
+                                           ('S', 99, 99, False), ('X', 42, 42, False)]:
+            entries = mock.MagicMock()
+            entries.__enter__.return_value = iter([SimpleNamespace(name='77', path='/proc/77')])
+            stat = '77 (name with ) parentheses) ' + state + ' 1 ' + str(pgid) + ' ' + str(sid)
+            with mock.patch.object(probe.os, 'scandir', return_value=entries), \
+                 mock.patch.object(probe, 'read_file', return_value=stat):
+                self.assertEqual(probe.group_running(42), expected)
+        entries = mock.MagicMock()
+        entries.__enter__.return_value = iter([SimpleNamespace(name='77', path='/proc/77')])
+        with mock.patch.object(probe.os, 'scandir', return_value=entries), \
+             mock.patch.object(probe, 'read_file', return_value='77 (bad session) S 1 42 99'), \
+             self.assertRaises(probe.Forbidden):
+            probe.group_running(42)
+
+    def test_created_cgroup_without_verified_directory_cleanup_is_failed_not_unavailable(self):
+        for failure in ['open-child', 'stat-child']:
+            error = PermissionError(errno.EACCES, 'post-mkdir failure')
+            with mock.patch.object(probe.os, 'open', side_effect=[10, error] if failure == 'open-child' else [10, 11]), \
+                 mock.patch.object(probe.os, 'mkdir') as mkdir, \
+                 mock.patch.object(probe.os, 'fstat', side_effect=error), \
+                 mock.patch.object(probe.os, 'close') as close, \
+                 mock.patch.object(probe.os, 'rmdir') as remove:
+                host = FakeBoundary()
+                host.create = lambda: probe.RealGroup(Path('/delegated'), '/job')
+                result = probe.containment(host)
+            self.assertEqual(result['status'], 'failed')
+            self.assertFalse(result['configuration_and_cleanup_verified'])
+            self.assertTrue(any('cleanup could not be verified' in e for e in result['errors']))
+            self.assertIsNone(host.child)
+            mkdir.assert_called_once()
+            remove.assert_not_called()  # No identity proof means no unsafe removal.
+            close.assert_any_call(10)
+            if failure == 'stat-child':
+                close.assert_any_call(11)
+
+    def test_missing_kill_capability_is_unavailable_only_after_verified_empty_constructor_cleanup(self):
+        identity = SimpleNamespace(st_uid=1001, st_dev=1, st_ino=2)
+        def read(group, name):
+            return '' if name == 'cgroup.procs' else 'populated 0'
+        with mock.patch.object(probe.os, 'open', side_effect=[10, 11, FileNotFoundError(errno.ENOENT, 'no cgroup.kill')]), \
+             mock.patch.object(probe.os, 'mkdir'), mock.patch.object(probe.os, 'fstat', return_value=identity), \
+             mock.patch.object(probe.os, 'geteuid', return_value=1001), \
+             mock.patch.object(probe.os, 'stat', return_value=identity), \
+             mock.patch.object(probe.RealGroup, 'read', read), \
+             mock.patch.object(probe.os, 'close'), mock.patch.object(probe.os, 'rmdir') as remove:
+            host = FakeBoundary()
+            host.create = lambda: probe.RealGroup(Path('/delegated'), '/job')
+            result = probe.containment(host)
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertFalse(result['errors'])
+        self.assertIsNone(host.child)
+        remove.assert_called_once()
+        self.assertEqual(remove.call_args.kwargs, {'dir_fd': 10})
+
+    def test_idle_child_constructor_cleans_owned_process_after_selector_failure(self):
+        for failure in ['selector-create', 'selector-register']:
+            process = SimpleNamespace(pid=42, stdin=mock.Mock(), stdout=mock.Mock())
+            selector = mock.Mock()
+            selector.register.side_effect = RuntimeError('selector registration failed')
+            with mock.patch.object(probe.subprocess, 'Popen', return_value=process), \
+                 mock.patch.object(probe.selectors, 'DefaultSelector',
+                                   side_effect=RuntimeError('selector unavailable') if failure == 'selector-create' else None,
+                                   return_value=selector), \
+                 mock.patch.object(probe, 'stop_owned') as stop, self.assertRaises(RuntimeError):
+                probe.RealChild()
+            stop.assert_called_once_with(process)
+            process.stdin.close.assert_called_once()
+            process.stdout.close.assert_called_once()
+            self.assertEqual(selector.close.call_count, int(failure == 'selector-register'))
+
     def test_only_explicit_manual_mode_is_allowed(self):
         for event in ['push', 'pull_request', 'workflow_call', '', 'workflow_dispatch']:
             for enabled in ['', 'false', '1', 'True', 'true']:

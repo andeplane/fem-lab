@@ -203,22 +203,58 @@ def read_file(path: Path, limit: int = FILE_BYTES) -> str:
     return data.decode('utf-8', errors='replace')
 
 
-def stop_owned(process: subprocess.Popen) -> None:
-    if process.poll() is None:
-        try:
-            if os.getpgid(process.pid) != process.pid:
-                raise Forbidden('refusing to signal a non-owned process group')
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
+def observe_exit(process: subprocess.Popen, seconds: float) -> int:
+    """Observe without reaping: the reserved leader PID prevents PGID reuse."""
+    deadline = time.monotonic() + seconds
+    while True:
+        info = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if info is not None:
+            return info.si_status if info.si_code == os.CLD_EXITED else -info.si_status
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(process.args, seconds)
+        time.sleep(min(0.01, remaining))
+
+
+def group_running(pgid: int) -> bool:
+    """Bounded Linux observation; zombies cannot execute or retain a pipe writer."""
+    deadline = time.monotonic() + 1
+    with os.scandir('/proc') as entries:
+        for count, entry in enumerate(entries):
+            if count >= 32768 or time.monotonic() >= deadline:
+                raise Forbidden('owned-group cleanup observation exceeded its cap')
+            if not entry.name.isdecimal():
+                continue
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    process.wait(timeout=2)
+                fields = read_file(Path(entry.path) / 'stat', 4096).rpartition(') ')[2].split()
+            except FileNotFoundError:
+                continue  # A process exited between directory observation and read.
+            if len(fields) < 4:
+                raise Forbidden('unreadable process identity during owned-group cleanup')
+            if int(fields[2]) == pgid:
+                if int(fields[3]) != pgid:
+                    raise Forbidden('owned process-group session identity changed')
+                if fields[0] not in {'Z', 'X', 'x'}:
+                    return True
+    return False
+
+
+def stop_owned(process: subprocess.Popen) -> None:
+    # No caller polls/waits before this boundary. Even an exited leader stays a
+    # zombie, reserving its PID/session identity until all group members are stopped.
+    if process.returncode is not None:
+        raise Forbidden('cleanup requires the unreaped owned session leader')
+    if os.getpgid(process.pid) != process.pid or os.getsid(process.pid) != process.pid:
+        raise Forbidden('refusing to signal a non-owned process group/session')
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+        deadline = time.monotonic() + 2
+        while group_running(process.pid):
+            if time.monotonic() >= deadline:
+                raise Forbidden('owned process group did not become terminal')
+            time.sleep(0.01)
+    finally:
+        process.wait(timeout=2)  # Reap only our Popen child after group cleanup.
 
 
 class RealChild:
@@ -227,8 +263,13 @@ class RealChild:
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL, start_new_session=True)
         self.pid = self.process.pid
-        self.selector = selectors.DefaultSelector()
-        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.selector = None
+        try:
+            self.selector = selectors.DefaultSelector()
+            self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        except Exception:
+            self.stop()  # Popen already owns a child even if selector setup fails.
+            raise
 
     def message(self) -> dict:
         data = bytearray()
@@ -252,15 +293,22 @@ class RealChild:
         return self.message()
 
     def wait(self) -> int:
-        return self.process.wait(timeout=2)
+        return observe_exit(self.process, 2)
 
     def stop(self) -> None:
+        errors = []
         try:
             stop_owned(self.process)
-        finally:
-            self.selector.close()
-            self.process.stdin.close()
-            self.process.stdout.close()
+        except Exception as error:
+            errors.append(str(error))
+        for resource in [self.selector, self.process.stdin, self.process.stdout]:
+            if resource is not None:
+                try:
+                    resource.close()
+                except Exception as error:
+                    errors.append(str(error))
+        if errors:
+            raise Forbidden('owned idle-child cleanup failed: ' + '; '.join(errors))
 
 
 class RealGroup:
@@ -288,12 +336,16 @@ class RealGroup:
             os.close(fd)
         except Exception as error:
             # Without an open, verified identity we cannot safely remove even this name.
+            removed = False
             try:
                 if self.identity is not None and self.identity.st_uid == os.geteuid():
                     empty_group(self.read('cgroup.procs'), self.read('cgroup.events'))
                     self.remove()
+                    removed = True
             finally:
                 self.close()
+            if not removed:
+                raise Forbidden('created cgroup cleanup could not be verified: ' + str(error)) from error
             if isinstance(error, OSError):
                 capability_error(error)
             raise
@@ -398,7 +450,7 @@ def capture(command: list[str], seconds: float, limit: int) -> dict:
                 data = os.read(process.stdout.fileno(), 4096)
                 if not data:
                     try:
-                        process.wait(timeout=max(0.001, deadline - time.monotonic()))
+                        observe_exit(process, max(0.001, deadline - time.monotonic()))
                     except subprocess.TimeoutExpired:
                         result['timed_out'] = True
                     break
