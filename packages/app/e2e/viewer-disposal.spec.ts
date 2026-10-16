@@ -1,14 +1,12 @@
+import { builtViewerModule } from './fixtures';
 import { expect, test } from '@playwright/test';
 
 test.describe('@cpu viewer resource lifecycle', () => {
   test.setTimeout(120_000);
   test('replaces surfaces and modes without retaining owned GPU resources', async ({ page }) => {
     await page.goto('./');
-    const result = await page.evaluate(async () => {
-      const viewerUrl = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'))
-        .map((link) => link.href)
-        .find((href) => /\/viewer-[^/]+\.js$/.test(href));
-      if (!viewerUrl) throw new Error('the built Viewer module was not preloaded');
+    const result = await page.evaluate(async file => {
+      const viewerUrl = new URL(file, document.baseURI).href;
       const { Viewer } = (await import(viewerUrl)) as {
         Viewer: new (canvas: HTMLCanvasElement) => unknown;
       };
@@ -110,7 +108,7 @@ test.describe('@cpu viewer resource lifecycle', () => {
         eventCount,
         listenerAdds: { click: listenerAdds.click ?? 0, pointermove: listenerAdds.pointermove ?? 0 },
       };
-    });
+    }, builtViewerModule());
 
     expect(result.beforeTeardown.maximumGeometries - result.initialGeometries).toBeLessThanOrEqual(1);
     expect(result.beforeTeardown.ownedDisposals).toBeGreaterThan(2000);

@@ -284,6 +284,18 @@ The same Benchmark run at several mesh sizes to show the error shrinks at the ex
 rate. A Benchmark that only passes at one mesh size is not a Benchmark.
 
 
+## Portable solved project
+
+A `femlab-project/1` artifact contains the ordinary input-only `femlab/1` Model file plus the
+complete retained solve cache, its identity sequence and convergence/adaptation report tables.
+`query.portableProject` captures one owned snapshot under the enclosing checked read stamp.
+Restoration validates an unpublished replacement candidate and preserves solved meshes, f64
+fields and history without re-running procedures. Portable restore preserves the saved result
+ids in a fresh project session; ids are not globally unique across projects. Original file bytes,
+completed host outputs, account ownership and storage I/O belong to the enclosing host bundle.
+Version 1 accepts the exact engine version, eight retained results and 64 MiB UTF-8 JSON.
+See ADR0042 and issue #779.
+
 ## Retained solve instances
 
 An immutable **Result record** owns one successful solve's Step, revision, Model identity,
@@ -349,6 +361,12 @@ STEP conversion. Durable face targets use geometric predicates. See ADR 0029 and
 
 **Account** — One verified Firebase identity mapped to service-owned status, entitlements
 and billing. It is not an engine Model, Session or Journal entry.
+
+**Cloud project** — An Account-owned complete portable project artifact with a service ID,
+revision and change cursor. It can include retained Results, files and completed outputs;
+a ModelFile alone does not imply those are present. Private immutable chunks are committed
+as one revision. Storage quotas use decimal bytes and are independent of AI credits.
+See ADR 0043.
 
 **Merchant mode** — The explicit `pending`, `direct` or `managed` route for new paid
 purchases. It is independent of tax collection mode and does not convert an existing

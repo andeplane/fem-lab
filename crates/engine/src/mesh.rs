@@ -20,7 +20,7 @@ use crate::model::{MesherSettings, Model, SetSource, Sweep};
 use crate::units::{Dim, Length, Q};
 
 /// What a Set selects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub enum SetKind {
     Face,
     Node,
@@ -39,7 +39,8 @@ impl SetKind {
 
 /// One Set resolved against the current Mesh. A face Set also carries the nodes of its faces;
 /// a region Set carries both the nodes and the elements it covers.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedSet {
     pub kind: SetKind,
     pub faces: Vec<Face>,
@@ -62,7 +63,8 @@ impl ResolvedSet {
 }
 
 /// The Mesh plus everything derived with it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BuiltMesh {
     /// Authored labels in dense array order; empty for geometric meshers.
     pub source_labels: crate::imported::SourceLabels,

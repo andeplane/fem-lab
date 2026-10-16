@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
@@ -110,6 +110,12 @@ test.describe('@cpu accessibility and small screens', () => {
       await expect(propInput).toBeFocused();
 
       const resultsTab = page.getByRole('tab', { name: /results/ });
+      // Keep the default first-run tour open: its desktop height adaptation must not
+      // let the viewer's physical drawing surface intercept mobile bottom-tab clicks.
+      if (width === 320) await expect(page.locator('.tour-callout')).toBeVisible();
+      const canvas = (await page.locator('.viewer canvas').boundingBox())!;
+      const bottom = (await page.locator('.centre > section.bottom').boundingBox())!;
+      expect(canvas.y + canvas.height).toBeLessThanOrEqual(bottom.y);
       await resultsTab.click();
       await expect(resultsTab).toHaveAttribute('aria-selected', 'true');
       await assertInside('.centre > section.bottom');

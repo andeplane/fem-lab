@@ -23,6 +23,12 @@ pub struct Valued {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "query")]
 pub enum Query {
+    /// Lossless portable project snapshot, including all retained solved meshes and f64 fields.
+    /// Host storage is separate; capture the checked ReadReply stamp with this owned value.
+    #[serde(rename = "query.portableProject")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "PortableProject"))]
+    PortableProject {},
     /// Everything about the Model in one read: bodies with volumes and materials, imported
     /// face patches with paste-ready naming predicates, named Sets, constraints, loads with
     /// their totals, steps and predecessor links, mesh settings, and the well-posedness warnings
@@ -1308,6 +1314,7 @@ pub struct Capabilities {
 pub enum QueryResult {
     Model(ModelSummary),
     Document(ModelDocument),
+    Project(crate::portable::PortableProject),
     Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
@@ -1450,6 +1457,7 @@ pub fn schema_document() -> serde_json::Value {
         "ack": schemars::schema_for!(Ack),
         "error": schemars::schema_for!(crate::error::Error),
         "modelFile": schemars::schema_for!(crate::journal::ModelFile),
+        "portableProject": schemars::schema_for!(crate::portable::PortableProject),
         "writeRequest": schemars::schema_for!(crate::session::WriteRequest),
         "readRequest": schemars::schema_for!(crate::session::ReadRequest),
         "stamp": schemars::schema_for!(crate::session::Stamp),
