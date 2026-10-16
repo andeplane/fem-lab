@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import schema from '../src/generated/runtime-schema';
 import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
@@ -631,4 +632,44 @@ it('forwards explicit subscription use while preserving legacy direct checkout a
   expect(host.account!.checkout).toHaveBeenCalledTimes(3);
   await expect(registry.dispatch({cmd:'account.changePlan',plan:'studio',purchaseUse:'business'})).rejects.toMatchObject({code:'schema'});
   expect(host.account!.changePlan).not.toHaveBeenCalled();
+});
+
+
+it('binds a transport-free host phase through the same schemas, metadata and router', async () => {
+  const context = { count: 0, reads: 0 };
+  let retired = false;
+  const unavailable = () => new FemError('session.transitioning', 'the actual engine is still starting', 'workspace', 'query.workspaceStatus');
+  const registry = Registry.hostOnly({
+    schema: engineSchema, context,
+    guard: () => { if (retired) throw new FemError('session.expired', 'landing host was published'); },
+    unavailable,
+    hostCommands: [{ name: 'workspace.retryStartup', execution: 'workspace', tool: false,
+      description: 'Retry the owned startup attempt without sending an engine command.',
+      schema: z.object({ attempt: z.number().int().positive() }),
+      run: (input: { attempt: number }, host) => { host.count += input.attempt; return host.count; } }],
+    hostQueries: [{ name: 'query.workspaceStatus', execution: 'workspace', tool: true,
+      description: 'Read the actual host startup status without an engine or model.',
+      schema: z.object({}), run: (_input, host) => { host.reads++; return { attempts: host.count }; } }],
+  });
+  expect(registry.describe('workspace.retryStartup')).toMatchObject({ provider: 'host', execution: 'workspace', journaled: false, schema: { required: ['attempt'] } });
+  expect(registry.list().commands).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'geometry.addBox', provider: 'engine' })]));
+  await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: 2 })).resolves.toBe(2);
+  await expect(registry.query({ query: 'query.workspaceStatus' })).resolves.toEqual({ attempts: 2 });
+  await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: -1 })).rejects.toMatchObject({ code: 'schema', where: 'attempt' });
+  expect(context.count).toBe(2);
+  await expect(registry.dispatch({ cmd: 'model.new', name: 'early' })).rejects.toMatchObject({ code: 'session.transitioning', where: 'workspace' });
+  await expect(registry.query({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.transitioning', where: 'workspace' });
+  await expect(registry.dispatch({ cmd: 'not-a-command' })).rejects.toMatchObject({ code: 'not-found', where: 'cmd' });
+  await expect(registry.query({ query: 'not-a-query' })).rejects.toMatchObject({ code: 'not-found', where: 'query' });
+  const describedCommand = registry.describe('workspace.retryStartup').run!;
+  const describedQuery = registry.describe('query.workspaceStatus').run!;
+  const listedCommand = registry.list().commands.find(command => command.name === 'workspace.retryStartup')!.run!;
+  const listedQuery = registry.list().queries.find(query => query.name === 'query.workspaceStatus')!.run!;
+  retired = true;
+  const retained = [describedCommand({ attempt: 9 }), listedCommand({ attempt: 9 }), describedQuery({}), listedQuery({})];
+  await Promise.all(retained.map(result => expect(result).rejects.toMatchObject({ code: 'session.expired' })));
+  expect(context.reads).toBe(1);
+  await expect(registry.dispatch({ cmd: 'workspace.retryStartup', attempt: 1 })).rejects.toMatchObject({ code: 'session.expired' });
+  await expect(registry.query({ query: 'query.workspaceStatus' })).rejects.toMatchObject({ code: 'session.expired' });
+  expect(context.count).toBe(2);
 });

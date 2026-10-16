@@ -4,11 +4,12 @@ import { AccountPanel } from './Account';
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
 // Playwright smoke can hold the DOM against `registry.list()`.
 import type { CommandDef, EngineSchema, JsonSchema, Registry, Valued } from '@femlab/registry';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, hasDeformation, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
+import type { StartupHost } from '../startup';
 import type { ResultComparison } from '../result-comparison';
 import { lazy } from '../lazy';
 import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
@@ -37,7 +38,8 @@ const TutorialPanel = lazy(() => import('../tutorial').then((m) => m.TutorialPan
 const Tour = lazy(() => import('../tutorial').then((m) => m.Tour));
 const Report = lazy(() => import('./Report').then((m) => m.Report));
 
-export interface AppProps {
+export type AppProps = ActiveAppProps | { startup: StartupHost };
+export interface ActiveAppProps {
   store: Store;
   sessionKey?: string;
   dispatch: Dispatch;
@@ -746,21 +748,34 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
   );
 }
 
-function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, commands = [] }: AppProps) {
+function DocumentApp(props: AppProps) {
+  const active = 'startup' in props ? undefined : props;
+  const store = active?.store;
   const s = useStore(store);
-  const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
-  const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
-
-  // Design state 1: the moment a Model exists the Properties panel shows "New body".
+  const startup = 'startup' in props ? props.startup : undefined;
+  const [, updateStartup] = useState(0);
+  const startupState = startup?.state;
+  useLayoutEffect(() => {
+    if (!startup) return;
+    const redraw = () => updateStartup(revision => revision + 1);
+    const detach = startup.subscribe(redraw);
+    if (startup.state !== startupState) redraw();
+    return detach;
+  }, [startup]);
+  const started = !!s && s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
+  const read = useMemo<Query>(() => active?.query ?? (async () => ({ value: 0, unit: '' })), [active?.query]);
   useEffect(() => {
-    if (started && !s.form) store.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
-  }, [started, s.form, store]);
-
+    if (started && s && !s.form) store?.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
+  }, [started, s?.form, store]);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, dispatch, s.selection.refs.length, s.panels);
+    if (!active || !s) return;
+    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, active.dispatch, s.selection.refs.length, s.panels);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dispatch, s.selection.refs.length, s.panels]);
+  }, [active?.dispatch, s?.selection.refs.length, s?.panels]);
+  if ('startup' in props) return <><div class="start-layout"><Start s={props.startup.state} dispatch={command => props.startup.registry.dispatch(command)} /></div></>;
+  if (!s || !store) return null;
+  const { dispatch, viewer, rightViewer, comparison, commands = [] } = props;
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
   // offers "Tutorials", and a tutorial that begins there has to survive the switch to
@@ -818,14 +833,17 @@ function DocumentApp({ store, dispatch, viewer, rightViewer, comparison, query, 
 /** Conversations and tutorial runs outlive their model's presentation subtree. Their producer
  * lease, rather than mounting/unmounting a component, decides whether execution may continue. */
 export function App(props: AppProps) {
-  const { store, registry, dispatch } = props;
-  const s = useStore(store);
+  const active = 'startup' in props ? undefined : props;
+  const s = useStore(active?.store);
   const assistantOpened = useRef(false);
-  assistantOpened.current ||= s.panels['assistant'] === true;
+  const initialSession = useRef<{ key: string | undefined }>();
+  if (active && !initialSession.current) initialSession.current = { key: active.sessionKey };
+  const key = !active || active.sessionKey === initialSession.current?.key ? 'initial' : `session:${active.sessionKey}`;
+  assistantOpened.current ||= s?.panels['assistant'] === true;
   return <>
-    <DocumentApp key={props.sessionKey} {...props} />
-    {registry ? <TutorialPanel registry={registry} store={store} /> : null}
-    {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
-    {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
+    <DocumentApp key={key} {...props} />
+    {active?.registry && s ? <TutorialPanel registry={active.registry} store={active.store} /> : null}
+    {active?.registry && s && assistantOpened.current ? <AssistantPanel registry={active.registry} store={active.store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+    {active?.registry && s && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={active.store} dispatch={active.dispatch} fixed /> : null}
   </>;
 }

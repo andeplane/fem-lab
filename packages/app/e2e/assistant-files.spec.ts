@@ -7,7 +7,10 @@ test.use({ trace: 'on' });
 test.describe.configure({ retries: 0, timeout: 30_000 });
 
 test('@cpu Assistant file cards use actual deliveries and exclude a cancelled recording', async ({ page }, testInfo) => {
-  const expectedWasm = createHash('sha256').update(await readFile(new URL('../src/generated/wasm/femlab_engine_wasm_bg.wasm', import.meta.url))).digest('hex');
+  const bindingHashes = {
+    portable: createHash('sha256').update(await readFile(new URL('../src/generated/wasm/femlab_engine_wasm_bg.wasm', import.meta.url))).digest('hex'),
+    threaded: createHash('sha256').update(await readFile(new URL('../src/generated/wasm-threads/femlab_engine_wasm_bg.wasm', import.meta.url))).digest('hex'),
+  };
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   const wasm: Promise<{ url: string; sha256: string }>[] = [];
   page.on('response', response => {
@@ -41,6 +44,14 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
+  const runtimeCapabilities = await page.evaluate(() => ({
+    isolated: crossOriginIsolated === true,
+    sharedMemory: typeof SharedArrayBuffer === 'function',
+  }));
+  // Runtime selection precedes solving: requesting one thread still uses the threaded
+  // binary on an isolated origin. Accept only that selected binary, never either hash.
+  const expectedMode = runtimeCapabilities.isolated && runtimeCapabilities.sharedMemory ? 'threaded' : 'portable';
+  const expectedWasm = bindingHashes[expectedMode];
   const source = JSON.parse(await readFile(new URL('../../../crates/engine/benches/journals/cantilever-modal.json', import.meta.url), 'utf8')) as { cmd: Record<string, unknown> }[];
   const commands = source.map(({ cmd }) => cmd.cmd === 'model.new' ? { ...cmd, name: 'assistant-files' }
     : cmd.cmd === 'mesh.set' ? { ...cmd, mesher: { kind: 'lattice', size: { nx: 4, ny: 1, nz: 1 } } }
@@ -138,5 +149,5 @@ test('@cpu Assistant file cards use actual deliveries and exclude a cancelled re
   }, delivery.id);
   expect(refused).toBe('file.not-found');
   await testInfo.attach('expired-file-download.png', { body: await page.screenshot(), contentType: 'image/png' });
-  await testInfo.attach('file-delivery-receipts.json', { body: JSON.stringify({ expectedWasm, runtime, shownFiles, delivery, available, defaultFilename: first.suggestedFilename(), scriptFilename: script.suggestedFilename(), bytes: firstBytes.length, sha256: createHash('sha256').update(firstBytes).digest('hex'), repeatSha256: createHash('sha256').update(repeatedBytes).digest('hex'), refused, cancelledDownloads: downloads, before, edited }, null, 2), contentType: 'application/json' });
+  await testInfo.attach('file-delivery-receipts.json', { body: JSON.stringify({ expectedMode, runtimeCapabilities, bindingHashes, expectedWasm, runtime, shownFiles, delivery, available, defaultFilename: first.suggestedFilename(), scriptFilename: script.suggestedFilename(), bytes: firstBytes.length, sha256: createHash('sha256').update(firstBytes).digest('hex'), repeatSha256: createHash('sha256').update(repeatedBytes).digest('hex'), refused, cancelledDownloads: downloads, before, edited }, null, 2), contentType: 'application/json' });
 });
