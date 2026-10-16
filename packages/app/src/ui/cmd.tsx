@@ -7,10 +7,13 @@ import type { Store, UiState } from '../store';
 
 export type Dispatch = (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>;
 
-export function useStore(store: Store): UiState {
+export function useStore(store: Store): UiState;
+export function useStore(store: Store | undefined): UiState | undefined;
+export function useStore(store: Store | undefined): UiState | undefined {
   const [, redraw] = useReducer((revision: number) => revision + 1, 0);
-  const snapshot = store.state;
+  const snapshot = store?.state;
   useLayoutEffect(() => {
+    if (!store) return;
     const unsubscribe = store.subscribe(() => redraw(undefined));
     // Catch a publication between render and subscription. A different Store is read on
     // its very first render; no state value from the previous activation is retained.

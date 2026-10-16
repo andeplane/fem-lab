@@ -16,8 +16,6 @@
       @keyframes boot-scan{from{transform:translate(-95px,-24px)}to{transform:translate(95px,24px)}}@keyframes boot-pulse{50%{stroke:#b2ffea;filter:drop-shadow(0 0 6px #5cdec4)}}@keyframes boot-shine{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
       @media(prefers-reduced-motion:reduce){.boot *{animation:none!important;transition:none!important}}
     </style>
-    <script src="coi-bootstrap.js"></script>
-    <script src="coi-serviceworker.min.js"></script>
   </head>
   <body>
     <div id="app">
@@ -41,6 +39,6 @@
         </div>
       </div>
     </div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/bootstrap.ts"></script>
   </body>
 </html>

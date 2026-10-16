@@ -19,8 +19,8 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
   const source = 'text' in values ? 'text' : 'path' in values ? 'path' : 'picker';
   const draft = (patch: Record<string, unknown>) => void dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { ...values, ...patch }, keepInitial: true }).catch(() => undefined);
   const chooseMode = (next: 'mesh' | 'static') => {
-    const { unitForce: _force, ...mesh } = values;
-    void dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { ...(next === 'mesh' ? mesh : values), mode: next }, keepInitial: true }).catch(() => undefined);
+    const { unitForce: _force, unitTime: _time, ...mesh } = values;
+    void dispatch({ cmd: 'form.open', command: 'file.importAbaqus', args: { ...(next === 'mesh' ? mesh : { ...values, unitTime: values['unitTime'] ?? '1 s' }), mode: next }, keepInitial: true }).catch(() => undefined);
   };
   const chooseSource = (next: string) => {
     const { text: _text, path: _path, picker: _picker, ...rest } = values;
@@ -30,7 +30,7 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
   const mode = values['mode'];
   const incomplete = !String(values['name'] ?? '').trim() || !String(values['body'] ?? '').trim()
     || (mode !== 'mesh' && mode !== 'static') || !String(values['unitLength'] ?? '').trim()
-    || (mode === 'static' && !String(values['unitForce'] ?? '').trim())
+    || (mode === 'static' && (!String(values['unitForce'] ?? '').trim() || !String(values['unitTime'] ?? '').trim()))
     || (source === 'text' && !String(values['text']).trim());
   const textField = (key: string, label: string, placeholder?: string) => (
     <label class="field">
@@ -46,8 +46,8 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'abaqus', open: false }} title="Close Abaqus import">×</Cmd>
       </div>
       <div class="props-body abaqus-import">
-        <p>Import a flat deck with one Body of C3D4 tetrahedra or full-integration C3D8 hexahedra and named Sets. Maximum input: 16 MiB.</p>
-        <p>PART, ASSEMBLY, INSTANCE, transforms, INCLUDE, OUTPUT blocks, other element types, and binary .odb or .cae databases are unsupported.</p>
+        <p>Load an Abaqus input deck, including parts, transformed instances, material regions and supported solid elements. Maximum deck and include bundle: 16 MiB.</p>
+        <p>If the deck includes other files, choose its submission folder when prompted. Binary .odb and .cae databases need a text .inp export.</p>
         {textField('name', 'Project name')}
         {textField('body', 'Body name')}
         <div class="field">
@@ -57,10 +57,19 @@ export function ImportAbaqus({ s, dispatch }: { s: UiState; dispatch: Dispatch }
               {choice === 'mesh' ? 'Mesh and Sets' : 'Linear static analysis'}
             </button>)}
           </div>
-          {mode === 'mesh' ? <p>Mesh mode accepts nodes, elements and Sets. Decks containing physics require static mode.</p> : mode === 'static' ? <p>Static mode accepts one homogeneous isotropic elastic Material, displacement constraints, one STATIC Step and CLOAD nodal forces. Import creates the final equilibrium model; Abaqus increment history is not reproduced. Unsupported static content fails the import.</p> : null}
+          {mode === 'mesh' ? <p>Mesh mode accepts nodes, elements and Sets. Decks containing physics require static mode.</p> : mode === 'static' ? <p>Import supported linear-static load cases with elastic material regions, displacement constraints, nodal forces and face pressures. The report lists retained analyses and output settings. Unsupported physical behavior stops the import; Abaqus increment history is not reproduced.</p> : null}
+        </div>
+        <div class="field">
+          <span class="field-label">Source unit system</span>
+          <div class="segmented" role="group" aria-label="Abaqus source unit presets">
+            {[['m', 'N'], ['mm', 'N'], ['mm', 'kN']].map(([length, force]) => <button type="button" data-cmd="form.open" onClick={() => draft({ unitLength: `1 ${length}`, ...(mode === 'mesh' ? {} : { mode: 'static', unitForce: `1 ${force}`, unitTime: '1 s' }) })}>
+              {mode === 'mesh' ? length : `${length} · ${force} · s`}
+            </button>)}
+          </div>
         </div>
         {textField('unitLength', 'One source length unit', 'Choose a positive Quantity, e.g. 1 mm or 1 m')}
         {mode === 'static' ? textField('unitForce', 'One source force unit', 'Choose a positive Quantity, e.g. 1 N or 1 kN') : null}
+        {mode === 'static' ? textField('unitTime', 'One source time unit', 'Choose a positive Quantity, e.g. 1 s or 1 ms') : null}
         <p>These source units convert the deck to SI. The toolbar’s display units do not select import units.</p>
         <div class="segmented" role="group" aria-label="Abaqus input source">
           <button type="button" data-cmd="form.open" aria-pressed={source === 'picker'} onClick={() => chooseSource('picker')}>Choose .inp file</button>
@@ -97,11 +106,12 @@ export function AbaqusImportReport({ s, dispatch }: { s: UiState; dispatch: Disp
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'abaqusReport', open: false }} title="Close Abaqus import report">×</Cmd>
       </div>
       <div class="props-body abaqus-import">
-        <p>Body <b class="mono">{report.body}</b> · {report.elementKind} · {report.mode === 'static' ? 'Linear static analysis configured; not solved' : 'Mesh and Sets imported'}</p>
+        <p>Body <b class="mono">{report.body}</b> · {(report.elementKinds?.length ? report.elementKinds : [report.elementKind]).join(', ')} · {report.mode === 'static' ? 'Linear static analyses configured; not solved' : 'Mesh and Sets imported'}</p>
         <table class="mono"><tbody>
           <tr><th>Source nodes</th><td>{report.sourceNodes}</td><th>Active nodes</th><td>{report.activeNodes}</td></tr>
           <tr><th>Source elements</th><td>{report.sourceElements}</td><th>Input bytes</th><td>{report.inputBytes}</td></tr>
           <tr><th>One source length unit</th><td>{quantityText(report.unitLength)}</td><th>One source force unit</th><td>{report.unitForce == null ? 'Not used' : quantityText(report.unitForce)}</td></tr>
+          {report.unitTime == null ? null : <tr><th>One source time unit</th><td>{quantityText(report.unitTime)}</td><th>Density units</th><td>Force × time² / length⁴</td></tr>}
         </tbody></table>
         <p>SI bounds of active nodes at import:</p>
         <table class="mono"><thead><tr><th>Axis</th><th>Minimum</th><th>Maximum</th></tr></thead><tbody>
@@ -111,6 +121,22 @@ export function AbaqusImportReport({ s, dispatch }: { s: UiState; dispatch: Disp
           <p>Material <b class="mono">{report.analysis.material}</b> · Section Set <b class="mono">{report.analysis.sectionElset}</b> · Step <b class="mono">{report.analysis.step}</b></p>
           <p>Constraints: <span class="mono">{report.analysis.constraints.join(', ')}</span>. Loads: <span class="mono">{report.analysis.loads.join(', ')}</span>.</p>
           {report.analysis.finalEquilibriumOnly ? <p>The imported Step represents final equilibrium. Abaqus increment history is not reproduced. Use Solve to compute its Result.</p> : null}
+        </> : null}
+        {report.analysis?.sections?.length ? <>
+          <p>Material regions — shared source nodes remain connected:</p>
+          <table class="mono"><thead><tr><th>Source material</th><th>FEM Lab material</th><th>Region</th><th>Elements</th></tr></thead><tbody>
+            {report.analysis.sections.map(section => <tr key={section.body}><td>{section.sourceMaterial}</td><td>{section.material}</td><td>{section.body}</td><td>{section.elements}</td></tr>)}
+          </tbody></table>
+        </> : null}
+        {(report.analyses?.length ?? 0) > 0 ? <>
+          <p>Imported load cases — solve each named Step to compare:</p>
+          <table class="mono"><thead><tr><th>Source Step</th><th>FEM Lab Step</th><th>Constraints</th><th>Loads</th></tr></thead><tbody>
+            {report.analyses!.map(analysis => <tr key={analysis.step}><td>{analysis.sourceStep}</td><td>{analysis.step}</td><td>{analysis.constraints.length}</td><td>{analysis.loads.length}</td></tr>)}
+          </tbody></table>
+        </> : null}
+        {report.notes?.length ? <>
+          <p>Import notes:</p>
+          <ul>{report.notes.map((note, index) => <li key={index}><span class="mono">{note.source ? `${note.source}:` : ''}{note.line} · *{note.keyword}</span> — {note.cause}</li>)}</ul>
         </> : null}
         <p>Named Set mappings:</p>
         <table class="mono"><thead><tr><th>Kind</th><th>Source name</th><th>Imported name</th><th>Members</th></tr></thead><tbody>

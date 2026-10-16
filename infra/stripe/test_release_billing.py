@@ -42,7 +42,7 @@ class ReleaseBillingTests(unittest.TestCase):
             elif argv[1:5] == ['artifacts', 'docker', 'images', 'describe']:
                 body = json.dumps({'image_summary': {'digest': 'sha256:immutable'}})
             elif argv[1:4] == ['secrets', 'versions', 'list']:
-                body = '1'
+                body = '9' if argv[4] == 'free-eligibility-hmac-key' else '1'
             elif argv[1:4] == ['run', 'revisions', 'describe']:
                 body = json.dumps({'spec': {'containers': [{'env': [{'name': 'BILLING_ENABLED', 'value': 'true'}]}]}})
             elif argv[1:5] == ['run', 'services', 'describe', 'femlab-api']:
@@ -82,6 +82,7 @@ class ReleaseBillingTests(unittest.TestCase):
             env = next(value for value in command if value.startswith('--set-env-vars='))
             secrets = next(value for value in command if value.startswith('--set-secrets='))
             self.assertIn('APP_RETURN_ORIGIN=https://femlab.app', env)
+            self.assertIn('FREE_ELIGIBILITY_HMAC_KEY=free-eligibility-hmac-key:1', secrets)
             for name, value in binding['env'].items():
                 self.assertIn(name + '=' + value, env)
             for name, value in binding['secrets'].items():

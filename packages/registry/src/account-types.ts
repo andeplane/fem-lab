@@ -1,10 +1,19 @@
+import type {PublicCreditUnit} from './credit-units';
 /** Public host/account state. Tokens, provider keys and payment customer IDs are never included. */
 export type AccountPlan='free'|'plus'|'pro'|'studio';
 /** Declared use of a subscription, fixed for its lifetime. */
 export type PurchaseUse='personal'|'business';
+/** Server-reviewed free access. Missing or unavailable status never authorizes a claim. */
+export interface FreeAllowance {
+  status:'review-required'|'eligible'|'claimed'|'revoked'|'paid'|'unavailable';
+  credits:number;periodStartsAt:string;periodEndsAt:string;
+}
 export interface AccountInfo {
+  /** Applies to usage and freeAllowance; absent on legacy hosts using weighted-token credits. */
+  creditUnit?:PublicCreditUnit;
   id:string;email:string;createdAt:string;status:'active';billingAvailable?:boolean;
   usage?:{plan:AccountPlan;totalCredits:number;availableCredits:number;reservedCredits:number;periodEndsAt:string;models:string[];maxOutput:number;contextLimit:number;tariffVersion:string};
+  freeAllowance?:FreeAllowance;
   billing?:{available:boolean;
     /** Owned customer management is independent of new sales and financial-review freezes. Absent on older hosts. */
     canManage?:boolean;
@@ -18,6 +27,7 @@ export interface AccountServices {
   signIn(method:'google'|'email',email?:string):Promise<void>;
   signOut():Promise<void>;
   refresh():Promise<void>;
+  claimFreeAllowance():Promise<void>;
   checkout(plan:Exclude<AccountPlan,'free'>,purchaseUse?:PurchaseUse):Promise<void>;
   portal():Promise<void>;
   changePlan(plan:Exclude<AccountPlan,'free'>):Promise<void>;

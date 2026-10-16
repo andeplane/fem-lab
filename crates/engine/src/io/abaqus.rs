@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use super::abaqus_deck::DeckRecord;
 use crate::command::{
     Command, Formulation, IdealisationSpec, ImportedElement, ImportedElementKind, ImportedFace, ImportedMeshSpec,
     ImportedNodeSpec, ImportedProvenance, MesherSpec,
@@ -17,7 +18,6 @@ use crate::units::{Length, Q};
 
 pub const MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_ENTITIES: usize = 250_000;
 const MAX_MEMBERSHIPS: usize = 1_000_000;
 pub const CONVERSION_VERSION: &str = "abaqus-mesh/2";
 const SUGGESTION: &str = "query.convertAbaqus with a supported deck and explicit unitLength";
@@ -293,8 +293,8 @@ pub(crate) fn scalar(text: &str, line: usize, keyword: &str, field: &str, scale:
     value.ok_or_else(|| malformed(line, keyword, field, format!("'{text}' must convert to a finite numeric value")))
 }
 
-pub(crate) fn fields<'a>(record: Record<'a>, keyword: &str, min: usize, max: usize) -> Result<Vec<&'a str>, Error> {
-    let fields = split_fields(record.text, record.line, keyword)?;
+pub(crate) fn fields<'a>(record: &'a DeckRecord, keyword: &str, min: usize, max: usize) -> Result<Vec<&'a str>, Error> {
+    let fields: Vec<_> = record.fields.iter().map(String::as_str).collect();
     if fields.len() < min || fields.len() > max {
         return Err(malformed(
             record.line,
@@ -340,11 +340,14 @@ pub(crate) struct Active {
 impl Active {
     pub(crate) fn finish(&self) -> Result<(), Error> {
         if !self.pending.is_empty() {
-            return Err(malformed(
-                self.keyword.line,
-                "ELEMENT",
-                "connectivity",
-                "incomplete continued element connectivity",
+            return Err(with_source(
+                malformed(
+                    self.pending_line.unwrap_or(self.keyword.line),
+                    "ELEMENT",
+                    "connectivity",
+                    "incomplete continued element connectivity",
+                ),
+                self.pending_source.as_deref().or(self.keyword.source.as_deref()),
             ));
         }
         let requires_data = match self.section {
@@ -352,11 +355,14 @@ impl Active {
             Section::Nodes { .. } | Section::Elements { .. } | Section::Set { .. } | Section::Surface { .. } => true,
         };
         if requires_data && self.records == 0 {
-            return Err(malformed(
-                self.keyword.line,
-                &self.keyword.name,
-                "data",
-                "this keyword requires at least one data record",
+            return Err(with_source(
+                malformed(
+                    self.keyword.line,
+                    &self.keyword.name,
+                    "data",
+                    "this keyword requires at least one data record",
+                ),
+                self.keyword.source.as_deref(),
             ));
         }
         Ok(())
@@ -377,6 +383,30 @@ pub(crate) struct Builder {
     pub(super) element_sources: BTreeMap<u32, Arc<str>>,
     pub(super) set_sources: BTreeMap<(bool, String), BTreeMap<u32, Arc<str>>>,
     pub(super) surface_sources: BTreeMap<String, BTreeMap<ImportedFace, Arc<str>>>,
+}
+
+pub(crate) enum MeshKeyword {
+    Heading,
+    Preprint,
+    Nodes,
+    Elements,
+    NodeSet,
+    ElementSet,
+    Surface,
+}
+impl MeshKeyword {
+    pub(super) fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "HEADING" => Self::Heading,
+            "PREPRINT" => Self::Preprint,
+            "NODE" => Self::Nodes,
+            "ELEMENT" => Self::Elements,
+            "NSET" => Self::NodeSet,
+            "ELSET" => Self::ElementSet,
+            "SURFACE" => Self::Surface,
+            _ => return None,
+        })
+    }
 }
 
 impl Builder {
@@ -414,13 +444,13 @@ impl Builder {
         }
     }
 
-    pub(crate) fn start(&mut self, keyword: Keyword) -> Result<Active, Error> {
-        let section = match keyword.name.as_str() {
-            "HEADING" => {
+    pub(crate) fn start(&mut self, kind: MeshKeyword, keyword: Keyword) -> Result<Active, Error> {
+        let section = match kind {
+            MeshKeyword::Heading => {
                 keyword.only(&[])?;
                 Section::Heading
             }
-            "PREPRINT" => {
+            MeshKeyword::Preprint => {
                 keyword.only(&["ECHO", "MODEL", "HISTORY", "CONTACT"])?;
                 let mut settings = BTreeMap::new();
                 for key in keyword.parameters.keys() {
@@ -437,7 +467,7 @@ impl Builder {
                 self.preprint.push(settings);
                 Section::Preprint
             }
-            "NODE" => {
+            MeshKeyword::Nodes => {
                 keyword.only(&["NSET", "SYSTEM"])?;
                 if keyword.value("SYSTEM")?.is_some_and(|system| system != "R") {
                     return Err(unsupported(
@@ -450,14 +480,14 @@ impl Builder {
                 let set = keyword.value("NSET")?.map(|s| name(s, keyword.line, "NODE", "NSET")).transpose()?;
                 Section::Nodes { set }
             }
-            "ELEMENT" => {
+            MeshKeyword::Elements => {
                 keyword.only(&["TYPE", "ELSET"])?;
                 let kind = element_kind(&keyword)?;
                 let set = keyword.value("ELSET")?.map(|s| name(s, keyword.line, "ELEMENT", "ELSET")).transpose()?;
                 Section::Elements { kind, set }
             }
-            "NSET" | "ELSET" => self.start_set(&keyword)?,
-            "SURFACE" => {
+            MeshKeyword::NodeSet | MeshKeyword::ElementSet => self.start_set(&keyword)?,
+            MeshKeyword::Surface => {
                 keyword.only(&["NAME", "TYPE", "INTERNAL"])?;
                 if keyword.value("TYPE")?.is_some_and(|v| v != "ELEMENT") {
                     return Err(unsupported(
@@ -478,14 +508,6 @@ impl Builder {
                 }
                 self.surfaces.insert(set.clone(), (keyword.line, BTreeMap::new()));
                 Section::Surface { name: set }
-            }
-            _ => {
-                return Err(unsupported(
-                    keyword.line,
-                    &keyword.name,
-                    "keyword",
-                    format!("*{} is outside the supported mesh subset; no analysis data is discarded", keyword.name),
-                ))
             }
         };
         Ok(Active { keyword, section, records: 0, pending: Vec::new(), pending_line: None, pending_source: None })
@@ -540,16 +562,16 @@ impl Builder {
         Ok(Section::Set { nodes, name: set, generate })
     }
 
-    pub(crate) fn record(&mut self, active: &mut Active, record: Record<'_>, scale: f64) -> Result<(), Error> {
+    pub(crate) fn record(&mut self, active: &mut Active, record: &DeckRecord, scale: f64) -> Result<(), Error> {
         let keyword = active.keyword.name.as_str();
         match &active.section {
-            Section::Heading => self.headings.push(record.text.to_string()),
+            Section::Heading => self.headings.push(record.raw.clone()),
             Section::Preprint | Section::SetFromElements => {
                 return Err(malformed(record.line, keyword, "data", "this keyword accepts no data records"));
             }
             Section::Nodes { set } => {
                 let values = fields(record, "NODE", 2, 4)?;
-                let id = label(values[0], record.line, "NODE", "label")?;
+                let id = values[0].parse::<u32>().expect("record collection validates node labels");
                 if self.nodes.contains_key(&id) {
                     return Err(malformed(
                         record.line,
@@ -557,9 +579,6 @@ impl Builder {
                         "label",
                         format!("source node {id} is already defined"),
                     ));
-                }
-                if self.nodes.len() == MAX_ENTITIES {
-                    return Err(malformed(record.line, "NODE", "count", "source exceeds 250000 nodes"));
                 }
                 let mut at = [Q::new(0.0, "m"), Q::new(0.0, "m"), Q::new(0.0, "m")];
                 for (axis, text) in values.iter().skip(1).enumerate() {
@@ -572,18 +591,17 @@ impl Builder {
                     );
                 }
                 self.nodes.insert(id, (ImportedNodeSpec { label: id, at }, record.line));
-                if let Some(source) = record.source {
+                if let Some(source) = &record.source {
                     self.node_sources.insert(id, source.clone());
                 }
                 if let Some(set) = set {
                     self.reserve_members(1, record.line, "NODE")?;
-                    self.append_members(true, set, vec![id], record.line, record.source);
+                    self.append_members(true, set, vec![id], record.line, record.source.as_ref());
                 }
             }
             Section::Elements { kind, set } => {
                 let arity = kind.geometry().n_nodes();
-                let mut values: Vec<String> =
-                    split_fields(record.text, record.line, "ELEMENT")?.into_iter().map(str::to_string).collect();
+                let mut values = record.fields.clone();
                 let continues = values.last().is_some_and(String::is_empty);
                 if continues {
                     values.pop();
@@ -596,7 +614,7 @@ impl Builder {
                     active.pending = values;
                     active.pending_line.get_or_insert(record.line);
                     if active.pending_source.is_none() {
-                        active.pending_source = record.source.cloned();
+                        active.pending_source = record.source.clone();
                     }
                     return Ok(());
                 }
@@ -608,30 +626,18 @@ impl Builder {
                         format!("expected {} fields, got {}", arity + 1, values.len()),
                     ));
                 }
-                let source = active.pending_source.take().or_else(|| record.source.cloned());
-                let record = Record {
-                    line: active.pending_line.take().unwrap_or(record.line),
-                    text: record.text,
-                    source: source.as_ref(),
-                };
-                let id = label(&values[0], record.line, "ELEMENT", "label")?;
+                let source = active.pending_source.take().or_else(|| record.source.clone());
+                let line = active.pending_line.take().unwrap_or(record.line);
+                let id = values[0].parse::<u32>().expect("record collection validates element labels");
                 if self.elements.contains_key(&id) {
-                    return Err(malformed(
-                        record.line,
-                        "ELEMENT",
-                        "label",
-                        format!("source element {id} is already defined"),
-                    ));
-                }
-                if self.elements.len() == MAX_ENTITIES {
-                    return Err(malformed(record.line, "ELEMENT", "count", "source exceeds 250000 elements"));
+                    return Err(malformed(line, "ELEMENT", "label", format!("source element {id} is already defined")));
                 }
                 let mut nodes = Vec::with_capacity(arity);
                 for (index, value) in values.iter().skip(1).enumerate() {
-                    let node = label(value, record.line, "ELEMENT", &format!("element {id} node {}", index + 1))?;
+                    let node = label(value, line, "ELEMENT", &format!("element {id} node {}", index + 1))?;
                     if nodes.contains(&node) {
                         return Err(malformed(
-                            record.line,
+                            line,
                             "ELEMENT",
                             "connectivity",
                             format!("source element {id} repeats node {node}"),
@@ -639,13 +645,13 @@ impl Builder {
                     }
                     nodes.push(node);
                 }
-                self.elements.insert(id, (ImportedElement { label: id, kind: *kind, nodes }, record.line));
-                if let Some(source) = record.source {
+                self.elements.insert(id, (ImportedElement { label: id, kind: *kind, nodes }, line));
+                if let Some(source) = &source {
                     self.element_sources.insert(id, source.clone());
                 }
                 if let Some(set) = set {
-                    self.reserve_members(1, record.line, "ELEMENT")?;
-                    self.append_members(false, set, vec![id], record.line, record.source);
+                    self.reserve_members(1, line, "ELEMENT")?;
+                    self.append_members(false, set, vec![id], line, source.as_ref());
                 }
             }
             Section::Set { nodes, name: set, generate } => {
@@ -702,7 +708,7 @@ impl Builder {
                     self.memberships += members.len();
                     members
                 };
-                self.append_members(*nodes, set, members, record.line, record.source);
+                self.append_members(*nodes, set, members, record.line, record.source.as_ref());
             }
             Section::Surface { name: set } => {
                 let values = fields(record, "SURFACE", 2, 2)?;
@@ -745,7 +751,7 @@ impl Builder {
                 let (_, surface) = self.surfaces.get_mut(set).expect("surface created by its keyword");
                 for element in elements {
                     let face = ImportedFace { element, face };
-                    if let Some(source) = record.source {
+                    if let Some(source) = &record.source {
                         self.surface_sources
                             .entry(set.clone())
                             .or_default()
@@ -763,7 +769,7 @@ impl Builder {
 
 pub(super) fn with_source(error: Error, source: Option<&str>) -> Error {
     if let Some(source) = source {
-        if error.where_.as_deref().is_some_and(|at| at.starts_with(&format!("{source}: "))) {
+        if error.where_.as_deref().is_some_and(|at| at.starts_with(&format!("{source}: ")) || at.contains(": line ")) {
             return error;
         }
         let at = error.where_.as_deref().unwrap_or("input").to_string();
@@ -824,58 +830,18 @@ impl Builder {
     pub(crate) fn finish_source(
         self,
         body: &str,
-        digest: &str,
         scale: f64,
         regions: BTreeMap<String, Vec<u32>>,
-        provenance: Option<Box<ImportedProvenance>>,
+        provenance: Box<ImportedProvenance>,
     ) -> Result<MeshDeck, Error> {
         if self.nodes.is_empty() || self.elements.is_empty() {
             return Err(malformed(1, "INPUT", "mesh", "a mesh deck requires nodes and elements"));
         }
-        for (element, line) in self.elements.values() {
-            for (index, node) in element.nodes.iter().enumerate() {
-                if !self.nodes.contains_key(node) {
-                    return Err(with_source(
-                        malformed(
-                            *line,
-                            "ELEMENT",
-                            &format!("element {} node {}", element.label, index + 1),
-                            format!("source node {node} is not defined"),
-                        ),
-                        self.element_sources.get(&element.label).map(Arc::as_ref),
-                    ));
-                }
-            }
-        }
-        for (keyword, sets, nodes) in [("NSET", &self.node_sets, true), ("ELSET", &self.element_sets, false)] {
-            for (set, members) in sets {
-                for (&member, &line) in &members.members {
-                    let exists =
-                        if nodes { self.nodes.contains_key(&member) } else { self.elements.contains_key(&member) };
-                    if !exists {
-                        return Err(with_source(
-                            malformed(
-                                line,
-                                keyword,
-                                &format!("Set {set} member"),
-                                format!("source label {member} is not defined"),
-                            ),
-                            self.set_sources.get(&(nodes, set.clone())).and_then(|m| m.get(&member)).map(Arc::as_ref),
-                        ));
-                    }
-                }
-            }
-        }
+        // The typed normalizer has resolved every connectivity and Set member before this
+        // finalizer; no entity is removed after those checked lookups.
         for (set, (_, members)) in &self.surfaces {
             for (member, line) in members {
-                let (element, _) = self.elements.get(&member.element).ok_or_else(|| {
-                    malformed(
-                        *line,
-                        "SURFACE",
-                        &format!("surface {set}"),
-                        format!("source element {} is not defined", member.element),
-                    )
-                })?;
+                let element = &self.elements[&member.element].0;
                 let maximum = element.kind.geometry().n_faces() as u8;
                 if member.face > maximum {
                     return Err(with_source(
@@ -910,16 +876,7 @@ impl Builder {
             surfaces: self.surfaces.into_iter().map(|(name, (_, faces))| (name, faces.into_keys().collect())).collect(),
             node_targets: Vec::new(),
             regions,
-            provenance: provenance.or_else(|| {
-                Some(Box::new(ImportedProvenance {
-                    sha256: digest.to_string(),
-                    conversion_version: CONVERSION_VERSION.to_string(),
-                    node_identities: BTreeMap::new(),
-                    element_identities: BTreeMap::new(),
-                    source_files: BTreeMap::new(),
-                    source_name: None,
-                }))
-            }),
+            provenance: Some(provenance),
         };
         let checked = crate::imported::source(&source).map_err(|error| {
             let source = error_source(&error, &self.node_sources, &self.element_sources);
@@ -1159,6 +1116,15 @@ mod tests {
         records.keyword(first)
     }
 
+    fn data(text: &str) -> DeckRecord {
+        DeckRecord {
+            line: 2,
+            raw: text.into(),
+            fields: split_fields(text, 2, "INPUT").unwrap().into_iter().map(str::to_string).collect(),
+            source: None,
+        }
+    }
+
     #[test]
     fn serialized_byte_counter_enforces_exact_bound_without_copying_data() {
         let mut counter = BoundedCount { bytes: 0, limit: 4 };
@@ -1269,12 +1235,9 @@ mod tests {
             assert_eq!(scalar(text, 5, "NODE", "x", 0.001).unwrap().to_bits(), 0.0f64.to_bits());
         }
         assert_eq!(scalar("1E308", 5, "NODE", "x", 10.0).unwrap_err().code, ErrorCode::Schema);
-        assert_eq!(fields(Record { line: 2, text: "1,0,,", source: None }, "NODE", 2, 4).unwrap(), ["1", "0", "", ""]);
+        assert_eq!(fields(&data("1,0,,"), "NODE", 2, 4).unwrap(), ["1", "0", "", ""]);
         for text in ["1", "1,0,0,0,0"] {
-            assert_eq!(
-                fields(Record { line: 2, text, source: None }, "NODE", 2, 4).unwrap_err().where_.as_deref(),
-                Some("line 2 *NODE record")
-            );
+            assert_eq!(fields(&data(text), "NODE", 2, 4).unwrap_err().where_.as_deref(), Some("line 2 *NODE record"));
         }
     }
 
@@ -1303,6 +1266,25 @@ mod tests {
     }
 
     #[test]
+    fn error_origin_lookup_falls_back_only_when_a_source_label_is_not_identified() {
+        let nodes = BTreeMap::from([(10, Arc::<str>::from("Nodes.inp"))]);
+        let elements = BTreeMap::from([(90, Arc::<str>::from("Elements.inp"))]);
+        for (path, expected) in [
+            ("mesher.nodes[10].at", Some("Nodes.inp")),
+            ("mesher.elements[90].nodes", Some("Elements.inp")),
+            ("mesher.nodes[11].at", None),
+            ("mesher.nodes[bad]", Some("Elements.inp")),
+            ("mesher.nodes[10", Some("Elements.inp")),
+            ("mesh", Some("Elements.inp")),
+        ] {
+            assert_eq!(error_source(&Error::schema("bad source").at(path), &nodes, &elements), expected);
+        }
+        assert_eq!(error_source(&Error::schema("bad source"), &nodes, &elements), None);
+        let located = with_source(Error::schema("bad source").at("line 3 *NODE coordinate"), Some("Nodes.inp"));
+        assert_eq!(with_source(located.clone(), Some("Nodes.inp")), located);
+    }
+
+    #[test]
     fn membership_budget_is_checked_before_range_or_reference_allocation() {
         let mut builder = Builder { memberships: MAX_MEMBERSHIPS - 2, ..Builder::default() };
         builder.room_for(2, 4, "NSET").unwrap();
@@ -1311,5 +1293,12 @@ mod tests {
         assert_eq!(builder.memberships, MAX_MEMBERSHIPS);
         assert_eq!(builder.reserve_members(1, 5, "NSET").unwrap_err().code, ErrorCode::Schema);
         assert_eq!(builder.room_for(usize::MAX, 6, "NSET").unwrap_err().code, ErrorCode::Schema);
+    }
+
+    #[test]
+    fn deeper_alternate_record_sources_survive_outer_owner_annotations() {
+        let original = with_source(malformed(7, "NODE", "coordinate", "nonfinite coordinate"), Some("Data/Nodes.inp"));
+        let wrapped = with_source(original.clone(), Some("Parts/Owner.inp"));
+        assert_eq!(wrapped, original);
     }
 }

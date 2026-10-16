@@ -65,6 +65,16 @@ describe('panelsReducer', () => {
     expect(b['tree.menu.body:b']).toBe(true);
     expect(panelsReducer(initialState.panels, 'tree.geometry')['tree.geometry']).toBe(false);
   });
+
+  it('switches between the workflow guide and tutorial without two competing runners', () => {
+    const tour = panelsReducer({ tutorial: true, assistant: true }, 'tour', true);
+    expect(tour).toEqual({ tutorial: false, tour: true, assistant: true });
+    const tutorial = panelsReducer(tour, 'tutorial');
+    expect(tutorial).toEqual({ tutorial: true, tour: false, assistant: true });
+    expect(panelsReducer(tutorial, 'tutorial', false)).toEqual({ tutorial: false, tour: false, assistant: true });
+    expect(panelsReducer({ profile: true, tutorial: false }, 'tutorial', true)).toEqual({ profile: false, tutorial: true });
+    expect(panelsReducer({ tour: true }, 'profile', true)['tour']).toBe(false);
+  });
 });
 
 describe('visibilityReducer', () => {

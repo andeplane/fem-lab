@@ -6,7 +6,7 @@ import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DB_NAME, HANDLES, JOURNALS, PROJECTS, REVISIONS, openDb, tx, type ProjectMeta } from '../src/db';
 import { indexedDbAtomicProjects } from '../src/project-repository';
-import { RESTORING, forgetHandle, recallHandle, rememberHandle, rememberedFolder, reopenRemembered, type Breadcrumbs, type DirHandle } from '../src/ai/project';
+import { RESTORING, forgetHandle, recallHandle, recentFolder, rememberHandle, rememberedFolder, reopenRemembered, type Breadcrumbs, type DirHandle } from '../src/ai/project';
 import { indexedDbStore, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
@@ -58,11 +58,13 @@ describe('the femlab database', () => {
     const handle = { kind: 'directory', name: 'corbel' } as unknown as DirHandle;
     await rememberHandle(handle, factory);
     expect(await recallHandle(factory)).toMatchObject({ name: 'corbel' });
+    expect(await recentFolder(factory)).toEqual({ name: 'corbel' });
     // …and the projects store is still there and still usable, which is the half that used to fail
     await indexedDbAtomicProjects(factory).update('a', () => ({ id: 'a', generation: 'fixture', version: '0', meta: { id: 'a', name: 'a', at: 1, createdAt: 1, commands: 2, hash: null, thumbnail: null }, cmds: CMDS }));
     expect((await indexedDbAtomicProjects(factory).read('a'))?.cmds).toEqual(CMDS);
     await forgetHandle(factory);
     expect(await recallHandle(factory)).toBeNull();
+    expect(await recentFolder(factory)).toBeNull();
   });
 
   it('migrates the one autosave slot of a version-1 database into a project, once', async () => {
@@ -254,6 +256,14 @@ describe('a remembered project folder', () => {
     expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 5 });
   });
 
+  it('can remember a new explicit selection with the same name as a previously failed restore', async () => {
+    const store = crumbs({ [RESTORING]: 'corbel' });
+    await rememberHandle(dirHandle('corbel'), factory, () => 8, store);
+    expect(store.all).toEqual({});
+    expect(await recallHandle(factory, store)).toMatchObject({ kind: 'directory', name: 'corbel' });
+    expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 8 });
+  });
+
   it('drops a handle an older build left without a descriptor beside it', async () => {
     await tx(factory, HANDLES, 'readwrite', (s) => s.put(dirHandle('orphan'), 'folder'));
     expect(await rememberedFolder(factory)).toBeNull();
@@ -282,4 +292,32 @@ describe('a remembered project folder', () => {
     expect(await handleKeys()).toEqual([]);
     expect(store.all).toEqual({});
   });
+  it('does not report handle persistence when the transaction aborts after request success', async () => {
+    const store = crumbs({ [RESTORING]: 'aborted' });
+    const put = IDBObjectStore.prototype.put;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, value, key) {
+      const request = put.call(this, value, key);
+      if (this.name === HANDLES && key === 'folder:info') request.addEventListener('success', () => this.transaction.abort(), { once: true });
+      return request;
+    });
+    try { await expect(rememberHandle(dirHandle('aborted'), factory, () => 8, store)).rejects.toMatchObject({ name: 'AbortError' }); }
+    finally { spy.mockRestore(); }
+    expect(await handleKeys()).toEqual([]);
+    expect(store.all).toEqual({ [RESTORING]: 'aborted' });
+  });
+
+  it('does not report forgetting when the final successful delete is rolled back', async () => {
+    await rememberHandle(dirHandle('kept'), factory, () => 5);
+    const remove = IDBObjectStore.prototype.delete;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (this: IDBObjectStore, key) {
+      const request = remove.call(this, key);
+      if (this.name === HANDLES && key === 'folder:info') request.addEventListener('success', () => this.transaction.abort(), { once: true });
+      return request;
+    });
+    try { await expect(forgetHandle(factory, crumbs())).rejects.toMatchObject({ name: 'AbortError' }); }
+    finally { spy.mockRestore(); }
+    expect(await handleKeys()).toEqual(['folder', 'folder:info']);
+    expect(await rememberedFolder(factory)).toEqual({ name: 'kept', at: 5 });
+  });
+
 });

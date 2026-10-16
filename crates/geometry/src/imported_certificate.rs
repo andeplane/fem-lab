@@ -1032,7 +1032,7 @@ fn certify_pair(a: &Cell, b: &Cell) -> bool {
 /// Quadratic maps use polynomial Sylvester minors (Tet10 composed with Duffy),
 /// exact Bernstein image bounds, and identically implicit face quadrics. Shared
 /// entity identity checks every corner/mid-edge label and its reference incidence.
-/// See ADR0033 for the sufficient-condition limits; arbitrary implicit faces beyond
+/// See ADR0036 for the sufficient-condition limits; arbitrary implicit faces beyond
 /// the separator family may be inconclusive despite valid geometry.
 /// Each pair gets at most 4096 proof boxes, split at most 12 times in fixed xyz
 /// order. Broad-phase memory is linear; worst-case pair work remains quadratic.

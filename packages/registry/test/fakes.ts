@@ -85,7 +85,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
   let open: ProjectMeta | null = PROJECT;
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
   return {
-    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
+    account: {state:vi.fn(()=>EMPTY_ACCOUNT),signIn:vi.fn(async()=>undefined),signOut:vi.fn(async()=>undefined),refresh:vi.fn(async()=>undefined),claimFreeAllowance:vi.fn(async()=>undefined),checkout:vi.fn(async()=>undefined),portal:vi.fn(async()=>undefined),changePlan:vi.fn(async()=>undefined),exportData:vi.fn(async()=>undefined),deleteAccount:vi.fn(async()=>undefined),acceptDisclosure:vi.fn()},
     transport,
     step: { import: vi.fn(async () => ({ cancelled: true as const })), cancel: vi.fn(() => true) },
     resultComparison: {
@@ -95,6 +95,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
     abaqus: { capture: vi.fn(() => ({
       io: { pick: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), read: vi.fn(async () => ({ name: 'bar.inp', size: 5, read: async () => new TextEncoder().encode('*NODE') })), sha256: vi.fn(async () => 'a'.repeat(64)) },
       replace: vi.fn(async () => undefined),
+      dependencies: vi.fn(async () => ({ missingFiles: [] })),
       convert: vi.fn(async () => ABAQUS_CONVERSION),
     })) },
     view: {
@@ -167,6 +168,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       close: vi.fn(),
       refresh: vi.fn(async () => undefined),
       info: vi.fn(() => (folderOpen ? FOLDER : null)),
+      recent: vi.fn(async () => ({ name: FOLDER.name })),
       readText: vi.fn(async (path: string) => (path === 'big.txt' ? 'x'.repeat(2 * 1024 * 1024 + 1) : path.endsWith('.json') ? JSON.stringify(MODEL_FILE) : `content of ${path}`)),
       readBytes: vi.fn(async (path: string) => new TextEncoder().encode(path === 'huge.stl' ? 'x'.repeat(33 * 1024 * 1024) : TETRA_STL)),
       writeText: vi.fn(async () => undefined),

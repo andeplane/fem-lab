@@ -154,12 +154,12 @@ function Picker({ field, value, candidates, onChange, command, dispatch, armed }
   );
 }
 
-function Segmented({ options, active, onPick }: { options: string[]; active: (o: string) => boolean; onPick(o: string): void }) {
+function Segmented({ label, options, active, onPick }: { label: string; options: string[]; active: (o: string) => boolean; onPick(o: string): void }) {
   return (
-    <div class="segmented wide" role="group">
+    <div class="segmented wide" role="group" aria-label={label}>
       {options.map((o) => (
         <button key={o} type="button" data-cmd="form.open" aria-pressed={active(o)} onClick={() => onPick(o)}>
-          {o}
+          {o.split(/(?=[A-Z][a-z])/).flatMap((part, i) => i === 0 ? [part] : [<wbr key={i} />, part])}
         </button>
       ))}
     </div>
@@ -179,6 +179,8 @@ function FieldView(props: FieldProps) {
     // The issue's "the placeholder should show the units": the Model's own length unit, or the
     // dimension's SI one, so an empty box says what a number in it has to carry.
     const placeholder = `0 ${field.dimension === 'length' ? (s.model?.units.length ?? 'm') : siUnit(field.dimension)}`.trim();
+    // Optional placement defaults to the origin; editing x alone must keep y/z at zero.
+    const untouched = !field.required && field.dimension === 'length' && ['at', 'translate'].includes(field.path.at(-1) ?? '') ? placeholder : '';
     return (
       <Row field={field} error={error}>
         {parts === 1 ? (
@@ -193,7 +195,7 @@ function FieldView(props: FieldProps) {
               keyField={field.required}
               placeholder={placeholder}
               hint={hintFor(s, [...field.path, String(i)])}
-              onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? ''))))}
+              onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? untouched))))}
             />
           ))
         )}
@@ -215,6 +217,7 @@ function FieldView(props: FieldProps) {
     return (
       <Row field={field} error={error}>
         <Segmented
+          label={field.label}
           options={field.options}
           active={(o) => (field.multi ? many.includes(o) : value === o)}
           onPick={(o) => onChange(field.multi ? (many.includes(o) ? many.filter((m) => m !== o) : [...many, o]) : o)}
@@ -225,7 +228,7 @@ function FieldView(props: FieldProps) {
   if (field.kind === 'boolean') {
     return (
       <Row field={field} error={error}>
-        <Segmented options={['yes', 'no']} active={(o) => (o === 'yes') === (value === true)} onPick={(o) => onChange(o === 'yes')} />
+        <Segmented label={field.label} options={['yes', 'no']} active={(o) => (o === 'yes') === (value === true)} onPick={(o) => onChange(o === 'yes')} />
       </Row>
     );
   }
@@ -251,7 +254,7 @@ function FieldView(props: FieldProps) {
     const chosen = field.variants.find((v) => v.kind === kind);
     return (
       <Row field={field} error={error}>
-        <Segmented options={field.variants.map((v) => v.kind)} active={(o) => o === kind} onPick={(o) => set([...field.path, 'kind'], o)} />
+        <Segmented label={`${field.label} kind`} options={field.variants.map((v) => v.kind)} active={(o) => o === kind} onPick={(o) => set([...field.path, 'kind'], o)} />
         <div class="sub">
           {(chosen?.fields ?? []).map((f) => (
             <FieldView key={f.path.join('.')} {...props} field={f} />
@@ -349,7 +352,7 @@ export function SchemaForm(props: FormProps) {
   const physics = form.materialPhysics ?? materialPhysicsFor(s.model, values, fields, defs);
   const visibleFields = form.cmd === 'material.add' ? materialFieldsFor(fields, physics) : form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
   const procedure = form.cmd === 'step.add' && typeof values['procedure'] === 'string' ? procedureInfo(values['procedure'], defs) : null;
-  const cmd = { cmd: form.cmd, ...values };
+  const cmd = { ...values, cmd: form.cmd };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
   const missing = missingRequired(fields, values);
@@ -402,6 +405,7 @@ export function SchemaForm(props: FormProps) {
         <div class="recorded">
           <div class="section-label">Will be recorded as</div>
           <div class="mono recorded-cmd">{commandLine(cmd)}</div>
+          {['geometry.addBox', 'geometry.add'].includes(form.cmd) ? <div class="rule-note">Dashed geometry is a draft. Edit coordinates or a shape transform to place it, then Add body. Nothing is recorded before Add body.</div> : null}
           <div class="apply-row">
             <Cmd
               dispatch={dispatch}
@@ -417,6 +421,7 @@ export function SchemaForm(props: FormProps) {
             <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: form.cmd, args: form.initial, keepInitial: true }} title="Revert to the values this form opened with">
               Revert
             </Cmd>
+            {['geometry.addBox', 'geometry.add'].includes(form.cmd) ? <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: '' }} title="Discard the uncommitted body preview" label="Cancel draft">Cancel</Cmd> : null}
           </div>
         </div>
       </form>

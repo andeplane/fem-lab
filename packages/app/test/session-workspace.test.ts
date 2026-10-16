@@ -24,7 +24,7 @@ class TestWorker {
   pause: Promise<void> = Promise.resolve();
   readonly runtime: SessionRuntime;
   constructor(publication?: ModelFilePublicationPolicy) {
-    this.runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options), publication);
+    this.runtime = new SessionRuntime(async (options, epoch) => new wasm.SessionEngine(options.threads, epoch), (ticket, options) => wasm.PreparedEngine.create(ticket, options), () => 0, publication);
   }
   postMessage(request: SessionRequest): void {
     this.requests.push(structuredClone(request));
@@ -96,9 +96,10 @@ it('saves and exports the checked SI document under unreadable display units and
     assert('text' in script);
     for (const format of ['journal', 'script'] as const) {
       vi.mocked(host.folder.writeText).mockClear();
-      await expect(registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' })).resolves.toEqual({ name: `${before.file.model.name}.${format === 'journal' ? 'femlab.json' : 'ts'}`, to: 'folder' });
+      const delivery = await registry.dispatch({ cmd: 'file.export', spec: { format }, to: 'folder' });
       expect(host.folder.writeText).toHaveBeenCalledOnce();
       const exported = vi.mocked(host.folder.writeText).mock.calls[0]![1];
+      expect(delivery).toEqual({ name: `${before.file.model.name}.${format === 'journal' ? 'femlab.json' : 'ts'}`, to: 'folder', bytes: new TextEncoder().encode(exported).byteLength, mime: format === 'journal' ? 'application/json' : 'text/typescript', unavailable: 'unsupported' });
       if (format === 'journal') expect(JSON.parse(exported)).toEqual(before.file);
       else expect(exported).toBe(script.text);
       expect(await transport.query({ query: 'query.document' })).toEqual(before);
@@ -446,4 +447,51 @@ it('recovers export entries and a branched undo history after a Worker failure',
   expect(after.canRedo).toBe(false);
   await expect(a.dispatch(remove)).rejects.toMatchObject({ code: 'session.expired' });
   b.channel.close();
+});
+
+it('cancels only the initial private Worker, fences its late create reply, and retries with a fresh epoch', async () => {
+  const workers: TestWorker[] = [];
+  const held = deferred();
+  const publications: string[] = [];
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); if (workers.length === 0) worker.pause = held.promise; workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `startup-${workers.length}`,
+    engine: { gpu: false, threads: 1 },
+    build: async () => ({ dispose: vi.fn() }),
+    publish: session => { publications.push(session.transport.stamp.session.backendEpoch); },
+  });
+  const already = new AbortController(); already.abort(new Error('already cancelled'));
+  await expect(workspace.start(already.signal)).rejects.toThrow('already cancelled'); expect(workers).toHaveLength(0);
+  const controller = new AbortController();
+  const starting = workspace.start(controller.signal);
+  expect(workers[0]!.requests.map(request => request.op)).toEqual(['create']);
+  controller.abort(new Error('cancel startup'));
+  await expect(starting).rejects.toMatchObject({ code: 'cancelled' });
+  expect(workers[0]!.terminated).toBe(true); expect(publications).toEqual([]);
+  held.resolve();
+  const activeController = new AbortController();
+  const active = await workspace.start(activeController.signal);
+  expect(publications).toEqual(['startup-2']);
+  activeController.abort(new Error('late abort after publication'));
+  expect(workers[1]!.terminated).toBe(false);
+  expect(await active.transport.query({ query: 'query.model' })).toHaveProperty('name');
+  active.transport.channel.close();
+});
+
+it('abandons a late-built private resource bundle before permitting a cancelled initial startup retry', async () => {
+  const building = deferred(); const release = deferred(); const abandoned = deferred(); const releaseAbandon = deferred();
+  const dispose = vi.fn(); const publications = vi.fn(); const workers: TestWorker[] = [];
+  const workspace = new SessionWorkspace({
+    spawn: () => { const worker = new TestWorker(); workers.push(worker); return worker as unknown as Worker; },
+    epoch: () => `build-${workers.length}`, engine: { gpu: false, threads: 1 },
+    build: async () => { building.resolve(); await release.promise; return { dispose, abandon: async () => { abandoned.resolve(); await releaseAbandon.promise; } }; },
+    publish: publications,
+  });
+  const controller = new AbortController(); const starting = workspace.start(controller.signal);
+  await building.promise; controller.abort(new Error('cancel while building')); expect(workers[0]!.terminated).toBe(true);
+  release.resolve(); await abandoned.promise;
+  await expect(workspace.start()).rejects.toMatchObject({ code: 'session.conflict' }); expect(dispose).not.toHaveBeenCalled();
+  const stopped = expect(starting).rejects.toThrow('cancel while building'); releaseAbandon.resolve(); await stopped;
+  expect(dispose).toHaveBeenCalledTimes(1); expect(publications).not.toHaveBeenCalled();
+  const active = await workspace.start(); expect(publications).toHaveBeenCalledTimes(1); active.transport.channel.close();
 });

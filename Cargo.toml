@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/geometry", "crates/engine", "crates/engine-wasm", "crates/femlab"]
+members = ["crates/geometry", "crates/engine", "crates/engine-wasm", "crates/femlab", "crates/project-io"]
 
 [workspace.package]
 version = "0.1.0"
@@ -36,3 +36,7 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# #17: exact upstream native code plus a shared-memory wasm futex backend.
+[patch.crates-io]
+atomic-wait = { path = "vendor/atomic-wait" }

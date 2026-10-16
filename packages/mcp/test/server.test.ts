@@ -1,7 +1,9 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 // The MCP host with a fake engine: the tool list is the registry, every tool call routes to a
 // Command or a Query, `run_script` runs TypeScript, and `export_file` stays inside --project.
 import { MAX_MODEL_FILE_BYTES, RUN_SCRIPT, modelFileText, toolNameFor, type ModelFile } from '@femlab/registry';
-import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -16,7 +18,6 @@ import {
   errorText,
   exportText,
   readResource,
-  resolveInProject,
   RESOURCES,
   toolList,
   type ServerDeps,
@@ -45,6 +46,7 @@ function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
       seen.push(q);
       if (q['query'] === 'query.script') return Promise.resolve({ text: 'await fem.model.new({ name: "beam" });\n' });
       if (q['query'] === 'query.journal') return Promise.resolve({ entries: [], revision: 0 });
+      if (q['query'] === 'query.abaqusDependencies') return Promise.resolve({ missingFiles: [] });
       if (q['query'] === 'query.convertAbaqus') return Promise.resolve(ABAQUS_CONVERSION);
       return Promise.resolve(MODEL);
     },
@@ -93,7 +95,7 @@ it('offers one scoped Abaqus import tool and the same inline script Command; pic
   const registry = createRegistry({ engine, project });
   const args = { name: 'imported', body: 'bar', mode: 'mesh', unitLength: '1 cm' };
   expect(await callTool(registry, toolNameFor('file.importAbaqus'), { ...args, path: './source.inp' })).toEqual({ report: ABAQUS_CONVERSION.report });
-  expect(engine.seen).toEqual([{ query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+  expect(engine.seen).toEqual([{ query: 'query.abaqusDependencies', text, sourceName: 'source.inp' }, { query: 'query.convertAbaqus', ...args, text, sourceName: 'source.inp', sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
   engine.seen.length = 0;
   await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, picker: true })).rejects.toMatchObject({ code: 'unsupported' });
   await expect(registry.dispatch({ cmd: 'file.importAbaqus', ...args, path: 'results.odb' })).rejects.toMatchObject({ code: 'unsupported' });
@@ -101,7 +103,31 @@ it('offers one scoped Abaqus import tool and the same inline script Command; pic
   const scripted = await registry.dispatch({ cmd: 'script.run', code: `return await fem.file.importAbaqus(${JSON.stringify({ ...args, text })});` }) as { result: unknown; error?: string };
   expect(scripted.error).toBeUndefined();
   expect(scripted.result).toEqual({ report: ABAQUS_CONVERSION.report });
-  expect(engine.seen).toEqual([{ query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+  expect(engine.seen).toEqual([{ query: 'query.abaqusDependencies', text }, { query: 'query.convertAbaqus', ...args, text, sha256: createHash('sha256').update(text).digest('hex') }, ...ABAQUS_CONVERSION.commands]);
+});
+
+it('acquires included files relative to the submission folder and passes exact contents to the captured converter', async () => {
+  const project = await scratch();
+  await mkdir(path.join(project, 'submission/Parts'), { recursive: true });
+  const text = '*INCLUDE,INPUT=Parts/Mesh.inc\r\n';
+  const mesh = '*NODE\r\n1,0,0,0\r\n';
+  await writeFile(path.join(project, 'submission/Root.inp'), text);
+  await writeFile(path.join(project, 'submission/Parts/Mesh.inc'), mesh);
+  const engine = fakeEngine();
+  const original = engine.query;
+  engine.query = vi.fn(async query => {
+    if (query['query'] === 'query.abaqusDependencies') {
+      engine.seen.push(query);
+      return { missingFiles: query['sourceFiles'] ? [] : ['Parts/Mesh.inc'] };
+    }
+    return original(query);
+  });
+  const registry = createRegistry({ engine, project });
+  await registry.dispatch({ cmd: 'file.importAbaqus', name: 'imported', body: 'bar', mode: 'static', unitLength: '1 mm', unitForce: '1 N', unitTime: '1 s', path: 'submission/Root.inp' });
+  const converted = engine.seen.find(item => (item as Record<string, unknown>)['query'] === 'query.convertAbaqus');
+  expect(converted).toMatchObject({ sourceName: 'Root.inp', sourceFiles: { 'Parts/Mesh.inc': mesh }, text, unitTime: '1 s' });
+  expect(JSON.stringify(converted)).not.toContain(project);
+  expect(engine.seen.slice(-ABAQUS_CONVERSION.commands.length)).toEqual(ABAQUS_CONVERSION.commands);
 });
 
 describe('calling a tool', () => {
@@ -216,7 +242,7 @@ describe('export_file', () => {
     await expect(callTool(registry, 'export_file', { format: 'msh', path: 'link/escape.msh' })).rejects.toMatchObject({ code: 'file.scope' });
     // a folder deeper inside the project is fine, link or not
     await mkdir(path.join(root, 'deep'), { recursive: true });
-    await symlink(path.join(root, 'deep'), path.join(root, 'inner'), 'dir');
+    await symlink('deep', path.join(root, 'inner'), 'dir');
     await callTool(registry, 'export_file', { format: 'msh', path: 'inner/mesh.msh' });
     expect(await readFile(path.join(root, 'deep', 'mesh.msh'), 'utf8')).toBe('<msh>');
     // and a bad format is a schema error from the registry, before anything is written
@@ -252,7 +278,7 @@ describe('export_file', () => {
     await callTool(registry, 'export_file', { format: 'report', path: 'new/deep/report.md' });
     expect(await readFile(path.join(root, 'new/deep/report.md'), 'utf8')).toBe('<report>');
     await writeFile(path.join(root, 'file'), 'not a directory');
-    await expect(resolveInProject(root, 'file/child/report.md')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    await expect(callTool(registry, 'export_file', { format: 'report', path: 'file/child/report.md' })).rejects.toMatchObject({ code: 'file.scope' });
   });
 
   it('allows concurrent exports to create a shared nested directory', async () => {
@@ -266,7 +292,6 @@ describe('export_file', () => {
   it('refuses every write when the server was started without a project folder', async () => {
     const registry = createRegistry({ engine: fakeEngine() });
     await expect(callTool(registry, 'export_file', { format: 'msh', path: 'x.msh' })).rejects.toMatchObject({ code: 'file.scope' });
-    await expect(resolveInProject(undefined, 'x')).rejects.toMatchObject({ code: 'file.scope' });
   });
 
   it('takes the mesh formats from the engine and the two Journal ones from the Journal', async () => {
@@ -337,4 +362,73 @@ it('refuses executing a described export handler outside request admission', asy
   const registry = createRegistry({ engine: fakeEngine() });
   await expect(registry.describe('export.file').run!({ format: 'journal', path: 'model.json' }))
     .rejects.toMatchObject({ code: 'session.expired' });
+});
+
+it('closes the injected project capability when the MCP server closes', () => {
+  let closed = 0;
+  const { server } = createServer({ engine: fakeEngine(), projectFiles: {
+    ready: async () => {}, size: async () => 0, read: async () => new Uint8Array(), write: async () => {}, close: () => { closed++; },
+  } });
+  server.onclose!();
+  expect(closed).toBe(1);
+});
+
+it.each(['read', 'write'])('startup captures configured authority before first %s after root replacement', async operation => {
+  const parent = await scratch();
+  const root = path.join(parent, 'project');
+  const outside = path.join(parent, 'outside');
+  await mkdir(root);
+  await mkdir(outside);
+  const insideText = '*NODE\n** INSIDE AUTHORITY\n';
+  await writeFile(path.join(root, 'source.inp'), insideText);
+  await writeFile(path.join(outside, 'source.inp'), '*NODE\n** OUTSIDE BYTES\n');
+  await writeFile(path.join(root, 'victim'), 'inside original');
+  await writeFile(path.join(outside, 'victim'), 'OUTSIDE SENTINEL');
+  const engine = fakeEngine();
+  const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'startup-authority-witness', version: '1' });
+  try {
+    await Promise.all([start(['--project', root], '/here', () => engine, () => serverEnd), client.connect(clientEnd)]);
+    // No path stat/read/export has been issued. The advertised session must already own
+    // its root, rather than waiting for an arbitrary first disk operation.
+    await rename(root, path.join(parent, 'original'));
+    await symlink(outside, root, 'dir');
+    if (operation === 'read') {
+      const result = await client.callTool({ name: toolNameFor('file.importAbaqus'), arguments: { path: 'source.inp', name: 'witness', body: 'bar', mode: 'mesh', unitLength: '1 m' } });
+      expect(result.isError).not.toBe(true);
+      expect(engine.seen).toContainEqual(expect.objectContaining({ query: 'query.convertAbaqus', text: insideText }));
+    } else {
+      const result = await client.callTool({ name: 'export_file', arguments: { path: 'victim', format: 'report' } });
+      expect(result.isError).not.toBe(true);
+      expect(await readFile(path.join(parent, 'original/victim'), 'utf8')).toBe('<report>');
+      expect(await readFile(path.join(outside, 'victim'), 'utf8')).toBe('OUTSIDE SENTINEL');
+    }
+  } finally { await client.close(); await serverEnd.close(); }
+});
+
+it('gates embedded transport connection and direct registry admission on the same ready barrier', async () => {
+  let captured!: () => void;
+  const ready = new Promise<void>(resolve => { captured = resolve; });
+  const engine = fakeEngine();
+  const { server, registry } = createServer({ engine, projectFiles: {
+    ready: () => ready, size: async () => 0, read: async () => new Uint8Array(), write: async () => {}, close: () => {},
+  } });
+  const transport = { start: vi.fn(async () => {}), send: vi.fn(async () => {}), close: vi.fn(async () => {}) };
+  const connection = server.connect(transport);
+  const query = registry.query({query:'query.model'});
+  await Promise.resolve();
+  expect(transport.start).not.toHaveBeenCalled();
+  expect(engine.seen).toEqual([]);
+  captured();
+  await connection;
+  expect(await query).toEqual(MODEL);
+  expect(transport.start).toHaveBeenCalledOnce();
+  await server.close();
+});
+
+it('refuses startup before creating the transport when the configured root cannot be captured', async () => {
+  const root = await scratch();
+  const transport = vi.fn(() => ({ start: async () => {}, send: async () => {}, close: async () => {} }));
+  await expect(start(['--project',path.join(root,'missing')], '/here', () => fakeEngine(), transport)).rejects.toMatchObject({code:'file.not-found'});
+  expect(transport).not.toHaveBeenCalled();
 });

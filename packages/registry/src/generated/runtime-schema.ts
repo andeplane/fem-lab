@@ -5721,7 +5721,7 @@ const queries = {
       "x-returns": "Converted"
     },
     {
-      "description": "Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.\nUses the same bounded lexer and safe relative-path graph as conversion. This read\nperforms no model/physics conversion or file/network I/O; hosts can acquire listed\nfiles through their captured scoped I/O and repeat until the bundle is complete.\nThe actual conversion still rejects missing files and never publishes partial data.",
+      "description": "Inspect the supplied Abaqus bundle for missing INCLUDE and NODE/ELEMENT INPUT files.\nUses the same bounded lexer and safe relative-path graph as conversion. This read\nperforms no model/physics conversion or file/network I/O; hosts can acquire listed\nfiles through their captured scoped I/O and repeat until the bundle is complete.\nThe actual conversion still rejects missing files and never publishes partial data.",
       "type": "object",
       "properties": {
         "text": {
@@ -5800,7 +5800,7 @@ const queries = {
           ]
         },
         "sourceFiles": {
-          "description": "Explicit relative source filenames and UTF-8 contents for INCLUDE resolution.\nMissing/cyclic/escaping references fail; the engine never fetches a file.",
+          "description": "Explicit relative filenames and UTF-8 contents for INCLUDE and NODE/ELEMENT INPUT.\nMissing/cyclic/escaping references fail; the engine never fetches a file.",
           "type": "object",
           "additionalProperties": {
             "type": "string"

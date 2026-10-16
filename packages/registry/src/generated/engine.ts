@@ -3799,7 +3799,7 @@ export type Query =
        */
       sourceName?: string | null;
       /**
-       * Explicit relative source filenames and UTF-8 contents for INCLUDE resolution.
+       * Explicit relative filenames and UTF-8 contents for INCLUDE and NODE/ELEMENT INPUT.
        * Missing/cyclic/escaping references fail; the engine never fetches a file.
        */
       sourceFiles?: {

@@ -36,3 +36,11 @@ names is supplementary evidence, not the oracle for these fixtures.
 `-0` and `-0.0`, including the unused Tet node. Their physical bounds/volumes are the same
 closed forms above; the SHA-256 still hashes the original exact text. These expose signed-zero
 transport fidelity at the Rust serde/JavaScript JSON boundary and persisted replay path.
+
+
+`alternate-data/Main.inp` is independently authored for #681. A normal INCLUDE loads
+`Parts/Beam.inp`, whose NODE and ELEMENT options reference data-only files rooted at the
+submission directory. Sparse labels define the positive unit tetrahedron with volume
+1/6 m³. Exact coordinates/connectivity, instance identities, original per-file hashes and
+physical lines survive normalization. This is the documented owning-keyword INPUT form;
+keywords inside data files are rejected. No vendor exporter or solver supplied this fixture.

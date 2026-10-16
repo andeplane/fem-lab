@@ -72,8 +72,8 @@ function harness(patch: Partial<UiState> = {}): Harness {
   host.chat.clear = () => chatBridge.clear();
   host.ai.setKey = (key, provider = 'anthropic') => {
     const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
-    if (key === null) sessionStorage.removeItem(slot);
-    else sessionStorage.setItem(slot, key);
+    if (key === null) localStorage.removeItem(slot);
+    else localStorage.setItem(slot, key);
   };
   const registry = new Registry({
     schema: ENGINE_SCHEMA,
@@ -141,21 +141,21 @@ describe('behavioral Command parity', () => {
       threads: 1, chromium: true, userAgent: 'Chromium parity test',
     });
     const registry = new Registry({ schema: ENGINE_SCHEMA, host, hostCommands: HOST_COMMANDS });
-    sessionStorage.setItem('femlab.ai.key', 'anthropic-original');
-    sessionStorage.setItem('femlab.ai.key.openai', 'openai-original');
+    localStorage.setItem('femlab.ai.key', 'anthropic-original');
+    localStorage.setItem('femlab.ai.key.openai', 'openai-original');
     await registry.dispatch({ cmd: 'ai.setKey', key: 'openai-new', provider: 'openai' });
-    expect(sessionStorage.getItem('femlab.ai.key.openai')).toBe('openai-new');
-    expect(sessionStorage.getItem('femlab.ai.key')).toBe('anthropic-original');
+    expect(localStorage.getItem('femlab.ai.key.openai')).toBe('openai-new');
+    expect(localStorage.getItem('femlab.ai.key')).toBe('anthropic-original');
     await registry.dispatch({ cmd: 'ai.setKey', key: 'anthropic-new' });
-    expect(sessionStorage.getItem('femlab.ai.key')).toBe('anthropic-new');
-    expect(sessionStorage.getItem('femlab.ai.key.openai')).toBe('openai-new');
+    expect(localStorage.getItem('femlab.ai.key')).toBe('anthropic-new');
+    expect(localStorage.getItem('femlab.ai.key.openai')).toBe('openai-new');
     await registry.dispatch({ cmd: 'ai.setKey', key: null, provider: 'openai' });
-    expect(sessionStorage.getItem('femlab.ai.key.openai')).toBeNull();
-    expect(sessionStorage.getItem('femlab.ai.key')).toBe('anthropic-new');
+    expect(localStorage.getItem('femlab.ai.key.openai')).toBeNull();
+    expect(localStorage.getItem('femlab.ai.key')).toBe('anthropic-new');
     await registry.dispatch({ cmd: 'ai.setKey', key: 'openai-restored', provider: 'openai' });
     await registry.dispatch({ cmd: 'ai.setKey', key: null, provider: 'anthropic' });
-    expect(sessionStorage.getItem('femlab.ai.key')).toBeNull();
-    expect(sessionStorage.getItem('femlab.ai.key.openai')).toBe('openai-restored');
+    expect(localStorage.getItem('femlab.ai.key')).toBeNull();
+    expect(localStorage.getItem('femlab.ai.key.openai')).toBe('openai-restored');
     localStorage.clear();
     sessionStorage.clear();
   });
@@ -333,7 +333,7 @@ describe('behavioral Command parity', () => {
     clicked.root.querySelector<HTMLButtonElement>('button[data-cmd="ai.setKey"]')!.click();
     await tick();
     expect(calls).toContainEqual({ cmd: 'ai.setKey', key: 'test-key', provider: 'anthropic' });
-    expect(sessionStorage.getItem('femlab.ai.key')).toBe('test-key');
+    expect(localStorage.getItem('femlab.ai.key')).toBe('test-key');
     spy.mockRestore();
     unmount(clicked.root);
   });
@@ -341,7 +341,7 @@ describe('behavioral Command parity', () => {
   it('keeps OpenAI key saves in the OpenAI slot', async () => {
     localStorage.clear();
     sessionStorage.clear();
-    sessionStorage.setItem('femlab.ai.key.openai', 'old-openai');
+    localStorage.setItem('femlab.ai.key.openai', 'old-openai');
     const clicked = harness({ panels: { assistant: true, 'assistant.settings': true } });
     const calls: CommandCall[] = [];
     const original = clicked.registry.dispatch.bind(clicked.registry);
@@ -358,8 +358,8 @@ describe('behavioral Command parity', () => {
     clicked.root.querySelector<HTMLButtonElement>('button[data-cmd="ai.setKey"]')!.click();
     await tick();
     expect(calls).toContainEqual({ cmd: 'ai.setKey', key: 'new-openai', provider: 'openai' });
-    expect(sessionStorage.getItem('femlab.ai.key.openai')).toBe('new-openai');
-    expect(sessionStorage.getItem('femlab.ai.key')).toBeNull();
+    expect(localStorage.getItem('femlab.ai.key.openai')).toBe('new-openai');
+    expect(localStorage.getItem('femlab.ai.key')).toBeNull();
     spy.mockRestore();
     unmount(clicked.root);
   });

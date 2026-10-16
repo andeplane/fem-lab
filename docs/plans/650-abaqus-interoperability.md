@@ -8,15 +8,18 @@ Implementation and evidence: [#652](https://github.com/andeplane/fem-lab/issues/
 [#655](https://github.com/andeplane/fem-lab/issues/655),
 [#656](https://github.com/andeplane/fem-lab/issues/656),
 [#657](https://github.com/andeplane/fem-lab/issues/657),
-[#673](https://github.com/andeplane/fem-lab/issues/673).
+[#673](https://github.com/andeplane/fem-lab/issues/673),
+[#681](https://github.com/andeplane/fem-lab/issues/681),
+[#691](https://github.com/andeplane/fem-lab/issues/691).
 
-**Status, 2026-10-15: in progress.** This is an acceptance plan, not a statement that
-these capabilities have shipped. The children are in progress; their separate PRs and the
-composed user workflow still require acceptance. Closing planning issue #651 does not close
-#650. The [#500 plan](500-abaqus-import.md) describes the accepted first strict slice and
-remains its historical contract.
+**Status, 2026-10-15: implementation and final composed verification accepted.** The
+acceptance baseline is `1986cd90`, with matching native and complete browser/Node WASM
+runtimes. The final evidence below supersedes the historical baseline and intermediate
+child checkpoints. Parent #650 closeout records the required strict result and parent
+review. The [#500 plan](500-abaqus-import.md) retains the accepted first-slice contract;
+the unsupported mappings listed below remain separate work.
 
-## Outcome and current gap
+## Outcome and historical baseline
 
 An engineer loads an ordinary exported text input deck and its supplied includes, selects
 the source units, inspects the retained geometry, regions and analyses, solves a supported
@@ -31,7 +34,7 @@ assemblies, quoted/qualified names, output blocks and density. Passing fixtures 
 that subset did not establish practical interoperability with ordinary exports. Its mesh
 writer round trip also did not establish analysis-deck or exporter compatibility.
 
-The audit at `518dd29f` has these concrete boundaries:
+The historical audit at `518dd29f` identified these boundaries; its gaps motivated this implementation:
 
 | Layer | Existing implementation | Gap addressed here |
 |---|---|---|
@@ -58,7 +61,9 @@ is compiled. This plan does not invent a second wire schema.
 | [#655](https://github.com/andeplane/fem-lab/issues/655) | Tet10/Hex20 source kinds over #652; connectivity records coordinated with #653 and face loads with #654 | Original curved geometry, shared curved faces, sound admission, source order/labels and independent C3D10/C3D20 comparisons |
 | [#673](https://github.com/andeplane/fem-lab/issues/673) | Explicit small-strain Hex8 mean-dilatation (B-bar) for Abaqus C3D8, discovered by the unchanged independently published CAE case | Preserve existing Full Journals; volume-weighted distorted-cell patch and energy/refinement oracles; all 825 authored displacement components at the predeclared corpus tolerance; CPU thread determinism and software-adapter GPU correctness |
 | [#656](https://github.com/andeplane/fem-lab/issues/656) | Independent corpus and reference ledger, assembled alongside implementation | Exact source/license/digest/solver receipts; executable acceptance only on completed paths; remaining gaps visible |
+| [#681](https://github.com/andeplane/fem-lab/issues/681) | Data-only alternate files on NODE/ELEMENT INPUT over the same supplied-bundle contract | Inline/alternate geometry and identities agree; original filenames, hashes and source diagnostics survive; real hosts acquire the required files |
 | [#657](https://github.com/andeplane/fem-lab/issues/657) | Browser/CLI/MCP acquisition and reports over #653 supplied-bundle and #654 unit/report contracts | Real file/folder flow through inspection, solve, comparison and portable reopen; path/cancellation/admission atomicity |
+| [#691](https://github.com/andeplane/fem-lab/issues/691) | Source-labelled nodal displacement CSV through the same registry and browser export action | Scientific f64 SI fields pinned to one result and its solved Model; original part/instance/node identities, exact CSV escaping and stale-context rejection; actual import/solve/export comparison |
 
 ### Source, namespace and lifecycle contract
 
@@ -100,8 +105,8 @@ and a stale/switched project fail before checked publication. Every asynchronous
 the captured owner/project admission. Retain the existing exact prepared-file byte limit.
 No error may leave half an imported Model or a partially replaced Journal.
 
-The typed report identifies retained regions, materials, source/target names, element kinds
-and formulations, analyses, units and provenance. A documented allowlist of output
+The typed report identifies retained regions, materials, source/target names, element kinds,
+analyses, units and provenance. The imported mesh definition retains the explicit formulation. A documented allowlist of output
 bookkeeping is recognized and reported as configuration not executed by FEM Lab; it must
 not reject an otherwise representable model. Unknown keywords, physical intent and unknown
 parameters must never disappear behind a generic ignore rule. Structured errors identify
@@ -139,10 +144,11 @@ admission. Sampled positive Jacobians alone do not establish that certificate. I
 and failure to prove validity remain distinct; no straightening, tetrahedral replacement,
 order reduction or unreported change of connectivity is allowed.
 
-Standard C3D8 retains full integration rather than the app's incompatible-mode default.
-C3D10/C3D20 acceptance must establish their exact supported formulation. Reduced integration
-is a real kernel gap: the current Formulation inventory is Full/IncompatibleModes, not an
-implementation of C3D8R or C3D20R. Never alias an R, hybrid, modified or otherwise distinct
+Standard C3D8 uses the explicit volume-weighted mean-dilatation formulation from #673,
+with eight-point integration and a projected volumetric strain. Existing Full and
+IncompatibleModes Journals keep their original meanings. C3D10/C3D20 retain their supported
+full integration. C3D8R/C3D20R reduced integration and hourglass control remain separate
+kernel gaps; MeanDilatation is not an implementation of either. Never alias an R, hybrid, modified or otherwise distinct
 element to the closest supported type. If a required corpus deck needs a missing kernel,
 record that blocker and a separate issue; changing its element card is not acceptance of
 the original export.
@@ -150,9 +156,11 @@ the original export.
 ## Corpus and acceptance matrix
 
 #656 owns exact corpus selection, source URLs/revisions, licensing and reference receipts.
-The following are required groups, not claims that particular vendor files have already
-been acquired or passed. Keep each original deck unchanged; authored adversarial fixtures
-supplement it. A filename or a `Generated by` comment alone is not exporter provenance.
+The following retain the original acceptance requirements. The final composed evidence
+below identifies the five selected corpus cases and the separate analytical/adverse-path
+checks; those cases alone do not stand for every row. Keep each original deck unchanged;
+authored adversarial fixtures supplement it. A filename or a `Generated by` comment alone
+is not exporter provenance.
 
 | ID | Required corpus/behavior | Independent answer and acceptance | Owners |
 |---|---|---|---|
@@ -188,23 +196,21 @@ the name of remeshing. Add the actual cases to BENCHMARKS.md in their implementa
 
 ## Acceptance stages and remaining gaps
 
-1. **Baseline and contracts — in progress.** #651/#656 record truthful failing evidence and
-   corpus provenance; #652–655 agree the source, record, face and report boundaries. Plans
-   and contracts alone are not completed importing capability.
-2. **Independent components — in progress.** Each child lands its own green implementation,
-   schema docstrings, meaningful regressions and Benchmarks. Source decisions receive the
-   required ADR review. Engine/geometry retain 100% lines/functions/regions, including real
-   software-adapter GPU execution; registry retains its 100% thresholds. No exclusions.
-3. **Composed workflow — pending.** On the actual composed source and matching schema/native/
-   complete WASM bindings, run corpus A–K through real Chromium selection/folder acquisition,
-   report/inspection, explicit solve, quantitative comparison and save/reopen without the
-   originals. Run native 1/N determinism and native/WASM portable replay. Exercise CLI and
-   MCP acquisition as actual hosts, not parser-only mocks. Retain exact producer/head and
-   runtime receipts. Each unresolved row stays visible.
-4. **Parent review — pending.** #650 closes only after the ordinary-export workflow and
-   comparison matrix are explicitly accepted on that composed implementation. A merged
-   plan, parser-only milestone, hand-edited vendor deck or list of green child PRs does not
-   close it. Advertise the supported rows and remaining boundaries precisely.
+1. **Baseline and contracts — verified.** #651/#656 retain the initial failures, source and
+   reference ledger. #652–655 establish the source, namespace, face and report contracts.
+2. **Independent components — accepted.** Child changes
+   retain their schema docstrings, independent numerical/refinement tests, Benchmarks and
+   ADRs. Focused coverage and child CI do not substitute for the final full engine/geometry
+   100% lines/functions/regions gate, including software-adapter GPU execution without
+   exclusions. Registry thresholds remain 100% in all four metrics.
+3. **Composed workflow — accepted on `1986cd90`.** Real browser/CLI/MCP acquisition, explicit
+   solve, quantitative comparison and source-free portable reopen pass with the matching
+   source/schema/native/WASM identities recorded below. Native 1/4 determinism and WASM
+   reference checks are distinct claims; native/WASM bit identity is not claimed.
+4. **Parent review — accepted with terminal strict success.** The final
+   [strict run 38771622293](https://github.com/andeplane/fem-lab/actions/runs/38771622293)
+   and composed evidence establish this scope. A parser milestone, hand-edited source deck
+   or green child PR alone cannot close the parent.
 
 Plane/axisymmetric, thermal, modal/dynamic and beam/truss/shell import mappings are **not
 completed by these children**, even where the engine already has the corresponding element
@@ -239,5 +245,49 @@ Their agreement after binary32 rounding is evidence consistent with stored singl
 precision, whose actual use in the author's result is unknown. Neither reference
 values nor either original tolerance is relaxed. The source and report remain
 separately LGPLv3-licensed originals. See [ADR 0034](../adr/0034-explicit-mean-dilatation-hex8.md).
-This finding adds implementation work; it does not close parent #650 or replace
-the composed browser/CLI/portable-file acceptance matrix.
+The final composed checks below retain this formulation and the original tolerances;
+the diagnostic alone does not replace the browser/CLI/portable-file acceptance matrix.
+
+## Final composed verification — frozen `1986cd90`
+
+The [acceptance source `1986cd90`](https://github.com/andeplane/fem-lab/commit/1986cd9064e30aaf9fbd73270433ee87b3c0f7a7)
+and actual CI producer `1ca68175` have the identical complete tree
+`d7194dac2dad9b466372bb1a294475d0e587f649`. The
+[fast run 38771622270](https://github.com/andeplane/fem-lab/actions/runs/38771622270)
+provides all eight browser/Node bindings: WASM SHA-256 `a75ba0f8a351…`, schema
+`c79967c2ed85…`. The independently built ARM CLI has SHA-256 `5d4df0cfbf0c…` and
+emits that same schema. All 1,022 tracked source files and all eight bindings remained
+unchanged across host verification. Receipts retain the full hashes and actual producer.
+
+| Verification | Observed result on this source/runtime |
+|---|---|
+| Independent corpus | Both original CalculiX 2.23 quadratic beams, the FreeCAD 0.17 export, author-published Abaqus Case06 and authored two-material assembly pass their unchanged per-case reference oracles. All five native 1/4-worker canonical outputs agree after removing only timing. |
+| Portable WASM replay | All five portable files load through public `SessionEngine`/`PreparedEngine` without original decks, preserve their Journal hashes, explicitly solve and pass the same numerical oracles. Cross-host bit identity is not claimed. |
+| Real include acquisition | Browser, CLI and MCP acquire `Root.inp`, `Parts/Mesh.inc`, raw `Nodes.inc`/`Elements.inc` through NODE/ELEMENT `INPUT=`, and `Material.inp`. All five hashes and aggregate bytes are checked. The complete submission is deleted before solve/reopen/replay; the browser reads no selected unrelated file. The bar gives `u_x=5e-7 m`, `sigma_xx=1e5 Pa`, and root reaction `-1000 N`. |
+| Registry and MCP | 191 combined registry tests and 67 MCP tests pass at 100% statements, branches, functions and lines. Codegen freshness and all-workspace typechecks pass. |
+| App | 1,333 tests pass with five existing skips; coverage includes all 90 authored modules and passes unchanged thresholds. Production build, secret check and size budgets pass. |
+| Actual Chromium | All nine import and two nodal-CSV tests pass in one CPU production batch, zero retries. All 36 captured engine responses across 11 traces hash to the matching WASM. Report, complete-Mesh and visible Export-row captures were inspected. |
+| Comparison CSV | The downloaded author case retains all 275 source-labelled rows and all 825 displacement components. Maximum absolute error `4.980293818134234e-10 m` stays below the unchanged `7.16712e-10 m` corpus gate. The analytical two-instance case keeps duplicate local labels distinct and leaves unused-node displacements blank. |
+| Required strict acceptance | [38771622293](https://github.com/andeplane/fem-lab/actions/runs/38771622293) — **terminal success confirmed**. Full engine/geometry line/function/region thresholds, including the no-exclusion software-GPU gate, and required platform checks pass. |
+
+Reproduction uses the unchanged [corpus and reference ledger](../../tools/abaqus-interoperability/corpus.json),
+[native corpus runner](../../tools/abaqus-interoperability/corpus.py),
+[source-free WASM runner](../../tools/test-abaqus-corpus-wasm.mjs),
+[five-file host replay](../../tools/test-abaqus-hosts.mjs),
+[browser import cases](../../packages/app/e2e/abaqus-import.spec.ts) and
+[CSV download cases](../../packages/app/e2e/nodal-displacements-csv.spec.ts).
+The retained evidence separates actual source-solver runs from published references.
+
+Nodal CSV is an explicit registry-backed Export action. It joins scientific f64 SI values
+and original local/part/instance identities using one immutable Result ID and its solved
+Model hash. Stale, evicted or source-mismatched contexts, including edits during scientific
+reads, fail before delivery. Auxiliary node identities and unused authored displacements
+remain blank. Standard CSV quoting preserves exact names for machine-readable interchange;
+identity columns are text. See the [#691 contract](691-source-nodal-csv.md).
+
+The author's exact Abaqus/CAE version and export settings are **unknown**. No fresh licensed
+Abaqus run or general stress-recovery equivalence is claimed. The declared per-case units,
+source labels, evaluation locations, formulations and tolerances remain the comparison
+contract. These are local/CI-source results, not deployed-product acceptance. Plane/axisymmetric,
+thermal, modal/dynamic, beam/truss/shell, nonlinear/contact/tie and binary `.odb`/`.cae`
+mappings remain outside this text linear-static scope as listed above.

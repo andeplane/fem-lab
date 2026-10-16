@@ -1,7 +1,8 @@
 // PLAN 4.4: a stored key wins, the dev server's shell key stands in while `vite dev` runs, and the
 // settings row can always say which of the two the current key came from.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { migratePersistentKeys, defaultProvider, maskKey, resolveKey, storedModel, storeKey, KEY_SLOT } from '../src/ai/keys';
+import { adoptSessionKeys, defaultProvider, maskKey, resolveKey, storedModel, storeKey, KEY_SLOT } from '../src/ai/keys';
+import { prepareKeyStorage } from '../src/ai/key-storage';
 
 const memory = (): Storage => {
   const map = new Map<string, string>();
@@ -27,6 +28,8 @@ const hostile = (): Storage =>
 let storage: Storage;
 beforeEach(() => {
   storage = memory();
+  localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe('key resolution', () => {
@@ -90,49 +93,107 @@ describe('masking', () => {
 });
 
 
-describe('session-only key storage', () => {
-  it('stores keys in the tab session and leaves model preferences persistent', () => {
+describe('persistent key storage (#485)', () => {
+  it('keeps keys in localStorage so a new tab or session still has them, next to the model preference', () => {
     localStorage.clear();
     sessionStorage.clear();
     localStorage.setItem('femlab.ai.model', 'gpt-6-astra');
-    storeKey('openai', 'session-key');
-    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBe('session-key');
-    expect(localStorage.getItem(KEY_SLOT.openai)).toBeNull();
-    expect(defaultProvider(localStorage, null)).toBe('openai');
+    storeKey('openai', 'kept-key');
+    expect(localStorage.getItem(KEY_SLOT.openai)).toBe('kept-key');
+    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBeNull();
     sessionStorage.clear();
-    expect(resolveKey('openai', sessionStorage, null).key).toBeNull();
+    expect(resolveKey('openai', undefined, null)).toEqual({ key: 'kept-key', source: 'stored' });
+    expect(defaultProvider(localStorage, null)).toBe('openai');
     expect(storedModel('openai')).toBe('gpt-6-astra');
     localStorage.clear();
   });
 
-  it('migrates persistent keys once without overwriting a newer session key', () => {
+  it('adopts a key the session-only build left in this tab once, without overwriting a persistent one', () => {
     const session = memory();
-    storage.setItem(KEY_SLOT.anthropic, 'old-a');
-    storage.setItem(KEY_SLOT.openai, 'old-b');
+    session.setItem(KEY_SLOT.anthropic, 'left-a');
+    session.setItem(KEY_SLOT.openai, 'left-b');
+    storage.setItem(KEY_SLOT.openai, 'kept-b');
     storage.setItem('femlab.ai.model', 'gpt-6-astra');
-    session.setItem(KEY_SLOT.openai, 'new-b');
-    migratePersistentKeys(storage, session);
-    expect(session.getItem(KEY_SLOT.anthropic)).toBe('old-a');
-    expect(session.getItem(KEY_SLOT.openai)).toBe('new-b');
-    expect(storage.getItem(KEY_SLOT.anthropic)).toBeNull();
-    expect(storage.getItem(KEY_SLOT.openai)).toBeNull();
+    adoptSessionKeys(storage, session);
+    expect(storage.getItem(KEY_SLOT.anthropic)).toBe('left-a');
+    expect(storage.getItem(KEY_SLOT.openai)).toBe('kept-b');
+    expect(session.getItem(KEY_SLOT.anthropic)).toBeNull();
+    expect(session.getItem(KEY_SLOT.openai)).toBeNull();
     expect(storage.getItem('femlab.ai.model')).toBe('gpt-6-astra');
-    migratePersistentKeys(storage, session);
-    expect(session.getItem(KEY_SLOT.openai)).toBe('new-b');
+    adoptSessionKeys(storage, session);
+    expect(storage.getItem(KEY_SLOT.anthropic)).toBe('left-a');
   });
 
-  it('removes the persistent copy even if session storage refuses the migration', () => {
-    storage.setItem(KEY_SLOT.openai, 'old-key');
-    migratePersistentKeys(storage, hostile());
-    expect(storage.getItem(KEY_SLOT.openai)).toBeNull();
-    expect(() => migratePersistentKeys(hostile(), null)).not.toThrow();
+  it('retains a usable tab key when persistent migration is refused, and reports its actual source', () => {
+    const session = memory();
+    session.setItem(KEY_SLOT.openai, 'left-key');
+    adoptSessionKeys(hostile(), session);
+    expect(session.getItem(KEY_SLOT.openai)).toBe('left-key');
+    expect(resolveKey('openai', hostile(), null, session)).toEqual({ key: 'left-key', source: 'session' });
+    expect(storeKey('openai', 'replacement', hostile(), session)).toBe(false);
+    expect(session.getItem(KEY_SLOT.openai)).toBe('left-key');
+    expect(() => adoptSessionKeys(null, hostile())).not.toThrow();
     expect(resolveKey('openai', null, null).key).toBeNull();
   });
 
-  it('chooses the keyed session provider without using old persistent keys', () => {
+  it('forgets only the chosen provider in both stores and prevents adoption from another legacy tab', () => {
+    const first = memory(), second = memory();
+    for (const tab of [first, second]) {
+      tab.setItem(KEY_SLOT.openai, 'old-openai');
+      tab.setItem(KEY_SLOT.anthropic, 'anthropic');
+    }
+    adoptSessionKeys(storage, first);
+    expect(storeKey('openai', null, storage, first)).toBe(true);
+    adoptSessionKeys(storage, second);
+    expect(storage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(second.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(resolveKey('anthropic', storage, null, second)).toEqual({ key: 'anthropic', source: 'stored' });
+    expect(storeKey('openai', 'new-openai', storage, second)).toBe(true);
+    expect(resolveKey('openai', storage, null, second).key).toBe('new-openai');
+  });
+
+  it('stops resolving a forgotten retained key in an already-open tab without reload or readoption', () => {
+    const first = memory(), retained = memory();
+    const refusedWrites = new Proxy(storage, {
+      get(target, property) {
+        if (property === 'setItem') return () => { throw new Error('persistent writes refused'); };
+        return Reflect.get(target, property);
+      },
+    });
+    retained.setItem(KEY_SLOT.openai, 'old-openai');
+    adoptSessionKeys(refusedWrites, retained);
+    expect(resolveKey('openai', refusedWrites, null, retained)).toEqual({ key: 'old-openai', source: 'session' });
+    first.setItem(KEY_SLOT.openai, 'old-openai');
+    adoptSessionKeys(storage, first);
+    expect(storeKey('openai', null, storage, first)).toBe(true);
+    expect(resolveKey('openai', refusedWrites, null, retained)).toEqual({ key: null, source: 'none' });
+    expect(retained.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(resolveKey('openai', refusedWrites, { openai: 'dev-key', anthropic: null }, retained)).toEqual({ key: 'dev-key', source: 'dev' });
+    expect(storeKey('openai', 'new-openai', storage, first)).toBe(true);
+    expect(resolveKey('openai', refusedWrites, null, retained)).toEqual({ key: 'new-openai', source: 'stored' });
+  });
+
+  it('reports refusal to forget instead of pretending that an inaccessible saved key was removed', () => {
     const session = memory();
-    storage.setItem(KEY_SLOT.anthropic, 'old-a');
-    session.setItem(KEY_SLOT.openai, 'new-b');
-    expect(defaultProvider(storage, null, session)).toBe('openai');
+    session.setItem(KEY_SLOT.openai, 'tab-only');
+    expect(storeKey('openai', null, hostile(), session)).toBe(false);
+    expect(session.getItem(KEY_SLOT.openai)).toBeNull();
+  });
+
+  it('leaves cached direct-provider credentials untouched in hosted boot and adopts them only in direct mode', () => {
+    sessionStorage.setItem(KEY_SLOT.openai, 'legacy-tab');
+    localStorage.setItem(KEY_SLOT.anthropic, 'existing-browser');
+    prepareKeyStorage(true);
+    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBe('legacy-tab');
+    expect(localStorage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(localStorage.getItem(KEY_SLOT.anthropic)).toBe('existing-browser');
+    prepareKeyStorage(false);
+    expect(localStorage.getItem(KEY_SLOT.openai)).toBe('legacy-tab');
+    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBeNull();
+  });
+
+  it('chooses the keyed provider from the persistent slots', () => {
+    storage.setItem(KEY_SLOT.openai, 'kept-b');
+    expect(defaultProvider(storage, null, storage)).toBe('openai');
   });
 });

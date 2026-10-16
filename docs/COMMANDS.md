@@ -4618,7 +4618,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ### query.abaqusDependencies
 
-Inspect the explicitly supplied Abaqus source bundle for missing INCLUDE files.
+Inspect the supplied Abaqus bundle for missing INCLUDE and NODE/ELEMENT INPUT files.
 Uses the same bounded lexer and safe relative-path graph as conversion. This read
 performs no model/physics conversion or file/network I/O; hosts can acquire listed
 files through their captured scoped I/O and repeat until the bundle is complete.
@@ -4697,7 +4697,7 @@ Returns: `AbaqusConversion`.
 | unitForce | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_force"},{"type":"null"}]}</code> | Mandatory in static mode; absent in mesh mode. Positive force per source force. |
 | unitTime | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Positive seconds per source time. Required when a DENSITY is translated: source density scales by F T²/L⁴. No time or mass unit is inferred. |
 | sourceName | no | <code>{"type":["string","null"]}</code> | Logical root filename for resolving an explicitly supplied include bundle. Paths identify bundle entries only; the engine never reads a file system. |
-| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> | Explicit relative source filenames and UTF-8 contents for INCLUDE resolution. Missing/cyclic/escaping references fail; the engine never fetches a file. |
+| sourceFiles | no | <code>{"type":"object","additionalProperties":{"type":"string"}}</code> | Explicit relative filenames and UTF-8 contents for INCLUDE and NODE/ELEMENT INPUT. Missing/cyclic/escaping references fail; the engine never fetches a file. |
 | sha256 | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.convertAbaqus"}</code> |  |
 
