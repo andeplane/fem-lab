@@ -269,8 +269,14 @@
 .shell.with-tour { grid-template-rows: 46px auto minmax(0, 1fr); }
 /* The workflow tour has no dim layer: its outlined panels must stay below the Assistant. */
 .shell.with-tour [data-tutorial-target] { z-index: auto; }
-/* The guide takes vertical space; let the viewer fit it instead of scrolling the whole page. */
-.shell.with-tour .centre { grid-template-rows: minmax(0, 1fr) var(--bottom-used); }
+/* The guide takes vertical space; preserve the requested bottom size with a smaller viewer
+   floor. Mobile rows size to their controls and canvas instead of this desktop track. */
+@media (min-width: 1024px) {
+  .shell.with-tour .centre {
+    --bottom-used: min(var(--bottom-height, 252px), max(184px, calc(100% - 320px)));
+    grid-template-rows: minmax(0, 1fr) var(--bottom-used);
+  }
+}
 /* Integer line boxes keep the desktop workspace/canvas origin on whole CSS pixels. */
 .tour-callout { min-height: 0; max-height: min(38vh, 250px); overflow-y: auto; padding: 12px 20px; background: var(--bg-panel); border-bottom: 1px solid var(--cyan-border); color: var(--text-body); font-size: 13px; line-height: 19px; }
 .tour-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; position: sticky; top: -12px; padding-top: 4px; background: var(--bg-panel); z-index: 1; }
@@ -283,7 +289,7 @@
 .tour-actions { justify-content: space-between; }
 .tour-dismiss { min-width: 36px; min-height: 36px; }
 .tour-help { display: block; margin-top: 8px; color: var(--text-low); font-size: 11px; line-height: 16px; }
-.tutorial-tour { margin-bottom: 12px; text-align: left; }
+.tutorial-tour { flex-shrink: 0; margin-bottom: 12px; text-align: left; }
 @media (max-width: 600px) {
   .shell.with-tour { grid-template-rows: auto auto minmax(0, 1fr); }
   .tour-callout { padding: 8px 12px; max-height: 42vh; font-size: 12px; line-height: 18px; }

@@ -18,6 +18,8 @@ Dismiss the tour with **Continue on my own**, its close button, or **Escape**. D
 
 The tutorial's **Do it** action dispatches the same registered Command as a form. You can also perform the action yourself. Read the explanatory step before advancing; completing clicks is not an independent validation of the result.
 
+In short windows, the explanation scrolls inside the tutorial card. Each new step starts its explanation at the top; your reading position stays put while using controls within the same step. The **Modeling tour** replay control and the current step's **Do it** and **Skip** actions stay outside that scrolling explanation.
+
 ## Useful bundled Models
 
 | Example name | What to inspect |
