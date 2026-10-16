@@ -343,8 +343,8 @@ textarea:focus {
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
    text labels while giving the flexible model and command fields the remaining room.
-   Keep the wide settings from 2100 px so the STEP receipt fits beside document actions. */
-@media (min-width: 1180px) and (max-width: 2099px) {
+   Keep the wide settings from 2200 px so Docs and the STEP receipt fit beside document actions. */
+@media (min-width: 1180px) and (max-width: 2199px) {
   .topbar {
     gap: 2px;
     padding-inline: 8px;
@@ -374,7 +374,7 @@ textarea:focus {
     display: inline;
   }
   .topbar > .chip {
-    max-width: 164px;
+    max-width: 124px;
     padding-inline: 6px;
   }
   .topbar > .solve {
@@ -413,7 +413,9 @@ textarea:focus {
     max-width: 76px;
   }
   .topbar > .chip {
-    max-width: 60px;
+    /* The Docs link stays a visible keyboard stop; the read-only engine label yields
+       its space first, with the complete status still available in the title. */
+    max-width: 48px;
   }
   .palette-field {
     min-width: 80px;
@@ -2528,6 +2530,10 @@ input.model-name:focus {
   background: var(--bg-well);
   border-color: var(--border-panel);
   outline: none;
+}
+input.model-name:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
 }
 .saved-chip {
   display: flex;
