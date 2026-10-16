@@ -1,7 +1,9 @@
 # Assistant evaluation: twenty fixed student problems
 
 Issue: [#297](https://github.com/andeplane/fem-lab/issues/297). Parent plan:
-[#24](https://github.com/andeplane/fem-lab/blob/codex/294-script-validation/docs/plans/24-assistant-validation-materials-evals.md).
+[#24](../plans/24-assistant-validation-materials-evals.md).
+
+Published baseline: [16 October 2026 results](./assistant-20-problems-results-2026-10-16.md).
 
 This is the fixed evaluation specification. The prompts, answers and tolerances below are versioned
 before any live run. A failing run does not change them. Every problem starts from a fresh Model and
@@ -194,13 +196,15 @@ whole-evaluation allowance. The runner verifies every parent artifact, leaves it
 stopped ledger untouched, deducts its full charged-or-reserved cost and request count,
 and seals that lineage in the new configuration. Consumption rounds up and remaining
 allowance down to microdollars. A probe consumes the same remaining allowance, never a
-fresh one. At 2026-10-16, nine immutable parent artifacts record 234 generation requests
-and $6.847697 charged or reserved, including unresolved unknown-usage holds. They leave
-$43.152303 of the user-authorized cumulative $50 ceiling. The next fresh experiment uses
-an explicit 800-request cumulative guard and 256,000 input / 16,000 output tokens, leaving
-566 generation requests after those parents. The prior 400-request and 128,000-input
-guards were harness bounds; their change does not increase the dollar allowance or
-permit resuming an incompatible checkpoint. Every historical artifact remains unchanged.
+fresh one. The [published 2026-10-16 run](./assistant-20-problems-results-2026-10-16.md)
+used nine immutable earlier artifacts recording 234 generation requests and $6.847697
+charged or reserved, including unresolved unknown-usage holds. Its fresh configuration
+used an explicit 800-request cumulative guard and 256,000 input / 16,000 output tokens,
+leaving 566 requests and $43.152303 before launch. The completed run added 214 requests /
+$4.331657: cumulative 448 / $11.179354, with 352 / $38.820646 remaining under the unchanged
+user-authorized $50 ceiling. The prior 400-request and 128,000-input guards were harness
+bounds; their change did not increase the dollar allowance or permit resuming an
+incompatible checkpoint. Every historical artifact remains unchanged.
 Counting requests are not priced by this generation ledger; no claim that counting is free
 or that this ledger equals the provider's complete invoice is made.
 
@@ -239,7 +243,7 @@ explicit experiment, not a proven elimination of intermittent provider transport
 
 `FEMLAB_EVAL_COUNT_EVIDENCE_PARENT` optionally enables restricted local serialized count-body
 capture for transport diagnosis. Its bounded 128 MiB / 800-capture sink fails closed when
-exhausted. The next forty-case engineering run leaves that variable absent: full request-body
+exhausted. The published forty-case engineering run left that variable absent: full request-body
 capture is optional and must not become an unrelated capacity gate for the quality run.
 Ordinary sanitized transport diagnostics, tool traces, checkpoints and billing reservations
 remain enabled. Historical private diagnostic bodies and keyed cause-code evidence are
