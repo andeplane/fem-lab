@@ -77,15 +77,22 @@ test('@cpu every panel, disclosure and tab survives two open/close cycles', asyn
   const assistant = page.locator('.assistant');
   await assistant.getByTitle('Open a project folder', { exact: true }).click();
   await expect(assistant.getByTitle('The project rules in force')).toBeVisible();
+  const hostedSettings = assistant.getByTitle('Account settings', { exact: true });
+  const settings = await hostedSettings.count() ? {
+    button: hostedSettings,
+    body: page.getByRole('dialog', { name: 'Sign in', exact: true }),
+    close: page.getByRole('button', { name: 'Close account', exact: true }),
+  } : { button: assistant.getByTitle('Settings', { exact: true }), body: assistant.locator('.settings') };
   for (const disclosure of [
-    { button: assistant.getByTitle('Settings', { exact: true }), body: assistant.locator('.settings') },
+    settings,
     { button: assistant.getByTitle('Reference a Model object, a file or a Result'), body: assistant.locator('.popover') },
     { button: assistant.getByTitle('The project rules in force'), body: assistant.locator('.rules') },
   ]) {
     for (let cycle = 0; cycle < 2; cycle++) {
       await disclosure.button.click();
       await expect(disclosure.body).toBeVisible();
-      await disclosure.button.click();
+      if ('close' in disclosure && disclosure.close) await disclosure.close.click();
+      else await disclosure.button.click();
       await expect(disclosure.body).toBeHidden();
     }
   }
