@@ -341,6 +341,7 @@ fn portable_rejects_adversarial_ownership_provenance_and_numerical_overflow() {
         r#"{"solver":"future","iterations":0,"rel_residual":0,"time_ms":0}"#
     )
     .is_err());
+    assert!(serde_json::from_str::<femlab_engine::solve::SolveInfo>("{}").is_err());
 }
 
 #[test]

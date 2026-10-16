@@ -365,6 +365,32 @@ pub(crate) fn enforce_transient_budget(
     .suggest(suggestion))
 }
 
+impl<'de> serde::Deserialize<'de> for SolveInfo {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            solver: String,
+            iterations: usize,
+            rel_residual: f64,
+            time_ms: f64,
+        }
+        let wire = Wire::deserialize(de)?;
+        let solver = match wire.solver.as_str() {
+            "cpu-direct" => "cpu-direct",
+            "cpu-pcg" => "cpu-pcg",
+            "gpu-pcg" => "gpu-pcg",
+            "cpu-explicit" => "cpu-explicit",
+            "cpu-modal-superposition" => "cpu-modal-superposition",
+            "cpu-modal-covariance" => "cpu-modal-covariance",
+            "none" => "none",
+            "test" => "test",
+            _ => return Err(serde::de::Error::custom("unsupported retained solver identity")),
+        };
+        Ok(Self { solver, iterations: wire.iterations, rel_residual: wire.rel_residual, time_ms: wire.time_ms })
+    }
+}
+
 #[cfg(test)]
 mod transient_cost_tests {
     use super::*;
@@ -453,31 +479,5 @@ mod transient_cost_tests {
             assert_eq!(error.code, ErrorCode::SolveTooLarge);
             assert!(error.suggestion.is_some());
         }
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for SolveInfo {
-    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Wire {
-            solver: String,
-            iterations: usize,
-            rel_residual: f64,
-            time_ms: f64,
-        }
-        let wire = Wire::deserialize(de)?;
-        let solver = match wire.solver.as_str() {
-            "cpu-direct" => "cpu-direct",
-            "cpu-pcg" => "cpu-pcg",
-            "gpu-pcg" => "gpu-pcg",
-            "cpu-explicit" => "cpu-explicit",
-            "cpu-modal-superposition" => "cpu-modal-superposition",
-            "cpu-modal-covariance" => "cpu-modal-covariance",
-            "none" => "none",
-            "test" => "test",
-            _ => return Err(serde::de::Error::custom("unsupported retained solver identity")),
-        };
-        Ok(Self { solver, iterations: wire.iterations, rel_residual: wire.rel_residual, time_ms: wire.time_ms })
     }
 }
