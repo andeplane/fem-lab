@@ -179,6 +179,8 @@ function FieldView(props: FieldProps) {
     // The issue's "the placeholder should show the units": the Model's own length unit, or the
     // dimension's SI one, so an empty box says what a number in it has to carry.
     const placeholder = `0 ${field.dimension === 'length' ? (s.model?.units.length ?? 'm') : siUnit(field.dimension)}`.trim();
+    // Optional placement defaults to the origin; editing x alone must keep y/z at zero.
+    const untouched = !field.required && field.dimension === 'length' && ['at', 'translate'].includes(field.path.at(-1) ?? '') ? placeholder : '';
     return (
       <Row field={field} error={error}>
         {parts === 1 ? (
@@ -193,7 +195,7 @@ function FieldView(props: FieldProps) {
               keyField={field.required}
               placeholder={placeholder}
               hint={hintFor(s, [...field.path, String(i)])}
-              onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? ''))))}
+              onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? untouched))))}
             />
           ))
         )}
@@ -350,7 +352,7 @@ export function SchemaForm(props: FormProps) {
   const physics = form.materialPhysics ?? materialPhysicsFor(s.model, values, fields, defs);
   const visibleFields = form.cmd === 'material.add' ? materialFieldsFor(fields, physics) : form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
   const procedure = form.cmd === 'step.add' && typeof values['procedure'] === 'string' ? procedureInfo(values['procedure'], defs) : null;
-  const cmd = { cmd: form.cmd, ...values };
+  const cmd = { ...values, cmd: form.cmd };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
   const missing = missingRequired(fields, values);
@@ -403,6 +405,7 @@ export function SchemaForm(props: FormProps) {
         <div class="recorded">
           <div class="section-label">Will be recorded as</div>
           <div class="mono recorded-cmd">{commandLine(cmd)}</div>
+          {['geometry.addBox', 'geometry.add'].includes(form.cmd) ? <div class="rule-note">Dashed geometry is a draft. Edit coordinates or a shape transform to place it, then Add body. Nothing is recorded before Add body.</div> : null}
           <div class="apply-row">
             <Cmd
               dispatch={dispatch}
@@ -418,6 +421,7 @@ export function SchemaForm(props: FormProps) {
             <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: form.cmd, args: form.initial, keepInitial: true }} title="Revert to the values this form opened with">
               Revert
             </Cmd>
+            {['geometry.addBox', 'geometry.add'].includes(form.cmd) ? <Cmd dispatch={dispatch} cmd="form.open" class="tbutton outline" args={{ command: '' }} title="Discard the uncommitted body preview" label="Cancel draft">Cancel</Cmd> : null}
           </div>
         </div>
       </form>

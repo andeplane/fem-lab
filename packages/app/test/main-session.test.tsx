@@ -50,13 +50,14 @@ function drawing(onBounds: () => void) {
   const surface = vi.fn<Viewer['setSurface']>((installed) => { if (installed.indices.length || installed.edges?.length) onBounds(); });
   const viewer = {
     hasSurface: true,
+    setGeometryDraft: vi.fn<Viewer['setGeometryDraft']>(),
     setSurface: surface, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), animate: vi.fn(),
     getCamera: () => structuredClone(camera), setCamera: (next: CameraState) => { camera = structuredClone(next); },
     fit: vi.fn(() => {
       expect(surface.mock.lastCall?.[0].positions.length).toBeGreaterThan(0);
       camera = { position: [1.5,1.5,1.5], target: [0.5,0.5,0.5], up: [0,0,1] };
     }),
-  } satisfies Pick<Viewer, 'hasSurface' | 'setSurface' | 'setField' | 'setDeformed' | 'setDim' | 'setMode' | 'animate' | 'getCamera' | 'setCamera' | 'fit'>;
+  } satisfies Pick<Viewer, 'hasSurface' | 'setGeometryDraft' | 'setSurface' | 'setField' | 'setDeformed' | 'setDim' | 'setMode' | 'animate' | 'getCamera' | 'setCamera' | 'fit'>;
   return viewer;
 }
 

@@ -34,6 +34,8 @@ import { bindRegistryProducer, type RegistryProducer } from './producer-registry
 import { browserAbaqusIo } from './abaqus-files';
 import { StepImporter } from './step-import';
 import './ui/style.css';
+import { GeometryDraft, geometryDraftRenderer } from './geometry-draft';
+import { defaultFormValues, fieldsOf, type Defs } from './ui/schema';
 
 declare global {
   interface Window { fem: Fem & { registry: Registry; dispatch: Registry['dispatch']; gpuSelfTest(n: number): Promise<number> } }
@@ -63,6 +65,7 @@ class Bundle {
   readonly capture = new AnimationCapture(browserAnimationCaptureEnvironment());
   readonly viewer: ViewerRef = { current: null };
   readonly rightViewer: ViewerRef = { current: null };
+  readonly geometryDraft: GeometryDraft;
   readonly validation = new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), async () => undefined, async () => undefined,
     browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
   readonly results: ResultsView;
@@ -88,6 +91,16 @@ class Bundle {
   disposed = false;
   constructor(readonly transport: SessionTransport, recovered?: CompletedFilesHost) {
     this.ownsFiles = !recovered;
+    const engineSchema = schema as unknown as EngineSchema;
+    const definitions: Defs = { ...engineSchema.commands.$defs, ...engineSchema.queries.$defs };
+    this.geometryDraft = new GeometryDraft(this.store, geometryDraftRenderer(
+      () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }), () => crypto.randomUUID()),
+      () => this.viewer.current,
+      { schedule: (fn, ms) => setTimeout(fn, ms), cancel: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+      form => {
+        const variant = engineSchema.commands.oneOf.find(variant => variant.properties['cmd']?.const === form.cmd);
+        return variant ? defaultFormValues(form.values, fieldsOf(variant, definitions)) : form.values;
+      });
     this.completedFiles = recovered ?? createCompletedFiles({ download: browserDownload, nextId: () => crypto.randomUUID(),
       changed: () => { const store = completedFileStores.get(this.completedFiles); if (store) store.set({ completedFilesVersion: store.state.completedFilesVersion + 1 }); } });
     this.detachAccount = accounts.subscribe(account => this.store.set({ account }));
@@ -101,6 +114,7 @@ class Bundle {
     this.rightViewer.onReady = () => this.comparison.resume();
     this.viewer.onReady = () => {
       if (this.fitAfterOpen) this.initialCamera = this.viewer.current?.getCamera();
+      this.geometryDraft.restore();
       void this.refresh().catch(error => this.fail(error));
     };
     this.viewer.onBounds = () => {
@@ -266,6 +280,7 @@ class Bundle {
     this.disposed = true;
     retireProjectHost(this.store);
     this.stepImport.dispose();
+    this.geometryDraft.dispose();
     this.detachAccount();
     this.detachFiles();
     if (this.ownsFiles) { completedFileStores.delete(this.completedFiles); this.completedFiles.dispose(); }

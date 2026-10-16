@@ -549,8 +549,10 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
           }
           const legend = parent.querySelector('.legend')?.getBoundingClientRect();
           if (legend?.width) right = Math.min(right, legend.left - box.left - 12);
-          const deformation = parent.querySelector('.deform-bar')?.getBoundingClientRect();
-          if (deformation?.height) bottom = Math.min(bottom, deformation.top - box.top - 12);
+          for (const selector of ['.deform-bar', '.geometry-draft-note']) {
+            const overlay = parent.querySelector(selector)?.getBoundingClientRect();
+            if (overlay?.height) bottom = Math.min(bottom, overlay.top - box.top - 12);
+          }
           return right > 24 && bottom > top + 12 ? { width: box.width, height: box.height, left: 12, right, top, bottom } : null;
         });
       } catch (e) {
@@ -674,9 +676,13 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
       </div> : null}
       {side === 'left' ? <><SolvingCard s={s} dispatch={dispatch} /><ErrorCard s={s} dispatch={dispatch} /></> : null}
       {!comparing ? <div class="probe mono">{probe}</div> : null}
+      {side === 'left' && s.geometryDraft.status !== 'idle' ? <div class={`geometry-draft-note ${s.geometryDraft.status}`} role="status">
+        <strong>{s.geometryDraft.status === 'ready' ? 'Draft · not added' : s.geometryDraft.status === 'pending' ? 'Preparing draft…' : 'Draft unavailable'}</strong>
+        <span>{s.geometryDraft.status === 'error' ? `${s.geometryDraft.error.code}: ${s.geometryDraft.error.cause}${s.geometryDraft.error.where ? ` (${s.geometryDraft.error.where})` : ''}. Correct Properties to preview again.` : 'Edit size and position in Properties. Fit frames the preview. Add body commits it.'}</span>
+      </div> : null}
       {broken ? (
         <div class="hint">{broken}</div>
-      ) : (s.model?.bodies.length ?? 0) === 0 ? (
+      ) : (s.model?.bodies.length ?? 0) === 0 && s.geometryDraft.status === 'idle' ? (
         <div class="hint">
           <b>No geometry yet</b>
           <span>Add a box in Properties, or ask the Assistant. The banner above always says what is missing before Solve can run.</span>
