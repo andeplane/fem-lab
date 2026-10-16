@@ -8,7 +8,7 @@ On the public app, sign in through Account using Google or an email link. Accept
 
 Your messages and the context needed for the request pass through FEM Lab to the configured model provider. Context can include Model definitions, earlier messages, tool arguments/results, project-file excerpts and screenshots. Local storage does not mean an Assistant request stays on the device. Read the [Privacy notice](https://femlab.app/privacy.html) before including confidential data.
 
-On the start screen, describing an analysis creates an **unsent draft**. **Sign in to continue** opens Account; the same-tab draft remains editable after authentication. **Review in assistant** moves it into the Assistant without sending it. Nothing goes to hosted AI until you choose **Send** there and complete the disclosure/allowance requirements. Starting local modeling does not require using that draft or signing in.
+On the start screen, describing an analysis creates an **unsent draft**. **Sign in to continue** opens Account; the draft stays in that tab’s session storage and remains editable after authentication. It is bound to the authenticated account; signing out or switching accounts clears it. **Review in assistant** moves it into the Assistant without sending it. Nothing goes to hosted AI until you choose **Send** there and complete the disclosure/allowance requirements. Starting local modeling does not require using that draft or signing in.
 
 ## Give a bounded engineering task
 

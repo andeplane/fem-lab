@@ -180,6 +180,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'tutorial' }} pressed={s.panels['tutorial'] === true} title="Guided tutorials">
         Tutorials
       </Cmd>
+      <a class="tbutton docs-link" href={`${import.meta.env.BASE_URL}docs/`} target="_blank" rel="noreferrer">Docs</a>
       <Cmd dispatch={dispatch} cmd="account.open" class="tbutton account-button" title="Login, AI allowance and subscription" label={s.account.uid ? 'Account' : 'Sign in'}><span class="account-button-label">{s.account.uid ? 'Account' : 'Sign in'}</span><span class="account-button-icon" aria-hidden="true">◉</span></Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton outline" args={{ panel: 'assistant' }} pressed={s.panels['assistant'] === true}>
         ✳ Assistant

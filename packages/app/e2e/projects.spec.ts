@@ -170,24 +170,25 @@ test.describe('@cpu projects in this browser', () => {
     expect(names).toHaveLength(2);
   });
 
-  test('the start screen composer opens the Assistant over it, and the workspace comes up around it', async ({ page }) => {
+  test('the hosted landing composer requires sign-in and preserves an unsent draft', async ({ page }) => {
+    const completions: string[] = [];
+    page.on('request',request=>{if(/\/(?:chat|v1\/ai)\/completions(?:[?#]|$)/.test(request.url()))completions.push(request.url());});
     await page.goto('./');
     await ready(page);
-    // No API key in the test browser, so the drawer answers by opening its Settings — the point
-    // is that the line reached a drawer that did not exist when it was typed (issue #40).
     await page.getByLabel('describe the part').fill('a 1 m steel cantilever, 10 kN at the tip');
+    await expect(page.locator('.ask-send')).toHaveText('Sign in to continue');
     await page.getByLabel('describe the part').press('Enter');
-
-    const drawer = page.locator('aside.assistant');
-    await expect(drawer).toBeVisible();
-    await expect(drawer.locator('.settings')).toBeVisible();
-    await expect(page.locator('.start')).toBeVisible();
-    // The typed line is kept, so nothing has to be retyped once a key is pasted in.
+    const account=page.getByRole('dialog',{name:'Sign in for AI'});
+    await expect(account).toBeVisible();
+    await expect(page.locator('aside.assistant')).not.toBeVisible();
+    await page.getByRole('button',{name:'Close account'}).click();
     await expect(page.getByLabel('describe the part')).toHaveValue('a 1 m steel cantilever, 10 kN at the tip');
-
-    await page.evaluate(() => window.fem.model.new({ name: 'from-the-assistant' }));
+    await page.reload();await ready(page);
+    await expect(page.getByLabel('describe the part')).toHaveValue('a 1 m steel cantilever, 10 kN at the tip');
+    expect(completions).toEqual([]);
+    await page.getByRole('button',{name:'Start modeling — free'}).click();
     await expect(page.locator('.shell')).toBeVisible();
-    await expect(drawer.locator('.settings')).toBeVisible();
+    await expect(page.getByRole('link',{name:'Docs',exact:true})).toHaveAttribute('href',/\/docs\/$/);
   });
 
   test('every control on the start screen names a Command the registry has', async ({ page }) => {
