@@ -88,15 +88,20 @@ test.describe('@cpu the guided tutorial', () => {
     await expect(page.locator('.tutorial-step-title')).toHaveText('The truss, as lines');
     const content = page.locator('.tutorial-content');
     expect(await content.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
-    for (const label of ['Do it for me', 'Skip']) {
-      const button = page.locator('.tutorial-btn', { hasText: label });
-      const bounds = (await button.boundingBox())!;
-      const card = (await page.locator('.tutorial-panel').boundingBox())!;
-      expect(bounds.y).toBeGreaterThanOrEqual(card.y);
-      expect(bounds.y + bounds.height).toBeLessThanOrEqual(card.y + card.height);
-      // trial checks hit testing without Playwright scrolling the button into view.
-      await button.click({ trial: true });
-      expect(await content.evaluate(el => el.scrollTop)).toBe(0);
+    // Linux Chromium retains a 4px offset from the preceding steps. Both the top and a
+    // retained content position must leave the actions reachable without further scrolling.
+    for (const scrollTop of [0, 4]) {
+      await content.evaluate((el, offset) => { el.scrollTop = offset; }, scrollTop);
+      for (const label of ['Do it for me', 'Skip']) {
+        const button = page.locator('.tutorial-btn', { hasText: label });
+        const bounds = (await button.boundingBox())!;
+        const card = (await page.locator('.tutorial-panel').boundingBox())!;
+        expect(bounds.y).toBeGreaterThanOrEqual(card.y);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(card.y + card.height);
+        // trial checks hit testing without Playwright scrolling the button into view.
+        await button.click({ trial: true });
+        expect(await content.evaluate(el => el.scrollTop)).toBe(scrollTop);
+      }
     }
     await page.locator('.tutorial-btn.primary', { hasText: 'Do it for me' }).click();
     await expect(page.locator('.tutorial-step-title')).toHaveText('S355');
