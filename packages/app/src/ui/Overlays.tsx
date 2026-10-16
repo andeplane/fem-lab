@@ -441,7 +441,7 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
         <div class="landing-ai-heading"><div><span class="landing-eyebrow">OPTIONAL AI ASSISTANCE</span><h2 id={`landing-ai-title-${instance}`}>Describe the analysis you have in mind.</h2></div><a href={`${docs}assistant/`} target="_blank" rel="noreferrer">How the assistant works ↗</a></div>
         <p>{hosted ? 'Hosted AI requires sign-in, accepted data-use disclosure and available credits. Local modeling is always free.' : 'This development build can use your own provider key. The public hosted service requires sign-in and credits.'}</p>
         <div class="ask">
-          <input class="ask-field" aria-label="describe the part" aria-describedby={`landing-ai-note-${instance}`} data-cmd={hosted ? 'chat.setDraft' : 'chat.send'} placeholder="For example: a steel cantilever with a downward load at the tip…" value={ask}
+          <input type="text" name="analysis-description" autoComplete="off" class="ask-field" aria-label="describe the part" aria-describedby={`landing-ai-note-${instance}`} data-cmd={hosted ? 'chat.setDraft' : 'chat.send'} placeholder="For example: a steel cantilever with a downward load at the tip…" value={ask}
             onInput={(e) => { const text = (e.target as HTMLInputElement).value; setAsk(text); if (!text.trim()) promptStore.clear(); else if (promptStore.read(s.account.uid)) promptStore.save(text, s.account.uid); }}
             onKeyDown={(e) => { if (e.key === 'Enter') (e.preventDefault(), send()); }} />
           <Cmd dispatch={dispatch} cmd={needsSignIn ? 'account.open' : hosted ? 'chat.setDraft' : 'chat.send'} class="ask-send" args={{ text: ask }} disabled={!s.ready || ask.trim() === ''} onRun={send}>
@@ -455,7 +455,7 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
       <div class="section">
         <span class="section-head">New project</span>
         <div class="new-project">
-          <input class="mono new-name" aria-label="project name" data-cmd="project.new" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+          <input type="text" name="project-name" autoComplete="off" class="mono new-name" aria-label="project name" data-cmd="project.new" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
           <Cmd dispatch={dispatch} cmd="project.new" opens="model.new" class="apply" args={{ name }} disabled={!s.ready} title="project.new">
             New project
           </Cmd>
