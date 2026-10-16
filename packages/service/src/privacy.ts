@@ -3,6 +3,8 @@ import type {Account,Sql} from './accounts';
 import type {Identity} from './identity';
 import {ServiceFailure} from './errors';
 import {transaction,type Database} from './transactions';
+import {PUBLIC_CREDIT_UNIT} from '@femlab/registry';
+import {CREDIT_SCALE,PUBLIC_CREDIT_SCALE} from './credits';
 export interface ExportObjects {write(name:string,json:string,expires:Date):Promise<void>;url(name:string,expires:Date):Promise<string>;remove(name:string):Promise<void>}
 export interface PrivacyIdentity {remove(uid:string):Promise<void>}
 export interface PrivacyPayments {stopRenewal(accountId:string,customerId:string|null,key:string):Promise<void>}
@@ -50,10 +52,13 @@ export function accountPrivacy(deps:Dependencies) {
   }
   async function records(sql:Sql,accountId:string) {
     const account=(await sql.query('SELECT id,email,status,created_at FROM accounts WHERE id=$1',[accountId])).rows[0];
-    const tables=['credit_grants','credit_entries','credit_holds','usage_receipts','paid_periods','billing_accounts','billing_reviews'] as const;
-    const data:Record<string,unknown>={format:'femlab-account/1',exportedAt:now().toISOString(),account};
+    const tables=['credit_grants','credit_entries','credit_holds','usage_receipts','paid_periods','billing_accounts','billing_reviews','free_eligibilities'] as const;
+    const data:Record<string,unknown>={format:'femlab-account/1',exportedAt:now().toISOString(),account,
+      creditAccounting:{storedUnit:'subcredit',subcreditsPerLegacyCredit:Number(CREDIT_SCALE),publicCreditUnit:PUBLIC_CREDIT_UNIT,subcreditsPerPublicCredit:Number(PUBLIC_CREDIT_SCALE)}};
     let bytes=0;
     for(const table of tables){const rows=(await sql.query(`SELECT * FROM ${table} WHERE account_id=$1 LIMIT 100001`,[accountId])).rows;if(rows.length>100000)throw new Error('Account export requires support for a larger ledger.');bytes+=Buffer.byteLength(JSON.stringify(rows));if(bytes>32*1024*1024)throw new Error('Account export requires support for a larger ledger.');data[table]=rows}
+    data.free_eligibility_identities=(await sql.query('SELECT i.* FROM free_eligibility_identities i JOIN free_eligibilities e ON e.id=i.eligibility_id WHERE e.account_id=$1 LIMIT 100001',[accountId])).rows;
+    if((data.free_eligibility_identities as unknown[]).length>100000)throw new Error('Account export requires support for larger eligibility history.');
     data.requests=(await sql.query('SELECT id,model,plan,state,created_at,updated_at FROM ai_requests WHERE account_id=$1 ORDER BY created_at LIMIT 100001',[accountId])).rows;
     if((data.requests as unknown[]).length>100000)throw new Error('Account export requires support for a larger ledger.');
     const json=JSON.stringify(data);if(Buffer.byteLength(json)>32*1024*1024)throw new Error('Account export requires support for a larger ledger.');return json;

@@ -152,12 +152,12 @@ fn numeric_values(len: usize) -> Result<Vec<f64>, LltError> {
 /// A fixed logical partition budget keeps faer's reduction order independent of workers.
 /// This creates no threads: the caller's existing Rayon pool schedules the work (ADR0031).
 /// Per-call only; never modify the process-global faer setting shared by other Engines.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 fn arithmetic_parallelism() -> Par {
     Par::rayon(64)
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
 fn arithmetic_parallelism() -> Par {
     Par::Seq
 }

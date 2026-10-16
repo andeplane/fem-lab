@@ -27,7 +27,7 @@ function run(command: string, args: string[], cwd: string, environment?: NodeJS.
 /** Build HEAD, pack MCP, and install its actual tarball away from the checkout. */
 export async function prepareFrozenBuild(root: string, reusedWasm?: ReusedWasm): Promise<FrozenBuild> {
   const directory = await mkdtemp(path.join(tmpdir(), 'femlab-assistant-build-'));
-  const commands = [reusedWasm ? 'verify sealed source/schema/all eight reused wasm bindings' : 'node tools/build-wasm.mjs', 'npm run build -w packages/app', 'npm pack + isolated npm install packages/mcp'];
+  const commands = [reusedWasm ? 'verify sealed component source/schema/declared runtime and native component closure' : 'node tools/build-wasm.mjs', 'npm run build -w packages/app', 'npm pack + isolated npm install packages/mcp'];
   try {
     const wasmProvenance = reusedWasm ? await verifyReusedWasm(root, reusedWasm, reference => run('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], root)) : undefined;
     if (!reusedWasm) run(process.execPath, ['tools/build-wasm.mjs'], root);

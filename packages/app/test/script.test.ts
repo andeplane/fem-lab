@@ -57,7 +57,7 @@ const host = (dispatch = vi.fn(async () => 'ack'), query = vi.fn(async () => ({ 
 describe('ScriptHost', () => {
   it('never forwards account, billing or credential authority from a generated program',async()=>{
     const {scripts,dispatch,query}=host();const run=scripts.run('program()');const worker=FakeWorker.last!;
-    for(const cmd of ['account.signIn','account.delete','billing.checkout','ai.setKey']) await expect(worker.call('dispatch',{cmd})).rejects.toThrow('explicit user action');
+    for(const cmd of ['account.signIn','account.delete','account.claimFreeAllowance','billing.checkout','ai.setKey']) await expect(worker.call('dispatch',{cmd})).rejects.toThrow('explicit user action');
     await expect(worker.call('query',{query:'query.account'})).rejects.toThrow('explicit user action');
     expect(dispatch).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled();
     await expect(worker.call('dispatch',{cmd:'view.fit'})).resolves.toBe('ack');
@@ -97,6 +97,28 @@ describe('ScriptHost', () => {
     await worker.call('dispatch', { cmd: 'journal.undo' });
     worker.finish({ result: null, console: [] });
     await expect(run).resolves.toMatchObject({ journalEntries: [{ seq: 3, hashAfter: 'script-hash', cmd: command }] });
+  });
+
+  it('keeps only completed file deliveries, including before a later script failure, local to each run', async () => {
+    const delivery = { name: 'actual-default.femlab.json', to: 'download', bytes: 6, mime: 'text/plain', id: 'completed-original' };
+    const scripts = new ScriptHost(() => new FakeWorker() as unknown as Worker, async payload => {
+      if (payload['cmd'] === 'file.write') throw new Error('write refused');
+      if (payload['cmd'] === 'file.export') return { cancelled: true };
+      return delivery;
+    }, async () => ({ name: 'not-a-delivery.json', to: 'download' }));
+    const run = scripts.run('save();');
+    const worker = FakeWorker.last!;
+    await worker.call('dispatch', { cmd: 'file.save' });
+    await worker.call('dispatch', { cmd: 'file.download', id: delivery.id });
+    await worker.call('dispatch', { cmd: 'file.export', spec: { format: 'webm' } });
+    await expect(worker.call('dispatch', { cmd: 'file.write', path: 'failed.md', text: 'x' })).rejects.toThrow('write refused');
+    await worker.call('dispatch', { cmd: 'view.fit' });
+    await worker.call('query', { query: 'query.model' });
+    worker.finish({ console: [], error: 'after delivery' });
+    await expect(run).resolves.toEqual({ result: null, console: [], error: 'after delivery', files: [delivery, delivery] });
+    const next = scripts.run('next();');
+    FakeWorker.last!.finish({ console: [] });
+    await expect(next).resolves.toEqual({ result: null, console: [] });
   });
 
   it('preserves structured failures and refuses recursive script execution', async () => {

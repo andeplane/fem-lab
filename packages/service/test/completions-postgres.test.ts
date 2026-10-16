@@ -9,7 +9,7 @@ import type {ChatEvent,ChatRequest} from '@femlab/ai';
 import {postgresAccounts} from '../src/accounts';
 import {creditLedger} from '../src/ledger';
 import {migrate} from '../src/migrations';
-import {reservations} from '../src/reservations';
+import {reservations,type RequestStatus} from '../src/reservations';
 import {completionService} from '../src/completions';
 import {serviceServer} from '../src/http';
 import type {ProviderGateway,Observations} from '../src/provider';
@@ -41,13 +41,29 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
   const body={protocol:1,turnId:'turn-one',round:0,model:'gpt-5.4-mini',maxTokens:1000,system:'project context',messages:[{role:'user',content:[{type:'text',text:'inspect'}]}],tools:[]};
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
-    const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}
+    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql','010-free-monthly-allowance.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
+    const connection=await db.connect();try{await migrate(connection,migrations);}finally{connection.release();}await db.query('UPDATE ai_limits SET free_monthly_micros=50000000');
     server.listen(0,'127.0.0.1');await once(server,'listening');url=`http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
   beforeEach(async()=>{await db.query('TRUNCATE accounts CASCADE');counted=undefined;generated=0;mode='complete';});
   afterAll(async()=>{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));await db.end();await admin.query(`DROP SCHEMA ${schema} CASCADE`);await admin.end();});
-  const send=(key='key-one',input:unknown=body,authorization='Bearer owner')=>fetch(`${url}/v1/ai/completions`,{method:'POST',headers:{authorization,'content-type':'application/json','idempotency-key':key},body:JSON.stringify(input)});
+  const send=(key='key-one',input:unknown=body,authorization='Bearer owner',creditUnit?:string)=>fetch(`${url}/v1/ai/completions`,{method:'POST',headers:{authorization,'content-type':'application/json','idempotency-key':key,...(creditUnit?{'x-femlab-credit-unit':creditUnit}:{})},body:JSON.stringify(input)});
+  it('negotiates SSE, status and replay credit units without rebilling or changing stored amounts',async()=>{
+    const response=await send('scaled',body,'Bearer owner','usd-milli-v1');expect(response.status).toBe(200);
+    const events=(await response.text()).split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
+    const scaled=events.find(event=>event.type==='receipt').receipt;
+    expect(scaled).toMatchObject({creditUnit:'usd-milli-v1',chargedCredits:1.2,chargedSubcredits:'48000',tariffVersion:'2026-10-14.v1'});
+    expect(counted).not.toHaveProperty('creditUnit');expect(generated).toBe(1);
+    const stored=(await db.query('SELECT * FROM usage_receipts')).rows[0];
+    const path=`${url}/v1/ai/requests/${stored.request_id}`;
+    expect(await(await fetch(path,{headers:{authorization:'Bearer owner'}})).json()).toMatchObject({receipt:{chargedCredits:1600,chargedSubcredits:'48000'}});
+    expect(await(await fetch(path,{headers:{authorization:'Bearer owner','x-femlab-credit-unit':'usd-milli-v1'}})).json()).toMatchObject({receipt:scaled});
+    const replay=await send('scaled',body,'Bearer owner','usd-milli-v1');expect(await replay.json()).toMatchObject({replay:true,receipt:scaled});
+    const legacyReplay=await send('scaled');const legacy=await legacyReplay.json() as RequestStatus;expect(legacy.receipt!.chargedCredits).toBe(1600);expect(legacy.receipt).not.toHaveProperty('creditUnit');
+    expect((await db.query('SELECT * FROM usage_receipts')).rows).toEqual([stored]);
+    expect((await db.query("SELECT amount FROM credit_entries WHERE kind='usage'")).rows).toEqual([{amount:'-48000'}]);expect(generated).toBe(1);
+    expect((await db.query("SELECT * FROM ai_requests WHERE state=ANY($1)",[['reserved','dispatched','pending_reconciliation']])).rows).toHaveLength(0);
+  });
   it('denies disposable verified identities before any provider call unless explicitly approved',async()=>{
     mode='unapproved';
     for(let i=0;i<8;i++){const response=await send('signup',body,`Bearer disposable-${i}`);expect(response.status).toBe(402);}
@@ -62,8 +78,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
     const pause=await readFile(new URL('../../../infra/google/sql-staging-ai-paused.sql',import.meta.url),'utf8');
     try {
       await db.query(pause);await db.query(pause);
-      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
-        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
+      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,free_monthly_micros,uncertain_micros FROM ai_limits')).rows[0])
+        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',free_monthly_micros:'0',uncertain_micros:'0'});
       for(const uid of ['free','paid']) {
         const response=await send('paused',body,`Bearer ${uid}`);
         expect(response.status).toBe(503);expect(await response.json()).toMatchObject({code:'ai-unavailable'});
@@ -71,13 +87,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('authenticated completion HTTP p
       expect(counted).toBeUndefined();expect(generated).toBe(0);
       expect((await db.query('SELECT * FROM ai_requests')).rows).toHaveLength(0);
       expect((await db.query('SELECT * FROM usage_receipts')).rows).toHaveLength(0);
-      expect((await ledger.balance(paid.id)).availableCredits).toBe(4000000);
+      expect((await ledger.balance(paid.id)).availableCredits).toBe(10000000);
       await db.query('DELETE FROM ai_limits');await db.query('INSERT INTO ai_limits(id) VALUES(true)');
-      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,uncertain_micros FROM ai_limits')).rows[0])
-        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',uncertain_micros:'0'});
+      expect((await db.query('SELECT enabled,daily_micros,monthly_micros,free_daily_micros,free_monthly_micros,uncertain_micros FROM ai_limits')).rows[0])
+        .toEqual({enabled:false,daily_micros:'0',monthly_micros:'0',free_daily_micros:'0',free_monthly_micros:'0',uncertain_micros:'0'});
     } finally {
-      await db.query('UPDATE ai_limits SET enabled=$1,daily_micros=$2,monthly_micros=$3,free_daily_micros=$4,uncertain_micros=$5 WHERE id=true',
-        [original.enabled,original.daily_micros,original.monthly_micros,original.free_daily_micros,original.uncertain_micros]);
+      await db.query('UPDATE ai_limits SET enabled=$1,daily_micros=$2,monthly_micros=$3,free_daily_micros=$4,uncertain_micros=$5,free_monthly_micros=$6 WHERE id=true',
+        [original.enabled,original.daily_micros,original.monthly_micros,original.free_daily_micros,original.uncertain_micros,original.free_monthly_micros]);
     }
   });
   it('streams normalized calls/continuation, with the authoritative receipt before executable tools',async()=>{

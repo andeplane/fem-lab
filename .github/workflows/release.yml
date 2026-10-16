@@ -11,6 +11,9 @@ on:
       - 'tools/test_release_artifacts.py'
       - 'tools/test-mcp-package.mjs'
       - 'packages/mcp/package.json'
+      - 'crates/project-io/**'
+      - 'tools/build-project-io.mjs'
+      - 'tools/package-mcp.mjs'
 
 permissions:
   contents: read
@@ -70,7 +73,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: cargo build --locked --release -p femlab --target ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo test --locked -p femlab-project-io
+      - run: cargo build --locked --release -p femlab -p femlab-project-io --target ${{ matrix.target }}
+      - run: node tools/build-project-io.mjs --target ${{ matrix.target }} --stage target/${{ matrix.target }}/release/femlab-project-io${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: project-io-${{ matrix.target }}
+          path: tools/project-io/
+          if-no-files-found: error
       - run: python tools/release-artifacts.py native --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
@@ -79,7 +92,7 @@ jobs:
           if-no-files-found: error
 
   web-package:
-    needs: [metadata, validation]
+    needs: [metadata, validation, native]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,10 +110,17 @@ jobs:
         with:
           name: dist
           path: packages/app/dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: project-io-*
+          merge-multiple: true
+          path: tools/project-io
+      - run: chmod +x tools/project-io/*/femlab-project-io
       - run: npm ci
       - run: node tools/test-mcp-package.mjs "release/femlab-mcp-$RELEASE_VERSION.tgz"
         env:
           RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          FEMLAB_RELEASE_HELPERS: all
       - run: python tools/release-artifacts.py web
       - uses: actions/upload-artifact@v4
         with:

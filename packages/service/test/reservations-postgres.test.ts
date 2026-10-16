@@ -19,13 +19,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
   const digest='a'.repeat(64);
   beforeAll(async()=>{
     await admin.query(`CREATE SCHEMA ${schema}`);
-    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
+    const migrations=await Promise.all(['001-accounts.sql','002-credit-ledger.sql','003-ai-reservations.sql','004-provider-rejections.sql','005-billing-inbox.sql','010-free-monthly-allowance.sql'].map(async name=>({name,sql:await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8')})));
     const connection=await db.connect(); try { await migrate(connection,migrations); } finally { connection.release(); }
   });
   beforeEach(async()=>{
     clock=new Date('2026-10-14T12:00:00Z');
     await db.query('TRUNCATE accounts CASCADE');
-    await db.query('UPDATE ai_limits SET enabled=true,daily_micros=100000000,monthly_micros=1000000000,free_daily_micros=20000000,uncertain_micros=10000000,concurrent=16');
+    await db.query('UPDATE ai_limits SET enabled=true,daily_micros=100000000,monthly_micros=1000000000,free_daily_micros=20000000,free_monthly_micros=50000000,uncertain_micros=10000000,concurrent=16');
   });
   afterAll(async()=>{ await db.end(); await otherProcess.end(); await admin.query(`DROP SCHEMA ${schema} CASCADE`); await admin.end(); });
   async function owner(uid='owner') { const account=await accounts.provision({uid,email:`${uid}@example.com`}); await grantFreeFixture(ledger, account.id, clock); return account.id; }
@@ -71,7 +71,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
     const replay=await prepare(accountId,(await db.query('SELECT idempotency_key FROM ai_requests WHERE id=$1',[id])).rows[0].idempotency_key);
     expect(replay.receipt).toEqual(receipts[0]); expect(replay.replay).toBe(true);
   });
-  it.each(['daily_micros','monthly_micros','free_daily_micros','uncertain_micros'])('global %s includes outstanding holds across processes',async column=>{
+  it.each(['daily_micros','monthly_micros','free_daily_micros','free_monthly_micros','uncertain_micros'])('global %s includes outstanding holds across processes',async column=>{
     await db.query(`UPDATE ai_limits SET ${column}=6000`);
     const one=await owner('one'),two=await owner('two');
     const r1=await prepare(one),r2=await prepare(two);
@@ -79,6 +79,20 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('atomic admission/recovery on re
     expect(results.filter(row=>row.status==='fulfilled')).toHaveLength(1);
     expect(results.filter(row=>row.status==='rejected')).toHaveLength(1);
     expect((await db.query("SELECT count(*) AS n FROM ai_requests WHERE state='reserved'")).rows[0].n).toBe('1');
+  });
+  it('enforces the supplier month budget for paid usage independently of the free pool and paid renewal date',async()=>{
+    const accountId=await owner();
+    await ledger.grant({accountId,source:'paid-budget',plan:'plus',startsAt:clock,expiresAt:new Date('2026-11-14T12:00:00Z')});
+    await db.query('UPDATE ai_limits SET monthly_micros=6000,free_daily_micros=0');
+    const id=await admit(accountId);await a.dispatch(accountId,id);
+    await a.settle(accountId,id,{input:1000,cacheRead:0,output:1000}); // $0.00525.
+    expect(await ledger.balance(accountId)).toMatchObject({plan:'plus',availableCredits:9_993_000});
+    const denied=await prepare(accountId);
+    await expect(a.reserve(accountId,denied.id,1000)).rejects.toMatchObject({code:'spend-limit'});await a.release(accountId,denied.id);
+    clock=new Date('2026-11-01T00:00:00Z');
+    const newMonth=await admit(accountId);await a.release(accountId,newMonth);
+    expect(await ledger.balance(accountId)).toMatchObject({plan:'plus',availableCredits:9_993_000});
+    expect((await db.query("SELECT count(*) AS n FROM credit_grants WHERE account_id=$1 AND plan='plus'",[accountId])).rows[0].n).toBe('1');
   });
   it('global concurrency, model entitlement and context bounds fail closed',async()=>{
     const one=await owner('one'),two=await owner('two');

@@ -69,7 +69,7 @@ it('transfers explicit member field identities without merging the stresses at a
 
 it('transfers independent retained meshes and f64 fields repeatedly without exposing engine storage', async () => {
   const engine = new wasm.SessionEngine(1, 'retained-transfer');
-  const runtime = new SessionRuntime(async () => engine, wasm.PreparedEngine.create);
+  const runtime = new SessionRuntime(async () => engine, wasm.PreparedEngine.create, () => 0);
   const detached: number[] = [];
   const worker = {
     onmessage: null as ((event: MessageEvent<SessionResponse>) => void) | null,

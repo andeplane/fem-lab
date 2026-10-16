@@ -35,11 +35,18 @@ try {
     assert(!/^(file:|workspace:)/.test(version), `local dependency leaked: ${name}`);
   }
   const hash = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
+  const helperManifest = JSON.parse(readFileSync(path.join(installed, 'dist/project-io/manifest.json'), 'utf8'));
+  if (process.env.FEMLAB_RELEASE_HELPERS === 'all') assert.equal(Object.keys(helperManifest).length, 4, 'release must contain all four native helper targets');
+  for (const [relative, expected] of Object.entries(helperManifest)) {
+    assert.equal(hash(path.join(installed, 'dist/project-io', relative)), expected, `helper payload changed: ${relative}`);
+  }
+  assert(Object.keys(helperManifest).some(name => name.startsWith(`${process.platform}-${process.arch}/`)), 'installed host helper is missing');
+
   assert.equal(hash(path.join(installed, 'dist/wasm-node/femlab_engine_wasm_bg.wasm')), hash(path.join(root, 'tools/wasm-node/femlab_engine_wasm_bg.wasm')));
   // No inherited FEMLAB_WASM, NODE_PATH or NODE_OPTIONS can make the checkout rescue this package.
   const env = Object.fromEntries(['PATH', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP'].filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
   client = new Client({ name: 'installed-package-smoke', version: '1' });
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(installed, manifest.bin['femlab-mcp'])], cwd: directory, env, stderr: 'inherit' }));
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(installed, manifest.bin['femlab-mcp']), '--project', directory], cwd: directory, env, stderr: 'inherit' }));
   const { tools } = await client.listTools();
   const names = new Set(tools.map(({ name }) => name));
   for (const name of ['query_model', 'model_new', 'run_script', 'validate_script', 'file_importAbaqus']) assert(names.has(name), `missing installed tool ${name}`);
@@ -77,6 +84,12 @@ try {
   assert.equal(meshImport.report.analysisConfigured, false);
   assert.deepEqual((await call('query_model', {})).steps, []);
   assert.equal((await call('query_mesh', {})).nodes, 4);
+  writeFileSync(path.join(directory, 'input.inp'), meshText);
+  const diskMeshArgs = { ...meshArgs, path: 'input.inp' };
+  delete diskMeshArgs.text;
+  await call('file_importAbaqus', diskMeshArgs);
+  await call('export_file', { format: 'journal', path: 'nested/output.femlab.json' });
+  assert.equal(JSON.parse(readFileSync(path.join(directory, 'nested/output.femlab.json'), 'utf8')).format, 'femlab/1');
   const staticImport = await call('file_importAbaqus', { ...staticArgs, unitForce: '1 N' });
   assert.equal(staticImport.report.analysisConfigured, true);
   assert.equal((await call('query_model', {})).steps[0].solved, false);

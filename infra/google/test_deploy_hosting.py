@@ -12,6 +12,20 @@ from unittest.mock import patch
 
 
 class HostingReleaseSmoke(unittest.TestCase):
+    def test_only_signin_document_leaves_engine_isolation_in_both_environments(self):
+        for environment in ['production', 'staging']:
+            with self.subTest(environment=environment):
+                config = json.loads(Path(__file__).with_name(f'hosting.{environment}.json').read_text())['hosting']
+                rules = config['headers']
+                global_headers = {h['key']: h['value'] for r in rules if r['source'] == '**' for h in r['headers']}
+                self.assertEqual(global_headers['Cross-Origin-Opener-Policy'], 'same-origin')
+                self.assertEqual(global_headers['Cross-Origin-Embedder-Policy'], 'credentialless')
+                exceptions = [r for r in rules if any(h['key'] == 'Cross-Origin-Embedder-Policy' and h['value'] != 'credentialless' for h in r['headers'])]
+                self.assertEqual(len(exceptions), 1)
+                self.assertEqual(exceptions[0]['source'], '/signin.html')
+                self.assertEqual({h['key']: h['value'] for h in exceptions[0]['headers']}, {'Cross-Origin-Embedder-Policy': 'unsafe-none', 'Cache-Control': 'no-store'})
+                self.assertGreater(rules.index(exceptions[0]), next(i for i, rule in enumerate(rules) if rule['source'] == '**'))
+
     def release(self, *, custom=False, other_source=False, hosted_project='femlab-app', readiness='ready', google=False, provider=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -62,7 +76,9 @@ class HostingReleaseSmoke(unittest.TestCase):
             self.assertEqual((root / 'packages/app/dist/index.html').read_text(), 'compiled artifact')
             self.assertFalse(any(command[0] == 'firebase' for command in commands))
             self.assertEqual(list(root.glob('firebase-*.json')), [])
-            return json.loads(stdout.getvalue()), environments[0]
+            manifest = json.loads(stdout.getvalue())
+            self.assertEqual(manifest['billing'], 'runtime-controlled')
+            return manifest, environments[0]
 
     def test_build_in_script_checkout_preserves_artifact(self):
         manifest, environment = self.release()

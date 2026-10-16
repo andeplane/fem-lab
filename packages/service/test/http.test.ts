@@ -59,9 +59,28 @@ describe('headless service host', () => {
     const url = await host(async () => true, { origins: ['https://femlab.app'] });
     const allowed = await fetch(`${url}/v1/account`, { method: 'OPTIONS', headers: { origin: 'https://femlab.app' } });
     expect(allowed.status).toBe(204); expect(allowed.headers.get('access-control-allow-origin')).toBe('https://femlab.app');
+    expect(allowed.headers.get('access-control-allow-headers')).toContain('x-femlab-credit-unit');
     expect(allowed.headers.get('access-control-allow-credentials')).toBeNull();
     const refused = await fetch(`${url}/v1/account`, { method: 'OPTIONS', headers: { origin: 'https://evil.example' } });
     expect(refused.status).toBe(403); expect(refused.headers.get('access-control-allow-origin')).toBeNull();
+  });
+  it('rejects unknown credit units before account, claim or generation work',async()=>{
+    let called=0;const url=await host(async()=>true,{account:async()=>{called++;throw new Error('must not run')}});
+    for(const path of ['/v1/account','/v1/account/free-allowance','/v1/ai/completions','/chat/completions']){
+      const response=await fetch(url+path,{method:path==='/v1/account'?'GET':'POST',headers:{'x-femlab-credit-unit':'usd-milli-v9','content-type':'application/json'},...(path==='/v1/account'?{}:{body:'{}'})});
+      expect(response.status).toBe(422);expect(await response.json()).toMatchObject({code:'unsupported-credit-unit'});
+    }
+    expect(called).toBe(0);
+  });
+  it('passes monthly claims through authenticated ownership and redacts failures without implicit reads',async()=>{
+    let called=0;const view={status:'eligible' as const,credits:6666666,periodStartsAt:'2026-10-01T00:00:00.000Z',periodEndsAt:'2026-11-01T00:00:00.000Z'};
+    const url=await host(async()=>true,{freeAllowance:{status:async()=>view,claim:async(header,body)=>{
+      called++;if(!header)throw new ServiceFailure(401,'login-required','Sign in to claim an allowance.','identity');if(header==='Bearer broken')throw new Error('private HMAC key');expect(body).toEqual({});return {...view,status:'claimed',replay:false};
+    }}});
+    expect((await fetch(url+'/v1/account/free-allowance')).status).toBe(404);expect(called).toBe(0);
+    const send=(authorization?:string)=>fetch(url+'/v1/account/free-allowance',{method:'POST',headers:{'content-type':'application/json',...(authorization?{authorization}:{})},body:'{}'});
+    expect((await send()).status).toBe(401);expect(await (await send('Bearer owner')).json()).toMatchObject({status:'claimed',credits:6666666});const failed=await send('Bearer broken');expect(failed.status).toBe(503);expect(await failed.text()).not.toContain('HMAC');
+    const unavailable=await fetch(`${await host(async()=>true)}/v1/account/free-allowance`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});expect(unavailable.status).toBe(503);
   });
   it('passes original payment webhook bytes/signature and refuses an unconfigured payment service',async()=>{
     let raw='',signature:string|undefined;

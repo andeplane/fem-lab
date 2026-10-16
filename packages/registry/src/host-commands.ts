@@ -17,6 +17,8 @@ import type { HostDef } from './registry';
 import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
 import { MAX_MODEL_FILE_BYTES, boundedModelFileText } from './model-file';
+import { unretainedFile, type FileDelivery, type FileDeliveryAdmission, type FileDeliveryInput, type CompletedFilesHost } from './file-delivery';
+export { FileDelivery } from './file-delivery';
 import {EMPTY_ACCOUNT,type AccountServices} from './account-types';
 import { ComparisonConfig, ComparisonLegendInput, ComparisonPickInput, ComparisonVisibilityInput, ComparisonPlaybackInput, RetainedFrameSample, type ResultComparisonHost } from './result-comparison';
 export { MAX_MODEL_FILE_BYTES } from './model-file';
@@ -73,7 +75,8 @@ export const CopyWhat = z.union([
   z.object({ kind: z.literal('script'), seqs: z.array(int).optional() }),
   z.object({ kind: z.literal('text'), text: z.string() }),
 ]);
-export const OpenHow = z.union([z.object({ picker: z.literal(true) }), z.object({ handle: z.looseObject({}) })]);
+// Preserve opaque browser handles and their prototype methods through parsing.
+export const OpenHow = z.union([z.object({ picker: z.literal(true) }), z.object({ handle: z.unknown().nonoptional() }), z.object({ reopen: z.literal(true) })]);
 const Destination = z.enum(['download', 'folder']).optional();
 
 export interface Selection {
@@ -94,6 +97,8 @@ export interface ScriptResult {
   diagnostics?: ScriptDiagnostic[];
   /** Successful engine Commands dispatched by this script, for attributable turn diffs. */
   journalEntries?: JournalEntry[];
+  /** Completed host file deliveries, including those before a later script error. */
+  files?: FileDelivery[];
   result: unknown;
   console: string[];
   error?: string;
@@ -203,6 +208,8 @@ export interface HostContext {
     /** Open a file picker filtered to `accept` and return the chosen file's bytes. */
     pickBytes(accept: string): Promise<Uint8Array>;
     download(name: string, mime: string, data: string | Uint8Array): void;
+    /** Optional bounded document-local ownership of completed bytes; no payload enters the Journal. */
+    completed?: CompletedFilesHost;
     /** Capture the current document before async I/O; completion affects only that document. */
     beginSave(): (journal: ModelFile['journal']) => void;
     /** Establish a successful explicit open's normalized baseline and invalidate older save completions. */
@@ -237,7 +244,8 @@ export interface HostContext {
     close(): void;
     refresh(): Promise<void>;
     info(): FolderInfo | null;
-    readText(path: string): Promise<string>;
+    recent(): Promise<{ name: string } | null>;
+    readText(path: string, maxBytes?: number): Promise<string>;
     /** Read a file from the open folder as bytes, for a format that is not text. */
     readBytes(path: string): Promise<Uint8Array>;
     writeText(path: string, text: string): Promise<void>;
@@ -267,12 +275,25 @@ const account=(ctx:HostContext):AccountServices=>{
 const paidPlan=z.enum(['plus','pro','studio']);
 
 /** Write a saved or exported file where the person asked, defaulting to the open folder. */
-async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, name: string, mime: string, data: string | Uint8Array): Promise<{ name: string; to: 'download' | 'folder' }> {
+function captureDelivery(ctx: HostContext): FileDeliveryAdmission {
+  try { return ctx.files.completed?.capture() ?? unretainedFile; }
+  catch { return input => unretainedFile(input, 'unavailable'); }
+}
+
+async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, name: string, mime: string, data: string | Uint8Array, admission: FileDeliveryAdmission): Promise<FileDelivery> {
   const dest = to ?? (ctx.folder.info() ? 'folder' : 'download');
-  if (dest === 'download') ctx.files.download(name, mime, data);
-  else if (typeof data === 'string') await ctx.folder.writeText(name, data);
-  else await ctx.folder.writeBytes(name, data);
-  return { name, to: dest };
+  if (dest === 'folder') name = assertInside(name).join('/');
+  const input: FileDeliveryInput = { name, mime, to: dest, data };
+  let prepared;
+  try { prepared = admission(input); }
+  catch { prepared = unretainedFile(input, 'unavailable'); }
+  try {
+    if (dest === 'download') ctx.files.download(name, mime, prepared.data);
+    else if (typeof prepared.data === 'string') await ctx.folder.writeText(name, prepared.data);
+    else await ctx.folder.writeBytes(name, prepared.data);
+  } catch (error) { prepared.discard(); throw error; }
+  try { return prepared.complete(); }
+  catch { prepared.discard(); return { name, to: dest, bytes: prepared.bytes, mime, unavailable: 'unavailable' }; }
 }
 
 /** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
@@ -455,7 +476,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('panel.toggle', 'sessionView', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
   def('panel.resize', 'workspace', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
   def('report.print', 'sessionView', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
-  def('script.run', 'producer', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
+  def('script.run', 'producer', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error?, files? }`; files contains only completed host delivery receipts, including those before a later script error. Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
     return ctx.script.run(code, timeoutMs);
@@ -465,7 +486,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('script.setEditing', 'sessionView', 'Show the editable Script draft or the live Script generated from the Journal. Leaving edit mode retains the draft so the person can compare it with the Journal and resume it later.', z.object({ editing: z.boolean() }), ({ editing }, ctx) => ctx.script.setEditing(editing)),
   def('chat.send', 'producer', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
   def('chat.insertMention', 'sessionView', 'Open the Assistant and insert a reference chip into its unsent input. Use kind:name, JSON-quote names containing spaces or separators, mesh:mesh for the current global Mesh, result:step for a latest Result or result:id:opaque-id for an exact retained solve in its owning Engine. Captions do not identify Results. Repeated targets produce one chip; no engine Command is recorded. Not a tool; the AI receives the resolved context.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
-  def('chat.clear', 'workspace', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
+  def('chat.clear', 'workspace', 'Start a new conversation: clears the chat history, AI context and retained completed-file bytes. The Model and Journal are untouched.', none, (_, ctx) => { ctx.files.completed?.clear(); return ctx.chat.clear(); }, false),
   def('skill.invoke', 'workspace', 'Load a skill by name and return its instructions (`{ name, body, source }`) so they enter the conversation at the point they are needed; `args` is the rest of the person\'s `/name` line. Use query.skills to see what exists.', z.object({ name: z.string(), args: z.string().optional() }), ({ name, args }, ctx) => {
     const skills = ctx.skills();
     const skill = skills.find((s) => s.name === name);
@@ -483,7 +504,7 @@ export const HOST_COMMANDS: HostDef[] = [
   }),
   def('file.open', 'replacement', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
     if ('json' in how) return importText(ctx, how.json);
-    if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
+    if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/'), MAX_MODEL_FILE_BYTES));
     return importText(ctx, await ctx.files.pick());
   }),
   def('file.importAbaqus', 'replacement', 'Import a UTF-8 Abaqus .inp deck and its include files (at most 16 MiB total) into a new project from inline text, a picker, or a path inside the open project folder. Supply name, body, explicit mode (mesh or static) and positive unitLength Quantity. Static additionally requires unitForce; supply unitTime when density is present. Mesh mode refuses force and time units. Source units are independent of display units. Parts, transformed instances, named Sets, material regions and full-integration C3D4/C3D8/C3D10/C3D20 solids are retained. Static mode translates supported isotropic elastic regions, translational constraints, nodal forces, face pressures and named linear-static load cases. Normal output requests are recorded in the report. Include contents are supplied explicitly or read by the host from the submission folder; the engine performs no file I/O. Binary .odb/.cae databases require a text .inp export. Unsupported physical behavior is an error, never a mesh fallback. Conversion is read-only and import never solves. Checked portable Commands replace the Model and Journal atomically only after validation and persistence against the session/state captured before input I/O. An intervening edit or project switch rejects this import; view-only actions remain valid. Failure, cancellation or an expired producer leaves the current project unchanged. Returns the conversion report with exact source counts, names, SI bounds and unused authored node labels; the Journal contains no original file path.', AbaqusImport, async (how, ctx) => {
@@ -520,15 +541,16 @@ export const HOST_COMMANDS: HostDef[] = [
       ...(simplifyBelow === undefined ? {} : { simplifyBelow }),
     } as Command);
   }),
-  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. The complete saved pretty JSON must fit the 16 MiB UTF-8 file limit; refusal occurs before any file write or download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+  def('file.save', 'modelRead', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. The complete saved pretty JSON must fit the 16 MiB UTF-8 file limit; refusal occurs before any file write or download. `name` defaults to `<model name>.femlab.json`. Returns completed metadata `{ name, to, bytes, mime, id?, unavailable? }`; bytes is the exact encoded size and id, when present, identifies bounded host-retained original bytes. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+    const admission = captureDelivery(ctx);
     const completeSave = ctx.files.beginSave();
 
     const file = await ctx.transport.exportFile();
-    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', boundedModelFileText(file));
+    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', boundedModelFileText(file), admission);
     completeSave(file.journal);
     return receipt;
   }),
-  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. CSV table is extremes (default), reactions, path or nodal-displacements; unknown tables fail. Nodal displacements export scientific f64 coordinates and three displacement components in metres, independent of display units, with original source label, instance and part plus the normalized label. Unused authored nodes have blank displacement cells and status unused. This table pins one Result id and requires its solved Model hash to match the current document; stale or changed source identities fail before delivery, including edits during scientific reads. CSV text cells retain exact source names with standard quoting for machine-readable interchange; consumers must interpret identity columns as text. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. CSV table is extremes (default), reactions, path or nodal-displacements; unknown tables fail. Nodal displacements export scientific f64 coordinates and three displacement components in metres, independent of display units, with original source label, instance and part plus the normalized label. Unused authored nodes have blank displacement cells and status unused. This table pins one Result id and requires its solved Model hash to match the current document; stale or changed source identities fail before delivery, including edits during scientific reads. CSV text cells retain exact source names with standard quoting for machine-readable interchange; consumers must interpret identity columns as text. A Model file must fit the 16 MiB UTF-8 limit including pretty formatting; refusal occurs before any file write or download. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads. Returns completed metadata `{ name, to, bytes, mime, id?, unavailable? }`; bytes is the exact encoded size and id, when present, identifies bounded host-retained original bytes; a cancelled animation returns `{ cancelled: true }` with no delivery.', z.object({
     spec: z.union([
       AnimationCaptureOptions.extend({ format: z.literal('webm') }),
       z.looseObject({ format: z.literal('csv'), table: z.enum(['extremes', 'reactions', 'path', 'nodal-displacements']).optional(), step: z.string().optional(), resultId: z.string().optional() }),
@@ -537,9 +559,14 @@ export const HOST_COMMANDS: HostDef[] = [
     name: z.string().optional(),
     to: Destination,
   }), async ({ spec, name, to }, ctx) => {
+    const admission = captureDelivery(ctx);
     const out = await buildExport(spec as ExportSpec, ctx);
     if (out === null) return { cancelled: true };
-    return deliver(ctx, to, name ?? out.filename, out.mime, out.data);
+    return deliver(ctx, to, name ?? out.filename, out.mime, out.data, admission);
+  }),
+  def('file.download', 'sessionView', 'Download the original immutable completed bytes identified by id, using the original basename. This never re-exports the current Model, rereads a folder, creates another retained entry or changes the Journal. Bounded browser retention is RAM only and may expire; unknown/evicted ids return file.not-found. Returns actual completed download metadata with the same id. Hosts without this capability return unsupported.', z.object({ id: z.string() }), ({ id }, ctx) => {
+    if (!ctx.files.completed) throw new FemError('unsupported', 'This host does not retain completed file downloads', 'file.download', 'export or write the file again');
+    return ctx.files.completed.download(id);
   }),
   def('file.cancelAnimationCapture', 'control', 'Cancel the WebM animation recording in progress. The viewer returns to the exact phase and play state it had before recording; returns `{ cancelled: false }` when no recording is active.', none, (_, ctx) => ({ cancelled: ctx.view.cancelAnimationCapture() })),
   def('file.shareLink', 'modelRead', 'Make a URL that reopens the current Model: the Journal deflated into the URL fragment, so nothing is uploaded anywhere and the link works offline. Returns `{ url }` and copies it to the clipboard; paste it in a message or a report. Links replay validated engine Commands only. Refuses with `unsupported` over 32 kB encoded or 1 MiB uncompressed — use file.save and send the file for a big Model.', none, async (_, ctx) => ctx.files.shareLink(await ctx.transport.exportFile())),
@@ -549,13 +576,17 @@ export const HOST_COMMANDS: HostDef[] = [
   }),
   def('file.restore', 'replacement', 'Reopen an autosaved Journal revision as a separate project without overwriting the currently saved project. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
   def('file.read', 'workspace', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
-    const text = await ctx.folder.readText(assertInside(path).join('/'));
+    const text = await ctx.folder.readText(assertInside(path).join('/'), MAX_TEXT);
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
     return { text };
   }),
-  def('file.write', 'workspace', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused.', z.object({ path: z.string(), text: z.string() }), ({ path, text }, ctx) => ctx.folder.writeText(assertInside(path).join('/'), text)),
-  def('folder.open', 'workspace', 'Open a folder on disk with the directory picker (needs a click) or from a stored handle; its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
-  def('folder.close', 'workspace', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules are dropped, saves go back to downloads.', none, (_, ctx) => ctx.folder.close()),
+  def('file.write', 'workspace', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused. Returns completed metadata { name: normalizedRelativePath, to: "folder", bytes, mime, id?, unavailable? }; bytes is the exact UTF-8 size. An optional id addresses bounded original bytes for file.download; a failed write has no delivery receipt.', z.object({ path: z.string(), text: z.string() }), async ({ path, text }, ctx): Promise<FileDelivery> => {
+    const admission = captureDelivery(ctx);
+    const name = assertInside(path).join('/');
+    return deliver(ctx, 'folder', name, 'text/plain;charset=utf-8', text, admission);
+  }),
+  def('folder.open', 'workspace', 'Open a folder on disk with picker: true, an opaque directory handle, or reopen: true for the remembered folder (needs a click and read/write permission); its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.folder.open(how), false),
+  def('folder.close', 'workspace', 'Close the open folder on disk: file.read/file.write stop working, its skills and AGENTS.md rules and retained completed-file bytes are dropped, saves go back to downloads.', none, (_, ctx) => { ctx.files.completed?.clear(); return ctx.folder.close(); }),
   def('folder.refresh', 'workspace', 'Re-list the open folder on disk and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.folder.refresh()),
   def('project.new', 'replacement',
     'Start a new project: an empty Model and Journal under `name`, kept in this browser and saved after every Command from now on. The project that was open is left exactly as it was and stays in Recent projects, so starting another one loses nothing.',
@@ -579,12 +610,13 @@ export const HOST_COMMANDS: HostDef[] = [
     }),
   def('example.open', 'replacement', 'Open a bundled example by name (see the examples gallery), replaying its Journal Commands. A complete open establishes the saved baseline. If replay fails partway through, the partial Model remains visible and the previous saved baseline is preserved.', z.object({ name: z.string() }), ({ name }, ctx) => ctx.examples.open(name)),
   def('solve.cancel', 'control', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'workspace', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
+  def('ai.setKey', 'workspace', 'Store a direct/development AI provider key in this browser (localStorage, across tabs and sessions), or `null` to forget that provider in both browser and tab storage. Refused storage returns a structured error; an existing usable key is retained when persistence fails. Hosted production uses account identity and does not read or migrate these keys. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'workspace', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
   def('account.open','control','Open the optional login, AI allowance and subscription panel. Host view state only; never journaled or exposed as an Assistant tool.',none,(_input,ctx)=>ctx.panels.toggle('account',true),false),
   def('account.signIn','control','Sign in for hosted AI with Google redirect or an email link. Requires an explicit user action; no password, token or provider key is accepted.',z.strictObject({method:z.enum(['google','email']),email:z.email().optional()}),({method,email},ctx)=>account(ctx).signIn(method,email),false),
   def('account.signOut','control','Sign out this tab session and stop its hosted Assistant access. Local models remain available anonymously.',none,(_input,ctx)=>account(ctx).signOut(),false),
   def('account.refresh','control','Refresh the verified account allowance and billing status from the service. Cannot select another account.',none,(_input,ctx)=>account(ctx).refresh(),false),
+  def('account.claimFreeAllowance','control','Explicitly claim the reviewed free AI allowance for the signed-in account in the current UTC calendar month. The server checks approval, revocation, paid access, shared budgets and one claim per reviewed person and month across account recreation. Does not approve eligibility or select another identity. Unused credits expire at the next UTC month boundary; no rollover or automatic claim. Never journaled or exposed to Assistant tools or scripts.',z.strictObject({}),(_input,ctx)=>account(ctx).claimFreeAllowance(),false),
   def('account.checkout','control','Open hosted checkout for a supported monthly plan after the user declares personal or business use, fixed for this subscription. purchaseUse is required for Managed Checkout; omission is supported only for legacy direct billing. The server owns prices/customer identity; this Command does not grant credits or complete payment and is never an Assistant tool.',z.strictObject({plan:paidPlan,purchaseUse:z.enum(['personal','business']).optional()}),({plan,purchaseUse},ctx)=>account(ctx).checkout(plan,purchaseUse),false),
   def('account.portal','control','Open cancellation/payment management for the signed-in account with an owned billing customer, including during a sales pause or financial review. Requires a configured service and an explicit user action; never an Assistant tool.',none,(_input,ctx)=>account(ctx).portal(),false),
   def('account.changePlan','control','Schedule a supported paid plan for the next billing period. The subscription keeps its personal/business use. Current credits stay unchanged; the next paid invoice grants the new allowance.',z.strictObject({plan:paidPlan}),({plan},ctx)=>account(ctx).changePlan(plan),false),
@@ -599,13 +631,15 @@ export const HOST_QUERIES: HostDef[] = [
   def('query.validateScript', 'workspace', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
   def('query.screenshot', 'modelRead', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. Comparison captures contain each visible retained pane with its own Result identity and legend; side-by-side divides the requested total width between panes. A single dimension preserves the viewport aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
   def('query.view', 'modelRead', 'The current camera: position, target and up in metres, plus dimensionless zoom when changed from one. Comparison panes share this camera. Hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
-  def('query.capabilities', 'modelRead', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
-    ...((await ctx.transport.query({ query: 'query.capabilities' })) as object),
+  def('query.capabilities', 'modelRead', 'What this engine and browser can do: GPU and adapter, actual initialized CPU worker count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
     ...ctx.env,
+    ...((await ctx.transport.query({ query: 'query.capabilities' })) as object),
   })),
   def('query.selection', 'modelRead', 'The current selection as bodies, faces and Sets plus the `refs` list (`face:beam.top`, …) that `@selection` expands to in the chat.', none, (_, ctx) => ctx.selection.get()),
   def('query.skills', 'workspace', 'Every available skill with its name, description, when to use it and whether it is built in or from the project folder. Invoke one with skill.invoke.', none, (_, ctx) => ctx.skills().map(({ name, description, when, source }) => ({ name, description, when, source }))),
+  def('query.fileDelivery', 'sessionView', 'Read currently available metadata for a retained completed file id. Returns { file } with id, original logical name, MIME and exact bytes, or { file: null } when unknown, expired, evicted or unsupported. No payload or filesystem read; no Journal change.', z.object({ id: z.string() }), ({ id }, ctx) => ({ file: ctx.files.completed?.info(id) ?? null })),
   def('query.exportFormats', 'workspace', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `animation`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
+  def('query.folderRecent', 'workspace', 'The remembered folder name or null, without requesting permission. Use folder.open with reopen: true from a click to request access.', none, (_, ctx) => ctx.folder.recent(), false),
   def('query.folder', 'workspace', 'The open folder on disk: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the skills it carries; `null` when no folder is open.', none, (_, ctx) => ctx.folder.info()),
   def('query.projects', 'workspace',
     'Every project saved in this browser, most recently edited first: id, name, when it was last written, how many Commands its Journal holds, and a small thumbnail. The start screen\u2019s Recent projects list is a view of this Query.',

@@ -1,13 +1,18 @@
 import { createRequire } from 'node:module';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { ComponentProps, VNode } from 'preact';
-import type { App } from '../src/ui/App';
+import type { ActiveAppProps, App } from '../src/ui/App';
+import type { Progress } from '@femlab/registry';
 import type { Viewer, CameraState } from '../src/viewer/viewer';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import { SessionRuntime } from '../src/session-runtime';
+import { FileDelivery, FileArtifactMetadata } from '@femlab/registry';
+import { fakeDir } from './project-fake';
+import { IDBFactory } from 'fake-indexeddb';
 
-const mounted = vi.hoisted(() => ({ props: null as ComponentProps<typeof App> | null, makeViewer: null as ((props: ComponentProps<typeof App>) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
+const mounted = vi.hoisted(() => ({ props: null as ActiveAppProps | null, makeViewer: null as ((props: ActiveAppProps) => Viewer) | null, afterReady: null as ((viewer: Viewer) => void) | null }));
 vi.mock('preact', async original => ({ ...await original<typeof import('preact')>(), render: (node: VNode<ComponentProps<typeof App>>) => {
+  if ('startup' in node.props) return;
   mounted.props = node.props;
   const viewer = mounted.makeViewer?.(node.props);
   if (viewer) {
@@ -24,9 +29,14 @@ class LocalWorker {
   onerror = null;
   private owner: InstanceType<typeof wasm.SessionEngine> | undefined;
   private closed = false;
-  private runtime = new SessionRuntime(async (_options, epoch) => this.owner = new wasm.SessionEngine(1, epoch), wasm.PreparedEngine.create);
+  progressSample: Progress | null = null;
+  private runtime = new SessionRuntime(async (_options, epoch) => this.owner = new wasm.SessionEngine(1, epoch), wasm.PreparedEngine.create, () => 0);
   constructor() { workers.push(this); }
   postMessage(request: SessionRequest) {
+    // Typed public transport fixture; the real checked owner still executes the Command.
+    if (request.op === 'dispatch' && this.progressSample) {
+      this.onmessage?.({ data: { id: request.id, context: request.context, progress: this.progressSample } } as MessageEvent<SessionResponse>);
+    }
     void this.runtime.accept(structuredClone(request), (reply, raw = []) => {
       if (!this.closed) this.onmessage?.({ data: structuredClone(reply, { transfer: raw }) } as MessageEvent<SessionResponse>);
     });
@@ -63,7 +73,14 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect((await initial.query.model()).name).toBeTruthy();
   expect(initial.registry.list().commands.length).toBeGreaterThan(50);
   const first = await initial.dispatch({ cmd: 'project.new', name: 'first' }) as { id: string };
+  const sample: Required<Progress> = { phase: 'solve', fraction: 0.5, message: 'refinement 2: relative residual 2.5e-6' };
+  workers.at(-1)!.progressSample = sample;
+  const received: unknown[] = [];
+  const store = mounted.props!.store;
+  const stop = store.subscribe(() => received.push(store.state.progress));
   await initial.dispatch({ cmd: 'geometry.addBox', name: 'body', size: ['1 m', '1 m', '1 m'] });
+  stop(); workers.at(-1)!.progressSample = null;
+  expect(received).toContainEqual(sample);
   expect(drawings.at(-1)!.fit).not.toHaveBeenCalled();
   await expect(appHost.prepareAccountNavigation()).rejects.toMatchObject({ code: 'unsupported', suggestion: 'project.save' });
   const saved = await initial.dispatch({ cmd: 'project.save' }) as { commands: number };
@@ -114,4 +131,43 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   await window.fem.dispatch({ cmd: 'model.setName', name: 'deleted stays deleted' });
   expect(await window.fem.dispatch({ cmd: 'project.save' })).toBeNull();
   expect(mounted.props!.store.state.projects).toEqual([]);
+  // Actual host ownership follows this document through Worker recovery, but expires when
+  // the person changes document/folder/conversation. The download boundary is injected here;
+  // actual browser delivery is a separate scheduled acceptance case.
+  const payloads: Blob[] = [];
+  vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { if (blob instanceof Blob) payloads.push(blob); return 'blob:unit-completed-file'; });
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+  await window.fem.dispatch({ cmd: 'project.new', name: 'file-history' });
+  const file = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save', to: 'download' }));
+  expect(file.id).toBeTruthy();
+  const originalBytes = await payloads.at(-1)!.text();
+  expect(file.bytes).toBe(new TextEncoder().encode(originalBytes).byteLength);
+  await window.fem.dispatch({ cmd: 'model.setName', name: 'changed after delivery' });
+  await window.fem.dispatch({ cmd: 'solve.cancel' });
+  const meta = await window.fem.registry.query({ query: 'query.fileDelivery', id: file.id });
+  expect(meta).toEqual({ file: FileArtifactMetadata.parse(file) });
+  const repeated = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.download', id: file.id }));
+  expect(repeated.id).toBe(file.id);
+  expect(await payloads.at(-1)!.text()).toBe(originalBytes);
+  expect((await window.fem.query.model()).name).toBe('changed after delivery');
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  await window.fem.dispatch({ cmd: 'folder.open', handle: fakeDir({}, 'other') });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: file.id })).toEqual({ file: null });
+  const beforeFileVersion = mounted.props!.store.state.completedFilesVersion;
+  const inFolder = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save' }));
+  expect(mounted.props!.store.state.completedFilesVersion).toBeGreaterThan(beforeFileVersion);
+  expect(inFolder.to).toBe('folder');
+  await window.fem.dispatch({ cmd: 'folder.close' });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: inFolder.id })).toEqual({ file: null });
+  const beforeClear = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save' }));
+  await window.fem.dispatch({ cmd: 'chat.clear' });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: beforeClear.id })).toEqual({ file: null });
+  const beforeNew = FileDelivery.parse(await window.fem.dispatch({ cmd: 'file.save' }));
+  await window.fem.dispatch({ cmd: 'project.new', name: 'other-document' });
+  expect(await window.fem.registry.query({ query: 'query.fileDelivery', id: beforeNew.id })).toEqual({ file: null });
+  await expect(window.fem.dispatch({ cmd: 'geometry.remove', name: 'missing' })).rejects.toMatchObject({ code: 'not-found' });
+  const engineeringError = mounted.props!.store.state.lastError;
+  await expect(window.fem.dispatch({ cmd: 'file.download', id: beforeNew.id })).rejects.toMatchObject({ code: 'file.not-found' });
+  expect(mounted.props!.store.state.lastError).toBe(engineeringError);
 }, 30000);

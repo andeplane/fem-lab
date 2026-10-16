@@ -2,7 +2,7 @@ import { expect, test } from './fixtures';
 
 test('@cpu an Assistant turn continues across its nested script replacement', async ({ page }) => {
   await page.addInitScript(() => {
-    sessionStorage.setItem('femlab.ai.key.openai', 'test-only');
+    localStorage.setItem('femlab.ai.key.openai', 'test-only');
     localStorage.setItem('femlab.ai.model', 'gpt-5.4-mini');
     const original = window.fetch.bind(window);
     let round = 0;
@@ -34,7 +34,7 @@ test('@cpu an Assistant turn continues across its nested script replacement', as
 
 test('@cpu a delayed Assistant tool is revoked by an unrelated replacement', async ({ page }) => {
   await page.addInitScript(() => {
-    sessionStorage.setItem('femlab.ai.key.openai', 'test-only');
+    localStorage.setItem('femlab.ai.key.openai', 'test-only');
     localStorage.setItem('femlab.ai.model', 'gpt-5.4-mini');
     const original = window.fetch.bind(window);
     window.fetch = async (input, options) => {

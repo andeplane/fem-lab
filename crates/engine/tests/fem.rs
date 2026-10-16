@@ -3692,6 +3692,10 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     assert_eq!(e.code, ErrorCode::Unsupported);
     assert_eq!(e.cause, "no GPU adapter; use cpu-pcg or cpu-direct");
     assert_eq!(e.suggestion.as_deref(), Some("solve.run { solver: 'cpu-pcg' }"));
+    let empty = Csr { n: 0, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+    let empty_error = pollster::block_on(solve(&empty, &[], &opts, &Pool::new(2), None, &mut nop))
+        .expect_err("even an empty explicit GPU solve requires a device");
+    assert_eq!(empty_error, e);
     assert_eq!(solver_name(Solver::CpuDirect), "cpu-direct");
 
     let opts = SolveOptions::default();
@@ -11687,6 +11691,33 @@ fn stl_reads_binary_by_its_declared_facet_count() {
     let mut lying = bytes.clone();
     lying[80] = 99;
     assert!(read_stl(&lying).unwrap_err().cause.contains("neither a binary STL"));
+}
+
+#[test]
+fn stl_ascii_with_an_oversized_binary_count_candidate_keeps_exact_authored_facets() {
+    let bytes = include_bytes!("fixtures/stl/tetra-ascii-count-overflow.stl");
+    assert_eq!(u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]), 0x7373_7373);
+    let (positions, triangles) = read_stl(bytes).unwrap();
+    assert_eq!(positions, [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+    assert_eq!(triangles, [[0, 1, 2], [0, 3, 1], [0, 2, 3], [2, 1, 3]]);
+}
+
+#[test]
+fn stl_large_declared_counts_cannot_alias_a_short_binary_file() {
+    let positions = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+    let triangles = [[0, 1, 2], [0, 3, 1], [0, 2, 3], [2, 1, 3]];
+    let mut bytes = binary_stl(&positions, &triangles);
+    assert_eq!(bytes.len(), 284);
+    assert_eq!(read_stl(&bytes).unwrap(), (positions.to_vec(), triangles.to_vec()));
+    // Addition-only overflow, multiplication overflow, a wrapped exact length, and u32::MAX.
+    for count in [85_899_345u32, 85_899_346, 0x8000_0004, u32::MAX] {
+        bytes[80..84].copy_from_slice(&count.to_le_bytes());
+        let error = read_stl(&bytes).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert_eq!(error.where_.as_deref(), Some("data"));
+        assert!(error.cause.contains("neither a binary STL"));
+        assert!(error.suggestion.is_some());
+    }
 }
 
 #[test]
