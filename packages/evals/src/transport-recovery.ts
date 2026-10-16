@@ -59,7 +59,7 @@ export function recoverableProvider(factory: (observer: ProviderObserver) => Pro
           }
           throw error;
         }
-        abort();
+        await resources(); abort();
         reservation = budget.reserve(request.model, tokens, request.maxTokens);
         await changed(); abort();
         try {

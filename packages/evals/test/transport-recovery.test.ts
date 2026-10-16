@@ -59,7 +59,7 @@ it('buffers actual SDK partial text, completed tool/continuation and usage until
   expect(run.receipts.map(receipt => receipt.outcome)).toEqual(['retry', 'completed']);
   expect(run.receipts[0]).toMatchObject({ discardedEvents: 6, unknownUsageRetained: false, diagnostics: [{ phase: 'stream', error: { kind: 'TypeError', cause: { kind: 'Error', code: 'ECONNRESET' } } }] });
   expect(run.budget.snapshot()).toMatchObject({ requests: 2, chargedOrReservedUsd: 0.000762, inFlightRequests: 0, stoppedReason: null });
-  expect(run.resources).toHaveBeenCalledTimes(2); expect(run.count).toHaveBeenCalledTimes(2); expect(fetch).toHaveBeenCalledTimes(2);
+  expect(run.resources).toHaveBeenCalledTimes(4); expect(run.count).toHaveBeenCalledTimes(2); expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 it('retains the full unknown first debit as consumed and independently reserves/counts the successful retry', async () => {

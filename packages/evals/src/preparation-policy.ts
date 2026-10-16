@@ -15,5 +15,5 @@ export async function preparationPolicy(root: string, reuse: ReusedWasm | undefi
   const bytes = await readFile(path.join(vendor, kit.path));
   const hash = createHash('sha256').update(bytes).digest('hex');
   if (bytes.length !== kit.bytes || hash !== kit.sha256) throw new Error('verified reuse STEP source kit differs from its sealed manifest');
-  return { minimumFreeGiB: 24, preparationRoute: 'verified-wasm-and-staged-step-kit', stepSourceKitSha256: hash, ...(typeof verified.reuseIdentitySha256 === 'string' ? { reuseIdentitySha256: verified.reuseIdentitySha256 } : {}) };
+  return { minimumFreeGiB: 4, preparationRoute: 'verified-wasm-and-staged-step-kit', stepSourceKitSha256: hash, ...(typeof verified.reuseIdentitySha256 === 'string' ? { reuseIdentitySha256: verified.reuseIdentitySha256 } : {}) };
 }

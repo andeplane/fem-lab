@@ -34,7 +34,7 @@ it('recovers a genuine SDK transient count failure before reserving one complete
   let counts = 0;
   const run = setup(async stage => { if (stage === 'count') { if (counts++ === 0) throw network(); return count(); } return complete(); });
   const delivered = await collect(run.provider.chat(request));
-  expect(run.stages).toEqual(['count', 'count', 'generation']); expect(run.resources).toHaveBeenCalledTimes(2); expect(run.factory).toHaveBeenCalledOnce();
+  expect(run.stages).toEqual(['count', 'count', 'generation']); expect(run.resources).toHaveBeenCalledTimes(3); expect(run.factory).toHaveBeenCalledOnce();
   expect(run.receipts.map(row => ({ attempt: row.attempt, outcome: row.outcome, request: row.request }))).toEqual([{ attempt: 0, outcome: 'retry', request: 0 }, { attempt: 1, outcome: 'completed', request: 1 }]);
   expect(run.receipts[0]).toMatchObject({ diagnostics: [{ phase: 'input-count', abortOrigin: 'none', error: { cause: { cause: { code: 'ECONNRESET' } } } }], discardedEvents: 0, unknownUsageRetained: false });
   expect(run.states.map(state => state.inFlightRequests)).toEqual([0, 1, 0]);
@@ -140,5 +140,34 @@ it('retains the public bad-record TLS alert from actual SDK counting and vetoes 
   expect(await collect(run.provider.chat(request))).toEqual([{ type: 'error', message: 'Connection error.' }]);
   expect(run.stages).toEqual(['count']); expect(run.fetch).toHaveBeenCalledOnce(); expect(run.factory).not.toHaveBeenCalled();
   expect(run.receipts).toMatchObject([{ attempt: 0, outcome: 'stopped', diagnostics: [{ phase: 'input-count', abortOrigin: 'none', error: { cause: { cause: { errors: [{ code: 'ECONNRESET' }, { code, codeRecognized: true }] } } } }], discardedEvents: 0, unknownUsageRetained: false }]);
+  expect(run.budget.snapshot()).toMatchObject({ requests: 0, chargedOrReservedUsd: 0, inFlightRequests: 0, retainedUnknown: [] });
+});
+
+// The validated preparation policy supplies this floor; generic 24 GiB fixtures above
+// intentionally continue to exercise independent resource injection.
+it.each(['initial', 'retry'] as const)('enforces the verified 4 GiB floor before %s count/reservation/generation', async phase => {
+  let checks = 0;
+  const run = setup(async () => { throw network(); }, { resources: async () => {
+    checks++;
+    requireFreeDisk(4 * 2 ** 30 - (phase === 'initial' || checks > 1 ? 1 : 0), 4 * 2 ** 30);
+  } });
+  expect(await collect(run.provider.chat(request))).toEqual([{ type: 'error', message: expect.stringContaining('4 GiB') }]);
+  expect(run.stages).toEqual(phase === 'initial' ? [] : ['count']);
+  expect(run.resources).toHaveBeenCalledTimes(phase === 'initial' ? 1 : 2);
+  expect(run.factory).not.toHaveBeenCalled();
+  expect(run.budget.snapshot()).toMatchObject({ requests: 0, chargedOrReservedUsd: 0, inFlightRequests: 0, retainedUnknown: [] });
+});
+
+it.each(['disk', 'abort'] as const)('rechecks %s after genuine SDK count before reserving or creating generation', async kind => {
+  const controller = new AbortController(); let checks = 0;
+  const run = setup(async stage => { expect(stage).toBe('count'); return count(); }, { resources: async () => {
+    if (++checks === 2) {
+      if (kind === 'abort') controller.abort();
+      else requireFreeDisk(4 * 2 ** 30 - 1, 4 * 2 ** 30);
+    }
+  } });
+  expect(await collect(run.provider.chat({ ...request, signal: controller.signal }))).toEqual([{ type: 'error', message: expect.stringContaining(kind === 'disk' ? '4 GiB' : 'aborted') }]);
+  expect(run.stages).toEqual(['count']); expect(run.resources).toHaveBeenCalledTimes(2);
+  expect(run.factory).not.toHaveBeenCalled();
   expect(run.budget.snapshot()).toMatchObject({ requests: 0, chargedOrReservedUsd: 0, inFlightRequests: 0, retainedUnknown: [] });
 });
