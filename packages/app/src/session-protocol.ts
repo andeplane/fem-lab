@@ -2,13 +2,16 @@ import type { FieldRequest } from './result-transfer';
 import type { AbaqusConversionReport, ResultSelector } from '@femlab/registry';
 import type { ActiveBenchmark } from './benchmark';
 import type { ProjectRecord } from './project-repository';
-import type { BufferSpec, ProjectMeta, Command, DocumentSnapshot, EngineError, ExecutionContext, JournalEntry, ModelFile, Progress, Query, RunLease, SessionRef, Stamp, StateVersion } from '@femlab/registry';
+import type { BufferSpec, ProjectMeta, Command, DocumentSnapshot, EngineError, ExecutionContext, JournalEntry, ModelFile, Progress, PortableProject, Query, RunLease, SessionRef, Stamp, StateVersion } from '@femlab/registry';
 
 export interface SessionOptions { gpu: boolean; threads: number }
 export type ReplacementSource = (
   | { kind: 'commands'; commands: Command[] }
+  /** Historical browser records lacked hashes/results. Reconstruct inputs without solves. */
+  | { kind:'legacy-project'; commands:Command[] }
   | { kind: 'journal'; entries: JournalEntry[]; skipSolves: boolean; revision?: number }
-  | { kind: 'file'; file: ModelFile }) & { project?: { meta: ProjectMeta; expected: ProjectRecord | null }; benchmark?: ActiveBenchmark; abaqusReport?: AbaqusConversionReport };
+  | { kind: 'file'; file: ModelFile }
+  | { kind: 'portable'; portable: PortableProject }) & { project?: { meta: ProjectMeta; expected: ProjectRecord | null }; benchmark?: ActiveBenchmark; abaqusReport?: AbaqusConversionReport };
 export type SessionRequest = { id: number } & (
   | { op: 'create'; epoch: string; options: SessionOptions }
   | { op: 'beginRun'; session: SessionRef }

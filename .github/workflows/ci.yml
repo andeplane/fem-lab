@@ -316,6 +316,9 @@ jobs:
           FEMLAB_AI_MODE: hosted
         run: xvfb-run -a npx playwright test e2e/hosted-account.spec.ts --project=cpu
         working-directory: packages/app
+      - name: chromium, private project sync and offline artifact recovery
+        run: xvfb-run -a npm run e2e:cloud
+        working-directory: packages/app
       # Preserve the generated thumbnails in the downloaded production artifact.
       - run: |
           mkdir -p packages/app/public/examples/thumbnails

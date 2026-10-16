@@ -1,7 +1,7 @@
 import { FemError, HOST_COMMANDS, HOST_QUERIES, Registry, type AccountState, type EngineSchema, type HostDef, type ProjectMeta } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
-import { FORM_OPEN } from './host';
+import { FORM_OPEN,appCloudCommands } from './host';
 import type { LastError, UiState } from './store';
 
 export type StartupPhase = 'starting' | 'cancelling' | 'cancelled' | 'failed';
@@ -36,6 +36,7 @@ export class StartupHost {
   private readonly listeners = new Set<() => void>();
   private attempt: AbortController | undefined;
   private retired = false;
+  private catalogEpoch=0;
   constructor(private readonly options: StartupOptions) {
     this.value = { ready: false, account: options.account, projects: [], project: null, hostCaps: options.caps, engineCaps: null, notes: [], lastError: null, startup: { phase: 'starting', attempt: 0 }, catalog: 'loading' };
     const deny = (): never => { throw unavailable(); };
@@ -43,7 +44,7 @@ export class StartupHost {
     const queries = HOST_QUERIES.map(({ run: _run, ...definition }) => ({ ...definition, run: deny }));
     this.registry = Registry.hostOnly({
       schema: options.schema, context: this, guard: () => this.assertActive(), unavailable,
-      hostCommands: [...commands, { ...FORM_OPEN, run: deny }, {
+      hostCommands: [...commands,...appCloudCommands().map(({run:_run,...definition})=>({...definition,run:deny})), { ...FORM_OPEN, run: deny }, {
         name: 'workspace.retryStartup', execution: 'workspace', schema: z.object({}), tool: true,
         description: 'Retry a failed or cancelled initial workspace startup with a fresh engine session. Wait until cancellation has settled. Never replays or queues a Model action; unavailable after the initial session is published.',
         run: () => this.start(),
@@ -63,10 +64,11 @@ export class StartupHost {
     for (const listener of this.listeners) listener();
   }
   private assertActive(): void { if (this.retired) throw new FemError('session.expired', 'the startup registry has handed off to the active session'); }
-  setAccount(account: AccountState): void { this.set({ account }); }
+  setAccount(account: AccountState): void {const changed=account.uid!==this.value.account.uid;this.set({account,...(changed?{projects:[],catalog:'loading' as const,catalogError:undefined}:{})});if(changed)void this.loadProjects();}
   async loadProjects(): Promise<void> {
-    try { this.set({ projects: await this.options.listProjects(), catalog: 'ready' }); }
-    catch (error) { this.set({ catalog: 'failed', catalogError: error instanceof Error ? error.message : String(error) }); }
+    const epoch=++this.catalogEpoch;
+    try {const projects=await this.options.listProjects();if(epoch===this.catalogEpoch)this.set({projects,catalog:'ready',catalogError:undefined});}
+    catch (error) {if(epoch===this.catalogEpoch)this.set({catalog:'failed',catalogError:error instanceof Error?error.message:String(error)});}
   }
   async start(): Promise<void> {
     this.assertActive();

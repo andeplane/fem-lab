@@ -45,7 +45,22 @@ try {
     const args = ['run', file, '--cpu', '--threads', String(threads), '--verify'];
     const hashes = execFileSync(native, [...args, '--hashes'], { encoding: 'utf8' }).trim().split(/\r?\n/);
     assert.deepEqual(hashes, entries.map(e => e.hashAfter));
-    const actual = JSON.parse(execFileSync(native, [...args, ...queries.flatMap(q => ['--query', JSON.stringify(q)])], { encoding: 'utf8' }));
+    const portableQueries = [...queries, { query: 'query.portableProject' }];
+    const actual = JSON.parse(execFileSync(native, [...args, ...portableQueries.flatMap(q => ['--query', JSON.stringify(q)])], { encoding: 'utf8' }));
+    const nativeProject = actual.pop();
+    assert.equal(nativeProject.format, 'femlab-project/1');
+    assert.equal(nativeProject.results.length, 2);
+    const restored = new Engine(1);
+    try {
+      await restored.import_project(JSON.stringify(nativeProject));
+      assert.deepEqual(JSON.parse(restored.query(JSON.stringify({ query: 'query.portableProject' }))), nativeProject,
+        'native retained scientific arrays and solved contexts survive WASM import exactly without re-solving');
+      for (let i = 0; i < 4; i++) {
+        assert.deepEqual(JSON.parse(restored.query(JSON.stringify(queries[i]))), actual[i],
+          'restored native retained surfaces and f64 fields match native reads exactly');
+      }
+    } finally { restored.free(); }
+    console.log(`portable native ${threads} threads → WASM: both stored result archives, meshes, f64 fields and identities preserved exactly without solving`);
     for (let i = 0; i < actual.length; i++) {
       if (queries[i].query === 'query.surface') {
         assert.deepEqual(actual[i], expected[i]);

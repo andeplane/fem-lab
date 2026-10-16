@@ -41,10 +41,10 @@ describe('codegen', () => {
     expect(out).toBe(1);
   });
 
-  it('merges the six schemas into one $defs table, renaming only the conflicting defs', () => {
+  it('merges the schema roots into one $defs table, renaming only the conflicting defs', () => {
     const merged = mergeSchema(schema) as { $defs: Record<string, unknown>; required: string[] };
-    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile', 'writeRequest', 'readRequest', 'stamp', 'executionPolicy', 'writeReply', 'readReply', 'runLease', 'documentSnapshot', 'replacementTicket']);
-    for (const t of ['Command', 'Query', 'QueryResult', 'Ack', 'EngineError', 'ModelFile', 'Quantity', 'ModelSummary']) expect(merged.$defs).toHaveProperty(t);
+    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile', 'portableProject', 'writeRequest', 'readRequest', 'stamp', 'executionPolicy', 'writeReply', 'readReply', 'runLease', 'documentSnapshot', 'replacementTicket']);
+    for (const t of ['Command', 'Query', 'QueryResult', 'Ack', 'EngineError', 'ModelFile', 'PortableProject', 'Quantity', 'ModelSummary']) expect(merged.$defs).toHaveProperty(t);
     expect(Object.keys(merged.$defs)).toEqual(expect.arrayContaining(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate']));
     // Adding envelope schemas cannot change a previously merged definition through an
     // indirect renamed dependency (Journal -> JournalEntry -> Command -> ShapeSpec).

@@ -55,6 +55,7 @@ export function batchModule(wasm) {
       return JSON.stringify(snapshot.journal.entries.map(entry => entry.hashAfter));
     }
     async import_file(json) { await this.replace(candidate => candidate.file(json)); }
+    async import_project(json) { await this.replace(candidate => candidate.project(json)); }
     document() { return JSON.parse(this.query(JSON.stringify({ query: 'query.document' }))); }
     export_file() {
       const text = compactFileText(this.document().file);

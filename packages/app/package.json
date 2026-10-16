@@ -17,7 +17,8 @@
     "postbuild": "node scripts/check-no-secrets.mjs",
     "size": "node ../../tools/size-check.mjs",
     "pretypecheck": "node ../../tools/build-script-declarations.mjs && node ../../tools/docs.mjs --check",
-    "pretest": "node ../../tools/build-script-declarations.mjs && node --test ../../tools/test_docs.mjs"
+    "pretest": "node ../../tools/build-script-declarations.mjs && node --test ../../tools/test_docs.mjs",
+    "e2e:cloud": "playwright test --config playwright.cloud.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

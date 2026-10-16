@@ -70,6 +70,8 @@ const buffer = (text: string, producer?: Promise<RegistryProducer>): void => {
 const bufferMention = (ref: string): void => { chatBridge.pendingMentions.push(ref); };
 
 interface QueuedMessage { producer: Promise<RegistryProducer>; text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string; uid?:string; epoch?:number }
+interface AttachmentOwner { registry: Registry; store: Store; uid: string | null; epoch: number; active: boolean }
+interface Attachments { owner: AttachmentOwner; images: ImageBlock[] }
 
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
@@ -261,7 +263,24 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [tokens, setTokens] = useState<string[]>([]);
-  const [images, setImages] = useState<ImageBlock[]>([]);
+  const attachmentOwner = useRef<AttachmentOwner>({ registry, store, uid: accounts.state.uid, epoch: accounts.version, active: true });
+  const [attachments, setAttachments] = useState<Attachments | null>(null);
+  const currentAttachments = useRef(attachments);
+  currentAttachments.current = attachments;
+  const currentAttachment = (owner: AttachmentOwner): boolean => owner.active && attachmentOwner.current === owner
+    && owner.registry === registry && owner.store === store
+    && (!__HOSTED_AI__ || (accounts.state.uid === owner.uid && accounts.version === owner.epoch));
+  const images = attachments && currentAttachment(attachments.owner) ? attachments.images : [];
+  useLayoutEffect(() => {
+    const owner: AttachmentOwner = { registry, store, uid: accounts.state.uid, epoch: accounts.version, active: true };
+    attachmentOwner.current = owner;
+    setAttachments(null);
+    return () => { owner.active = false; };
+  }, [registry, store, ui.account.uid, accounts.version]);
+  const editImages = (edit: (images: ImageBlock[]) => ImageBlock[]) => {
+    const owner = attachments?.owner;
+    if (owner) setAttachments(cur => cur?.owner === owner && currentAttachment(owner) ? { owner, images: edit(cur.images) } : cur);
+  };
   const [index, setIndex] = useState<IndexEntry[]>([]);
   const indexOwner = useRef({ registry, request: 0 });
   useLayoutEffect(() => {
@@ -307,7 +326,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     activeRequest.current?.abort();
     for (const job of queue.current) void job.producer.then(owner => owner.release()).catch(() => undefined);
     for (const owner of summaries.current) void owner.release();
-    summaries.current = []; queue.current = []; messages.current = []; setQueued([]); setItems([]); setTurn(null); setCharged(0); setPendingUsage(null); setStreaming(''); setImages([]); setDraft(''); setTokens([]);
+    summaries.current = []; queue.current = []; messages.current = []; setQueued([]); setItems([]); setTurn(null); setCharged(0); setPendingUsage(null); setStreaming(''); setAttachments(null); setDraft(''); setTokens([]);
     chatBridge.clear(); chatBridge.pendingDraft = null;
     void chatBridge.pendingProducer?.then(owner => owner.release()).catch(() => undefined); chatBridge.pendingProducer = undefined;
   }, [ui.account.uid, accounts.version]);
@@ -366,14 +385,20 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     }
   };
 
-  const attach = async (blob: Blob) => {
+  const readAttachment = async (read: () => Promise<ImageBlock>) => {
+    const owner = attachmentOwner.current;
+    if (!currentAttachment(owner)) return;
     try {
-      const image = await downscaleImage(blob);
-      setImages((cur) => [...cur, image]);
+      const image = await read();
+      if (currentAttachment(owner)) setAttachments(cur => currentAttachment(owner)
+        ? { owner, images: [...(cur?.owner === owner ? cur.images : []), image] } : cur);
     } catch (e) {
-      add({ kind: 'bad', text: e instanceof FemError ? e.cause : String(e) });
+      if ((e instanceof FemError && e.code === 'cancelled') || (e instanceof Error && e.name === 'AbortError')) return;
+      if (currentAttachment(owner)) setItems(cur => currentAttachment(owner)
+        ? [...cur, { kind: 'bad', text: e instanceof FemError ? e.cause : String(e) }] : cur);
     }
   };
+  const attach = (blob: Blob) => readAttachment(() => downscaleImage(blob));
 
   const runMessage = useCallback(
     async (job: QueuedMessage, requestSignal: AbortSignal) => {
@@ -488,12 +513,15 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     }
     const producer = supplied ?? acquireRegistryProducer(registry);
     void producer.catch(() => undefined);
-    queue.current.push({ producer, text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey, ...(__HOSTED_AI__ ? {uid:accounts.state.uid!,epoch:accounts.version} : {}) });
+    // Recheck the captured image owner at admission, before a pending clearing render.
+    const latest = currentAttachments.current;
+    const attached = latest && currentAttachment(latest.owner) ? [...latest.images] : [];
+    queue.current.push({ producer, text: line, images: attached, provider: selectedProvider, model: selectedModel, key: apiKey, ...(__HOSTED_AI__ ? {uid:accounts.state.uid!,epoch:accounts.version} : {}) });
     followBottom.current = true;
     setQueued([...queue.current]);
     setDraft('');
     setTokens([]);
-    setImages([]);
+    setAttachments(null);
     if (activeRequest.current) return;
     // A ref owns the lock before the first await, including two sends in the same paint.
     while (queue.current.length) {
@@ -505,7 +533,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       finally { activeRequest.current = null; }
     }
     setBusy('');
-  }, [images, provider, model, store, registry]);
+  }, [provider, model, store, registry]);
 
   const refreshIndex = useCallback(async () => {
     const owner = indexOwner.current;
@@ -564,10 +592,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   // Open on the `@` the caret is behind, or because the `@` button asked; Esc closes the first
   // without touching the draft, and typing another letter brings it back.
   const mentionsOpen = (at !== null && dismissed !== `${at.from}:${at.q}`) || openPanel('mentions');
-  const attachView = async (): Promise<void> => {
-    const view = await screenshotBlock(registry);
-    setImages((cur) => [...cur, view]);
-  };
+  const attachView = () => readAttachment(() => screenshotBlock(registry));
   const mentionRows: Row[] = mentionsOpen
     ? [
         ...(ui.selection.refs.length > 0 && query === ''
@@ -603,7 +628,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         <span class="title">Assistant</span>
         <span class="note">shares this Model</span>
         <span class="grow" />
-        <Cmd cmd="panel.toggle" title="Settings" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.settings' })}>
+        <Cmd
+          cmd={__HOSTED_AI__ ? 'account.open' : 'panel.toggle'}
+          title={__HOSTED_AI__ ? 'Account settings' : 'Settings'}
+          run={() => void dispatch(__HOSTED_AI__ ? { cmd: 'account.open' } : { cmd: 'panel.toggle', panel: 'assistant.settings' })}
+        >
           ⚙
         </Cmd>
         <Cmd cmd="chat.clear" disabled={busy !== ''} title="Start a new conversation" run={() => void dispatch({ cmd: 'chat.clear' })}>
@@ -703,9 +732,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
                 <input
                   placeholder="caption"
                   value={img.caption ?? ''}
-                  onInput={(e) => setImages((cur) => cur.map((c, j) => (i === j ? { ...c, caption: (e.target as HTMLInputElement).value } : c)))}
+                  onInput={(e) => editImages((cur) => cur.map((c, j) => (i === j ? { ...c, caption: (e.target as HTMLInputElement).value } : c)))}
                 />
-                <X label="remove the image" onRemove={() => setImages((cur) => cur.filter((_, j) => j !== i))} />
+                <X label="remove the image" onRemove={() => editImages((cur) => cur.filter((_, j) => j !== i))} />
               </span>
             ))}
           </div>
@@ -806,10 +835,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             <Cmd
               cmd="query.screenshot"
               title="Attach the current view as an image"
-              run={async () => {
-                const view = await screenshotBlock(registry);
-                setImages((cur) => [...cur, view]);
-              }}
+              run={attachView}
             >
               view
             </Cmd>

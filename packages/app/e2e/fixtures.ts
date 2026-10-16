@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs';
 import { test as base, expect, type Page } from '@playwright/test';
 
 /** Every browser test fails on uncaught page errors, including errors in newly opened pages. */
@@ -19,3 +20,10 @@ export const test = base.extend<{ noPageErrors: void }>({
 });
 
 export { expect, type Page } from '@playwright/test';
+
+/** Import the real built renderer without requiring an eager landing-page preload. */
+export function builtViewerModule(): string {
+  const files = readdirSync('dist/assets').filter(file => /^viewer-[^/]+\.js$/.test(file));
+  expect(files, 'one built Viewer module').toHaveLength(1);
+  return `assets/${files[0]!}`;
+}

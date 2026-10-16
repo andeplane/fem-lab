@@ -1,6 +1,7 @@
 // The share link and the autosave (PLAN.md 5.8). Both are pure enough to test without a browser:
 // the fragment is bytes in and Commands out, and the autosave writes to an injected `JournalStore`.
 import { describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import { deflateRawSync } from 'node:zlib';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { Store } from '../src/store';
+import { done, openDb, REVISIONS } from '../src/db';
 import { fakeHost } from '../../registry/test/fakes';
 import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import {
@@ -22,6 +24,7 @@ import {
   shareUrl,
   type ShareCommand,
   type JournalStore,
+  type Saved,
 } from '../src/share';
 
 const CMDS: ShareCommand[] = [
@@ -293,6 +296,102 @@ describe('IndexedDB autosave transactions', () => {
     transaction.onabort!.call(transaction, new Event('abort'));
     await expect(clearing).rejects.toThrow('commit aborted');
     expect(close).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('account-scoped IndexedDB history', () => {
+  const revision = (name: string): Saved => ({ id: name, name, at: 1, cmds: [{ cmd: 'model.setName', name }] });
+
+  it('preserves legacy anonymous history without exposing it to signed-in owners', async () => {
+    const factory = new IDBFactory();
+    const legacy = revision('legacy anonymous');
+    const db = await openDb(factory);
+    try { await done(db.transaction(REVISIONS, 'readwrite').objectStore(REVISIONS).put(legacy, 'last')); }
+    finally { db.close(); }
+    const anonymous = indexedDbStore(factory);
+    const explicitAnonymous = indexedDbStore(factory, null);
+    const a = indexedDbStore(factory, 'A');
+    const b = indexedDbStore(factory, 'B');
+    expect(await anonymous.read()).toEqual([legacy]);
+    expect(await explicitAnonymous.read()).toEqual([legacy]);
+    expect(await a.read()).toEqual([]);
+    expect(await b.read()).toEqual([]);
+    await a.write([revision('A')]);
+    await b.write([revision('B')]);
+    await anonymous.write([revision('new anonymous')], current => [revision('new anonymous'), ...current]);
+    expect(await explicitAnonymous.read()).toEqual([revision('new anonymous'), legacy]);
+    expect(await a.read()).toEqual([revision('A')]);
+    expect(await b.read()).toEqual([revision('B')]);
+    expect(await indexedDbStore(factory, 'A').read()).toEqual([revision('A')]);
+  });
+
+  it('uses distinct keys for delimiter, namespace-shaped, empty and Unicode owners', async () => {
+    const factory = new IDBFactory();
+    const owners = ['last', '', 'a","b', 'å/😀', '\0femlab:autosave-owner:v1:"last"'];
+    await indexedDbStore(factory).write([revision('anonymous')]);
+    for (const owner of owners) await indexedDbStore(factory, owner).write([revision(owner)]);
+    for (const owner of owners) expect(await indexedDbStore(factory, owner).read()).toEqual([revision(owner)]);
+    expect(await indexedDbStore(factory).read()).toEqual([revision('anonymous')]);
+  });
+
+  it('atomically merges competing same-owner writes without mixing another owner', async () => {
+    const factory = new IDBFactory();
+    const a = indexedDbStore(factory, 'A');
+    const otherSessionA = indexedDbStore(factory, 'A');
+    const b = indexedDbStore(factory, 'B');
+    await b.write([revision('B')]);
+    await Promise.all([
+      a.write([], current => [revision('A1'), ...current]),
+      otherSessionA.write([], current => [revision('A2'), ...current]),
+    ]);
+    expect((await a.read()).map(saved => saved.id).sort()).toEqual(['A1', 'A2']);
+    expect(await b.read()).toEqual([revision('B')]);
+    expect(await indexedDbStore(factory).read()).toEqual([]);
+  });
+
+  it('keeps a delayed autosave merge attached to its captured owner after switching accounts', async () => {
+    const factory = new IDBFactory();
+    const a = indexedDbStore(factory, 'A');
+    const b = indexedDbStore(factory, 'B');
+    const anonymous = indexedDbStore(factory);
+    await a.write([revision('old A')]);
+    await anonymous.write([revision('anonymous')]);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const writing = new Promise<void>(resolve => { started = resolve; });
+    const delayed: JournalStore = { read: () => a.read(), clear: () => a.clear(), write: async (saved, merge) => { started(); await gate; await a.write(saved, merge); } };
+    let active = makeAutosave({ store: delayed, now: () => 10, id: () => 'late A' });
+    active.note('late A', [{ cmd: { cmd: 'model.setName', name: 'late A' } }]);
+    const pending = active.flush();
+    await writing;
+    active = makeAutosave({ store: b, now: () => 20, id: () => 'B' });
+    active.note('B', [{ cmd: { cmd: 'model.setName', name: 'B' } }]);
+    await active.flush();
+    release(); await pending;
+    expect((await a.read()).map(saved => saved.name)).toEqual(['late A', 'old A']);
+    expect((await active.readAll()).map(saved => saved.name)).toEqual(['B']);
+    expect(await anonymous.read()).toEqual([revision('anonymous')]);
+  });
+
+  it('clears only the captured owner, including a clear started before switching accounts', async () => {
+    const factory = new IDBFactory();
+    const anonymous = indexedDbStore(factory);
+    const a = indexedDbStore(factory, 'A');
+    const b = indexedDbStore(factory, 'B');
+    await anonymous.write([revision('anonymous')]);
+    await a.write([revision('A')]);
+    await b.write([revision('B')]);
+    let active = a;
+    const clearing = active.clear();
+    active = b;
+    await clearing;
+    expect(await a.read()).toEqual([]);
+    expect(await active.read()).toEqual([revision('B')]);
+    expect(await anonymous.read()).toEqual([revision('anonymous')]);
+    await anonymous.clear();
+    expect(await anonymous.read()).toEqual([]);
+    expect(await b.read()).toEqual([revision('B')]);
   });
 });
 

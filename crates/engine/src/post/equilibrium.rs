@@ -11,7 +11,8 @@ use crate::model::Idealisation;
 use crate::par::{self, Pool};
 use femlab_geometry::Mesh;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StaticEquilibrium {
     pub reference: [f64; 3],
     pub characteristic_length: f64,

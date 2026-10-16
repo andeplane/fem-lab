@@ -32,6 +32,14 @@ Select the submission folder for `INCLUDE` and NODE/ELEMENT `INPUT=` dependencie
 
 Import does not solve: solve each named Step explicitly. Nonlinear/contact source analyses, unsupported formulations and binary `.odb`/`.cae` files are not silently downgraded. Reduced-integration, hybrid and modified elements are rejected rather than substituted. Export a supported text `.inp` from the source application.
 
+## Complete project bundles and captured files
+
+**Download project bundle** packages the complete saved project, including its portable engine state, Journal and retained Results plus captured original inputs and completed output files. The cloud wrapper is `femlab-project-bundle/1`; it is distinct from a legacy `femlab/1` Model file and the engine's portable solved-project payload. A bundle has a 128 MiB total limit, 64 MiB engine JSON limit, 32 MiB per-file limit and at most 256 files.
+
+Successful file imports capture the exact admitted source bytes, including dependencies actually read for a supported import. Successful generated outputs can also be retained and downloaded by name. Selecting a project folder does not capture all of its files. Chats and arbitrary unrelated folder contents do not join the project bundle.
+
+New signed-in projects synchronize this bundle privately when connected. An anonymous project needs an explicit **Upload a copy** to join the account. Network/quota errors leave the browser copy available; check status and export a backup before deleting local data. Account-record JSON export contains a project metadata index, not these files or artifact bytes. See [projects/storage](./projects-storage.md).
+
 ## Export the right artifact
 
 | Format | Use |
@@ -51,3 +59,22 @@ await fem.file.export({ spec: { format: 'csv', table: 'nodal-displacements', ste
 Nodal-displacement CSV preserves scientific f64 coordinates and three displacement components **in metres**, with normalized labels and original node/part/instance identities. Unused source nodes have blank displacements and an `unused` status. Identity columns must be treated as text. Stale/changed source Results are refused before delivery.
 
 Exports go to an open permitted project folder when selected, otherwise to a download. Inspect the exact completed filename and byte receipt; an expired retained download can be regenerated from the appropriate Model. See [storage](./projects-storage.md) and [Results](./results-verification.md).
+
+## Portable solved projects
+
+The headless engine additionally exposes `query.portableProject`, an owned `femlab-project/1`
+artifact for project-storage hosts. It includes the ordinary `femlab/1` Model and Journal plus
+all currently retained simulation results: their solved Models and fingerprints, exact meshes,
+resolved Sets, f64 fields, modes, frame histories, harmonic sweeps, convergence/adaptation report tables and solver diagnostics.
+Restoration uses an unpublished replacement candidate and preserves those values without
+running the simulations again. A corrupt or incompatible artifact leaves the open project
+unchanged. Ordinary `.femlab.json` files continue to contain inputs only.
+
+Version 1 supports the exact engine version, eight retained results, and at most 64 MiB of
+UTF-8 JSON. Projects exceeding that artifact limit cannot be captured or restored through this
+boundary. Results already evicted by the engine's retention limit are not recoverable from a
+later snapshot. Model fingerprints identify the saved inputs; they do not certify an imported
+answer's physical correctness. Hosts re-encoding the artifact must preserve finite f64 values, including signed zero; the
+registry `scientificJson` encoder provides that JSON boundary. Ordinary `JSON.stringify`
+normalizes negative zero. Account ownership, cloud synchronization, original imported
+files and completed output bytes are responsibilities of the surrounding project-storage host.

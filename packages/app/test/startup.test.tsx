@@ -15,6 +15,39 @@ function setup(start: (signal: AbortSignal) => Promise<void> = async () => undef
 }
 afterEach(() => { render(null, document.body); });
 
+it.each(['old-result', 'old-failure'] as const)('clears account catalog synchronously and fences A → B → A %s publication', async outcome => {
+  const a = deferred<ProjectMeta[]>(); const b = deferred<ProjectMeta[]>(); const latest = deferred<ProjectMeta[]>();
+  const list = vi.fn(async () => projects).mockResolvedValueOnce(projects).mockImplementationOnce(() => a.promise).mockImplementationOnce(() => b.promise).mockImplementationOnce(() => latest.promise);
+  const host = setup(async () => undefined, list); await host.loadProjects();
+  expect(host.state.projects).toEqual(projects);
+  host.setAccount({ ...EMPTY_ACCOUNT, uid: 'A', status: 'active' });
+  expect(host.state.projects).toEqual([]); expect(host.state.catalog).toBe('loading');
+  host.setAccount({ ...EMPTY_ACCOUNT, uid: 'B', status: 'active' });
+  expect(host.state.projects).toEqual([]);
+  host.setAccount({ ...EMPTY_ACCOUNT, uid: 'A', status: 'active' });
+  expect(host.state.projects).toEqual([]); expect(list).toHaveBeenCalledTimes(4);
+  const current = [{ ...projects[0]!, id: 'new-A', name: 'current account A' }];
+  latest.resolve(current); await vi.waitFor(() => expect(host.state.catalog).toBe('ready'));
+  if (outcome === 'old-result') { a.resolve([{ ...projects[0]!, id: 'stale-A' }]); b.reject(new Error('old B failure')); }
+  else { a.reject(new Error('old A failure')); b.resolve([{ ...projects[0]!, id: 'stale-B' }]); }
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(host.state.account.uid).toBe('A'); expect(host.state.projects).toEqual(current); expect(host.state.catalog).toBe('ready'); expect(host.state.catalogError).toBeUndefined();
+  expect(await host.registry.query({ query: 'query.projects' })).toEqual({ projects: current });
+  host.setAccount({ ...EMPTY_ACCOUNT, uid: 'A', email: 'refreshed@example.test', status: 'active' });
+  expect(list).toHaveBeenCalledTimes(4); expect(host.state.projects).toEqual(current);
+});
+
+it('clears catalog and stale errors on sign-out before anonymous storage finishes loading', async () => {
+  const pending = deferred<ProjectMeta[]>();
+  const list = vi.fn(async () => projects).mockRejectedValueOnce(new Error('anonymous storage old failure')).mockResolvedValueOnce(projects).mockImplementationOnce(() => pending.promise);
+  const host = setup(async () => undefined, list); await host.loadProjects(); expect(host.state.catalogError).toBe('anonymous storage old failure');
+  host.setAccount({ ...EMPTY_ACCOUNT, uid: 'A', status: 'active' });
+  expect(host.state.catalogError).toBeUndefined(); await vi.waitFor(() => expect(host.state.projects).toEqual(projects));
+  host.setAccount(EMPTY_ACCOUNT);
+  expect(host.state.projects).toEqual([]); expect(host.state.catalog).toBe('loading'); expect(host.state.account.uid).toBeNull();
+  pending.resolve([]); await vi.waitFor(() => expect(host.state.catalog).toBe('ready')); expect(host.state.projects).toEqual([]);
+});
+
 it('exposes validated startup actions and persisted metadata while rejecting every engine or model action', async () => {
   const run = deferred<void>(); const host = setup(() => run.promise); const starting = host.start(); await host.loadProjects();
   expect(await host.registry.query({ query: 'query.projects' })).toEqual({ projects });

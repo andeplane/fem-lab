@@ -13,6 +13,7 @@ import { useDialogFocus } from './Dialog';
 import { humanise } from './schema';
 import { browserLandingPrompt, type LandingPrompt } from '../landing-prompt';
 import {HomeAccount,ProfileControl} from './Profile';
+import {CloudProjects,ProjectSyncDetails} from './CloudProjects';
 
 /** Substring-in-order match, the cheapest fuzzy filter that still feels like one. */
 export function fuzzy(query: string, text: string): boolean {
@@ -276,7 +277,7 @@ export function ago(at: number, now = Date.now()): string {
 }
 
 /** One Recent card: the whole card opens the project, with rename and delete sitting on it. */
-function RecentCard({ p, dispatch, ready = true }: { p: ProjectMeta; dispatch: Dispatch; ready?: boolean }) {
+function RecentCard({ p, dispatch, ready = true, state }: { p: ProjectMeta; dispatch: Dispatch; ready?: boolean; state: StartState }) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   return (
@@ -288,6 +289,7 @@ function RecentCard({ p, dispatch, ready = true }: { p: ProjectMeta; dispatch: D
           {p.commands} Command{p.commands === 1 ? '' : 's'} · edited {ago(p.at)}
         </span>
       </Cmd>
+      <ProjectSyncDetails s={state} id={p.id} dispatch={dispatch}/>
       <div class="recent-tools">
         {renaming === null ? null : (
           <input
@@ -398,12 +400,12 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
           <span class="landing-eyebrow">{signedIn?'YOUR ENGINEERING WORKSPACE':'SIMULATION, IN YOUR BROWSER'}</span>
           <h1 id={`landing-title-${instance}`}>{signedIn?<>Welcome back.<br/>Build what’s next.</>:<>Understand how<br />your design behaves.</>}</h1>
           <p class="pitch">{signedIn?'Start a fresh finite-element analysis, pick up a project, or let the AI assistant help you get from an idea to a model.':'FEM Lab is a finite-element modeling and simulation tool. Build a model, apply loads, and explore how it bends, vibrates, or transfers heat.'}</p>
-          <p class="landing-local">{signedIn?'Your projects stay in this browser. Local modeling is always free; your account adds optional hosted AI.':'Model, mesh and solve locally — free, with no account required. Optional hosted AI can help you build and inspect your analysis.'}</p>
+          <p class="landing-local">{signedIn?'Account projects sync across devices; browser originals are uploaded only when you choose. Local modeling is always free.':'Model, mesh and solve locally — free, with no account required. Optional hosted AI can help you build and inspect your analysis.'}</p>
           <div class="landing-actions">
             <Cmd dispatch={dispatch} cmd="project.new" args={{ name }} disabled={!s.ready} class="landing-primary" title="Start a local model without signing in">Start modeling — free <span aria-hidden="true">↗</span></Cmd>
             <a href={`${docs}getting-started/`} target="_blank" rel="noreferrer" class="landing-secondary">Your first simulation <span aria-hidden="true">→</span></a>
           </div>
-          <p class="landing-browser">For Chromium browsers · Projects stay in this browser · Export files to keep a backup</p>
+          <p class="landing-browser">For Chromium browsers · Keep a project bundle as an independent backup</p>
         </div>
         {signedIn?<HomeAccount account={s.account} dispatch={dispatch} onAccount={openAccount} disabled={!s.ready}/>:<figure class="landing-analysis">
           <div class="analysis-label"><span class="analysis-live" /> FROM A QUESTION TO AN ANALYSIS <span class="mono">01 / 03</span></div>
@@ -477,7 +479,7 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
         {recent.length > 0 ? (
           <div class="recents">
             {recent.map((p) => (
-              <RecentCard key={p.id} p={p} dispatch={dispatch} ready={s.ready} />
+              <RecentCard key={p.id} p={p} dispatch={dispatch} ready={s.ready} state={s} />
             ))}
           </div>
         ) : (
@@ -485,6 +487,7 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
         )}
       </div>
 
+      <CloudProjects s={s} dispatch={dispatch}/>
       <div class="cards">
         <Cmd dispatch={dispatch} cmd="file.open" class="card" disabled={!s.ready} args={{ picker: true }} title="file.open">
           <b>Open a file</b>

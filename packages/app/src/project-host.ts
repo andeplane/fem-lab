@@ -20,6 +20,11 @@ export const browserProjectAccess: ProjectAccess = {
   forget: () => forgetHandle(),
 };
 
+/** Remembered folders belong to the same immutable account partition as projects. */
+export function browserProjectAccessFor(owner:string|null):ProjectAccess {
+  return owner===null?browserProjectAccess:{pick:()=>pickFolder(),recall:()=>recallHandle(indexedDB,localStorage,owner),recent:()=>recentFolder(indexedDB,owner),remember:handle=>rememberHandle(handle,indexedDB,()=>Date.now(),localStorage,owner),forget:()=>forgetHandle(indexedDB,localStorage,owner)};
+}
+
 /** Preserve cancellation and permission failures as structured errors, never a second picker. */
 export function projectError(error: unknown, where: string): FemError {
   if (error instanceof FemError) return error;
