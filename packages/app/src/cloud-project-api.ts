@@ -81,7 +81,7 @@ export class CloudProjectApi {
     const value=await this.request(actor,'/v1/projects/uploads',{method:'POST',headers,body:JSON.stringify(body)});
     if(!object(value)||!uuid(value.uploadId)||!uuid(value.projectId)||!timestamp(value.expiresAt)||!Array.isArray(value.missingChunks)||value.missingChunks.some((index:unknown)=>!count(index)||index>=chunks.length)||new Set(value.missingChunks).size!==value.missingChunks.length||input.id!==undefined&&input.id!==value.projectId)throw invalid();
     const upload=value as unknown as CloudProjectUpload;let done=bytes.length-upload.missingChunks.reduce((sum,index)=>sum+chunks[index]!.bytes,0);progress(done,bytes.length);
-    for(const index of upload.missingChunks){const offset=index*PROJECT_CHUNK_BYTES;await this.request(actor,`/v1/projects/uploads/${upload.uploadId}/chunks/${index}`,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes.slice(offset,offset+chunks[index]!.bytes) as BodyInit});done+=chunks[index]!.bytes;progress(done,bytes.length);}
+    for(const index of upload.missingChunks){const offset=index*PROJECT_CHUNK_BYTES;await this.request(actor,`/v1/projects/uploads/${upload.uploadId}/chunks/${index}`,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:bytes.slice(offset,offset+chunks[index]!.bytes) as RequestInit['body']});done+=chunks[index]!.bytes;progress(done,bytes.length);}
     const committed=readCloudProject(await this.request(actor,`/v1/projects/uploads/${upload.uploadId}/commit`,{method:'POST',headers,body:'{}'}));
     if(committed.id!==upload.projectId||committed.deletedAt!==null||committed.bytes!==bytes.length)throw invalid();return committed;
   }
