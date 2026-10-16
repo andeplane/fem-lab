@@ -22,6 +22,8 @@ Use **Search commands** or **Ctrl+K / Command+K**. Search for a Command such as 
 
 The bottom panels expose Results, Checks, Script, Journal and other analysis views. Examples and Tutorials open guided overlays. Escape closes the active supported overlay. You can resize docked panels; view changes do not change the engine Journal.
 
+The modeling tour uses space above the workspace rather than changing your requested panel sizes. On phones, the viewer and its comparison controls occupy their full height before the bottom tabs; scroll the workspace to move between these panels, the Model tree and Properties.
+
 ## Revisit the modeling sequence
 
 Open **Tutorials → Modeling tour** for the eight-stage workflow guide, including when a tutorial is already open. The guide uses its own row above the workspace, so you can still use the highlighted controls and Properties form. At small window sizes, the workspace scrolls to the relevant control. It is a guide, not a checklist that edits or validates your Model.
