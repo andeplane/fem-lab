@@ -3117,7 +3117,9 @@ witnesses below on Apple M4 Max (Metal). Software-GPU/100% coverage and large-ca
 acceptance remain open.
 
 `aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes` uses the exact
-Dirichlet tridiagonal Laplacian at 31, 127 and 1023 rows. Its sine eigenvector and
+Dirichlet tridiagonal Laplacian at 31, 127, 1023 and 1537 rows. The last case exercises
+two fine levels (1537 → 97 → 7) with sixteen-row aggregation and one algebraic
+constant candidate. Its sine eigenvector and
 λ=4 sin²(π/(2(n+1))) provide independent solution oracles at multiple hierarchy depths.
 It checks cycle positive energy, linearity and bilinear symmetry within 2e-4 relative
 f32 allowance, repeated-map identity, final sine displacement within 1e-6 relative,

@@ -562,7 +562,9 @@ fn poisson(n: usize) -> Csr {
 fn aggregation_gpu_cycle_is_linear_symmetric_positive_and_solves_sine_modes() {
     let g = gpu();
     let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
-    for n in [31, 127, 1023] {
+    // One constant candidate gives 1537 -> 97 -> 7 with sixteen-row aggregates.
+    // Keep a true two-fine-level public GPU witness as well as the smaller cases.
+    for n in [31, 127, 1023, 1537] {
         let k = poisson(n);
         let inner = pollster::block_on(GpuCg::new(&g, &k, &opts)).unwrap();
         let (a, b) = data(n, 0.73);
