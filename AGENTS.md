@@ -140,3 +140,10 @@ here at once, and the issue tracker is the only shared view of who is doing what
   green and self-contained (code, its tests, its Benchmark, its doc string), and open a PR as a
   sequence of such commits. A day of uncommitted work is a bug.
 - Stage files by name. Run the tests before claiming done; report failures with their output.
+- **Validate before pushing, not only before merging.** Run the affected CI checks locally on
+  the final diff before each push. Changes to shared app layout, onboarding, navigation or
+  browser startup require a fresh app build and the entire Chromium CPU smoke suite, not just
+  the new spec. Bundle/runtime changes also require the size gate and cold Pages bootstrap
+  check. Follow the commands in `CONTRIBUTING.md`; if a required check cannot run locally,
+  record the exact limitation in the PR. Investigate a failed run before pushing another
+  candidate; never hide failures with retries, exclusions or lower thresholds.
