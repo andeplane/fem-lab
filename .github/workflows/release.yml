@@ -3,12 +3,19 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      large_gpu_preflight:
+        type: boolean
+        default: false
+        description: Collect bounded Linux capacity and containment evidence only; never run a model.
   pull_request:
     paths:
       - '.github/workflows/ci.yml'
       - '.github/workflows/release.yml'
       - 'tools/release-artifacts.py'
       - 'tools/test_release_artifacts.py'
+      - 'tools/gpu-large-preflight.py'
+      - 'tools/test_gpu_large_preflight.py'
       - 'tools/test-mcp-package.mjs'
       - 'packages/mcp/package.json'
       - 'crates/project-io/**'
@@ -24,7 +31,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  large-gpu-preflight:
+    if: github.event_name == 'workflow_dispatch' && inputs.large_gpu_preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check pure preflight guards
+        run: python3 -m unittest discover -s tools -p test_gpu_large_preflight.py -v
+      - name: Install the existing software-adapter metadata tools
+        run: |
+          timeout 180s sudo apt-get update
+          timeout 180s sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      - name: Collect capacity evidence without a model
+        env:
+          FEMLAB_LARGE_GPU_PREFLIGHT: 'true'
+        run: python3 tools/gpu-large-preflight.py --output "$RUNNER_TEMP/femlab-gpu-preflight"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: large-gpu-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/femlab-gpu-preflight/
+          if-no-files-found: error
+          retention-days: 14
+
   metadata:
+    if: github.event_name != 'workflow_dispatch' || !inputs.large_gpu_preflight
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -43,12 +82,14 @@ jobs:
 
   # The same suite as PR CI, with Windows, GPU and browser GPU failures made fatal.
   validation:
+    if: github.event_name != 'workflow_dispatch' || !inputs.large_gpu_preflight
     needs: metadata
     uses: ./.github/workflows/ci.yml
     with:
       strict: true
 
   native:
+    if: github.event_name != 'workflow_dispatch' || !inputs.large_gpu_preflight
     needs: metadata
     strategy:
       fail-fast: false
@@ -92,6 +133,7 @@ jobs:
           if-no-files-found: error
 
   web-package:
+    if: github.event_name != 'workflow_dispatch' || !inputs.large_gpu_preflight
     needs: [metadata, validation, native]
     runs-on: ubuntu-latest
     steps:
@@ -129,6 +171,7 @@ jobs:
           if-no-files-found: error
 
   artifacts:
+    if: github.event_name != 'workflow_dispatch' || !inputs.large_gpu_preflight
     needs: [metadata, validation, native, web-package]
     runs-on: ubuntu-latest
     steps:
@@ -149,7 +192,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && !inputs.large_gpu_preflight
     needs: [metadata, artifacts]
     runs-on: ubuntu-latest
     environment: release
