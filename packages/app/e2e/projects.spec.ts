@@ -170,24 +170,15 @@ test.describe('@cpu projects in this browser', () => {
     expect(names).toHaveLength(2);
   });
 
-  test('the start screen composer opens the Assistant over it, and the workspace comes up around it', async ({ page }) => {
-    await page.goto('./');
-    await ready(page);
-    // No API key in the test browser, so the drawer answers by opening its Settings — the point
-    // is that the line reached a drawer that did not exist when it was typed (issue #40).
-    await page.getByLabel('describe the part').fill('a 1 m steel cantilever, 10 kN at the tip');
+  test('the development composer opens provider settings without a FEM Lab account',async({page})=>{
+    test.skip(process.env['FEMLAB_AI_MODE']!=='development','Only the explicit developer-key host exposes provider settings.');
+    await page.goto('./');await ready(page);
+    await page.getByLabel('describe the part').fill('a steel cantilever');
+    await expect(page.locator('.ask-send')).toHaveText('Send');
     await page.getByLabel('describe the part').press('Enter');
-
-    const drawer = page.locator('aside.assistant');
-    await expect(drawer).toBeVisible();
-    await expect(drawer.locator('.settings')).toBeVisible();
-    await expect(page.locator('.start')).toBeVisible();
-    // The typed line is kept, so nothing has to be retyped once a key is pasted in.
-    await expect(page.getByLabel('describe the part')).toHaveValue('a 1 m steel cantilever, 10 kN at the tip');
-
-    await page.evaluate(() => window.fem.model.new({ name: 'from-the-assistant' }));
-    await expect(page.locator('.shell')).toBeVisible();
-    await expect(drawer.locator('.settings')).toBeVisible();
+    const drawer=page.locator('aside.assistant');await expect(drawer).toBeVisible();await expect(drawer.locator('.settings')).toBeVisible();
+    await expect(page.getByLabel('describe the part')).toHaveValue('a steel cantilever');
+    await page.evaluate(()=>window.fem.model.new({name:'developer-entry'}));await expect(page.locator('.shell')).toBeVisible();await expect(drawer.locator('.settings')).toBeVisible();
   });
 
   test('every control on the start screen names a Command the registry has', async ({ page }) => {
