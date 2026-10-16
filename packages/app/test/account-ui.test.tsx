@@ -153,3 +153,76 @@ it('denies a stale eligible free claim while paid credits, account loading or bi
     act(()=>render(null,container));container.remove();
   }
 });
+it('presents Google first with an independent passwordless email path and only dispatches an explicit sign-in',()=>{
+  const s={...structuredClone(initialState),panels:{account:true},account:{...EMPTY_ACCOUNT,configured:true,googleEnabled:true}},dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  const methods=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.signIn"]');
+  expect(methods[0]!.textContent).toContain('Continue with Google');expect(methods[1]!.textContent).toBe('Send sign-in link');
+  expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('account-title');expect(container.querySelector('#account-title')?.textContent).toBe('Sign in for AI');
+  expect(container.textContent).toContain('Model, mesh and solve without signing in.');expect(dispatch).not.toHaveBeenCalled();
+  act(()=>methods[0]!.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.signIn',method:'google'});
+  const email=container.querySelector<HTMLInputElement>('input[type="email"]')!;
+  act(()=>{email.value='owner@example.com';email.dispatchEvent(new Event('input',{bubbles:true}));});
+  expect(methods[1]!.disabled).toBe(false);act(()=>methods[1]!.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.signIn',method:'email',email:'owner@example.com'});
+  act(()=>render(null,container));container.remove();
+});
+it('shows the actual account identity and an accessible precise allowance without changing its accounting',()=>{
+  const s=signedIn('plus'),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  Object.assign(s.account.profile.usage,{totalCredits:7500,availableCredits:3750.125,reservedCredits:40.25});
+  const before=structuredClone(s.account.profile.usage);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  const identity=container.querySelector('section[aria-label="Account overview"]')!;
+  expect(identity.textContent).toContain('a@example.com');expect(identity.querySelector('.profile-avatar')?.textContent).toBe('A');
+  expect(identity.querySelector('img')).toBeNull();expect(container.querySelector('#account-title')?.textContent).toBe('Your account');
+  const meter=container.querySelector('meter')!;expect(meter.getAttribute('aria-label')).toBe('AI credits available');
+  expect(Number(meter.getAttribute('value'))).toBeCloseTo(50.0016666667);
+  expect(meter.getAttribute('aria-valuetext')).toBe('3,750.13 available of 7,500 AI credits');
+  expect(container.querySelector('.account-balance')?.textContent).toContain('40.25 reserved');expect(container.querySelector('.account-balance')?.textContent).toContain('UTC. Credits do not roll over.');
+  expect(container.querySelector('.account-plan.is-current')?.textContent).toContain('Plus');expect(s.account.profile.usage).toEqual(before);expect(dispatch).not.toHaveBeenCalled();
+  act(()=>render(null,container));container.remove();
+});
+it('keeps the zero allowance meter finite and loading and error feedback explicit',()=>{
+  const s=signedIn(),container=document.createElement('div');document.body.append(container);
+  Object.assign(s.account.profile.usage,{totalCredits:0,availableCredits:0});
+  act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
+  expect(container.querySelector<HTMLMeterElement>('meter')?.value).toBe(0);
+  Object.assign(s.account,{status:'error',error:'Refresh your account.'});delete (s.account.profile as Partial<AccountInfo>).usage;
+  act(()=>render(<AccountPanel s={s} dispatch={vi.fn(async()=>{})}/>,container));
+  expect(container.querySelector('meter')).toBeNull();expect(container.textContent).toContain('Could not refresh your allowance.');
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe('Refresh your account.');expect(container.textContent).toContain('Account needs attention');
+  act(()=>render(null,container));container.remove();
+});
+it('separates account records and deletion and retains the exact confirmation and registry actions',()=>{
+  const s=signedIn(),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  const toggle=container.querySelector<HTMLButtonElement>('.profile-data-toggle')!;
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');expect(container.querySelector('[data-cmd="account.delete"]')).toBeNull();
+  act(()=>toggle.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'panel.toggle',panel:'account.data'});
+  Object.assign(s.panels,{'account.data':true});act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  expect(toggle.getAttribute('aria-controls')).toBe('profile-account-data');expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  const area=container.querySelector('#profile-account-data')!,remove=area.querySelector<HTMLButtonElement>('[data-cmd="account.delete"]')!,confirmation=area.querySelector<HTMLInputElement>('input')!;
+  act(()=>area.querySelector<HTMLButtonElement>('[data-cmd="account.export"]')!.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.export'});
+  for(const text of ['delete','DELETE ']){act(()=>{confirmation.value=text;confirmation.dispatchEvent(new Event('input',{bubbles:true}));});expect(remove.disabled).toBe(true);}
+  act(()=>{confirmation.value='DELETE';confirmation.dispatchEvent(new Event('input',{bubbles:true}));});expect(remove.disabled).toBe(false);
+  act(()=>remove.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.delete',confirm:'DELETE'});
+  for(const button of container.querySelectorAll('button'))expect(button.getAttribute('data-cmd')).toBeTruthy();
+  act(()=>render(null,container));container.remove();
+});
+it.each(['plus','free'] as const)('hides stale %s allowance after refresh failure and blocks sales while preserving owned management',plan=>{
+  const s=signedIn(plan),dispatch=vi.fn(async()=>{}),container=document.createElement('div');document.body.append(container);
+  Object.assign(s.account,{status:'error',error:'Network request failed.'});Object.assign(s.account.profile.billing,{canManage:true});
+  Object.assign(s.account.profile,{freeAllowance:{status:'eligible',credits:4999.9995,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}});
+  const retained=structuredClone(s.account.profile.usage);
+  act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
+  expect(container.textContent).toContain('Could not refresh your allowance.');expect(container.querySelector('meter')).toBeNull();expect(container.querySelector('.account-balance')).toBeNull();
+  expect(container.querySelector('.profile-plan-badge')).toBeNull();expect(container.querySelector('.account-plan.is-current')).toBeNull();
+  const sales=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.checkout"],[data-cmd="account.changePlan"]');expect(sales).toHaveLength(3);
+  for(const button of sales){expect(button.disabled).toBe(true);act(()=>button.click());}
+  expect(container.querySelector('[data-cmd="account.checkout"]')!==null).toBe(plan==='free');
+  expect(container.querySelector<HTMLButtonElement>('[data-cmd="account.claimFreeAllowance"]')!.disabled).toBe(true);expect(dispatch).not.toHaveBeenCalled();
+  const retry=container.querySelector<HTMLButtonElement>('.profile-allowance-problem [data-cmd="account.refresh"]')!;act(()=>retry.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.refresh'});
+  const manage=container.querySelector<HTMLButtonElement>('[data-cmd="account.portal"]')!;expect(manage.disabled).toBe(false);act(()=>manage.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.portal'});
+  expect(s.account.profile.usage).toEqual(retained);
+  s.account.status='active';act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));expect(container.querySelector('meter')).not.toBeNull();expect(container.querySelector('.profile-allowance-problem')).toBeNull();
+  act(()=>render(null,container));container.remove();
+});

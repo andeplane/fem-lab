@@ -1,4 +1,5 @@
 import { AccountPanel } from './Account';
+import {ProfileControl} from './Profile';
 // The shell of docs/design/README.md: top bar, blocker banner, Model tree, viewer, Properties,
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
@@ -181,7 +182,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         Tutorials
       </Cmd>
       <a class="tbutton docs-link" href={`${import.meta.env.BASE_URL}docs/`} target="_blank" rel="noreferrer">Docs</a>
-      <Cmd dispatch={dispatch} cmd="account.open" class="tbutton account-button" title="Login, AI allowance and subscription" label={s.account.uid ? 'Account' : 'Sign in'}><span class="account-button-label">{s.account.uid ? 'Account' : 'Sign in'}</span><span class="account-button-icon" aria-hidden="true">◉</span></Cmd>
+      <ProfileControl account={s.account} dispatch={dispatch} compact open={s.panels['profile']===true}/>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton outline" args={{ panel: 'assistant' }} pressed={s.panels['assistant'] === true}>
         ✳ Assistant
       </Cmd>

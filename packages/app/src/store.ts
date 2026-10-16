@@ -359,6 +359,7 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
   const nextOpen = open ?? !panels[panel];
+  if(nextOpen&&(panel==='account'||panel==='profile'))return {...panels,account:false,profile:false,[panel]:true};
   if (!panel.startsWith('tree.menu.') || !nextOpen) return { ...panels, [panel]: nextOpen };
   const next = { ...panels };
   for (const key of Object.keys(next)) if (key.startsWith('tree.menu.')) next[key] = false;

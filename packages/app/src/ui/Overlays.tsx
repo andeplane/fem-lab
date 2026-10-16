@@ -12,6 +12,7 @@ import { Cmd, type Dispatch } from './cmd';
 import { useDialogFocus } from './Dialog';
 import { humanise } from './schema';
 import { browserLandingPrompt, type LandingPrompt } from '../landing-prompt';
+import {HomeAccount,ProfileControl} from './Profile';
 
 /** Substring-in-order match, the cheapest fuzzy filter that still feels like one. */
 export function fuzzy(query: string, text: string): boolean {
@@ -361,6 +362,7 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
   }, [s.account.uid, promptStore]);
   const recent = all ? s.projects : s.projects.slice(0, 6);
   const needsSignIn = hosted && s.account.status !== 'active';
+  const signedIn = s.account.uid !== null;
   const openAccount = (): void => {
     if (ask.trim()) setDraftWarning(promptStore.save(ask, s.account.uid) ? '' : 'Your browser blocked draft storage. Copy your request before leaving this page to sign in.');
     void dispatch({ cmd: 'account.open' }).catch(() => undefined);
@@ -381,29 +383,29 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
   };
   const docs = `${import.meta.env.BASE_URL}docs/`;
   return (
-    <div class="start">
+    <div class={signedIn?'start signed-in-home':'start'}>
       <a class="landing-skip" href={`#start-workspace-${instance}`}>Skip to your projects</a>
       <header class="landing-header">
         <span class="landing-brand"><i aria-hidden="true" /> FEM Lab</span>
         <nav aria-label="Main navigation">
           <a href={docs} target="_blank" rel="noreferrer">Documentation</a>
           <Cmd dispatch={dispatch} cmd="panel.toggle" args={{ panel: 'examples' }} disabled={!s.ready} class="tbutton">Examples</Cmd>
-          <Cmd dispatch={dispatch} cmd="account.open" disabled={!s.ready} class="tbutton outline" onRun={openAccount}>{s.account.uid ? 'Account and AI plans' : 'Sign in for AI'}</Cmd>
+          <ProfileControl account={s.account} dispatch={dispatch} disabled={!s.ready} open={s.panels?.['profile']===true} onAccount={openAccount}/>
         </nav>
       </header>
-      <section class="landing-hero" aria-labelledby={`landing-title-${instance}`}>
+      <section class={signedIn?'landing-hero signed-home':'landing-hero'} aria-labelledby={`landing-title-${instance}`}>
         <div class="landing-intro">
-          <span class="landing-eyebrow">SIMULATION, IN YOUR BROWSER</span>
-          <h1 id={`landing-title-${instance}`}>Understand how<br />your design behaves.</h1>
-          <p class="pitch">FEM Lab is a finite-element modeling and simulation tool. Build a model, apply loads, and explore how it bends, vibrates, or transfers heat.</p>
-          <p class="landing-local">Model, mesh and solve locally — free, with no account required. Optional hosted AI can help you build and inspect your analysis.</p>
+          <span class="landing-eyebrow">{signedIn?'YOUR ENGINEERING WORKSPACE':'SIMULATION, IN YOUR BROWSER'}</span>
+          <h1 id={`landing-title-${instance}`}>{signedIn?<>Welcome back.<br/>Build what’s next.</>:<>Understand how<br />your design behaves.</>}</h1>
+          <p class="pitch">{signedIn?'Start a fresh finite-element analysis, pick up a project, or let the AI assistant help you get from an idea to a model.':'FEM Lab is a finite-element modeling and simulation tool. Build a model, apply loads, and explore how it bends, vibrates, or transfers heat.'}</p>
+          <p class="landing-local">{signedIn?'Your projects stay in this browser. Local modeling is always free; your account adds optional hosted AI.':'Model, mesh and solve locally — free, with no account required. Optional hosted AI can help you build and inspect your analysis.'}</p>
           <div class="landing-actions">
             <Cmd dispatch={dispatch} cmd="project.new" args={{ name }} disabled={!s.ready} class="landing-primary" title="Start a local model without signing in">Start modeling — free <span aria-hidden="true">↗</span></Cmd>
             <a href={`${docs}getting-started/`} target="_blank" rel="noreferrer" class="landing-secondary">Your first simulation <span aria-hidden="true">→</span></a>
           </div>
           <p class="landing-browser">For Chromium browsers · Projects stay in this browser · Export files to keep a backup</p>
         </div>
-        <figure class="landing-analysis">
+        {signedIn?<HomeAccount account={s.account} dispatch={dispatch} onAccount={openAccount} disabled={!s.ready}/>:<figure class="landing-analysis">
           <div class="analysis-label"><span class="analysis-live" /> FROM A QUESTION TO AN ANALYSIS <span class="mono">01 / 03</span></div>
           <svg viewBox="0 0 480 285" role="img" aria-label="Illustration of a meshed cantilever fixed at one end and bending under a downward force">
             <defs>
@@ -425,13 +427,13 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
           </svg>
           <figcaption><span>Cantilever under load</span><span>Workflow illustration · deformation exaggerated</span></figcaption>
           <ol class="analysis-stages"><li><b>01</b> Model</li><li><b>02</b> Mesh</li><li><b>03</b> Solve & explore</li></ol>
-        </figure>
+        </figure>}
       </section>
-      <section class="landing-workflow" aria-label="How FEM Lab works">
+      {!signedIn?<section class="landing-workflow" aria-label="How FEM Lab works">
         <div><span>01</span><h2>Define your problem</h2><p>Create geometry or import a supported file. Choose materials, supports and loads.</p></div>
         <div><span>02</span><h2>Run the analysis</h2><p>Generate finite elements, select an analysis Step, and solve using the local engine.</p></div>
         <div><span>03</span><h2>Check your answer</h2><p>Inspect fields and plots, compare results, and refine the mesh to check convergence.</p></div>
-      </section>
+      </section>:null}
       {s.startup ? <div class="startup-status" role="status" aria-live="polite"><span>
         {s.startup.phase === 'starting' ? 'Loading the simulation engine… You can edit drafts and browse Recent projects.' : s.startup.phase === 'cancelling' ? 'Cancelling workspace startup…' : s.startup.phase === 'cancelled' ? 'Workspace startup cancelled.' : 'Could not start the workspace.'}
         </span><div class="startup-actions"><Cmd dispatch={dispatch} cmd="workspace.cancelStartup" disabled={s.startup.phase !== 'starting'}>Cancel startup</Cmd>
@@ -439,13 +441,13 @@ export function Start({ s, dispatch, hosted = __HOSTED_AI__, promptStore = brows
       </div> : null}
       <section class="landing-ai" aria-labelledby={`landing-ai-title-${instance}`}>
         <div class="landing-ai-heading"><div><span class="landing-eyebrow">OPTIONAL AI ASSISTANCE</span><h2 id={`landing-ai-title-${instance}`}>Describe the analysis you have in mind.</h2></div><a href={`${docs}assistant/`} target="_blank" rel="noreferrer">How the assistant works ↗</a></div>
-        <p>{hosted ? 'Hosted AI requires sign-in, accepted data-use disclosure and available credits. Local modeling is always free.' : 'This development build can use your own provider key. The public hosted service requires sign-in and credits.'}</p>
+        <p>{hosted ? signedIn ? 'You are signed in. Draft your request, then review it in the assistant. AI use requires available credits and accepted data-use disclosure.' : 'Hosted AI requires sign-in, accepted data-use disclosure and available credits. Local modeling is always free.' : 'This development build can use your own provider key. The public hosted service requires sign-in and credits.'}</p>
         <div class="ask">
           <input type="text" name="analysis-description" autoComplete="off" class="ask-field" aria-label="describe the part" aria-describedby={`landing-ai-note-${instance}`} data-cmd={hosted ? 'chat.setDraft' : 'chat.send'} placeholder="For example: a steel cantilever with a downward load at the tip…" value={ask}
             onInput={(e) => { const text = (e.target as HTMLInputElement).value; setAsk(text); if (!text.trim()) promptStore.clear(); else if (promptStore.read(s.account.uid)) promptStore.save(text, s.account.uid); }}
             onKeyDown={(e) => { if (e.key === 'Enter') (e.preventDefault(), send()); }} />
           <Cmd dispatch={dispatch} cmd={needsSignIn ? 'account.open' : hosted ? 'chat.setDraft' : 'chat.send'} class="ask-send" args={{ text: ask }} disabled={!s.ready || ask.trim() === ''} onRun={send}>
-            {needsSignIn ? 'Sign in to continue' : hosted ? 'Review in assistant' : 'Send'}
+            {needsSignIn ? s.account.status==='loading'?'View account status':signedIn?'Refresh account to continue':'Sign in to continue' : hosted ? 'Review in assistant' : 'Send'}
           </Cmd>
         </div>
         <p class="ask-note" id={`landing-ai-note-${instance}`}>{hosted ? 'This is an unsent draft. Nothing goes to AI until you choose Send in the assistant. AI changes appear as visible Commands you can inspect and undo.' : 'The Assistant builds it as visible Commands; you can take over at any step.'}</p>

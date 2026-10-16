@@ -11,6 +11,7 @@ export type StartState = Pick<UiState, 'ready' | 'account' | 'projects' | 'proje
   startup?: StartupStatus;
   catalog?: 'loading' | 'ready' | 'failed';
   catalogError?: string;
+  panels?: UiState['panels'];
 };
 export interface StartupOptions {
   schema: EngineSchema;
