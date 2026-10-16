@@ -180,3 +180,21 @@ or exact cancellation to zero, three empty partitions and exact admitted native 
 2972/2960 bytes (2776/2764 on wasm32); one byte less must refuse. Existing independent
 energy/duality and thread-identity oracles remain unchanged. Small numerical/coverage
 checks, source-matched release 66k and a new resource review precede any 780k retry.
+
+
+The `e2ce154a` direct-output checkpoint passed the original release 66k numerical and
+1/4-thread identity oracles on Metal. Its one authorized 780,300-equation run advanced
+beyond the first refused setup prefix, then returned `solve.too-large`: requested
+8,999,730,545 bytes against the same 7,837,371,816-byte allowance. OS maximum RSS was
+9,512,042,496 bytes; the resource guard did not stop it. This is a later setup capacity
+refusal, before GPU iterations, and remains RED.
+
+The next diagnostic checkpoint appends finite admission context to sparse count/output
+and transpose byte refusals: static operation/stage names, output rows/columns, unknown
+or exact counted NNZ, previous charged bytes, the ordered requested vector batch and
+scratch envelope. It preserves the exact original error prefix, code, location,
+suggestion, admission arithmetic and all caps. This describes requested storage, not RSS.
+A real one-row product proves symbolic unknown-fill and final known-one/known-zero
+reports; a build-produced prolongation proves transpose shape and cursor accounting.
+Existing real quota walks retain exact numeric-prefix checks and physical invariants.
+No large rerun or 780k scientific acceptance follows from this diagnostic change.

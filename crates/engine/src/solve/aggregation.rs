@@ -116,6 +116,16 @@ enum Entries {
     Operator,
 }
 
+/// Finite diagnostic metadata for an actual requested output; it never affects admission.
+#[derive(Clone, Copy)]
+struct AdmissionContext {
+    operation: &'static str,
+    stage: &'static str,
+    rows: usize,
+    cols: usize,
+    nnz: Option<usize>,
+}
+
 struct Budget {
     limits: Limits,
     bytes: u128,
@@ -138,6 +148,25 @@ fn requested_limit(what: &str, requested: u128, admitted: u128) -> Error {
     .suggest("solve.run { solver: 'cpu-direct' }, or a host with a larger admitted solve budget")
 }
 
+fn requested_limit_in(
+    what: &str,
+    requested: u128,
+    admitted: u128,
+    context: Option<AdmissionContext>,
+    vectors: &[u128],
+    scratch: u128,
+    previous: u128,
+) -> Error {
+    let mut error = requested_limit(what, requested, admitted);
+    if let Some(context) = context {
+        error.cause.push_str(&format!(
+            "; admission operation={} stage={} rows={} cols={} nnz={:?} previous_bytes={} vector_bytes={vectors:?} scratch_bytes={scratch}",
+            context.operation, context.stage, context.rows, context.cols, context.nnz, previous,
+        ));
+    }
+    error
+}
+
 fn stalled(what: &str) -> Error {
     Error::new(ErrorCode::SolveStalled, format!("aggregation setup: {what}"))
         .at("solve/aggregation")
@@ -155,13 +184,37 @@ impl Budget {
     /// dimensions/NNZ are bounded by u32 and all concrete element types are <=512 bytes.
     /// Exact u128 accounting therefore cannot overflow on either supported pointer width.
     fn allocations(&mut self, vectors: &[u128], scratch: u128) -> Result<(), Error> {
+        self.allocations_in(None, vectors, scratch)
+    }
+    fn allocations_in(
+        &mut self,
+        context: Option<AdmissionContext>,
+        vectors: &[u128],
+        scratch: u128,
+    ) -> Result<(), Error> {
         let next = self.bytes + vectors.iter().sum::<u128>() + scratch;
         if next > self.limits.max_bytes as u128 {
-            return Err(requested_limit("setup bytes", next, self.limits.max_bytes as u128));
+            return Err(requested_limit_in(
+                "setup bytes",
+                next,
+                self.limits.max_bytes as u128,
+                context,
+                vectors,
+                scratch,
+                self.bytes,
+            ));
         }
         let largest = vectors.iter().copied().max().unwrap_or(0);
         if largest > isize::MAX as u128 {
-            return Err(requested_limit("allocation bytes", largest, isize::MAX as u128));
+            return Err(requested_limit_in(
+                "allocation bytes",
+                largest,
+                isize::MAX as u128,
+                context,
+                vectors,
+                scratch,
+                self.bytes,
+            ));
         }
         self.bytes = next;
         Ok(())
@@ -611,6 +664,13 @@ enum RowOp<'a> {
 }
 
 impl RowOp<'_> {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Product { .. } => "product",
+            Self::Smooth { .. } => "smooth-interpolation",
+            Self::Symmetric { .. } => "symmetrize",
+        }
+    }
     fn shape(self) -> (usize, usize) {
         match self {
             Self::Product { a, b } => (a.n_rows, b.n_cols),
@@ -713,7 +773,13 @@ fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<Rect
         let bound = rows(n_rows, slot).map(|row| op.row_bound(row)).max().unwrap_or(0);
         scratch += (bound as u128 + 1) * MAP_ENTRY_BYTES as u128;
     }
-    budget.allocations(&[vector_bytes::<usize>(n_rows), vector_bytes::<Vec<usize>>(ROW_PARTITIONS)], scratch)?;
+    let context =
+        AdmissionContext { operation: op.operation(), stage: "symbolic-count", rows: n_rows, cols: n_cols, nnz: None };
+    budget.allocations_in(
+        Some(context),
+        &[vector_bytes::<usize>(n_rows), vector_bytes::<Vec<usize>>(ROW_PARTITIONS)],
+        scratch,
+    )?;
     let counts = par::map_collect(ROW_PARTITIONS, |slot| {
         let range = rows(n_rows, slot);
         let mut out = Vec::with_capacity(range.len());
@@ -729,7 +795,8 @@ fn sparse_rows(op: RowOp<'_>, kind: Entries, budget: &mut Budget) -> Result<Rect
     // n<=isizeMAX/8, so n_rows+4 and n_rows+1 fit usize without a second overflow arm.
     // OutputSpan has the same nine pointer words as the former three-Vec blocks.
     // Borrowing the final output avoids their duplicate row/index/value payloads.
-    budget.allocations(
+    budget.allocations_in(
+        Some(AdmissionContext { stage: "final-csr", nnz: Some(nnz), ..context }),
         &[
             vector_bytes::<OutputSpan<'_>>(ROW_PARTITIONS),
             vector_bytes::<u32>(n_rows + 1),
@@ -799,7 +866,14 @@ fn smooth_interpolation(
 
 fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr, Error> {
     budget.entries(a.vals.len() as u128, kind)?;
-    budget.allocations(
+    budget.allocations_in(
+        Some(AdmissionContext {
+            operation: "transpose",
+            stage: "output-and-cursor",
+            rows: a.n_cols,
+            cols: a.n_rows,
+            nnz: Some(a.vals.len()),
+        }),
         &[
             vector_bytes::<u32>(a.n_cols + 1),
             vector_bytes::<u32>(a.col_idx.len()),
@@ -1265,8 +1339,46 @@ mod tests {
             let error = multiply(a, &b, Entries::Operator, &mut refused).unwrap_err();
             assert_eq!(error.code, ErrorCode::SolveTooLarge);
             assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
-            assert!(error.cause.contains(&format!("requested {exact} setup bytes; admitted limit {}", exact - 1)));
+            assert_eq!(requested_count(&error, Quota::Bytes, exact - 1), exact);
+            let symbolic = 5 * MAP_ENTRY_BYTES + size_of::<usize>() + ROW_PARTITIONS * size_of::<Vec<usize>>();
+            assert_eq!(refused.bytes, symbolic as u128);
+            assert_eq!(
+                error.cause.split_once("; admission ").unwrap().1,
+                format!(
+                    "operation=product stage=final-csr rows=1 cols=1 nnz=Some({}) previous_bytes={symbolic} vector_bytes={:?} scratch_bytes=0",
+                    expected.len(),
+                    [ROW_PARTITIONS * size_of::<OutputSpan<'_>>(), 2 * size_of::<u32>(), expected.len() * size_of::<u32>(), expected.len() * size_of::<f64>()],
+                ),
+            );
         }
+    }
+
+    #[test]
+    fn symbolic_admission_reports_unknown_fill_and_the_exact_requested_batch() {
+        let a = Matrix { n_rows: 1, row_ptr: &[0, 2], col_idx: &[0, 1], vals: &[2.0, 3.0] };
+        let b = RectCsr { n_rows: 2, n_cols: 1, row_ptr: vec![0, 1, 2], col_idx: vec![0, 0], vals: vec![5.0, 7.0] };
+        let exact = 5 * MAP_ENTRY_BYTES + size_of::<usize>() + ROW_PARTITIONS * size_of::<Vec<usize>>();
+        let mut budget = Budget {
+            limits: Limits { max_bytes: exact - 1, ..limits() },
+            bytes: 0,
+            interpolation_nnz: 0,
+            operator_nnz: 0,
+        };
+        let error = multiply(a, &b, Entries::Operator, &mut budget).unwrap_err();
+        assert_eq!(requested_count(&error, Quota::Bytes, exact - 1), exact);
+        assert_eq!(budget.bytes, 0);
+        assert_eq!(budget.operator_nnz, 0);
+        assert_eq!(
+            error.cause.split_once("; admission ").unwrap().1,
+            format!(
+                "operation=product stage=symbolic-count rows=1 cols=1 nnz=None previous_bytes=0 vector_bytes={:?} scratch_bytes={}",
+                [size_of::<usize>(), ROW_PARTITIONS * size_of::<Vec<usize>>()], 5 * MAP_ENTRY_BYTES,
+            ),
+        );
+        assert_eq!(
+            error.suggestion.as_deref(),
+            Some("solve.run { solver: 'cpu-direct' }, or a host with a larger admitted solve budget")
+        );
     }
 
     #[test]
@@ -1343,17 +1455,15 @@ mod tests {
     fn requested_count(error: &Error, quota: Quota, cap: usize) -> usize {
         assert_eq!(error.code, ErrorCode::SolveTooLarge);
         assert_eq!(error.where_.as_deref(), Some("solve/aggregation"));
-        let suffix = error.cause.strip_prefix("aggregation setup requested ").unwrap();
+        let prefix = error.cause.split("; admission ").next().unwrap();
+        let suffix = prefix.strip_prefix("aggregation setup requested ").unwrap();
         let (count, rest) = suffix.split_once(' ').unwrap();
         let (units, admitted) = rest.split_once("; admitted limit ").unwrap();
         assert_eq!(units, quota.units());
         assert_eq!(admitted.parse::<usize>().unwrap(), cap);
         let requested = count.parse::<usize>().unwrap();
         assert!(requested > cap);
-        assert_eq!(
-            error.cause,
-            format!("aggregation setup requested {requested} {}; admitted limit {cap}", quota.units())
-        );
+        assert_eq!(prefix, format!("aggregation setup requested {requested} {}; admitted limit {cap}", quota.units()));
         requested
     }
 
@@ -1494,6 +1604,14 @@ mod tests {
                     let error = transpose(p, Entries::Interpolation, &mut refused).unwrap_err();
                     assert_eq!(requested_count(&error, Quota::Bytes, exact - 1), exact);
                     assert_eq!(refused.bytes, 0);
+                    assert_eq!(
+                        error.cause.split_once("; admission ").unwrap().1,
+                        format!(
+                            "operation=transpose stage=output-and-cursor rows={} cols={} nnz=Some({}) previous_bytes=0 vector_bytes={:?} scratch_bytes=0",
+                            p.n_cols, p.n_rows, p.vals.len(),
+                            [(p.n_cols + 1) * size_of::<u32>(), p.col_idx.len() * size_of::<u32>(), p.vals.len() * size_of::<f64>(), p.n_cols * size_of::<u32>()],
+                        ),
+                    );
                 }
             }
         }

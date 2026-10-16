@@ -3239,3 +3239,18 @@ The first reviewed 780,300-equation attempt instead returned a genuine setup cap
 8,902,588,620 requested bytes against the remaining 7,837,371,816-byte allowance, before GPU
 iterations. This is retained as RED, with no cap increase, retry, fallback or accepted
 scientific result. Direct final output remains pending its own numerical/resource checks.
+
+
+The direct-output `e2ce154a` release producer subsequently passed the unchanged Metal
+66k scientific and thread-identity checks. Its single reviewed 780,300-equation attempt
+reached a later setup refusal: 8,999,730,545 requested bytes against the unchanged
+7,837,371,816-byte allowance, before GPU iterations. This is capacity evidence, not
+convergence or performance acceptance.
+
+Sparse byte refusals now retain the exact numeric prefix and append static operation/stage,
+output dimensions, unknown versus counted NNZ, prior charged bytes, ordered vector requests
+and scratch. The one-row product above must report unknown fill at its symbolic bound
+minus one, and exact one or zero NNZ at its final bound minus one. The real prolongation
+transpose exact-bound/duality case also checks the output shape and all four vector requests,
+including the cursor. These failure oracles preserve the existing successful numerical
+answers and genuine monotonically admitted quota walks; they add no budget or tolerance.
