@@ -12,6 +12,7 @@ import { IDBFactory } from 'fake-indexeddb';
 import type { AccountController, AuthPort, Identity } from '../src/account/controller';
 import { indexedDbAtomicProjects } from '../src/project-repository';
 import { partitionedAtomicProjects } from '../src/project-partitions';
+import { indexedDbStore } from '../src/share';
 import { decodeProjectArtifact } from '../src/project-artifact';
 
 const identityFixture = vi.hoisted(() => ({ changed: null as ((identity: Identity | null) => void) | null, account: null as AccountController | null, beforeLeave: (async () => undefined) as () => Promise<void> }));
@@ -309,4 +310,28 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect(mounted.props!.store.state.projects.some(row => row.id === aId || row.id === bProject.id)).toBe(false);
   await window.fem.dispatch({ cmd: 'project.open', id: anonymous.id });
   expect((await window.fem.query.model()).bodies).toHaveLength(1);
+  // Persisted history must receive checked entries, not already flattened commands. Exercise
+  // the real host/storage/replacement path so a malformed autosave cannot hide behind mocks.
+  await window.fem.dispatch({ cmd: 'file.autosave', on: true });
+  await window.fem.dispatch({ cmd: 'project.new', name: 'typed history boundary' });
+  const historySeed = await window.fem.query.journal();
+  await window.fem.dispatch({ cmd: 'geometry.addBox', name: 'history_only_body', size: ['1 m', '2 m', '3 m'] });
+  const historyLater = await window.fem.query.journal();
+  const history = await window.fem.registry.query({ query: 'query.autosaveHistory' }) as { revisions: { id: string; name: string; commands: number }[] };
+  const seedRow = history.revisions.find(row => row.name === 'typed history boundary' && row.commands === historySeed.entries.length)!;
+  const laterRow = history.revisions.find(row => row.name === 'typed history boundary' && row.commands === historyLater.entries.length)!;
+  expect(seedRow).toBeDefined(); expect(laterRow).toBeDefined();
+  const persistedHistory = indexedDbStore(localDb);
+  await vi.waitFor(async () => {
+    const rows = await persistedHistory.read();
+    expect(rows.find(row => row.id === seedRow.id)?.cmds).toEqual(historySeed.entries.map(entry => entry.cmd));
+    expect(rows.find(row => row.id === laterRow.id)?.cmds).toEqual(historyLater.entries.map(entry => entry.cmd));
+  });
+  await window.fem.dispatch({ cmd: 'file.autosave', on: false });
+  await window.fem.dispatch({ cmd: 'file.restore', id: seedRow.id });
+  expect(await window.fem.query.journal()).toEqual(historySeed);
+  expect((await window.fem.query.model()).bodies).toEqual([]);
+  await window.fem.dispatch({ cmd: 'file.restore', id: laterRow.id });
+  expect(await window.fem.query.journal()).toEqual(historyLater);
+  expect((await window.fem.query.model()).bodies.map(body => body.name)).toEqual(['history_only_body']);
 }, 30000);

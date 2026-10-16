@@ -230,7 +230,7 @@ class Bundle {
       }
       this.latest = this.binding.capture(snapshot, Date.now());
       if (this.autosave && this.timer === undefined) this.timer = setTimeout(() => { this.timer = undefined; void this.save().catch(error => this.fail(error)); }, 500);
-      this.history.note(snapshot.model.name,snapshot.file.journal.entries.map(entry=>entry.cmd) as never);
+      this.history.note(snapshot.model.name,snapshot.file.journal.entries);
       this.store.set({autosaves:this.history.history().map(row=>({id:row.id??`legacy-${row.at}`,name:row.name,at:row.at,commands:row.cmds.length}))});
     }
   }
