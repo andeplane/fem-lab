@@ -32,13 +32,43 @@ test.describe('@cpu static documentation',()=>{
     await expect(page.locator('#docs-sidebar').getByRole('link',{name:'Open FEM Lab'})).toBeVisible();
     await expect(page.locator('#docs-sidebar').getByRole('link',{name:'Open FEM Lab'})).toHaveAttribute('href',new URL(baseURL!).pathname);
     await page.getByRole('navigation',{name:'Documentation',exact:true}).getByRole('link',{name:'Getting started',exact:true}).click();
-    await expect(page.locator('article h1')).toBeVisible();
+    await expect(page).toHaveURL(new URL('docs/getting-started/',baseURL!).href);
+    await expect(page.locator('article h1')).toHaveText('Getting started');
+    // Static article HTML can be visible before its progressive-enhancement module runs.
+    await expect(page.locator('html')).toHaveClass(/(?:^|\s)js(?:\s|$)/);
     await page.keyboard.press('Control+k');
     const input=page.getByRole('searchbox',{name:'Search topics or commands'});await input.fill('geometry.addBox');
     const result=page.locator('#docs-search-results a').first();await expect(result).toContainText('geometry.addBox');
     await input.press('ArrowDown');await expect(result).toBeFocused();await result.press('Enter');
     await expect(page).toHaveURL(/\/docs\/api-reference\/#command-engine-geometryaddbox$/);
     await expect(page.locator('#command-engine-geometryaddbox')).toBeVisible();
+  });
+  test('keyboard search works after a delayed enhancement module on topic navigation',async({page,baseURL})=>{
+    await page.setViewportSize({width:390,height:844});await page.goto('docs/');
+    await page.getByRole('button',{name:'Browse topics'}).click();
+    let releaseClient!:()=>void;
+    const held=new Promise<void>(resolve=>{releaseClient=resolve;});
+    await page.route('**/assets/docs-client-*.js',async route=>{
+      const response=await route.fetch();await held;await route.fulfill({response});
+    });
+    try{
+      await page.getByRole('navigation',{name:'Documentation',exact:true}).getByRole('link',{name:'Getting started',exact:true}).click();
+      await expect(page).toHaveURL(new URL('docs/getting-started/',baseURL!).href);
+      await expect(page.locator('article h1')).toHaveText('Getting started');
+      await expect(page.locator('html')).toHaveClass('no-js');
+      // This deliberately early shortcut cannot be handled by an unloaded module.
+      await page.keyboard.press('Control+k');
+      await expect(page.locator('#docs-search')).not.toHaveAttribute('open');
+      releaseClient();
+      await expect(page.locator('html')).toHaveClass(/(?:^|\s)js(?:\s|$)/);
+      await page.keyboard.press('Control+k');
+      const input=page.getByRole('searchbox',{name:'Search topics or commands'});await expect(input).toBeFocused();
+      await input.fill('geometry.addBox');
+      const result=page.locator('#docs-search-results a').first();await expect(result).toContainText('geometry.addBox');
+      await input.press('ArrowDown');await expect(result).toBeFocused();await result.press('Enter');
+      await expect(page).toHaveURL(/\/docs\/api-reference\/#command-engine-geometryaddbox$/);
+      await expect(page.locator('#command-engine-geometryaddbox')).toBeVisible();
+    }finally{releaseClient();}
   });
   test('article and all topic links remain readable with JavaScript disabled',async({browser,baseURL})=>{
     const context=await browser.newContext({baseURL,javaScriptEnabled:false,viewport:{width:390,height:844}});
