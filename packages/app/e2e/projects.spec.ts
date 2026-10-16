@@ -170,7 +170,8 @@ test.describe('@cpu projects in this browser', () => {
     expect(names).toHaveLength(2);
   });
 
-  test('the hosted landing composer requires sign-in and preserves an unsent draft', async ({ page }) => {
+  test('@hosted the hosted landing composer requires sign-in and preserves an unsent draft', async ({ page }) => {
+    test.skip(process.env['FEMLAB_AI_MODE']==='development','Hosted authentication is checked before the explicit BYOK build.');
     const completions: string[] = [];
     page.on('request',request=>{if(/\/(?:chat|v1\/ai)\/completions(?:[?#]|$)/.test(request.url()))completions.push(request.url());});
     await page.goto('./');
@@ -189,6 +190,17 @@ test.describe('@cpu projects in this browser', () => {
     await page.getByRole('button',{name:'Start modeling — free'}).click();
     await expect(page.locator('.shell')).toBeVisible();
     await expect(page.getByRole('link',{name:'Docs',exact:true})).toHaveAttribute('href',/\/docs\/$/);
+  });
+
+  test('the development composer opens provider settings without a FEM Lab account',async({page})=>{
+    test.skip(process.env['FEMLAB_AI_MODE']!=='development','Only the explicit developer-key host exposes provider settings.');
+    await page.goto('./');await ready(page);
+    await page.getByLabel('describe the part').fill('a steel cantilever');
+    await expect(page.locator('.ask-send')).toHaveText('Send');
+    await page.getByLabel('describe the part').press('Enter');
+    const drawer=page.locator('aside.assistant');await expect(drawer).toBeVisible();await expect(drawer.locator('.settings')).toBeVisible();
+    await expect(page.getByLabel('describe the part')).toHaveValue('a steel cantilever');
+    await page.evaluate(()=>window.fem.model.new({name:'developer-entry'}));await expect(page.locator('.shell')).toBeVisible();await expect(drawer.locator('.settings')).toBeVisible();
   });
 
   test('every control on the start screen names a Command the registry has', async ({ page }) => {

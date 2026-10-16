@@ -1,14 +1,18 @@
 import {readdirSync} from 'node:fs';
 import {expect,test} from './fixtures';
+import {loadReference} from '../../../tools/docs.mjs';
+const guideSlugs=()=>readdirSync(new URL('../../../docs/guide/',import.meta.url)).filter(name=>name.endsWith('.md')).map(name=>name.slice(0,-3));
+let referenceCount=0;
+test.beforeAll(async()=>{referenceCount=(await loadReference()).entries.length;});
 
 test.describe('@cpu static documentation',()=>{
   test('every guide and complete API reference is emitted as independent HTML',async({page,request})=>{
     const requests:string[]=[];page.on('request',request=>requests.push(request.url()));
     await page.goto('docs/');
     await expect(page.locator('article h1')).toHaveText('FEM Lab documentation');
-    await expect(page.locator('#docs-sidebar .docs-nav-group a')).toHaveCount(22);
+    await expect(page.locator('#docs-sidebar .docs-nav-group a')).toHaveCount(guideSlugs().length+1);
     await page.screenshot({path:'/tmp/femlab-768-docs-desktop.png',fullPage:true});
-    const guides=readdirSync(new URL('../../../docs/guide/',import.meta.url)).filter(name=>name.endsWith('.md')).map(name=>name.slice(0,-3));
+    const guides=guideSlugs();
     for(const slug of [...guides,'api-reference']){
       const response=await request.get(`docs/${slug==='index'?'':slug+'/'}`);
       expect(response.status(),slug).toBe(200);
@@ -16,17 +20,17 @@ test.describe('@cpu static documentation',()=>{
       expect(html,slug).toContain('<h1 id=');expect(html,slug).not.toMatch(/modulepreload|session\.worker|wasm_bg|firebase/);
     }
     await page.getByRole('link',{name:'API reference',exact:true}).first().click();
-    await expect(page.locator('[data-api-entry]')).toHaveCount(181);
+    await expect(page.locator('[data-api-entry]')).toHaveCount(referenceCount);
     expect(requests.filter(url=>/wasm|firebase|identitytoolkit|securetoken|\/v1\/|\/chat\/completions|session\.worker/.test(url))).toEqual([]);
   });
-  test('mobile navigation and keyboard search navigate to real command anchors',async({page})=>{
+  test('mobile navigation and keyboard search navigate to real command anchors',async({page,baseURL})=>{
     await page.setViewportSize({width:390,height:844});await page.goto('docs/');
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
     await page.screenshot({path:'/tmp/femlab-768-docs-mobile.png',fullPage:true});
     const menu=page.getByRole('button',{name:'Browse topics'});await menu.click();
     await expect(menu).toHaveAttribute('aria-expanded','true');
     await expect(page.locator('#docs-sidebar').getByRole('link',{name:'Open FEM Lab'})).toBeVisible();
-    await expect(page.locator('#docs-sidebar').getByRole('link',{name:'Open FEM Lab'})).toHaveAttribute('href','/fem-lab/');
+    await expect(page.locator('#docs-sidebar').getByRole('link',{name:'Open FEM Lab'})).toHaveAttribute('href',new URL(baseURL!).pathname);
     await page.getByRole('navigation',{name:'Documentation',exact:true}).getByRole('link',{name:'Getting started',exact:true}).click();
     await expect(page.locator('article h1')).toBeVisible();
     await page.keyboard.press('Control+k');
@@ -45,7 +49,7 @@ test.describe('@cpu static documentation',()=>{
       await expect(page.locator('article pre code')).not.toHaveCount(0);
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
       await page.getByRole('navigation',{name:'Documentation',exact:true}).getByRole('link',{name:'API reference',exact:true}).click();
-      await expect(page.locator('[data-api-entry]')).toHaveCount(181);
+      await expect(page.locator('[data-api-entry]')).toHaveCount(referenceCount);
     }finally{await context.close();}
   });
 });

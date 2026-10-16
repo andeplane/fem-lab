@@ -5,3 +5,5 @@ export function buildDocsSite(options?:{base?:string}):Promise<DocsSite>;
 export function normalizeBase(base:string):string;
 export function headingSlug(value:string):string;
 export const NAVIGATION:{title:string;pages:string[]}[];
+
+export function loadReference(): Promise<{entries: Record<string, unknown>[]} >;

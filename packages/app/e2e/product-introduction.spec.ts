@@ -2,7 +2,8 @@ import {readFileSync} from 'node:fs';
 import {expect,test} from './fixtures';
 
 test.describe('@cpu public introduction',()=>{
-  test('explains the product before local and hosted actions and keeps anonymous AI drafts local',async({page})=>{
+  test('@hosted explains the product before local and hosted actions and keeps anonymous AI drafts local',async({page})=>{
+    test.skip(process.env['FEMLAB_AI_MODE']==='development','Hosted authentication is checked before the explicit BYOK build.');
     const aiRequests:string[]=[];
     page.on('request',request=>{if(/\/(?:chat|v1\/ai)\/completions(?:[?#]|$)/.test(request.url()))aiRequests.push(request.url());});
     await page.setViewportSize({width:1440,height:1000});
