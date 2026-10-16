@@ -528,8 +528,8 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
-    // three.js is a lazy chunk, warmed by `main.tsx` the moment the shell paints, so by the time
-    // a Model exists this `import()` is already in the module cache.
+    // The isolation bootstrap warms this module before exposing view Commands.
+    // Each workspace still creates and disposes its own renderer when its canvas mounts.
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;

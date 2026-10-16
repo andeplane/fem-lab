@@ -3328,3 +3328,14 @@ with 79→106 iterations. Candidate reconstruction, positive energy, symmetry an
 passed. These are prototype observations, not Rust allocation bounds, GPU results or
 f64 outer acceptance. The unchanged 66k B1/equilibrium/direct 1e-8/thread identity and
 780k B1/f64/equilibrium gates remain mandatory for the sixteen-group source.
+## Portable retained-result persistence (#779)
+
+The existing linear cantilever is solved at two proportional load levels. The second
+retained displacement is twice the first to 1e-10 relative tolerance (linear superposition).
+After UTF-8 JSON serialization and restoration through a private replacement candidate,
+all scientific f64 values, exact mesh connectivity, solved-model fingerprints, immutable
+result identities and current input Journal must equal the source artifact exactly. No
+procedure is executed during restoration. Corrupt identity, model provenance, connectivity,
+field layout, unsupported version and oversized artifacts fail without advancing the active
+session or changing its model. This is a persistence regression around an existing numerical
+capability, not a new physical procedure or an independent accuracy claim for its coarse mesh.

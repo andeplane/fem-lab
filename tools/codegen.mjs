@@ -22,6 +22,7 @@ const TOP = {
   ack: 'Ack',
   error: 'EngineError',
   modelFile: 'ModelFile',
+  portableProject: 'PortableProject',
   writeRequest: 'WriteRequest',
   readRequest: 'ReadRequest',
   stamp: 'Stamp',

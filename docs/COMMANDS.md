@@ -4606,6 +4606,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.model](#queries-query-model)
 - [query.objects](#queries-query-objects)
 - [query.path](#queries-query-path)
+- [query.portableProject](#queries-query-portableProject)
 - [query.probe](#queries-query-probe)
 - [query.report](#queries-query-report)
 - [query.result](#queries-query-result)
@@ -4946,6 +4947,19 @@ Returns: `PathResult`.
 | to | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | n | yes | <code>{"type":"integer","format":"uint32","minimum":0}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.path"}</code> |  |
+
+<a id="queries-query-portableProject"></a>
+
+### query.portableProject
+
+Lossless portable project snapshot, including all retained solved meshes and f64 fields.
+Host storage is separate; capture the checked ReadReply stamp with this owned value.
+
+Returns: `PortableProject`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| query | yes | <code>{"type":"string","const":"query.portableProject"}</code> |  |
 
 <a id="queries-query-probe"></a>
 
