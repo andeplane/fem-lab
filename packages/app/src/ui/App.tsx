@@ -528,8 +528,8 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
-    // Load the 3D renderer when a workspace needs a canvas. Keeping it out of the
-    // landing document also avoids downloading it before the Pages isolation reload.
+    // The isolation bootstrap warms this module before exposing view Commands.
+    // Each workspace still creates and disposes its own renderer when its canvas mounts.
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;
