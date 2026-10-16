@@ -159,7 +159,7 @@ function Segmented({ label, options, active, onPick }: { label: string; options:
     <div class="segmented wide" role="group" aria-label={label}>
       {options.map((o) => (
         <button key={o} type="button" data-cmd="form.open" aria-pressed={active(o)} onClick={() => onPick(o)}>
-          {o}
+          {o.split(/(?=[A-Z][a-z])/).flatMap((part, i) => i === 0 ? [part] : [<wbr key={i} />, part])}
         </button>
       ))}
     </div>

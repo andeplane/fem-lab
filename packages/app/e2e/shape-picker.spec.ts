@@ -128,6 +128,10 @@ test('@cpu nested shapes retain aligned controls and long schema choices wrap in
     const range = document.createRange(); range.selectNodeContents(el);
     return range.getClientRects().length;
   }), 'a long schema label wraps instead of widening its column').toBeGreaterThan(1);
+  expect(await longChoice.evaluate(el => [...el.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => {
+    const range = document.createRange(); range.selectNode(node);
+    return { word: node.textContent, lines: range.getClientRects().length };
+  })), 'camel-case words remain whole when the label wraps').toEqual([{ word: 'random', lines: 1 }, { word: 'Vibration', lines: 1 }]);
   await page.screenshot({ path: info.outputPath('long-schema-labels-300.png') });
   await page.goto('docs/geometry/');
   await expect(page.locator('article')).toContainText('use Tab to reach a choice and Space or Enter to select it');
