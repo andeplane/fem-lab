@@ -603,7 +603,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         <span class="title">Assistant</span>
         <span class="note">shares this Model</span>
         <span class="grow" />
-        <Cmd cmd="panel.toggle" title="Settings" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.settings' })}>
+        <Cmd
+          cmd={__HOSTED_AI__ ? 'account.open' : 'panel.toggle'}
+          title={__HOSTED_AI__ ? 'Account settings' : 'Settings'}
+          run={() => void dispatch(__HOSTED_AI__ ? { cmd: 'account.open' } : { cmd: 'panel.toggle', panel: 'assistant.settings' })}
+        >
           ⚙
         </Cmd>
         <Cmd cmd="chat.clear" disabled={busy !== ''} title="Start a new conversation" run={() => void dispatch({ cmd: 'chat.clear' })}>
