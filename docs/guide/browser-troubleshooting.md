@@ -14,6 +14,9 @@ A software GPU adapter is useful for correctness tests and is not a performance 
 
 ## Startup or a blank page
 
+Some hosts need one initial reload to enable shared-memory isolation. FEM Lab waits for that
+isolation decision before loading the modeling app and 3D viewer, so they download once.
+
 Wait for the startup status to finish, then use its Retry control after a transient failure. Keep the original tab/project state while diagnosing; a fresh tab in the same browser can help distinguish one tab's presentation problem. Save a portable Model before clearing site data, since browser projects are local.
 
 For a local build, serve the app through its documented development/preview server. Opening `index.html` directly or using a server without required isolation/resource headers is not equivalent. Browser extensions, privacy settings, blocked workers and revoked permissions can change behavior. Record the URL, browser version, engine notes and exact error when reporting an issue; do not attach account tokens or sign-in links.

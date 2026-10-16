@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // The bundle budget of plan C row 37, gated in CI (`npm run size`). Two numbers matter:
 //
-//   landing JS   the isolation bootstrap plus main's static import closure — everything that
+//   landing JS   the isolation bootstrap plus main/viewer static import closures — everything that
 //                must run before the usable start screen. Main's dynamic bootstrap import is
 //                still charged here. User-requested modules such as the tutorial runner do not.
 //   cold boot    landing + the chunks `index.html` preloads + the largest actual engine runtime
@@ -37,8 +37,12 @@ const application = new Set();
 const main = Object.values(manifest).find(c => c.src === 'src/main.tsx');
 if (!main?.isDynamicEntry) throw new Error('The application must load dynamically after the isolation bootstrap');
 walk(main, application);
+// Bootstrap warms the renderer after isolation and before exposing view Commands.
+const viewer = Object.values(manifest).find(c => c.src === 'src/viewer/viewer.ts');
+if (!viewer?.isDynamicEntry) throw new Error('The startup Viewer must remain a separate dynamic entry');
+walk(viewer, application);
 
-// `index.html` starts these itself (vite.config.ts injects the links), so they are boot traffic.
+// Any static module preloads are boot traffic, including future additions to the HTML.
 const preloaded = new Set([...readFileSync(path.join(dist, 'index.html'), 'utf8').matchAll(/rel="modulepreload"[^>]*href="[^"]*\/([^"/]+)"/g)].map((m) => `assets/${m[1]}`));
 
 const files = readdirSync(path.join(dist, 'assets')).map((f) => `assets/${f}`).concat('index.html');

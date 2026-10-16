@@ -70,6 +70,7 @@ impl Engine {
     /// Answer a Query. `&mut self` because some Queries build lazy caches (solids, mesh).
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
+            Query::PortableProject {} => self.export_project().map(QueryResult::Project),
             Query::Model {} => self.query_model().map(QueryResult::Model),
             Query::Document {} => Ok(QueryResult::Document(ModelDocument {
                 file: self.export_file(),
