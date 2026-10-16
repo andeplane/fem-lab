@@ -778,7 +778,10 @@ function DocumentApp(props: AppProps) {
   const started = !!s && s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => active?.query ?? (async () => ({ value: 0, unit: '' })), [active?.query]);
   useEffect(() => {
-    if (started && s && !s.form) store?.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
+    // This runs after paint. A script or first geometry Command may have populated the
+    // Model since the empty workspace rendered; never invent a starter draft over it.
+    const current = store?.state;
+    if (started && current?.model?.bodies.length === 0 && !current.form) store?.openForm('geometry.addBox', { name: 'body', size: ['1 m', '100 mm', '100 mm'] });
   }, [started, s?.form, store]);
   useEffect(() => {
     if (!active || !s) return;
