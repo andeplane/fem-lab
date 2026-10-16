@@ -100,20 +100,22 @@ describe('ScriptHost', () => {
   });
 
   it('keeps only completed file deliveries, including before a later script failure, local to each run', async () => {
+    const delivery = { name: 'actual-default.femlab.json', to: 'download', bytes: 6, mime: 'text/plain', id: 'completed-original' };
     const scripts = new ScriptHost(() => new FakeWorker() as unknown as Worker, async payload => {
       if (payload['cmd'] === 'file.write') throw new Error('write refused');
       if (payload['cmd'] === 'file.export') return { cancelled: true };
-      return { name: 'actual-default.femlab.json', to: 'download' };
+      return delivery;
     }, async () => ({ name: 'not-a-delivery.json', to: 'download' }));
     const run = scripts.run('save();');
     const worker = FakeWorker.last!;
     await worker.call('dispatch', { cmd: 'file.save' });
+    await worker.call('dispatch', { cmd: 'file.download', id: delivery.id });
     await worker.call('dispatch', { cmd: 'file.export', spec: { format: 'webm' } });
     await expect(worker.call('dispatch', { cmd: 'file.write', path: 'failed.md', text: 'x' })).rejects.toThrow('write refused');
     await worker.call('dispatch', { cmd: 'view.fit' });
     await worker.call('query', { query: 'query.model' });
     worker.finish({ console: [], error: 'after delivery' });
-    await expect(run).resolves.toEqual({ result: null, console: [], error: 'after delivery', files: [{ name: 'actual-default.femlab.json', to: 'download' }] });
+    await expect(run).resolves.toEqual({ result: null, console: [], error: 'after delivery', files: [delivery, delivery] });
     const next = scripts.run('next();');
     FakeWorker.last!.finish({ console: [] });
     await expect(next).resolves.toEqual({ result: null, console: [] });

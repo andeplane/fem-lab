@@ -1730,6 +1730,13 @@ textarea:focus {
   padding: 40px 24px;
   background: var(--bg-page);
 }
+.startup-status {
+  padding: 12px;
+  border: 1px solid var(--border-panel);
+  border-radius: 4px;
+  color: var(--text-low);
+}
+.startup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .start h1 {
   display: flex;
   align-items: center;
@@ -2575,7 +2582,7 @@ input.model-name:focus {
 /* The drawer is a fixed panel rather than a column, so it exists on the start screen too and
    survives the flip into the workspace. In the shell it starts under the 46 px top bar — the
    design draws that bar full-width. When the three workspace tracks and drawer all fit,
-   `.workspace` reserves the 392 px it takes; at narrower widths the drawer overlays. */
+   `.workspace` reserves the width it takes; at narrower desktop widths it replaces Properties. */
 .assistant {
   position: fixed;
   top: 0;
@@ -2609,6 +2616,26 @@ input.model-name:focus {
     margin-right: var(--assistant-width, 392px);
   }
 }
+/* At narrow desktop widths the drawer takes the Properties track, rather than covering
+   live viewer controls. Keep one effective width for its track, panel and splitter. The
+   requested panel size stays intact; the cap leaves room for a 180 px tree + 520 px viewer. */
+@media (min-width: 1024px) and (max-width: 1493px) {
+  #app:has(> .assistant:not([hidden])) .workspace,
+  #app > .assistant,
+  #app > .resize-handle.assistant-resize.fixed {
+    --assistant-used: min(var(--assistant-width, 392px), calc(100vw - 700px));
+  }
+  #app:has(> .assistant:not([hidden])) .workspace {
+    --properties-used: var(--assistant-used);
+    --tree-used: min(var(--tree-width, 274px), max(180px, calc(100% - 520px - var(--assistant-used))));
+  }
+  #app:has(> .assistant:not([hidden])) .workspace > .props,
+  #app:has(> .assistant:not([hidden])) .workspace > .resize-handle.properties {
+    display: none;
+  }
+  #app > .assistant { width: var(--assistant-used); }
+  #app > .resize-handle.assistant-resize.fixed { right: var(--assistant-used); }
+}
 /* The start screen has no `.workspace` to carry the reservation, and the drawer would otherwise
    sit over its composer. Wide enough for the 880 px column plus the drawer, it moves aside and
    centres in what is left; narrower, the drawer simply floats over it. */
@@ -2621,7 +2648,8 @@ input.model-name:focus {
 /* ── narrow desktops ───────────────────────────────────────────────────────────────────── */
 /* The design is drawn for ≥ 1180 px. Below that the panels give way rather than the page
    growing a horizontal scrollbar: the tree and Properties narrow, the viewer keeps its
-   minimum, and the assistant drawer floats over the workspace instead of taking a column. */
+   minimum. The narrow desktop Assistant uses the Properties track; smaller screens retain
+   their floating drawer. */
 @media (max-width: 1179px) {
   .shell {
     min-width: 0;

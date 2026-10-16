@@ -33,31 +33,52 @@ export class SessionWorkspace<T extends SessionResources> {
     if (!this.current) throw new FemError('session.transitioning', 'workspace is still starting');
     return this.current;
   }
-  private async create(): Promise<SessionTransport> {
+  private async create(signal?: AbortSignal): Promise<SessionTransport> {
+    signal?.throwIfAborted();
     const channel = new SessionChannel(this.options.spawn(), error => {
       const active = this.current;
       if (active?.transport.channel !== channel) return;
       if (this.preparing) { this.recoveryRequested = true; return; }
       void this.recover(active.transport).catch(failure => active.resources.recoveryFailed?.(failure ?? error));
     });
+    const cancel = () => channel.close(new FemError('cancelled', 'workspace startup was cancelled'));
+    signal?.addEventListener('abort', cancel, { once: true });
     try {
+      signal?.throwIfAborted();
       const created = await channel.request({ op: 'create', epoch: this.options.epoch(), options: this.options.engine });
       const run = await channel.request({ op: 'beginRun', session: created.stamp.session });
       return new SessionTransport(channel, run.value as RunLease, (origin, source, admission) => this.replace(origin, source, admission), origin => this.recover(origin));
     } catch (error) { channel.close(); throw error; }
+    finally { signal?.removeEventListener('abort', cancel); }
   }
-  async start(): Promise<ActiveSession<T>> {
+  async start(signal?: AbortSignal): Promise<ActiveSession<T>> {
     if (this.current || this.preparing) throw new FemError('session.conflict', 'workspace already started');
+    signal?.throwIfAborted();
     this.preparing = true;
-    const transport = await this.create().catch((error: unknown) => { this.preparing = false; throw error; });
+    let transport: SessionTransport | undefined;
+    let resources: T | undefined;
+    let published = false;
+    const cancel = () => transport?.channel.close(new FemError('cancelled', 'workspace startup was cancelled'));
+    signal?.addEventListener('abort', cancel, { once: true });
     try {
+      transport = await this.create(signal);
+      signal?.throwIfAborted();
       const initial = await transport.snapshot();
-      const resources = await this.options.build(transport, initial);
+      resources = await this.options.build(transport, initial);
+      signal?.throwIfAborted();
       this.current = { transport, initial, resources };
+      published = true;
       this.options.publish(this.current);
       return this.current;
-    } catch (error) { transport.channel.close(); throw error; }
-    finally { this.preparing = false; }
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+      try {
+        if (!published) {
+          transport?.channel.close();
+          try { await resources?.abandon?.(); } finally { resources?.dispose(); }
+        }
+      } finally { this.preparing = false; }
+    }
   }
   async recover(origin: SessionTransport): Promise<void> {
     const expected = this.active;
