@@ -15,7 +15,7 @@ export const NAVIGATION=[
   {title:'Start here',pages:['index','getting-started','concepts','workspace','examples-tutorials']},
   {title:'Build a model',pages:['geometry','meshing','materials-sections','sets-constraints-loads','units']},
   {title:'Solve and understand',pages:['steps-solvers','physics','results-verification']},
-  {title:'Save and automate',pages:['projects-storage','import-export','scripting-journal','cli-mcp']},
+  {title:'Save and automate',pages:['projects-storage','cloud-project-api','import-export','scripting-journal','cli-mcp']},
   {title:'AI and your account',pages:['assistant','accounts-billing']},
   {title:'Reference and help',pages:['api-reference','browser-troubleshooting','architecture-extensions']},
 ];

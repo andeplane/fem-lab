@@ -15,7 +15,11 @@ class ReleaseBillingTests(unittest.TestCase):
             with self.subTest(merchant_mode=merchant_mode):
                 self.assert_billing_release(merchant_mode, tax_mode)
 
-    def assert_billing_release(self, merchant_mode, tax_mode):
+    def test_unsafe_project_bucket_stops_before_any_runtime_release(self):
+        with self.assertRaisesRegex(RuntimeError, 'bucket configuration is unexpected'):
+            self.assert_billing_release('managed', 'automatic', soft_delete_seconds='604800')
+
+    def assert_billing_release(self, merchant_mode, tax_mode, *, soft_delete_seconds='0'):
         calls = []
         resolved = []
         output = {}
@@ -39,6 +43,18 @@ class ReleaseBillingTests(unittest.TestCase):
             body = ''
             if argv[1:3] == ['builds', 'describe']:
                 body = 'SUCCESS'
+            elif argv[1:4] == ['projects', 'describe', 'femlab-app']:
+                body = '999163219889'
+            elif argv[1:4] == ['storage', 'buckets', 'describe']:
+                body = json.dumps({'name': 'femlab-app-projects', 'projectNumber': '999163219889',
+                                   'location': 'EUROPE-WEST3', 'locationType': 'region', 'storageClass': 'STANDARD',
+                                   'iamConfiguration': {'uniformBucketLevelAccess': {'enabled': True}, 'publicAccessPrevention': 'enforced'},
+                                   'softDeletePolicy': {'retentionDurationSeconds': soft_delete_seconds}})
+            elif argv[1:4] == ['iam', 'roles', 'describe']:
+                body = json.dumps({'stage': 'GA', 'includedPermissions': ['storage.objects.create', 'storage.objects.get', 'storage.objects.delete']})
+            elif argv[1:4] == ['storage', 'buckets', 'get-iam-policy']:
+                body = json.dumps({'bindings': [{'role': 'projects/femlab-app/roles/femlabProjectObjects', 'members': [
+                    'serviceAccount:femlab-api@femlab-app.iam.gserviceaccount.com', 'serviceAccount:femlab-jobs@femlab-app.iam.gserviceaccount.com']}]})
             elif argv[1:5] == ['artifacts', 'docker', 'images', 'describe']:
                 body = json.dumps({'image_summary': {'digest': 'sha256:immutable'}})
             elif argv[1:4] == ['secrets', 'versions', 'list']:
@@ -73,7 +89,11 @@ class ReleaseBillingTests(unittest.TestCase):
         with patch.dict('sys.modules', {'billing_config': module}), patch('sys.argv', [str(entry), '--environment', 'production', '--account', 'andershaf@gmail.com']), \
                 patch('subprocess.run', run), patch('urllib.request.urlopen', return_value=response), \
                 patch.object(Path, 'read_text', read), patch.object(Path, 'write_text', write), contextlib.redirect_stdout(io.StringIO()):
-            runpy.run_path(str(entry), run_name='__main__')
+            try:
+                runpy.run_path(str(entry), run_name='__main__')
+            except RuntimeError:
+                self.assertFalse(any(call[1] in ['run', 'scheduler', 'secrets'] for call in calls))
+                raise
         self.assertEqual(resolved[0][0:2], ('production', 'femlab-app'))
         self.assertEqual(resolved[0][3:], (True, 'preserve'))
         api = next(call for call in calls if call[1:3] == ['run', 'deploy'])
@@ -82,6 +102,8 @@ class ReleaseBillingTests(unittest.TestCase):
             env = next(value for value in command if value.startswith('--set-env-vars='))
             secrets = next(value for value in command if value.startswith('--set-secrets='))
             self.assertIn('APP_RETURN_ORIGIN=https://femlab.app', env)
+            self.assertIn('PROJECT_BUCKET=femlab-app-projects', env)
+            self.assertIn('PROJECT_STORAGE_GLOBAL_BYTES=100000000000', env)
             self.assertIn('FREE_ELIGIBILITY_HMAC_KEY=free-eligibility-hmac-key:1', secrets)
             for name, value in binding['env'].items():
                 self.assertIn(name + '=' + value, env)
