@@ -76,7 +76,8 @@ pub fn shell_surface_stress(p: &Problem<'_>, u: &[f64], side: f64) -> Result<Fie
 }
 
 /// Both faces of one ply, and their immutable extremes. Faces are bottom then top.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PlyStress {
     pub faces: [FieldData; 2],
     pub extremes: [Vec<crate::post::Extremum>; 2],

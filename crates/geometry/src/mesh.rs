@@ -482,10 +482,11 @@ impl Mesh {
         let n_nodes = self.n_nodes() as u32;
         let mut next = 0u32;
         for (b, blk) in self.blocks.iter().enumerate() {
-            // A line member is embedded in the mesh's space rather than being of its
-            // dimension: its two nodes carry the mesh's three displacements, so it belongs in
-            // a 3D mesh whatever direction it points.
-            if blk.kind.dim() != self.dim && !(blk.kind.dim() == 1 && self.dim == 3) {
+            // Line members and shell midsurfaces live in 3D space even though their intrinsic
+            // dimensions are smaller. Ordinary planar solids still require a 2D Mesh.
+            if blk.kind.dim() != self.dim
+                && !((blk.kind.dim() == 1 || blk.kind == ElementKind::Shell4) && self.dim == 3)
+            {
                 return Err(GeomError(format!("block {b} is {:?} in a {}D mesh", blk.kind, self.dim)));
             }
             if !blk.conn.len().is_multiple_of(blk.kind.n_nodes()) {

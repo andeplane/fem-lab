@@ -1,5 +1,6 @@
 import type { ModelFile } from './generated/engine';
 import { FemError } from './error';
+import { scientificJson } from './scientific-json';
 
 /** Host publication/save budget, measured on the complete persisted UTF-8 ModelFile text. */
 export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
@@ -13,9 +14,9 @@ export interface ModelFilePublicationPolicy {
   readonly maxBytes: number;
 }
 
-/** The existing browser format; MCP appends one LF. Number formatting is ECMAScript's. */
+/** The existing browser format; MCP appends one LF. Retain signed zero in scientific data. */
 export function modelFileText(file: ModelFile, trailingNewline = false): string {
-  return JSON.stringify(file, null, 2) + (trailingNewline ? '\n' : '');
+  return scientificJson(file, 2) + (trailingNewline ? '\n' : '');
 }
 
 /** Use the same encoder at private candidate finish and the corresponding host's writer. */

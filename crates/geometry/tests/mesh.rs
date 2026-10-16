@@ -2505,6 +2505,7 @@ fn structured_shells_keep_both_sides_and_embed_the_quad_in_space() {
     assert_eq!(mesh.n_nodes(), 12);
     assert_eq!(mesh.n_elems(), 6);
     assert_eq!(mesh.blocks[0].kind, ElementKind::Shell4);
+    mesh.validate().unwrap();
     assert_eq!(mesh.boundary_faces().len(), 12);
     assert_eq!(mesh.face_sets["top"].len(), 6);
     assert_eq!(mesh.face_sets["bottom"].len(), 6);

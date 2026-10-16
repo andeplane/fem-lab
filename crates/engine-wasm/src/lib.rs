@@ -435,6 +435,16 @@ impl PreparedEngine {
         Ok(())
     }
 
+    /// Restore a complete portable SI project without rerunning its retained solves.
+    /// Parse/size/validation errors consume this private candidate before publication.
+    pub async fn project(&mut self, project_json: String) -> Result<(), JsValue> {
+        let candidate = self.take_building()?;
+        let project = femlab_engine::portable::PortableProject::from_json(&project_json).map_err(|e| throw(&e))?;
+        let prepared = candidate.project(project).await.map_err(|e| throw(&e))?;
+        self.state = CandidateState::Building(Box::new(prepared));
+        Ok(())
+    }
+
     /// Encode the complete prepared ModelFile with the host's actual save formatter and enforce
     /// its UTF-8 budget before Ready/commit. The callback receives compact transfer JSON and must
     /// faithfully return the persisted JSON text, including any trailing newline; it performs

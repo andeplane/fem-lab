@@ -346,7 +346,8 @@ impl Step {
 /// `amplitude[i]` and `phase[i]` are three-component nodal fields like any other, parallel to
 /// `frequencies[i]` in Hz. The phase is in radians and is the lag behind the driving load, so
 /// `u(t) = amplitude · cos(2π f t − phase)`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Sweep {
     pub frequencies: Vec<f64>,
     pub amplitude: Vec<FieldData>,
@@ -354,7 +355,8 @@ pub struct Sweep {
 }
 
 /// A transient Step's output: the times it kept and the nodal field at each of them.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct History {
     pub field: Field,
     pub times: Vec<f64>,
@@ -412,7 +414,8 @@ pub(crate) fn retained_payload_bytes(frames: usize, values_per_frame: usize) -> 
 /// `extremes` and `reactions` are computed here and kept, not recomputed on demand: a Result
 /// outlives the Mesh it was solved on (the Model can be edited under it), and a summary must
 /// stay readable — and honest about being stale — after that.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StepResult {
     /// Retained SI wrench ledger for linear Cartesian static recovery only.
     pub static_equilibrium: Option<crate::post::equilibrium::StaticEquilibrium>,
@@ -460,7 +463,8 @@ pub struct StepResult {
 }
 
 /// What one frictionless contact ended the Step with (`query.result` reports it).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ContactSummary {
     pub name: String,
     /// Slave nodes held on the master surface.

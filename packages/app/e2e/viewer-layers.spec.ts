@@ -1,3 +1,4 @@
+import { builtViewerModule } from './fixtures';
 import { expect, test, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
@@ -59,11 +60,8 @@ test.describe('@cpu viewer layers', () => {
 
   test('Viewer replacement objects retain real visibility state', async ({ page }) => {
     await page.goto('./');
-    const states = await page.evaluate(async () => {
-      const viewerUrl = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'))
-        .map((link) => link.href)
-        .find((href) => /\/viewer-[^/]+\.js$/.test(href));
-      if (!viewerUrl) throw new Error('the built Viewer module was not preloaded');
+    const states = await page.evaluate(async file => {
+      const viewerUrl = new URL(file, document.baseURI).href;
       const { Viewer } = (await import(viewerUrl)) as {
         Viewer: new (canvas: HTMLCanvasElement) => unknown;
       };
@@ -113,7 +111,7 @@ test.describe('@cpu viewer layers', () => {
       viewer.dispose();
       canvas.remove();
       return { hidden, afterSurface, afterMode, afterBody };
-    });
+    }, builtViewerModule());
 
     const hidden = { mesh: false, edges: false, grid: false, axes: false };
     expect(states).toEqual({ hidden, afterSurface: hidden, afterMode: hidden, afterBody: hidden });
