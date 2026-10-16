@@ -35,7 +35,8 @@ A case passes only when all of these checks pass:
 Each host must pass at least 16 of the same 20 cases. The report lists every failure and cause; it
 never drops a case, widens a tolerance or counts a fake provider/reference Journal as a live pass.
 The browser and MCP percentages are reported separately, so one host cannot hide failures in the
-other.
+other. The scorer grades the Model, Results and tool workflow; it does not grade the
+Assistant's free-text explanation or its requested hand calculation.
 
 ## Fixed cases
 
@@ -109,7 +110,7 @@ Run the live lane from a clean commit after confirming the available credential,
 bound and host capacity. A successful model-list read proves access, not generation credits.
 The runner checks actual free disk before preparation, cases and every provider request.
 Fresh or unverified engine routes retain a 30 GiB floor. Fully verified WASM reuse with
-a matching staged STEP corresponding-source kit uses a 24 GiB operational floor; the
+a matching staged STEP corresponding-source kit uses a 4 GiB operational floor; the
 selected route, source-kit hash and floor are sealed into the run configuration. This
 measured allowance avoids native compilation and source extraction; it is not a quota
 on arbitrary model-directed export files, tool replies, checkpoints or system swap.
@@ -175,9 +176,12 @@ browser run must use actual Chromium, and the MCP run must use the packed stdio 
 
 The benchmark wrapper buffers an entire provider attempt, including text, tools and
 opaque continuation, until iteration and billing validation complete. One explicit
-retry is allowed only for an observed allowlisted network cause. SDK retries remain
-zero; authentication, schema/protocol errors, request cancellation, SDK timeouts and
-input-count failures are terminal. Every attempt checks resources, recounts input and
+retry is shared across input counting and generation, and is allowed only for an observed
+allowlisted network cause. SDK retries remain zero; authentication, schema/protocol errors,
+request cancellation, SDK timeouts, fatal TLS alerts and unrecognized transport failures
+are terminal. Input counting must succeed before a generation reservation. Resources and
+cancellation are checked again after counting, before reserving or creating a generation.
+Every generation attempt checks resources, recounts input and
 reserves a new worst-case charge. An unknown first-attempt charge remains consumed
 at its full reservation; a second failure stops generation. Attempt receipts retain
 sanitized cause chains and discarded-event counts. A checkpoint containing retained
@@ -189,10 +193,16 @@ probe. `FEMLAB_EVAL_MAX_USD` and `FEMLAB_EVAL_MAX_REQUESTS` now describe the ori
 whole-evaluation allowance. The runner verifies every parent artifact, leaves its
 stopped ledger untouched, deducts its full charged-or-reserved cost and request count,
 and seals that lineage in the new configuration. Consumption rounds up and remaining
-allowance down to microdollars. The two original failed Sol 6.1 attempts remain
-incomplete evidence; their combined 71 requests and $2.309102 held/charged leave
-$47.690898 and 329 requests from the approved $50/400 envelope. A probe consumes this
-same remaining allowance, never a fresh one.
+allowance down to microdollars. A probe consumes the same remaining allowance, never a
+fresh one. At 2026-10-16, nine immutable parent artifacts record 234 generation requests
+and $6.847697 charged or reserved, including unresolved unknown-usage holds. They leave
+$43.152303 of the user-authorized cumulative $50 ceiling. The next fresh experiment uses
+an explicit 800-request cumulative guard and 256,000 input / 16,000 output tokens, leaving
+566 generation requests after those parents. The prior 400-request and 128,000-input
+guards were harness bounds; their change does not increase the dollar allowance or
+permit resuming an incompatible checkpoint. Every historical artifact remains unchanged.
+Counting requests are not priced by this generation ledger; no claim that counting is free
+or that this ledger equals the provider's complete invoice is made.
 
 Both isolated npm locks are copied byte-for-byte to an output-adjacent runtime
 receipt directory, with raw SHA-256 hashes and verified readback, before temporary
@@ -219,7 +229,18 @@ remain separate and are never executed on another platform. The complete runtime
 receipt identity and host-input hashes enter the frozen configuration. Missing or changed
 nested helpers, notices, native files or compile inputs refuse reuse before a build starts.
 
-The authorized no-tools probe is an additional immutable parent: one Sol 6.1 generation
-charged $0.000124. Together with the two incomplete attempts, the original allowance has
-72 requests and $2.309226 held/charged, leaving $47.690774 and 328 requests. Include all
-three pinned artifacts in the lineage input for the eventual full run.
+### Explicit HTTP transport and optional diagnostics
+
+`FEMLAB_EVAL_HTTP_TRANSPORT` selects `native-default` or `http1-connection-close`.
+The latter requires Node 22 and applies `Connection: close` to both authoritative counting
+and generation through the SDK. The selected mode is frozen in the manifest; absent or
+mismatched checkpoint transport configuration rejects resumption. Connection-close is an
+explicit experiment, not a proven elimination of intermittent provider transport failures.
+
+`FEMLAB_EVAL_COUNT_EVIDENCE_PARENT` optionally enables restricted local serialized count-body
+capture for transport diagnosis. Its bounded 128 MiB / 800-capture sink fails closed when
+exhausted. The next forty-case engineering run leaves that variable absent: full request-body
+capture is optional and must not become an unrelated capacity gate for the quality run.
+Ordinary sanitized transport diagnostics, tool traces, checkpoints and billing reservations
+remain enabled. Historical private diagnostic bodies and keyed cause-code evidence are
+preserved outside the repository.
