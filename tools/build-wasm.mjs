@@ -39,7 +39,8 @@ if (have !== want) {
 const profile = process.argv.includes("--dev") ? "dev" : "wasm";
 run("cargo", ["build", "-p", "femlab-engine-wasm", "--target", "wasm32-unknown-unknown", "--profile", profile]);
 const dir = profile === "dev" ? "debug" : "wasm";
-const artifact = path.join(root, "target", "wasm32-unknown-unknown", dir, "femlab_engine_wasm.wasm");
+const target = path.resolve(root, process.env.CARGO_TARGET_DIR ?? "target");
+const artifact = path.join(target, "wasm32-unknown-unknown", dir, "femlab_engine_wasm.wasm");
 const webOut = path.join(root, "packages", "app", "src", "generated", "wasm");
 const nodeOut = path.join(root, "tools", "wasm-node");
 mkdirSync(webOut, { recursive: true });

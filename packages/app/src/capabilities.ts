@@ -6,7 +6,7 @@ export interface HostCaps {
   webgpu: boolean;
   crossOriginIsolated: boolean;
   sharedArrayBuffer: boolean;
-  /** What we ask the engine for: the hardware count when isolated, 1 when not. */
+  /** Requested CPU pool size: hardware count with isolation and shared memory, otherwise 1. */
   threads: number;
   chromium: boolean;
   userAgent: string;
@@ -23,11 +23,12 @@ export function readHostCaps(win: CapabilityHost = globalThis as CapabilityHost)
   const nav = win.navigator;
   const ua = nav?.userAgent ?? '';
   const isolated = win.crossOriginIsolated === true;
+  const shared = typeof win.SharedArrayBuffer === 'function';
   return {
     webgpu: nav?.gpu !== undefined,
     crossOriginIsolated: isolated,
-    sharedArrayBuffer: typeof win.SharedArrayBuffer === 'function',
-    threads: isolated ? (nav?.hardwareConcurrency ?? 1) : 1,
+    sharedArrayBuffer: shared,
+    threads: isolated && shared ? Math.max(1, Math.floor(nav?.hardwareConcurrency ?? 1)) : 1,
     chromium: /Chrome\/|Chromium\/|Edg\//.test(ua),
     userAgent: ua,
   };
@@ -41,7 +42,8 @@ export function capabilityNotes(host: HostCaps, engine: Capabilities | null): st
   const notes: string[] = [];
   if (!host.webgpu) notes.push('Open in Chrome for GPU solving — this browser has no WebGPU, so solves run on the CPU.');
   else if (engine && !engine.gpu) notes.push('WebGPU is present but no adapter was granted; solving on the CPU.');
-  if (!host.crossOriginIsolated) notes.push('Running single-threaded; reload to enable threads.');
+  if (!host.crossOriginIsolated || !host.sharedArrayBuffer) notes.push('Running single-threaded; open in Chrome and reload to enable threads.');
+  else if (engine && engine.threads < host.threads) notes.push(`Running with ${engine.threads} CPU thread${engine.threads === 1 ? '' : 's'}; the requested worker pool is unavailable.`);
   if (!host.chromium) notes.push('Chromium is the supported browser; anything else is best effort (ADR 0014).');
   return notes;
 }

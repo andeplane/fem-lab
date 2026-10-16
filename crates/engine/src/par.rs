@@ -1,10 +1,10 @@
-//! Parallelism shim: rayon natively, plain iteration on wasm32 (ADR 0013).
+//! Parallelism shim: rayon natively and on atomics wasm, serial iteration on portable wasm (ADR 0013).
 //!
 //! Every reduction in the engine goes through these functions or a sequential `for` loop,
 //! and every chunk boundary is a function of `n`, never of the thread count, so results are
 //! bit-identical at 1 and N threads.
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 use rayon::prelude::*;
 
 /// Chunk length used by [`dot`]; a constant so the summation order never depends on threads.
@@ -12,11 +12,11 @@ pub const DOT_CHUNK: usize = 4096;
 
 /// `(0..n).map(f)` collected in index order.
 pub fn map_collect<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> Vec<T> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
     {
         (0..n).into_par_iter().map(f).collect()
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     {
         (0..n).map(f).collect()
     }
@@ -25,11 +25,11 @@ pub fn map_collect<T: Send>(n: usize, f: impl Fn(usize) -> T + Sync + Send) -> V
 /// Disjoint mutable chunks of `out`, `f(chunk_index, chunk)`.
 pub fn for_each_chunk_mut<T: Send>(out: &mut [T], chunk: usize, f: impl Fn(usize, &mut [T]) + Sync + Send) {
     let chunk = chunk.max(1);
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
     {
         out.par_chunks_mut(chunk).enumerate().for_each(|(i, c)| f(i, c));
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     {
         out.chunks_mut(chunk).enumerate().for_each(|(i, c)| f(i, c));
     }
@@ -56,8 +56,8 @@ pub fn dot(a: &[f64], b: &[f64]) -> f64 {
     total
 }
 
-/// A private thread pool of `threads` threads (natively); on wasm32 runs inline.
-/// The engine holds one pool per instance so tests can compare thread counts.
+/// Native engines own a private pool. Atomics wasm uses the host-initialized global pool
+/// within its dedicated session Worker; portable wasm reports its actual single thread.
 pub struct Pool {
     #[cfg(not(target_arch = "wasm32"))]
     inner: rayon::ThreadPool,
@@ -72,9 +72,15 @@ impl Pool {
             let inner = rayon::ThreadPoolBuilder::new().num_threads(threads).build().expect("rayon pool");
             Pool { inner, threads }
         }
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
         {
-            Pool { threads }
+            let _ = threads;
+            Pool { threads: rayon::current_num_threads() }
+        }
+        #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
+        {
+            let _ = threads;
+            Pool { threads: 1 }
         }
     }
     pub fn threads(&self) -> usize {

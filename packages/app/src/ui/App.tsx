@@ -792,6 +792,7 @@ function DocumentApp(props: AppProps) {
               <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
                 <div class="result-workspace">
+                  {s.notes.length > 0 ? <div class="capability-notes" role="status" aria-label="Engine capabilities">{s.notes.map(note => <span key={note}>{note}</span>)}</div> : null}
                   <ComparisonControls s={s} dispatch={dispatch} query={read} />
                   <ComparisonPlaybackControls s={s} store={store} dispatch={dispatch} query={read} preview={comparison} />
                   <div class={`comparison-canvases${s.viewMode === 'results' && s.resultComparison.configuration.mode === 'sideBySide' ? ' paired' : ''}`}>

@@ -11,6 +11,8 @@ rust-version.workspace = true
 gpu-tests = []
 # Integration physics tests can inspect the core; production hosts use SessionOwner only.
 test-internals = []
+# Browser hosts initialize the shared Rayon pool before constructing an engine.
+wasm-threads = ["dep:rayon", "faer/rayon"]
 
 [dependencies]
 femlab-geometry = { path = "../geometry" }
@@ -33,6 +35,7 @@ faer = { version = "0.24.4", default-features = false, features = ["std", "spars
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "metal", "vulkan", "dx12"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+rayon = { version = "1.12", optional = true, features = ["web_spin_lock"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "webgpu"] }
 
 [dev-dependencies]
