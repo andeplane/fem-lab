@@ -2,6 +2,8 @@
 """Release a successful immutable build, preserving verified billing configuration."""
 import argparse,hashlib,json,subprocess,sys,urllib.request
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from project_storage_config import release_config as project_storage_config
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'stripe'))
 from billing_config import resolve as billing_config
 p=argparse.ArgumentParser();p.add_argument('--environment',choices=['staging','production'],required=True);p.add_argument('--account',required=True);p.add_argument('--billing',choices=['preserve','disabled','enabled'],default='preserve');a=p.parse_args()
@@ -13,6 +15,7 @@ def run(*argv,optional=False):
  return r
 status=run('builds','describe',manifest['buildId'],'--format=value(status)').stdout.strip()
 if status!='SUCCESS':raise RuntimeError('Build must be SUCCESS before release; current status: '+status)
+project_storage=project_storage_config(project,run)
 digest=json.loads(run('artifacts','docker','images','describe',image,'--format=json').stdout)['image_summary']['digest'];image=image.split(':')[0]+'@'+digest
 connection=f'{project}:{region}:{instance}'
 def version(name):return run('secrets','versions','list',name,'--filter=state:ENABLED','--sort-by=~createTime','--limit=1','--format=value(name)').stdout.strip().split('/')[-1]
@@ -36,7 +39,7 @@ if previous:
  try:ready(previous['url']);rollback_ready=True
  except Exception:pass
 return_origin='https://femlab.app' if a.environment=='production' else f'https://{project}.web.app'
-common=f'PGHOST=/cloudsql/{connection}|PGDATABASE=femlab|FIREBASE_PROJECT_ID={project}|EXPORT_BUCKET={project}-exports|APP_RETURN_ORIGIN={return_origin}|'+'|'.join(f'{key}={value}' for key,value in billing['env'].items())
+common=f'PGHOST=/cloudsql/{connection}|PGDATABASE=femlab|FIREBASE_PROJECT_ID={project}|EXPORT_BUCKET={project}-exports|APP_RETURN_ORIGIN={return_origin}|'+'|'.join(f'{key}={value}' for key,value in {**billing['env'],**project_storage}.items())
 stripe_secrets=''.join(f',{key}={value}' for key,value in billing['secrets'].items())
 origins=f'https://{project}.web.app,https://{project}.firebaseapp.com'
 if a.environment=='production':origins+=',https://femlab.app,https://www.femlab.app'
