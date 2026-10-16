@@ -67,6 +67,16 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('places a geometry draft along one axis using the visible zero defaults for untouched optional axes, then cancels without Apply', () => {
+    const { root, store, sent } = mount('geometry.addBox', { name: 'draft', size: ['1 m', '1 m', '1 m'] });
+    type(field(root, 'at').querySelector('input')!, '2 m');
+    expect(store.state.form!.values['at']).toEqual(['2 m', '0 mm', '0 mm']);
+    const cancel = root.querySelector<HTMLButtonElement>('[aria-label="Cancel draft"]')!;
+    cancel.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: '' });
+    expect(sent.every(command => command.cmd === 'form.open')).toBe(true);
+  });
+
   it('opens a heat Material form with thermal and mass fields first and stiffness hidden', () => {
     const { root, store } = mount('material.add', { name: 'conductor' });
     store.set({ model: { ...model(), steps: [{ name: 'heat', procedure: 'heat-steady', loads: [], constraints: [], solved: false }] } });

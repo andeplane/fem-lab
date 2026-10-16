@@ -25,6 +25,14 @@ In Properties, the **Shape kind** buttons form an aligned grid that adapts to th
 await fem.geometry.addBox({ name: 'block', size: ['80 mm', '40 mm', '20 mm'] });
 ```
 
+### Preview and place a draft
+
+In **geometry** view, opening `geometry.addBox` or `geometry.add` in Properties draws a cyan, translucent Body with a dashed outline when its arguments are valid. **Draft · not added** identifies this temporary drawing. It uses the same engine geometry as the committed Body, including inline unions, cuts, intersections and transforms. A 2D sheet still requires the matching Model idealisation.
+
+Edit unit-bearing **at** coordinates to position boxes, cylinders and spheres. For rotated or scaled geometry, use the **transform** shape and its translation, rotation in degrees and scale. These edits use `form.open`; they change neither the active Model nor its Journal. The camera remains where you put it while editing. Use **Fit** to frame the draft and existing Bodies together, and orbit to inspect placement.
+
+**Add body** commits exactly one geometry Command. **Cancel** discards the draft; **Revert** restores the form's original values. Changing selection, opening a different form or committing a Model edit clears the old preview. Drafts are view state and are not saved or synced as project geometry. Invalid or incomplete inputs clear the old drawing and show a structured explanation; correct Properties to preview again. Preview calculation runs locally on the CPU in a separate Worker, stops after five seconds, and never runs a Mesh or solve. Complex drafts may exceed that preview limit even when the engine can ultimately add them. Drag handles are not available; use the explicit coordinates and transform fields.
+
 Boxes expose `xmin`, `xmax`, `ymin`, `ymax`, `zmin` and `zmax` face names prefixed by the Body name. Cylinders have side/top/bottom faces. Prefer these names when they express your intended target.
 
 For a cut, use `geometry.subtract` with an explicit source Body and cutting shape. Keep names meaningful: `housing`, `inlet` and `mountingFace` are easier to audit than screen coordinates. The exact shape and predicate fields are in the [API reference](./api-reference.md).

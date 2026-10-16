@@ -15,6 +15,8 @@ import {
   Group,
   HemisphereLight,
   LineBasicMaterial,
+  LineDashedMaterial,
+  DoubleSide,
   LineSegments,
   Mesh,
   MeshLambertMaterial,
@@ -97,6 +99,8 @@ export class Viewer {
   private readonly controls: OrbitControls;
   private readonly raycaster = new Raycaster();
   private readonly layers = new Group();
+  private draft: Group | null = null;
+  private draftBox: Box3 | null = null;
   private readonly material = new MeshLambertMaterial({ vertexColors: true, flatShading: true });
   private grid: GridHelper | null = null;
   private triad: AxesHelper | null = null;
@@ -235,7 +239,7 @@ export class Viewer {
     if (this.disposed) return;
     // Clipping is a property of the physical drawing, not a fixed number of meters. Include
     // the undeformed outline and the actual exaggerated shape, without refitting the camera.
-    const bounds = this.box.clone();
+    const bounds = this.drawingBounds();
     for (const geometry of [this.mesh?.geometry, this.outlines?.geometry]) {
       if (geometry?.boundingBox) bounds.union(geometry.boundingBox);
     }
@@ -257,6 +261,52 @@ export class Viewer {
   }
 
   // ── geometry ────────────────────────────────────────────────────────────────────────────
+  /** Drafts are a separate non-pickable view layer, never the authoritative surface. */
+  setGeometryDraft(surface: AppSurface | null): void {
+    if (this.draft) {
+      this.scene.remove(this.draft);
+      this.draft.traverse(object => {
+        if (object instanceof Mesh || object instanceof LineSegments) {
+          object.geometry.dispose();
+          for (const material of Array.isArray(object.material) ? object.material : [object.material]) material.dispose();
+        }
+      });
+    }
+    this.draft = null;
+    this.draftBox = null;
+    if (surface && surface.positions.length > 0) {
+      const group = new Group();
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(surface.positions.slice(), 3));
+      geometry.setIndex(new BufferAttribute(surface.indices.slice(), 1));
+      geometry.computeBoundingBox();
+      geometry.computeVertexNormals();
+      this.draftBox = geometry.boundingBox?.clone() ?? null;
+      const scale = Math.max(this.draftBox?.getSize(new Vector3()).length() ?? 1, 1e-9);
+      const material = new MeshLambertMaterial({ color: 0x58b7d6, transparent: true, opacity: 0.16, depthWrite: false, side: DoubleSide });
+      const mesh = new Mesh(geometry, material);
+      const edgeGeometry = surface.indices.length > 0 ? new EdgesGeometry(geometry, 1) : new BufferGeometry();
+      if (surface.indices.length === 0) {
+        const positions = new Float32Array((surface.edges?.length ?? 0) * 3);
+        surface.edges?.forEach((node, i) => positions.set(surface.positions.subarray(node * 3, node * 3 + 3), i * 3));
+        edgeGeometry.setAttribute('position', new BufferAttribute(positions, 3));
+      }
+      const edges = new LineSegments(edgeGeometry, new LineDashedMaterial({ color: 0x80d4ee, dashSize: scale * 0.025, gapSize: scale * 0.015, transparent: true, opacity: 0.95, depthWrite: false }));
+      edges.computeLineDistances();
+      group.add(mesh, edges);
+      this.draft = group;
+      this.scene.add(group);
+    }
+    // Editing size or placement never changes camera position, target, up or zoom.
+    this.render();
+  }
+
+  private drawingBounds(): Box3 {
+    if (!this.draftBox) return this.box.clone();
+    const empty = !this.surface || (this.surface.indices.length === 0 && (this.surface.edges?.length ?? 0) === 0);
+    return empty ? this.draftBox.clone() : this.box.clone().union(this.draftBox);
+  }
+
   /**
    * The surface arrives indexed; we expand it so every triangle owns its three vertices. That
    * buys flat shading, a per-triangle colour (body tint, face-set highlight) and a `faceIndex`
@@ -730,7 +780,7 @@ export class Viewer {
   fit(): void {
     const viewport = this.fitViewport?.();
     if (!viewport) return this.preset('iso');
-    const bounds = this.box.clone();
+    const bounds = this.drawingBounds();
     for (const geometry of [this.mesh?.geometry, this.outlines?.geometry]) {
       if (geometry?.boundingBox) bounds.union(geometry.boundingBox);
     }
@@ -738,7 +788,7 @@ export class Viewer {
   }
 
   preset(view: ViewPreset, bounds?: { min: [number, number, number]; max: [number, number, number] }, fitAspect?: number): void {
-    const box = bounds ? new Box3(new Vector3(...bounds.min), new Vector3(...bounds.max)) : this.box;
+    const box = bounds ? new Box3(new Vector3(...bounds.min), new Vector3(...bounds.max)) : this.drawingBounds();
     const size = box.getSize(new Vector3());
     const centre = box.getCenter(new Vector3());
     const radius = Math.max(size.length() * 0.5, 1e-6);
@@ -844,6 +894,7 @@ export class Viewer {
     this.cameraChangeCb = null;
     this.cameraEndCb = null;
     this.controls.dispose();
+    this.setGeometryDraft(null);
     this.disposeSurface();
     this.disposeChrome();
     this.material.dispose();
@@ -958,7 +1009,7 @@ export class Viewer {
   }
 
   private frameOrtho(aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480)): void {
-    const h = this.comparisonFrameHeight ?? Math.max(this.box.getSize(new Vector3()).length() * 0.7, 1e-6);
+    const h = this.comparisonFrameHeight ?? Math.max(this.drawingBounds().getSize(new Vector3()).length() * 0.7, 1e-6);
     Object.assign(this.orthographic, { left: -h * aspect, right: h * aspect, top: h, bottom: -h });
     this.orthographic.updateProjectionMatrix();
   }
