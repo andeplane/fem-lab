@@ -244,3 +244,31 @@ old AP-backed arrays can extend oversized allocations into the CPU Plan, so~2.5G
 not an upper bound on extra live memory; future runs retain actual whole-process guards.
 Analytical two-step Gram fit/full-replacement exact-cap tests and real Poisson769
 energy/duality/thread identity precede any matching release/large resource review.
+
+
+## Later transfer storage refusal and stronger coarsening
+
+The matching f12ee7d4 release with the eight-group policy reaches a later transfer
+transpose, then refuses cumulative setup storage before GPU iterations. Output 3054×24390
+has 10755036 entries; previous 7805295466 plus batch [12220,43020144,86040288,12216]
+requests 7934380334 against 7837371816. No external watchdog stopped the run. This is a
+capacity RED, not failed convergence; the original scientific gates have no 780k result.
+Its OS maximum RSS was 7428931584 bytes and reported peak memory footprint 12019246440
+bytes. Earlier capacity and external-disk failures remain preserved.
+
+A controlled CPU-only comparison on the same 216/1200/5832 exported systems supports
+trying sixteen groups per aggregate while preserving raw edge strength and every other
+numerical choice. All six comparisons meet the unchanged 1e-5 rounded-system target;
+216/1200/5832 iterations change 26/34/79 to 27/53/106. At 5832, total A/P/AP/raw entries
+fall 912601/347721/902322/518851 to 585457/215589/527646/191707. Tentative candidates
+are reconstructed, and independent symmetry/linearity/positive-energy checks pass.
+This prototype neither establishes the Rust cumulative prefix nor GPU/physical success.
+
+The next source checkpoint changes only the fixed aggregate cardinality to 16. It keeps
+the six physical rigid candidates plus existing constant, rank threshold, QR traversal,
+P smoothing, full Galerkin averaging, paired Chebyshev cycle, entry/storage caps and all
+outer oracles. No buffer role or ledger-credit change accompanies it. A 16-node rigid-mode
+witness and a genuinely two-Fine 769-row constant/linear Poisson witness accompany it.
+Actual small native/software-GPU/coverage, matching release 66k and a separately admitted
+780k run remain required. More iterations are acceptable only with the original physical
+and residual gates; no completed large-case claim follows from the prototype.

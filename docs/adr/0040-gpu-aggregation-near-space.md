@@ -37,11 +37,25 @@ factor their matrix and do not consume candidate columns.
 For A_s=S K S and physical displacement u=S y, scaled candidates are S^-1 R_free. The
 setup may augment an algebraic constant candidate to cover scalar or otherwise unrepresented
 rows; this does not claim it is a physical rigid mode. Rank-reveal each aggregate locally in
-fixed column/row order. Use at most eight node groups per greedy aggregate, raw block-Frobenius edge strengths,
+fixed column/row order. Use at most sixteen node groups per greedy aggregate, raw block-Frobenius edge strengths,
 ascending node/group tie breaks and two fixed Gram-Schmidt passes with relative rank threshold
 1e-10. Propagate Q^T B to the next level without appending a fresh constant there. Repeated
 null candidates are removed by local rank, not by altering the physical constraints.
 Record actual coarsening and reject exhausted resource bounds.
+
+The fixed aggregate size was increased from eight to sixteen after the actual 780k
+hierarchy exhausted the unchanged cumulative setup allowance. This trades a smaller
+coarse approximation for less hierarchy fill and potentially more Krylov iterations;
+it changes neither the physical operator nor the declared near modes. A controlled
+CPU prototype using the same raw-strength 216/1200/5832-row exports reduced the largest
+hierarchy's total operator entries from 912601 to 585457 and prolongation entries
+from 347721 to 215589, while rounded-system iterations increased from 79 to 106.
+Those experiments select a candidate only: SciPy traversal/storage is not the Rust
+admission ledger or GPU/physical acceptance. The original 66k and 780k scientific
+oracles must still pass; prior iteration counts are observations, not requirements.
+All other interpolation, QR, smoothing, factorization and resource policies remain.
+The finiteness proof's conservative eight-group contraction still holds because the
+fixed sixteen-group policy contracts at least as strongly.
 
 ## Algebra
 

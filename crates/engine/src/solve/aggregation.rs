@@ -14,7 +14,8 @@ use crate::fem::assembly::Csr;
 use crate::par;
 
 const COARSE_ROWS: usize = 96;
-const GROUPS_PER_AGGREGATE: usize = 8;
+// Larger fixed aggregates reduce hierarchy fill while retaining every local near mode.
+const GROUPS_PER_AGGREGATE: usize = 16;
 const MAX_MODES: usize = 7;
 const RANK_TOL: f64 = 1e-10;
 // Conservative admission for one live BTreeMap entry, including its partially filled node.
@@ -290,8 +291,8 @@ fn vector_bytes<T>(len: usize) -> u128 {
 /// Root scaling/validation and bounded coarse factorisation remain fallible.
 ///
 /// Finiteness proof (ordinary IEEE f64, including gradual underflow):
-/// - Seven candidates and eight-group aggregation give next_n<=7*ceil(n/8). Fine
-///   levels have n>96: n>=98 contracts by<=15/16, while97 immediately reaches91.
+/// - Seven candidates and fixed target 16 give next_n<=7*ceil(n/16)<=7*ceil(n/8).
+///   Fine levels have n>96: n>=98 contracts by<=15/16, while97 gives at most91.
 ///   Since (15/16)^11<1/2 and root n<2^32, there are fewer than288 Fine levels.
 /// - Robust normalization's scaled square sum contains1, so computed norm>=max|v|
 ///   and every retained |Tij|<=1. Its gamma_n<2^-20 for n<=u32MAX; even a subnormal
@@ -1161,6 +1162,45 @@ mod tests {
     }
 
     #[test]
+    fn sixteen_node_aggregate_reproduces_all_six_rigid_modes_and_the_dependent_constant() {
+        let a = poisson(48);
+        let mut basis = vec![vec![0.0; a.n]; 7];
+        basis[0].fill(1.0);
+        for node in 0..16 {
+            let x = (node % 4) as f64 - 1.5;
+            let y = ((node / 4) % 2) as f64 - 0.5;
+            let z = (node / 8) as f64 - 0.5;
+            let row = 3 * node;
+            basis[1][row] = 1.0;
+            basis[2][row + 1] = 1.0;
+            basis[3][row + 2] = 1.0;
+            // Independent infinitesimal rotations e_axis cross(x,y,z).
+            basis[4][row + 1] = -z;
+            basis[4][row + 2] = y;
+            basis[5][row] = z;
+            basis[5][row + 2] = -x;
+            basis[6][row] = -y;
+            basis[6][row + 1] = x;
+        }
+        let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
+        let node_of_row = (0..a.n).map(|row| (row / 3) as u32).collect::<Vec<_>>();
+        let grouped = groups(&node_of_row, &mut budget).unwrap();
+        let aggregate_rows = aggregates(Matrix::square(&a, &a.vals), &grouped, &mut budget).unwrap();
+        assert_eq!(aggregate_rows.len(), 1);
+        assert_eq!(aggregate_rows[0].len(), 48);
+        budget.vector::<Vec<f64>>(basis.len()).unwrap();
+        let Tentative { matrix: t, coarse_basis, .. } =
+            tentative(a.n, &aggregate_rows, &basis, vec![Vec::new(); basis.len()], &mut budget).unwrap();
+        assert_eq!(t.n_cols, 6);
+        for (original, reduced) in basis.iter().zip(&coarse_basis) {
+            let reproduced = rect_mv(&t, reduced);
+            for (&actual, &expected) in reproduced.iter().zip(original) {
+                assert!((actual - expected).abs() < 1e-13);
+            }
+        }
+    }
+
+    #[test]
     fn each_explicit_admission_bound_refuses_setup() {
         let a = poisson(127);
         let controls = [
@@ -1208,9 +1248,9 @@ mod tests {
 
     #[test]
     fn raw_block_strength_selects_the_strongest_frontier_and_disconnected_ids_are_stable() {
-        let n = 12;
-        for strong in [11, 1] {
-            let weak = 12 - strong;
+        let n = 20;
+        for strong in [19, 1] {
+            let weak = 20 - strong;
             let mut a = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
             // Symmetric strict diagonal dominance (8 > 2 + 0.5) proves SPD.
             // Store the zero 0<->5 edge explicitly: it must never seed a frontier.
@@ -1237,7 +1277,10 @@ mod tests {
             let actual = aggregates(Matrix::square(&a, &a.vals), &grouping, &mut budget).unwrap();
             // Positive strength wins, then the remaining positive neighbor. Zero
             // strength cannot move node5 before the stable disconnected node2.
-            assert_eq!(actual, [vec![0, strong, weak, 2, 3, 4, 5, 6], vec![7, 8, 9, 10]]);
+            assert_eq!(
+                actual,
+                [vec![0, strong, weak, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], vec![15, 16, 17, 18]]
+            );
         }
     }
 
@@ -1298,8 +1341,8 @@ mod tests {
     fn candidate_underflow_and_missing_positive_diagonal_fail_before_upload() {
         let a = poisson(127);
         let mut scale = vec![1e-308; a.n];
-        scale[..8].fill(1e308);
-        // The first full eight-row aggregate becomes exactly zero when the root
+        scale[..16].fill(1e308);
+        // The first full sixteen-row aggregate becomes exactly zero when the root
         // candidates are normalized against the rest, rather than losing one T row.
         let error = build(&a, &a.vals, &scale, None, limits()).unwrap_err();
         assert_eq!(error.code, ErrorCode::SolveStalled);
@@ -2007,9 +2050,15 @@ mod tests {
     #[test]
     fn real_two_fine_level_plan_keeps_dirichlet_energy_and_all_thread_bits() {
         let a = poisson(769);
+        // Constant plus linear candidates have rank two on each complete aggregate.
+        // With 16 groups the actual first coarse level still exceeds 96 rows, so this
+        // checks genuine recursion rather than weakening the two-Fine witness.
+        let space =
+            NearSpace { node_of_row: (0..a.n as u32).collect(), modes: vec![(0..a.n).map(|row| row as f64).collect()] };
         let mut plans = Vec::new();
         for threads in [1, 4] {
-            let plan = par::Pool::new(threads).install(|| build(&a, &a.vals, &vec![1.0; a.n], None, limits()).unwrap());
+            let plan = par::Pool::new(threads)
+                .install(|| build(&a, &a.vals, &vec![1.0; a.n], Some(&space), limits()).unwrap());
             check_poisson_plan(&plan);
             let mut current = &plan;
             let mut sizes = Vec::new();
@@ -2025,7 +2074,7 @@ mod tests {
                     }
                 }
             }
-            assert_eq!(sizes, [769, 97, 13]);
+            assert_eq!(sizes, [769, 97, 7]);
             plans.push(plan);
         }
         assert_eq!(plans[0], plans[1]);

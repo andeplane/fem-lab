@@ -3306,5 +3306,23 @@ P1=[ones;I257], giving2(I+11ᵀ). Its sparse retired entry arrays cannot fit the
 outputs: full replacements must be admitted, the initial exact cap passes and one byte
 less refuses the final symmetric batch, and energy is2(||x||²+(Σx)²). These are analytical
 Galerkin fixtures, not claims that SA constructs those P matrices from an identity root.
-A real Poisson769 hierarchy has sizes769/97/13, exercises the two-Fine-level handoff,
+A real Poisson 769 hierarchy with constant and linear candidates has sizes 769/97/7,
+exercises the two-Fine-level handoff under sixteen-group aggregation,
 retains Dirichlet energy/transfer duality and is exactly identical at one/four workers.
+
+
+The sixteen-group policy also has a genuine 16-node 4×2×2 grid witness. Its 48 retained
+rows are grouped by node, and actual aggregation produces one aggregate. Closed-form
+translations and rotations `e_axis×(x,y,z)`, plus their dependent algebraic constant,
+must have rank six and be reconstructed by tentative interpolation within 1e-13.
+This guards against dropping rotational modes to obtain a smaller hierarchy. The
+Poisson 769 two-Fine witness retains independent Dirichlet energy, transfer duality
+and complete one/four-worker Plan identity. All analytical Gram/quota cases remain.
+
+A bounded CPU RAW-strength 8/16 selection experiment on unchanged 216/1200/5832 exports
+converged under the same 1e-5 rounded-system residual target. At 5832 rows its total
+A/P/AP/raw entries changed 912601/347721/902322/518851 to 585457/215589/527646/191707,
+with 79→106 iterations. Candidate reconstruction, positive energy, symmetry and linearity
+passed. These are prototype observations, not Rust allocation bounds, GPU results or
+f64 outer acceptance. The unchanged 66k B1/equilibrium/direct 1e-8/thread identity and
+780k B1/f64/equilibrium gates remain mandatory for the sixteen-group source.
