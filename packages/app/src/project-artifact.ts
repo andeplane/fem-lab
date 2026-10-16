@@ -1,4 +1,4 @@
-import { FemError } from '@femlab/registry';
+import { FemError, scientificJson } from '@femlab/registry';
 
 export interface ProjectAsset {
   id: string;
@@ -70,11 +70,22 @@ function layout(name: string, createdAt: number, engineBytes: number, assets: re
     if (offset > MAX_PROJECT_ARTIFACT_BYTES) throw limit('the project bundle exceeds 128 MiB');
     return entry;
   });
-  const manifest = utf8.encode(JSON.stringify({ format: PROJECT_BUNDLE_FORMAT, name, createdAt, engineBytes, files } satisfies Manifest));
+  const manifest = utf8.encode(scientificJson({ format: PROJECT_BUNDLE_FORMAT, name, createdAt, engineBytes, files } satisfies Manifest));
   if (manifest.byteLength > MAX_PROJECT_MANIFEST_BYTES) throw limit('the project manifest exceeds 1 MiB');
   const total = headerBytes + manifest.byteLength + offset;
   if (total > MAX_PROJECT_ARTIFACT_BYTES) throw limit('the project bundle exceeds 128 MiB');
   return { manifest, total };
+}
+
+/** The bundle accepts JSON data only, before the scientific encoder creates raw -0 literals.
+ * Do not let unsupported values disappear through native JSON omission/toJSON behavior. */
+function checkJson(value: unknown, active = new WeakSet<object>()): void {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint' || typeof value === 'number' && !Number.isFinite(value)) throw bad('the engine payload contains a non-JSON value');
+  if (value === null || typeof value !== 'object') return;
+  if (active.has(value) || typeof (value as { toJSON?: unknown }).toJSON === 'function' || (JSON as typeof JSON & { isRawJSON?(value: unknown): boolean }).isRawJSON?.(value)) throw bad('the engine payload contains a non-JSON object');
+  active.add(value);
+  for (const child of Array.isArray(value) ? value : Object.values(value)) checkJson(child, active);
+  active.delete(value);
 }
 
 /** Opaque engine JSON plus exact original/generated file bytes; no paths are opened or written. */
@@ -82,10 +93,8 @@ export function encodeProjectArtifact(artifact: ProjectArtifact): Uint8Array {
   if (!object(artifact) || !object(artifact.engine)) throw bad('the engine payload must be a non-null JSON object');
   let json: string;
   try {
-    json = JSON.stringify(artifact.engine, (_key, child: unknown) => {
-      if (child === undefined || typeof child === 'function' || typeof child === 'symbol' || typeof child === 'bigint' || typeof child === 'number' && !Number.isFinite(child)) throw bad('the engine payload contains a non-JSON value');
-      return child;
-    });
+    checkJson(artifact.engine);
+    json = scientificJson(artifact.engine);
   } catch { throw bad('the engine payload cannot be encoded as JSON'); }
   if (!json.startsWith('{')) throw bad('the engine payload must encode a JSON object');
   if (json.length > MAX_PROJECT_ENGINE_BYTES || utf8Length(json) > MAX_PROJECT_ENGINE_BYTES) throw limit('the engine payload exceeds 64 MiB');

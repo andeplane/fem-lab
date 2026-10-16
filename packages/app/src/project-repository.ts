@@ -1,6 +1,6 @@
 // Durable project ownership. A save owns its destination, generation, version and bytes before
 // any thumbnail, debounce or storage await. Tombstones retain revocation after deletion.
-import { FemError, type DocumentSnapshot, type ProjectMeta, type StateVersion, type SessionRef, type ModelFile, type CloudProject } from '@femlab/registry';
+import { FemError, scientificJson, type DocumentSnapshot, type ProjectMeta, type StateVersion, type SessionRef, type ModelFile, type CloudProject } from '@femlab/registry';
 import { JOURNALS, PROJECTS, done, openDb } from './db';
 import type { ShareCommand } from './share';
 
@@ -28,8 +28,9 @@ export interface AtomicProjects {
   update(id: string, change: (previous: ProjectRecord | null) => ProjectRecord): Promise<ProjectRecord>;
 }
 const clone = <T>(value: T): T => structuredClone(value);
-const identity = (value: unknown): string => JSON.stringify(value, (_key, child: unknown) => child && typeof child === 'object' && !Array.isArray(child)
-  ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => a.localeCompare(b))) : child);
+// A bit-significant -0 must remain different from +0 when comparing checked history.
+const canonical=(value:unknown):unknown=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([key,child])=>[key,canonical(child)])):value;
+const identity=(value:unknown):string|undefined=>value===undefined?undefined:scientificJson(canonical(value));
 const conflict = (): FemError => new FemError('session.conflict', 'the saved project changed or was deleted after this save was prepared', 'project');
 const later = (a: StateVersion, b: StateVersion): boolean => a.length > b.length || a.length === b.length && a > b;
 

@@ -139,6 +139,20 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`project owners
     expect(await repo.list()).toEqual([]);
     a.close(); b.close();
   });
+  it('distinguishes signed-zero command provenance when claiming saved content', async () => {
+    const { repo, storage } = setup(); const doc = document();
+    try {
+      const snapshot = doc.snapshot();
+      snapshot.file.journal.entries = [{ seq: 0, cmd: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: -0 }, hashAfter: 'checked-native-hash' }];
+      await repo.claim(meta('signed-zero'), snapshot, null);
+      const before = await repo.read('signed-zero');
+      const stale = structuredClone(before);
+      stale.cmds[0]!.nu = 0;
+      await expect(repo.claim(meta('signed-zero'), snapshot, stale)).rejects.toMatchObject({ code: 'session.conflict' });
+      expect(await storage.read('signed-zero')).toEqual(before);
+      expect(Object.is(before.cmds[0]!.nu, -0)).toBe(true);
+    } finally { doc.close(); }
+  });
   it('captures immutable input and destination before any asynchronous save work', async () => {
     const { repo } = setup(); const a = document('a'); const b = document('b');
     const snapshot = a.snapshot();

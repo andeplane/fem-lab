@@ -49,6 +49,18 @@ describe('portable project binary artifact', () => {
     expect(decodeProjectArtifact(encodeProjectArtifact(source))).toEqual(source);
   });
 
+  it('retains signed-zero and finite f64 bits, escaping and exact files through repeated full bundle encoding',()=>{
+    const values=[-0,0,Number.MIN_VALUE,Number.MAX_VALUE,Math.PI,-1.234567890123456e-200];
+    const text='literal -0.0 {"rawJSON":"-0.0"} quote " slash \\ newline\n ☃';
+    const source={...artifact(),createdAt:-0,engine:{fields:{values},text,nested:{zero:-0}}};
+    const bytes=encodeProjectArtifact(source),decoded=decodeProjectArtifact(bytes),engine=decoded.engine as typeof source.engine;
+    expect(new Uint8Array(Float64Array.from(engine.fields.values).buffer)).toEqual(new Uint8Array(Float64Array.from(values).buffer));
+    expect(Object.is(engine.nested.zero,-0)).toBe(true);expect(Object.is(decoded.createdAt,-0)).toBe(true);expect(engine.text).toBe(text);
+    expect(decoded.files).toEqual(source.files);expect(encodeProjectArtifact(decoded)).toEqual(bytes);
+    expect(decodeProjectArtifact(encodeProjectArtifact({...artifact(),engine:{a:{value:1},b:{value:1}}})).engine).toEqual({a:{value:1},b:{value:1}});
+    const shared={zero:-0};expect((decodeProjectArtifact(encodeProjectArtifact({...artifact(),engine:{a:shared,b:shared}})).engine as {b:typeof shared}).b.zero).toBe(-0);
+  });
+
   it('rejects unknown/truncated formats and bounds the manifest before parsing JSON', () => {
     const encoded = encodeProjectArtifact(artifact());
     for (const bytes of [encoded.slice(0, 2), new Uint8Array(encoded.length)]) expect(() => decodeProjectArtifact(bytes)).toThrow();
@@ -111,7 +123,7 @@ describe('portable project binary artifact', () => {
 
   it('rejects invalid encode inputs and unsupported JSON values', () => {
     const invalid: unknown[] = [null, { ...artifact(), name: '' }, { ...artifact(), createdAt: NaN }, { ...artifact(), files: null },
-      ...[null, [], 3, 'engine', { value: undefined }, { value: () => 1 }, { value: Infinity }, { value: 1n }, { toJSON: () => null }].map(engine => ({ ...artifact(), engine })),
+      ...[null, [], 3, 'engine', { value: undefined }, { value: () => 1 }, { value: Infinity }, {value:-Infinity},{value:NaN},{value:Symbol("not data")},{value:[undefined]},{value:new Array(1)},{value:(JSON as typeof JSON & {rawJSON(text:string):unknown}).rawJSON('1e999')}, { value: 1n }, { toJSON: () => null }].map(engine => ({ ...artifact(), engine })),
       { ...artifact(), files: [null] }, { ...artifact(), files: [{ ...asset(), data: [] }] },
       { ...artifact(), files: [asset(), asset()] }, { ...artifact(), files: [{ ...asset(), role: 'unknown' }] }];
     const circular: Record<string, unknown> = {}; circular.self = circular;

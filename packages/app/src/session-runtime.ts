@@ -74,7 +74,7 @@ const need = (): SessionEngine => {
         const source = req.source;
         switch (source.kind) {
           case 'commands': await candidate.commands(json(source.commands)); break;
-          case 'legacy-project': await candidate.journal(json(source.commands.map((cmd,seq)=>({seq,cmd,hashAfter:''}))),true,false);break;
+          case 'legacy-project': await candidate.journal(scientificJson(source.commands.map((cmd,seq)=>({seq,cmd,hashAfter:''}))),true,false);break;
           case 'journal':
             await candidate.journal(scientificJson(source.entries), source.skipSolves);
             if (source.revision !== undefined && source.revision < source.entries.length) {

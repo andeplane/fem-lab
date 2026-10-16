@@ -62,3 +62,28 @@ test('a reload after a lost first commit receipt resumes one immutable operation
   const rows=await projects(page);await page.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),rows[0]!.id);expect((await page.evaluate(()=>window.fem.query.model())).bodies).toHaveLength(1);
   expect(server.owners.get('fixture-A')?.size).toBe(1);expect(server.operations.size).toBe(1);
 });
+
+
+test('complete bundle import, local reopen and download preserve signed-zero retained fields',async({page})=>{
+  const server=new CloudFixtureServer();await server.install(page.context());await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await ready(page);
+  await page.evaluate(()=>window.fem.dispatch({cmd:'file.openExample',name:'cantilever'}));
+  await page.evaluate(()=>window.fem.dispatch({cmd:'solve.run',step:'static',solver:'cpu-direct'}));
+  const fixture=await page.evaluate(async()=>{
+    const {encodeProjectArtifact}=await import(/* @vite-ignore */new URL('src/project-artifact.ts',document.baseURI).href);
+    const project=await window.fem.query.portableProject();
+    const field=project.results[0]!.result.fields.displacement!;
+    const index=field.data.findIndex(value=>value===0);if(index<0)throw new Error('fixture requires a zero displacement');field.data[index]=-0;
+    const bytes=encodeProjectArtifact({name:'signed-zero complete bundle',createdAt:1,engine:project,files:[{id:'exact-input',role:'input',name:'source.bin',mime:'application/octet-stream',data:new Uint8Array([0,255,13,10,128])}]});
+    return {bytes:Array.from(bytes as Uint8Array),index,ids:project.results.map(result=>result.id),journal:project.file.journal};
+  });
+  await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'projects',open:true}));
+  const chooser=page.waitForEvent('filechooser');await page.getByRole('button',{name:'Open project bundle',exact:true}).click();await (await chooser).setFiles({name:'signed-zero.femlab',mimeType:'application/octet-stream',buffer:Buffer.from(fixture.bytes)});
+  async function verify(){return page.evaluate(async index=>{const project=await window.fem.query.portableProject();return {negative:Object.is(project.results[0]!.result.fields.displacement!.data[index],-0),ids:project.results.map(result=>result.id),journal:project.file.journal};},fixture.index);}
+  await expect.poll(()=>verify().catch(()=>null)).toEqual({negative:true,ids:fixture.ids,journal:fixture.journal});
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.save'}));const saved=(await projects(page)).find(row=>row.name==='signed-zero complete bundle')!;
+  await page.evaluate(()=>window.fem.dispatch({cmd:'project.new',name:'temporary workspace'}));await page.evaluate(id=>window.fem.dispatch({cmd:'project.open',id}),saved.id);
+  await expect.poll(()=>verify().catch(()=>null)).toEqual({negative:true,ids:fixture.ids,journal:fixture.journal});
+  const download=page.waitForEvent('download');await page.evaluate(()=>window.fem.dispatch({cmd:'project.downloadBundle'}));const bytes=await readFile((await (await download).path())!);
+  expect(await page.evaluate(async({bytes,index})=>{const {decodeProjectArtifact}=await import(/* @vite-ignore */new URL('src/project-artifact.ts',document.baseURI).href);const artifact=decodeProjectArtifact(new Uint8Array(bytes));const project=artifact.engine as import('@femlab/registry').PortableProject;return {negative:Object.is(project.results[0]!.result.fields.displacement!.data[index],-0),files:artifact.files.map((file: {name:string;data:Uint8Array})=>({name:file.name,data:Array.from(file.data)}))};},{bytes:Array.from(bytes),index:fixture.index})).toEqual({negative:true,files:[{name:'source.bin',data:[0,255,13,10,128]}]});
+  expect(server.writes).toBe(0);expect(server.operations.size).toBe(0);
+});

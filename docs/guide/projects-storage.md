@@ -49,6 +49,8 @@ Existing anonymous projects remain independent. **Upload a copy** makes an accou
 
 `query.autosaveHistory` lists retained local revisions and distinguishes pending from saved work. `file.restore` opens a revision as a separate project, preserving the currently saved project. Retained history is bounded; it is not permanent version control.
 
+If a complete archive could not be saved, recovery restores the latest checked Model inputs and Journal without running saved solves. Older command-only browser projects also reopen without solving. Retained Results are unavailable until you explicitly solve again. A previous complete archive is kept as a recovery backup with its captured files; it is not presented or downloaded as the current project.
+
 Deleting a project has no Undo. An offline account-project deletion must synchronize before the service receives it. Once accepted, the cloud project is no longer normally downloadable; old object cleanup can retry and has no guaranteed completion deadline. Download a backup before deleting something you may need again.
 
 Account deletion immediately freezes cloud access and new sync, then purges cloud project objects and metadata before identity removal can finish. Cleanup failures leave deletion pending. Account-record export lists project metadata, not the project bytes: export the complete projects separately first. Deleting an account does not erase every browser cache, anonymous project or downloaded file. See the [Privacy notice](https://femlab.app/privacy.html).
