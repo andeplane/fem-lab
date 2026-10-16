@@ -2,6 +2,14 @@
 
 A project holds a Model and its Journal. The workspace presents that same Model through a tree, forms, a viewer and analysis panels. UI operations use the same registry as scripts and tools, so the [API reference](./api-reference.md) can clarify a form's fields.
 
+## Home and profile
+
+When signed out, the home screen introduces FEM Lab and offers local modeling, examples, tutorials and your browser's Recent projects. **Start modeling — free** does not require an account. The optional sign-in route is for hosted AI and account services.
+
+When signed in, home welcomes you with your actual account email and a workspace overview, including plan/allowance information when available. The header's avatar/email control opens your profile menu, where you can open **Account & AI settings**, refresh account state or sign out. Account settings organize your identity, AI allowance, subscriptions and account records. Values that are loading or unavailable are shown as status information, not invented zero balances.
+
+Both home states lead to the same local modeling workspace. Recent projects belong to this browser/profile; signing in does not upload or synchronize them. Save a portable Model file for a backup or another device. See [accounts](./accounts-billing.md) and [projects/storage](./projects-storage.md).
+
 ## Follow the tree
 
 The Model tree groups Geometry, Materials, Mesh, Constraints, Connections, Loads, Steps and Results. A warning badge identifies missing or incompatible input. Clicking an editable object opens its definition in **Properties**. Applying a change reissues a Command with the object's name; it is recorded in the Journal. A Result row selects a field rather than editing the Model.

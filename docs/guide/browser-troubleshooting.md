@@ -32,8 +32,12 @@ For a local build, serve the app through its documented development/preview serv
 
 ## Sign-in, credits and files
 
-An iCloud Passwords or other password-manager popup in the analysis prompt comes from your browser or password manager. The prompt and project name are plain text and request that autofill be turned off; FEM Lab sign-in uses Google or an email link and does not ask for a password. Password managers can ignore autofill hints. Dismiss an unrelated popup with Escape; use the actual **Sign in for AI** action when you want to sign in.
+An iCloud Passwords or other password-manager popup in the analysis prompt comes from your browser or password manager. The prompt and project name are plain text and request that autofill be turned off; FEM Lab sign-in uses Google or an email link and does not ask for a password. Password managers can ignore autofill hints. Dismiss an unrelated popup with Escape; use the actual **Sign in** action when you want to sign in.
 
 Use the newest email link, check Spam, and return to the requesting browser. Google sign-in offers another configured route. Report repeated failures with the error code, not the private link. Zero signup credits, review-required free access and disabled claims can be expected policy states; see [accounts](./accounts-billing.md).
+
+If you have signed in but the home/profile overview is still loading, unavailable or reports a refresh error, use its Refresh action and read the resulting status. Missing values do not mean zero credits or a changed plan. Check the displayed account email before interpreting a balance. Signing out still leaves local modeling and local projects available.
+
+If a screen differs from this guide, include its exact public URL and whether it is signed in when reporting it. A different origin, an older screen or one tab's rendering problem needs diagnosis; its appearance alone does not establish a cache defect or that clearing browser storage will fix it. Preserve local projects and downloaded backups while investigating.
 
 A failed autosave is not a durable backup. Download a Model file if storage is restricted. Folder permissions can require a new click after reopening the app. Imported source units and display units are separate; check geometry bounds before solving a suspiciously large or small model. See [projects](./projects-storage.md) and [import/export](./import-export.md).
