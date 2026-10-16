@@ -796,8 +796,9 @@ function DocumentApp(props: AppProps) {
   return (
     <>
       {started ? (
-        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
+        <div class={`shell${s.panels['tour'] ? ' with-tour' : ''}`} style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
+          <Tour store={store} dispatch={dispatch} />
           <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
@@ -837,8 +838,6 @@ function DocumentApp(props: AppProps) {
       <AbaqusImportReport s={s} dispatch={dispatch} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
-      {/* The tour's stops are shell regions, so it waits for the shell. */}
-      {started ? <Tour store={store} /> : null}
     </>
   );
 }

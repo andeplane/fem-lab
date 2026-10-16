@@ -26,6 +26,7 @@ import type { TransientInput } from './transient';
 import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
 import type { AbaqusIo } from '@femlab/registry';
 import { browserAbaqusIo } from './abaqus-files';
+import { tourCommands } from './tutorial/tour-state';
 
 /** Static form metadata is shared with the unavailable startup control; no form runs early. */
 export const FORM_OPEN = {
@@ -502,6 +503,13 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry, comparison?: ResultComparison): HostDef[] {
   let intentRun = 0;
   return [
+    ...tourCommands(store, {
+      preferences: { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) },
+      openCantilever: async () => {
+        const { tutorialHash } = await import('./tutorial/runner');
+        location.hash = tutorialHash('cantilever', 0);
+      },
+    }),
     {
       name: 'palette.resolve',
       execution: 'sessionView',

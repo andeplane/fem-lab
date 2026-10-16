@@ -26,7 +26,7 @@ export function normalizeBase(base){if(typeof base!=='string'||!/^\/(?:[A-Za-z0-
 const route=(base,slug)=>`${base}docs/${slug==='index'?'':`${slug}/`}`;
 const digest=value=>createHash('sha256').update(value).digest('hex').slice(0,12);
 let referencePromise;
-export const APP_REFERENCE_INPUTS=['packages/app/src/host.ts','packages/app/src/startup.ts','packages/app/src/main.tsx','packages/app/src/ui/schema.ts'];
+export const APP_REFERENCE_INPUTS=['packages/app/src/host.ts','packages/app/src/startup.ts','packages/app/src/main.tsx','packages/app/src/ui/schema.ts','packages/app/src/tutorial/tour-state.ts'];
 export function isDocsInput(filename){
   const relative=path.relative(ROOT,filename).split(path.sep).join('/');
   if(/^packages\/registry\/src\/generated\/script-declarations-(browser|mcp)\.json(?:\..*\.tmp)?$/.test(relative))return false;
