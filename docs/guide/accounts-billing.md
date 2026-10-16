@@ -1,0 +1,38 @@
+# Accounts, AI credits and billing
+
+Local modeling, meshing and solving do not require an account or AI subscription. Sign-in is needed for hosted AI. Account state and payment actions are separate from the engine Model and are never entries in its engineering Journal.
+
+## Sign in and review your allowance
+
+Open **Sign in for AI** or **Account and AI plans**. Choose Google or enter your email and open the newest sign-in link in the requesting browser. If the link opens elsewhere, complete the email prompt as needed. A completed login verifies account access; it does not automatically approve free eligibility or establish a unique person.
+
+The Account panel shows available, total and reserved credits, the allowance expiry and current billing status. Refresh reads authoritative service state. A disabled claim or purchase button should be read with the accompanying status; repeated clicks or account recreation do not bypass it.
+
+## What an AI credit means
+
+One public AI credit represents **USD 0.001 of supplier/model usage**. It is a cost-budget unit, not a raw input/output token. Model choice, output/reasoning, cached input, conversation/tool context and images can change consumption. The UI rounds the display; internal accounting retains exact integer subcredits, so small requests do not each get rounded into a larger charge.
+
+| Offer | Included public AI credits | USD subscription price before applicable tax |
+|---|---:|---:|
+| Reviewed free monthly | 5,000 | No subscription charge; approval and explicit claim required |
+| Plus | 7,500 per paid period | $49 / month |
+| Pro | 12,000 per paid period | $149 / month |
+| Studio | 37,500 per paid period | $499 / month |
+
+Account totals and debits retain exact internal precision; display rounding does not add credit or round each request up. These are included allowances; there is no automatic paid overage or rollover.
+
+## Free monthly access
+
+Signup starts at zero. Request an eligibility review through the Account support link. After approval, explicitly choose **Claim this month's free allowance** for the current UTC calendar month. Unused credits expire at 00:00 UTC on the first of the next month, even for a late claim. Each new month needs another explicit claim.
+
+One reviewed person can claim once per month across approved aliases and account recreation. Deletion/reopening does not reset the month or transfer an earlier account's credits. Eligibility can be revoked. Free monthly credits do not stack with an active paid allowance, and shared service budgets/capacity can temporarily pause claims or requests. These pool limits are operational configuration, not a permanent marketing promise.
+
+## Subscribe, change or cancel
+
+Choose a tier and declare personal or business use when requested. That choice remains fixed for the subscription. Checkout shows the applicable tax, payment terms and final total. Hafreager kode & koblinger sells/provides FEM Lab; when Managed Payments is used, Stripe handles the merchant-of-record transaction. Consult the [Terms](https://femlab.app/terms.html) for current seller, support and statutory-rights information.
+
+Credits follow the canonical paid invoice, not the browser's return from Checkout. A pending/failed payment or expired unpaid Session is not an entitlement. Plan changes are scheduled for the next paid period; current credits remain unchanged. **Manage subscription and payment** opens the owned management flow, including cancellation. Cancellation stops renewal at the period end rather than silently deleting the current paid period.
+
+## Export or delete account data
+
+Account data export contains service records, not your local Models or chats. Deletion requires typing DELETE and durable cancellation/identity processing. Required financial records and pseudonymous reviewed-eligibility/abuse-prevention markers can remain as described in the [Privacy notice](https://femlab.app/privacy.html). Local browser projects and downloaded files remain yours to manage. Signing out clears hosted access while local modeling remains available.

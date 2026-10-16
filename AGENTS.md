@@ -1,8 +1,10 @@
 # FEM Lab: working rules
 
-A finite-element engine as a headless library, with a browser app, a Node CLI and later a paid
-backend and a Python environment as hosts. These rules hold for every change. The reasons live
-in `docs/adr/`; the vocabulary in `CONTEXT.md`; the phases in `docs/PLAN.md`; the physics
+A finite-element engine as a headless Rust library, with a browser app, a native Rust CLI
+and a Node MCP host. A hosted service provides optional account-based AI and billing;
+remote FEM compute and a Python environment are planned hosts. These rules hold for every
+change. The reasons live in `docs/adr/`; the vocabulary in `CONTEXT.md`; the phases in
+`docs/PLAN.md`; the physics
 tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from it.
 
 ## Architecture
@@ -106,6 +108,24 @@ here at once, and the issue tracker is the only shared view of who is doing what
   `in progress` as above. Add an area label to every issue you file.
 - **Plans link both ways.** A plan in `docs/plans/` names the issues it covers; each of those
   issues links the plan. Reviews of a plan are comments on the issue.
+
+## Product documentation
+
+- **Documentation ships with the behavior.** Every feature or change to user-visible behavior,
+  physics, formats, Commands/Queries, APIs, account policy or billing updates the relevant
+  pages in `docs/guide/` in the same PR. State prerequisites, practical usage, expected outcomes
+  and supported limits; distinguish implemented behavior from plans and schema stubs.
+- **Every new capability is discoverable.** Explain it in the guide and update the engine
+  schema or host registry metadata that produces the complete generated public API reference.
+  Keep argument docstrings, examples, defaults, units, host availability and unsupported
+  combinations accurate. Regenerate references from source rather than hand-edit generated
+  catalogues or maintaining a second partial Command list.
+- **Verify documentation as a product surface.** Run the documentation generation, link,
+  anchor and reference-coverage checks for changed guides/metadata. Check code examples against
+  the current schema; meaningful runnable examples must not silently rely on missing objects
+  or unimplemented capabilities. Include public-route/browser verification when navigation,
+  rendering or landing documentation changes. A feature is not complete with stale guides,
+  broken links or a new callable capability absent from the public reference.
 
 ## Working
 
