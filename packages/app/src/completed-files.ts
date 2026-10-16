@@ -4,6 +4,8 @@ export interface CompletedFilesIo {
   download(name: string, mime: string, data: string | Uint8Array): void;
   nextId(): string;
   changed?(): void;
+  /** Independent complete project archive, staged before I/O regardless of UI retention. */
+  archive?(input: FileDeliveryInput): { complete(): void; discard(): void };
 }
 export interface CompletedFileSnapshot { metadata: FileArtifactMetadata; data: string | Uint8Array }
 export interface ProjectCompletedFiles extends CompletedFilesHost {
@@ -26,6 +28,8 @@ export function createCompletedFiles(io: CompletedFilesIo, policy: CompletedFile
   let generation = 0;
   let alive = true;
   let sequence = 0;
+  const pendingArchives = new Set<() => void>();
+  const discardArchives = (): void => { for (const discard of [...pendingArchives]) discard(); };
   const changed = (): void => { try { io.changed?.(); } catch { /* Availability notifications cannot fail completed I/O. */ } };
   const remove = (id: string): void => {
     const entry = entries.get(id);
@@ -37,6 +41,7 @@ export function createCompletedFiles(io: CompletedFilesIo, policy: CompletedFile
   };
   const clear = (): void => {
     generation++;
+    discardArchives();
     for (const id of entries.keys()) remove(id);
     changed();
     // In-flight deliveries still own their snapshots until complete/discard releases them.
@@ -57,6 +62,7 @@ export function createCompletedFiles(io: CompletedFilesIo, policy: CompletedFile
       const pendingBytes=bytesHeld-[...entries.values()].reduce((sum,entry)=>sum+entry.metadata.bytes,0),pendingCount=countHeld-entries.size;
       if(bytes+pendingBytes>maxBytes||restored.size+pendingCount>maxEntries)throw new FemError('unsupported','completed-file archive exceeds the retention capacity','project.restore');
       generation++;
+      discardArchives();
       entries.clear();for(const [id,entry] of restored)entries.set(id,entry);
       bytesHeld=bytes+pendingBytes;countHeld=restored.size+pendingCount;changed();
     },
@@ -69,6 +75,21 @@ export function createCompletedFiles(io: CompletedFilesIo, policy: CompletedFile
         let unavailable: FileDelivery['unavailable'];
         let reserved = false;
         let receipt: FileDelivery | undefined;
+        let archive: ReturnType<NonNullable<CompletedFilesIo['archive']>> | undefined;
+        const discardArchive = (): void => {
+          const current = archive; archive = undefined; pendingArchives.delete(discardArchive);
+          try { current?.discard(); } catch { /* Archive warnings cannot fail physical I/O. */ }
+        };
+        const completeArchive = (): void => {
+          const current = archive; archive = undefined; pendingArchives.delete(discardArchive);
+          try { current?.complete(); } catch { try { current?.discard(); } catch { /* Release best effort. */ } }
+        };
+        if (alive && captured === generation) {
+          try {
+            archive = io.archive?.({ ...input, name: base.name, mime: base.mime!, data });
+            if (archive) pendingArchives.add(discardArchive);
+          } catch { /* The injected archive reports its own warning; I/O remains available. */ }
+        }
         const release = (): void => {
           if (!reserved) return;
           reserved = false;
@@ -96,7 +117,8 @@ export function createCompletedFiles(io: CompletedFilesIo, policy: CompletedFile
           data, bytes,
           complete: () => {
             if (receipt) return { ...receipt };
-            if (!alive || captured !== generation) { release(); unavailable = 'expired'; }
+            if (!alive || captured !== generation) { release(); unavailable = 'expired'; discardArchive(); }
+            else completeArchive();
             if (reserved) {
               try {
                 const prefix = io.nextId();
@@ -112,7 +134,7 @@ export function createCompletedFiles(io: CompletedFilesIo, policy: CompletedFile
             receipt ??= { ...base, unavailable: unavailable ?? 'expired' };
             return { ...receipt };
           },
-          discard: () => { release(); receipt ??= { ...base, unavailable: 'expired' }; },
+          discard: () => { release(); discardArchive(); receipt ??= { ...base, unavailable: 'expired' }; },
         };
       };
     },

@@ -6,6 +6,7 @@ import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/regis
 import type { GeometryDraftState } from './geometry-draft';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
+import type {ProjectSyncState} from './project-sync';
 import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
@@ -86,6 +87,9 @@ export function verificationState(record: AssistantVerification, state: UiState)
 
 export interface UiState {
   account: AccountState;
+  projectSync:ProjectSyncState;
+  anonymousProjects:ProjectMeta[];
+  projectArtifactError:string|null;
   /** Two immutable solve presentations; never serialized into the Model or Journal. */
   resultComparison: import('@femlab/registry').ResultComparisonState;
   assistantVerifications: AssistantVerification[];
@@ -246,6 +250,7 @@ export const EMPTY_HOVER: UiState['hover'] = { bodies: [], faces: [], sets: [] }
 
 export const initialState: UiState = {
   account: structuredClone(EMPTY_ACCOUNT),
+  projectSync:{uid:null,projects:{},storage:null,refreshing:false,error:null},anonymousProjects:[],projectArtifactError:null,
   assistantVerifications: [],
 
   autosave: null,

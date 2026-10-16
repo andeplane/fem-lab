@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MAX_RETAINED_FILE_BYTES, type FileDeliveryInput } from '@femlab/registry';
 import { createCompletedFiles, type CompletedFilesPolicy } from '../src/completed-files';
+import { createProjectFileInventory, MAX_PROJECT_ASSET_BYTES } from '../src/project-artifact';
 
 function harness(policy?: CompletedFilesPolicy) {
   let sequence = 0;
@@ -182,6 +183,92 @@ describe('completed file admission budgets and authority', () => {
     expect(() => h.cache.clear()).not.toThrow();
     expect(h.cache.info(second.id!)).toBeNull();
     expect(h.changed.mock.calls.length).toBeGreaterThan(3);
+  });
+});
+
+describe('durable project output archive hooks', () => {
+  function archived(policy?: CompletedFilesPolicy) {
+    let serial = 0;
+    const inventory = createProjectFileInventory(() => `asset-${++serial}`);
+    const archive = vi.fn((input: FileDeliveryInput) => {
+      const pending = inventory.prepare('output', input.name, input.mime, input.data);
+      return { complete: vi.fn(() => { pending.complete(); }), discard: vi.fn(() => { pending.discard(); }) };
+    });
+    const cache = createCompletedFiles({ archive, nextId: () => `file-${++serial}`, download: () => undefined }, policy);
+    const input = (data: string | Uint8Array, name = 'result.bin'): FileDeliveryInput => ({ name, mime: 'application/octet-stream', to: 'download', data });
+    return { inventory, archive, cache, input };
+  }
+
+  it('stages exact output before awaits, archives only successful delivery and completes exactly once', () => {
+    const h = archived(); const bytes = new Uint8Array([0, 128, 255]); const input = h.input(bytes);
+    const pending = h.cache.capture()(input);
+    expect(h.archive).toHaveBeenCalledOnce(); expect(h.inventory.snapshot()).toEqual([]);
+    bytes.fill(99); input.name = 'changed'; input.data = 'changed';
+    const receipt = pending.complete(); pending.complete(); pending.discard();
+    const hook = h.archive.mock.results[0]!.value;
+    expect(hook.complete).toHaveBeenCalledOnce(); expect(hook.discard).not.toHaveBeenCalled();
+    expect(h.inventory.snapshot()).toEqual([{ id: 'asset-1', role: 'output', name: 'result.bin', mime: 'application/octet-stream', data: new Uint8Array([0, 128, 255]) }]);
+    expect(receipt).toHaveProperty('id');
+    const failed = h.cache.capture()(h.input('failed write')); const failedHook = h.archive.mock.results[1]!.value;
+    failed.discard(); failed.discard(); failed.complete();
+    expect(failedHook.discard).toHaveBeenCalledOnce(); expect(failedHook.complete).not.toHaveBeenCalled(); expect(h.inventory.snapshot()).toHaveLength(1);
+  });
+
+  it('archives every completed export beyond the sixteen-entry UI cache', () => {
+    const h = archived();
+    const receipts = Array.from({ length: 20 }, (_, index) => h.cache.capture()(h.input(`exact output ${index}`, `result-${index}.txt`)).complete());
+    expect(h.cache.snapshot()).toHaveLength(16); expect(h.cache.info(receipts[0]!.id!)).toBeNull();
+    expect(h.inventory.snapshot()).toHaveLength(20);
+    expect(new TextDecoder().decode(h.inventory.snapshot()[0]!.data)).toBe('exact output 0');
+    expect(h.inventory.snapshot().map(asset => asset.name)).toEqual(Array.from({ length: 20 }, (_, index) => `result-${index}.txt`));
+  });
+
+  it('archives complete bytes even when UI retention is oversize, disabled or at pending capacity', () => {
+    const h = archived({ maxFileBytes: 2, maxEntries: 1, maxBytes: 2 });
+    const pending = h.cache.capture()(h.input('aa'));
+    const capacity = h.cache.capture()(h.input('b')).complete();
+    const oversize = h.cache.capture()(h.input(new Uint8Array([0, 128, 255]))).complete();
+    expect(capacity.unavailable).toBe('capacity'); expect(oversize.unavailable).toBe('oversize');
+    expect(h.inventory.snapshot().map(asset => asset.data)).toEqual([new Uint8Array([98]), new Uint8Array([0, 128, 255])]);
+    pending.discard();
+    const disabled = archived({ maxEntries: 0 });
+    expect(disabled.cache.capture()(disabled.input('full original')).complete().unavailable).toBe('capacity');
+    expect(new TextDecoder().decode(disabled.inventory.snapshot()[0]!.data)).toBe('full original');
+  });
+
+  it('archives the full 32 MiB supported output even though the UI cache retains at most 16 MiB', () => {
+    const h = archived(); const source = new Uint8Array(MAX_PROJECT_ASSET_BYTES); source.fill(7); source[source.length - 1] = 255;
+    const pending = h.cache.capture()(h.input(source, 'large-result.bin'));
+    source.fill(99);
+    expect(pending.complete()).toMatchObject({ bytes: MAX_PROJECT_ASSET_BYTES, unavailable: 'oversize' });
+    expect(h.cache.snapshot()).toEqual([]);
+    const saved = h.inventory.snapshot()[0]!;
+    expect(saved.data.length).toBe(MAX_PROJECT_ASSET_BYTES); expect(saved.data[0]).toBe(7); expect(saved.data.at(-1)).toBe(255);
+    expect(saved.name).toBe('large-result.bin'); expect(saved.role).toBe('output');
+  });
+
+  it('discards pending archives on clear, restore and dispose and never admits retired deliveries', () => {
+    const h = archived(); const admission = h.cache.capture(); const first = admission(h.input('pending clear'));
+    h.cache.clear(); expect(h.archive.mock.results[0]!.value.discard).toHaveBeenCalledOnce();
+    first.complete(); first.discard();
+    expect(admission(h.input('stale admission')).complete().unavailable).toBe('expired'); expect(h.archive).toHaveBeenCalledOnce();
+    const restored = h.cache.capture()(h.input('pending restore')); h.cache.restore([]); restored.complete();
+    expect(h.archive.mock.results[1]!.value.discard).toHaveBeenCalledOnce();
+    const disposed = h.cache.capture()(h.input('pending disposal')); h.cache.dispose(); h.cache.dispose(); disposed.complete();
+    expect(h.archive.mock.results[2]!.value.discard).toHaveBeenCalledOnce();
+    expect(h.inventory.snapshot()).toEqual([]);
+    expect(h.cache.capture()(h.input('dead')).complete().unavailable).toBe('expired'); expect(h.archive).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps physical I/O receipts successful when archive admission or completion throws', () => {
+    const complete = vi.fn(() => { throw new Error('archive commit failed'); }); const discard = vi.fn(() => { throw new Error('archive discard failed'); });
+    const archive = vi.fn().mockImplementationOnce(() => { throw new Error('archive full'); }).mockImplementation(() => ({ complete, discard }));
+    const cache = createCompletedFiles({ archive, nextId: () => 'file', download: () => undefined });
+    const input: FileDeliveryInput = { name: 'output', mime: 'text/plain', to: 'download', data: 'done' };
+    expect(cache.capture()(input).complete()).toHaveProperty('id');
+    const second = cache.capture()(input); expect(second.complete()).toHaveProperty('id'); expect(second.complete()).toHaveProperty('id');
+    expect(complete).toHaveBeenCalledOnce(); expect(discard).toHaveBeenCalledOnce();
+    const third = cache.capture()(input); expect(() => third.discard()).not.toThrow();
   });
 });
 

@@ -28,6 +28,9 @@ export class SessionWorkspace<T extends SessionResources> {
   private current: ActiveSession<T> | undefined;
   private preparing = false;
   private recoveryRequested = false;
+  private idle=new Set<()=>void>();
+  whenIdle():Promise<void>{return this.preparing?new Promise(resolve=>this.idle.add(resolve)):Promise.resolve();}
+  private finished():void{this.preparing=false;for(const resolve of this.idle)resolve();this.idle.clear();}
   constructor(private readonly options: WorkspaceOptions<T>) {}
   get active(): ActiveSession<T> {
     if (!this.current) throw new FemError('session.transitioning', 'workspace is still starting');
@@ -77,7 +80,7 @@ export class SessionWorkspace<T extends SessionResources> {
           transport?.channel.close();
           try { await resources?.abandon?.(); } finally { resources?.dispose(); }
         }
-      } finally { this.preparing = false; }
+      } finally { this.finished(); }
     }
   }
   async recover(origin: SessionTransport): Promise<void> {
@@ -101,7 +104,7 @@ export class SessionWorkspace<T extends SessionResources> {
       try { this.options.publish(next); } finally { expected.resources.dispose(); }
     } catch (error) { expected.resources.recoveryFailed?.(error); throw error; }
     finally {
-      this.preparing = false;
+      this.finished();
       if (!published) { candidate?.channel.close(); try { await resources?.abandon?.(); } finally { resources?.dispose(); } }
     }
   }
@@ -135,7 +138,7 @@ export class SessionWorkspace<T extends SessionResources> {
       finally { expected.transport.channel.close(); expected.resources.dispose(); }
       return initiating;
     } finally {
-      this.preparing = false;
+      this.finished();
       if (!published) {
         candidate?.channel.close();
         try { await resources?.abandon?.(); }
