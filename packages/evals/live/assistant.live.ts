@@ -15,6 +15,7 @@ import { countEvidenceFetch, localCountEvidence } from '../src/count-evidence';
 import { retainRuntimeLocks } from '../src/runtime-provenance';
 import { prepareFrozenBuild, hashFrozenArtifacts } from '../src/frozen-build';
 import { preparationPolicy } from '../src/preparation-policy';
+import { evaluationTransport } from '../src/transport-policy';
 import { markdownReport } from '../src/report';
 import { retainLane, runCheckpointedLane, serializeArtifact, type EvaluationArtifact, type FrozenManifest, type EvalAdapter } from '../src/runner';
 import { assertInFrozenPackage, serveFrozenApp } from '../src/static-app';
@@ -41,6 +42,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const resume = process.env['FEMLAB_EVAL_RESUME'];
   const previousBytes = resume ? await readFile(path.resolve(root, resume)) : undefined;
   const previous = previousBytes ? JSON.parse(previousBytes.toString()) as EvaluationArtifact : undefined;
+  const transport = evaluationTransport(process.env['FEMLAB_EVAL_HTTP_TRANSPORT'], process.version, previous?.manifest.configuration);
   const sdkVersion = (JSON.parse(await readFile(path.join(root, 'node_modules/openai/package.json'), 'utf8')) as { version: string }).version;
   const reuseSource = process.env['FEMLAB_EVAL_WASM_SOURCE_MANIFEST'];
   const reuseRuntime = process.env['FEMLAB_EVAL_WASM_RUNTIME_MANIFEST'];
@@ -49,7 +51,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   const reusedWasm = reuseSource && reuseRuntime ? { sourceManifest: reuseSource, runtimeManifest: reuseRuntime, ...(nativeManifests ? { nativeManifests } : {}) } : undefined;
   const diskPolicy = await preparationPolicy(root, reusedWasm, reference => execFileSync('git', ['diff', '--name-only', reference, '--', 'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'crates'], { cwd: root, encoding: 'utf8' }));
   const captureParent = process.env['FEMLAB_EVAL_COUNT_EVIDENCE_PARENT'];
-  const configuration = { ...(captureParent ? { countEvidence: 'serialized-count-input/1' } : {}), providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, originalAllowance: JSON.stringify(originalLimits), priorAttempts: JSON.stringify(lineage.receipts), maxTransportRetries: 1, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
+  const configuration = { httpTransport: transport.mode, ...(captureParent ? { countEvidence: 'serialized-count-input/1' } : {}), providerSdk: `openai@${sdkVersion}`, ...limits, ...controls, maxWallMs, ...diskPolicy, originalAllowance: JSON.stringify(originalLimits), priorAttempts: JSON.stringify(lineage.receipts), maxTransportRetries: 1, maxRetries: 0, serviceTier: 'default', reasoning: 'provider default', priceReference: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol', priceVerified: '2026-10-15', node: process.version, platform: process.platform, arch: process.arch };
   if (previous && (previous.format !== 'femlab-assistant-eval/1' || previous.manifest.gitCommit !== commit || previous.manifest.dirty || previous.manifest.specificationSha256 !== sha(JSON.stringify(EVAL_CASES)) || previous.manifest.provider !== 'openai' || previous.manifest.model !== model || JSON.stringify(previous.manifest.configuration) !== JSON.stringify(configuration) || previous.lanes.some(lane => !lane.live) || !previous.controls || previous.controls.caseInFlight !== false)) throw new Error('checkpoint configuration or frozen source differs; start a new evaluation');
   const budget = previous ? restoreEvaluationBudget(limits, previous.controls?.budget) : new EvaluationBudget(limits);
   const runStartedAt = previous?.manifest.startedAt ?? startedAt;
@@ -62,7 +64,7 @@ it('runs the fixed twenty problems through real browser and MCP hosts', async ()
   let persistProgress: () => Promise<void> = async () => undefined;
   const beforeCase = async () => { budget.assertReady(); await resources(); caseInFlight = true; await persistProgress(); };
   const capture = key && captureParent ? await localCountEvidence(root, captureParent, { source: commit, node: process.version, sdk: `openai@${sdkVersion}` }) : undefined;
-  const client = key ? new OpenAI({ apiKey: key, maxRetries: 0, timeout: 120_000, ...(capture ? { fetch: countEvidenceFetch(globalThis.fetch, capture) } : {}) }) : null;
+  const client = key ? new OpenAI({ apiKey: key, maxRetries: 0, timeout: 120_000, ...(transport.defaultHeaders ? { defaultHeaders: transport.defaultHeaders } : {}), ...(capture ? { fetch: countEvidenceFetch(globalThis.fetch, capture) } : {}) }) : null;
   const unavailableProvider: Provider = { id: 'openai', models: [], async *chat() { throw new Error('provider credential unavailable'); } };
   const providerAttempts: AttemptReceipt[] = [...(previous?.controls?.providerAttempts ?? [])];
   const provider = client ? recoverableProvider(observer => responsesProvider(client, [model], observer), { id: 'openai', models: [model] }, budget, async request => {
