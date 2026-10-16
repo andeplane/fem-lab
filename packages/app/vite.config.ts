@@ -24,10 +24,21 @@ function isolationHeaders():Plugin {
   return {name:'femlab-host-isolation',configureServer:install,configurePreviewServer:install};
 }
 
+/** Record the real Registry output for the headless cross-chunk linkage smoke test. */
+function registryLinkage():Plugin {
+  const source=resolve(import.meta.dirname,'../registry/src/registry.ts').replaceAll('\\','/');
+  return {name:'femlab-registry-linkage',generateBundle(_options,bundle){
+    const chunks=Object.values(bundle).filter(chunk=>chunk.type==='chunk'
+      &&Object.keys(chunk.modules).some(id=>id.replaceAll('\\','/')===source));
+    if(chunks.length!==1)throw new Error('The build must contain exactly one shared Registry implementation.');
+    this.emitFile({type:'asset',fileName:'.vite/registry-linkage.json',source:JSON.stringify({file:chunks[0]!.fileName})});
+  }};
+}
+
 export default defineConfig(({ command }) => ({
   base: BASE,
   worker: { format: 'es' },
-  plugins: [docsPlugin(BASE),isolationHeaders(), {
+  plugins: [docsPlugin(BASE),isolationHeaders(),registryLinkage(), {
     name: 'femlab-dev-csp',
     // Production keeps the static meta policy. Only the dev server needs HMR sockets.
     transformIndexHtml(html, ctx) {
@@ -52,7 +63,7 @@ export default defineConfig(({ command }) => ({
         advancedChunks: {
           groups: [
             // Keep three.js separate so viewer changes do not invalidate the library cache.
-            // ViewerPane loads both chunks only when a modeling workspace opens.
+            // Bootstrap warms the renderer after the isolation decision.
             // The AI SDKs get NO group: grouping them makes rolldown hoist the shared chunk into
             // the entry's *static* imports, which is exactly what this commit is removing.
             { name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ },
