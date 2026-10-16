@@ -1717,6 +1717,13 @@ textarea:focus {
   padding: 40px 24px;
   background: var(--bg-page);
 }
+.startup-status {
+  padding: 12px;
+  border: 1px solid var(--border-panel);
+  border-radius: 4px;
+  color: var(--text-low);
+}
+.startup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .start h1 {
   display: flex;
   align-items: center;

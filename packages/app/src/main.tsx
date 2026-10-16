@@ -26,6 +26,7 @@ import { Store, unsaved } from './store';
 import { retireProjectHost } from './project-host';
 import { AnimationCapture, browserAnimationCaptureEnvironment } from './animation-capture';
 import { App } from './ui/App';
+import { StartupHost, startupWait, WORKSPACE_STATUS, workspaceStatus } from './startup';
 import { SessionWorkspace } from './session-workspace';
 import { SessionTransport, sameSession } from './session-transport';
 import type { ReplacementSource } from './session-protocol';
@@ -295,7 +296,7 @@ class Producer {
     });
     this.listen();
   }
-  private handle(): RegistryProducer {
+  handle(): RegistryProducer {
     return { registry: this.registry, signal: this.lifetime.signal, store: () => this.bundle.store,
       release: async () => { this.lifetime.abort(); this.detach(); await this.transport.release().catch(() => undefined); } };
   }
@@ -367,7 +368,7 @@ class Producer {
       } finally { child.lifetime.signal.removeEventListener('abort', stop); child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); }
     };
     ctx.script.stop = () => { for (const job of scriptJobs) { if (job.producer.bundle !== bundle) continue; job.runner.stop(); job.producer.lifetime.abort(); void job.producer.transport.release().catch(() => undefined); } };
-    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry, bundle.comparison)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store)] });
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry, bundle.comparison)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store), { ...WORKSPACE_STATUS, run: () => workspaceStatus(bundle.store.state.ready) }] });
     return registry;
   }
   async dispatch(command: { cmd: string } & Record<string, unknown>): Promise<unknown> {
@@ -461,44 +462,52 @@ const workspace = new SessionWorkspace<Bundle>({
     window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleRegistry : key === 'dispatch' ? consoleDispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
     bundle.store.dispatch = dispatch;
     if (!root.querySelector('.shell, .start-layout, .start')) root.textContent = '';
+    startup.retire();
+    detachStartupAccount();
     render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} rightViewer={bundle.rightViewer} comparison={bundle.comparison} commands={ui.registry.list().commands} registry={ui.registry} />, root);
   },
 });
-async function boot(): Promise<void> {
-  bootStage('Checking graphics capabilities…', 20);
-  prepareKeyStorage(__HOSTED_AI__);
-  // Select the initial backend from an actual adapter probe. Later candidate device failures
-  // still abort replacement; they never silently change an established backend.
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
-  engineOptions.gpu = Boolean(await gpu?.requestAdapter());
-  bootStage('Reading saved projects…', 40);
-  await primeAutosave();
-  bootStage('Loading the simulation engine…', 60);
-  const active = await workspace.start();
-  await active.resources.refresh();
-  const accountReturn = sessionStorage.getItem('femlab.accountReturnProject');
-  if (accountReturn) {
-    sessionStorage.removeItem('femlab.accountReturnProject');
-    try { await window.fem.dispatch({ cmd: 'project.open', id: accountReturn }); return; }
-    catch (error) { workspace.active.resources.fail(error); }
-  }
-  const example = new URLSearchParams(location.search).get('example');
-  if (example) await window.fem.dispatch({ cmd: 'file.openExample', name: example });
-  const commands = await readShareFragment(location.hash);
-  if (commands) await workspace.replace(workspace.active.transport, { kind: 'commands', commands: commands as Command[] });
-}
-function bootStage(message: string, progress: number): void {
-  const status = root.querySelector('.boot-status');
-  const bar = root.querySelector<HTMLElement>('.boot-fill');
-  if (status) status.textContent = message;
-  if (bar) bar.style.width = `${progress}%`;
-}
-void accounts.initialize();
-void boot().catch(error => {
-  const message = error instanceof Error ? error.message : String(error);
-  if (root.querySelector('.boot')) {
-    root.querySelector('h1')!.textContent = 'Could not start the workspace';
-    root.querySelector('.boot')!.setAttribute('aria-busy', 'false');
-    bootStage(message, 100);
-  } else root.textContent = message;
+const startup = new StartupHost({
+  schema: schema as unknown as EngineSchema, caps: host, account: accounts.state,
+  listProjects: () => repository.list(),
+  start: async signal => {
+    prepareKeyStorage(__HOSTED_AI__);
+    // A late non-cancellable adapter probe cannot spawn a Worker after cancellation.
+    const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
+    engineOptions.gpu = Boolean(await startupWait(Promise.resolve(gpu?.requestAdapter()), signal));
+    await startupWait(primeAutosave(), signal);
+    signal.throwIfAborted();
+    const active = await workspace.start(signal);
+    void finishBoot(active.resources).catch(error => active.resources.fail(error));
+  },
 });
+const detachStartupAccount = accounts.subscribe(account => startup.setAccount(account));
+// The existing Start component is mounted before any awaited adapter, storage or engine work.
+render(<App startup={startup} />, root);
+void startup.loadProjects();
+void accounts.initialize();
+void startup.start().catch(() => undefined); // Failure remains visible, with registered Retry.
+
+async function finishBoot(owner: Bundle): Promise<void> {
+  await owner.refresh();
+  // Never retarget initial navigation onto a session that replaced this startup publication.
+  if (displayed !== owner) return;
+  // Use the ordinary producer lease: automatic navigation can follow only replacements it
+  // initiates, and a late share decode cannot target a project selected by the person.
+  const operation = new Producer(owner, await owner.transport.fork());
+  const navigation = operation.handle();
+  try {
+    const accountReturn = sessionStorage.getItem('femlab.accountReturnProject');
+    if (accountReturn) {
+      sessionStorage.removeItem('femlab.accountReturnProject');
+      try { await navigation.registry.dispatch({ cmd: 'project.open', id: accountReturn }); return; }
+      catch (error) { owner.fail(error); }
+    }
+    const example = new URLSearchParams(location.search).get('example');
+    if (example) await navigation.registry.dispatch({ cmd: 'file.openExample', name: example });
+    const commands = await readShareFragment(location.hash);
+    if (commands) {
+      await operation.transport.replaceWith({ kind: 'commands', commands: commands as Command[] });
+    }
+  } finally { await navigation.release(); }
+}

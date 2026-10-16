@@ -27,6 +27,15 @@ import { MATERIAL_PHYSICS, type MaterialPhysics } from './ui/schema';
 import type { AbaqusIo } from '@femlab/registry';
 import { browserAbaqusIo } from './abaqus-files';
 
+/** Static form metadata is shared with the unavailable startup control; no form runs early. */
+export const FORM_OPEN = {
+      name: 'form.open',
+      execution: 'sessionView',
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
+      tool: true,
+} satisfies Omit<HostDef, 'run'>;
+
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
  * Command reaches it lazily — and anything pushed to it before then (an example that opened
@@ -568,11 +577,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       },
     },
     {
-      name: 'form.open',
-      execution: 'sessionView',
-      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. `keepInitial` preserves the original values and edited object identity across field edits and Revert. `materialPhysics` selects visible Material property groups without changing their values; omitting it derives groups from the Model Steps and existing properties. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
-      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional(), materialPhysics: z.array(z.enum(MATERIAL_PHYSICS)).optional() }),
-      tool: true,
+      ...FORM_OPEN,
       run: (input) => {
         const { command, args, keepInitial, materialPhysics } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean; materialPhysics?: MaterialPhysics[] };
         store.openForm(command, args ?? {}, keepInitial === true, undefined, materialPhysics);

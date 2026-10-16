@@ -3,6 +3,7 @@
 // visible — every row is one Command with its doc string, which is also the AI's tool description.
 import type { CommandDef, ObjectRef, ProjectMeta } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import type { StartState } from '../startup';
 import type { ExampleEntry } from '../benchmark';
 export type { ExampleEntry } from '../benchmark';
 import { engineChip } from '../capabilities';
@@ -273,12 +274,12 @@ export function ago(at: number, now = Date.now()): string {
 }
 
 /** One Recent card: the whole card opens the project, with rename and delete sitting on it. */
-function RecentCard({ p, dispatch }: { p: ProjectMeta; dispatch: Dispatch }) {
+function RecentCard({ p, dispatch, ready = true }: { p: ProjectMeta; dispatch: Dispatch; ready?: boolean }) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   return (
     <div class="recent">
-      <Cmd dispatch={dispatch} cmd="project.open" class="recent-open" args={{ id: p.id }} title={`project.open ${p.name}`}>
+      <Cmd dispatch={dispatch} cmd="project.open" disabled={!ready} class="recent-open" args={{ id: p.id }} title={`project.open ${p.name}`}>
         {p.thumbnail ? <img class="recent-thumb" src={p.thumbnail} alt="" /> : <span class="recent-thumb empty" />}
         <span class="recent-name mono">{p.name}</span>
         <span class="recent-meta mono">
@@ -304,12 +305,13 @@ function RecentCard({ p, dispatch }: { p: ProjectMeta; dispatch: Dispatch }) {
             }}
           />
         )}
-        <Cmd dispatch={dispatch} cmd="project.rename" args={{ id: p.id, name: p.name }} title="project.rename" onRun={() => setRenaming(renaming === null ? p.name : null)}>
+        <Cmd dispatch={dispatch} cmd="project.rename" disabled={!ready} args={{ id: p.id, name: p.name }} title="project.rename" onRun={() => setRenaming(renaming === null ? p.name : null)}>
           rename
         </Cmd>
         <Cmd
           dispatch={dispatch}
           cmd="project.delete"
+          disabled={!ready}
           class={confirming ? 'danger' : ''}
           args={{ id: p.id }}
           title={confirming ? 'there is no undo' : 'project.delete'}
@@ -342,13 +344,13 @@ export function storageLine(s: Pick<UiState, 'project'>): string {
  * two Commands; with no API key the drawer answers by opening its Settings, and the line stays
  * here in the composer so nothing typed is lost.
  */
-export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+export function Start({ s, dispatch }: { s: StartState; dispatch: Dispatch }) {
   const [name, setName] = useState('model');
   const [ask, setAsk] = useState('');
   const [all, setAll] = useState(false);
   const recent = all ? s.projects : s.projects.slice(0, 6);
   const send = (): void => {
-    if (!ask.trim()) return;
+    if (!s.ready || !ask.trim()) return;
     void dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true })
       .then(() => dispatch({ cmd: 'chat.send', text: ask.trim() }))
       .catch(() => undefined);
@@ -359,7 +361,12 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <i /> FEM Lab
       </h1>
       <p class="pitch">A finite-element editor and solver in a browser tab. Model, mesh and solve locally. Optional hosted AI sends the context needed for your request to the model provider.</p>
-      <Cmd dispatch={dispatch} cmd="account.open" class="tbutton outline">{s.account.uid ? 'Account and AI plans' : 'Sign in for AI'}</Cmd>
+      {s.startup ? <div class="startup-status" role="status" aria-live="polite"><span>
+        {s.startup.phase === 'starting' ? 'Loading the simulation engine… You can edit drafts and browse Recent projects.' : s.startup.phase === 'cancelling' ? 'Cancelling workspace startup…' : s.startup.phase === 'cancelled' ? 'Workspace startup cancelled.' : 'Could not start the workspace.'}
+        </span><div class="startup-actions"><Cmd dispatch={dispatch} cmd="workspace.cancelStartup" disabled={s.startup.phase !== 'starting'}>Cancel startup</Cmd>
+        <Cmd dispatch={dispatch} cmd="workspace.retryStartup" disabled={s.startup.phase === 'starting' || s.startup.phase === 'cancelling'}>Retry startup</Cmd></div>
+      </div> : null}
+      <Cmd dispatch={dispatch} cmd="account.open" disabled={!s.ready} class="tbutton outline">{s.account.uid ? 'Account and AI plans' : 'Sign in for AI'}</Cmd>
 
       <div class="ask">
         <input
@@ -373,7 +380,7 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             if (e.key === 'Enter') (e.preventDefault(), send());
           }}
         />
-        <Cmd dispatch={dispatch} cmd="chat.send" class="ask-send" args={{ text: ask }} disabled={ask.trim() === ''} title="chat.send" onRun={send}>
+        <Cmd dispatch={dispatch} cmd="chat.send" class="ask-send" args={{ text: ask }} disabled={!s.ready || ask.trim() === ''} title="chat.send" onRun={send}>
           Send
         </Cmd>
       </div>
@@ -402,36 +409,36 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         {recent.length > 0 ? (
           <div class="recents">
             {recent.map((p) => (
-              <RecentCard key={p.id} p={p} dispatch={dispatch} />
+              <RecentCard key={p.id} p={p} dispatch={dispatch} ready={s.ready} />
             ))}
           </div>
         ) : (
-          <div class="faint no-projects">Projects you start are kept in this browser. Hosted AI processes the context needed for your request.</div>
+          <div class="faint no-projects">{s.catalog === 'loading' ? 'Reading saved projects…' : s.catalog === 'failed' ? `Could not read saved projects: ${s.catalogError}` : 'Projects you start are kept in this browser. Hosted AI processes the context needed for your request.'}</div>
         )}
       </div>
 
       <div class="cards">
-        <Cmd dispatch={dispatch} cmd="file.open" class="card" args={{ picker: true }} title="file.open">
+        <Cmd dispatch={dispatch} cmd="file.open" class="card" disabled={!s.ready} args={{ picker: true }} title="file.open">
           <b>Open a file</b>
           <span>A femlab/1 file saved from here or from the CLI; it becomes a project when you edit it.</span>
           <i class="mono cue-cyan">file.open(picker)</i>
         </Cmd>
-        <Cmd dispatch={dispatch} cmd="form.open" class="card" args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp">
+        <Cmd dispatch={dispatch} cmd="form.open" class="card" disabled={!s.ready} args={{ command: 'file.importAbaqus', args: { name: 'imported', body: 'body', picker: true } }} title="Import Abaqus .inp">
           <b>Import Abaqus .inp</b>
           <span>Solid meshes and linear static models with C3D4, C3D8, C3D10 or C3D20 elements, including assemblies. Choose source Length and Force units explicitly.</span>
           <i class="mono cue-cyan">file.importAbaqus</i>
         </Cmd>
-        <Cmd dispatch={dispatch} cmd="form.open" class="card" args={{ command: 'geometry.importStep', args: { name: 'body', linearDeflection: '0.1 mm', angularDeflection: '15 deg' } }} title="Import STEP geometry">
+        <Cmd dispatch={dispatch} cmd="form.open" class="card" disabled={!s.ready} args={{ command: 'geometry.importStep', args: { name: 'body', linearDeflection: '0.1 mm', angularDeflection: '15 deg' } }} title="Import STEP geometry">
           <b>Import STEP geometry</b>
           <span>Convert CAD surfaces into one tessellated Body. Choose physical deflection, then name faces and mesh.</span>
           <i class="mono cue-cyan">geometry.importStep</i>
         </Cmd>
-        <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'examples' }}>
+        <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" disabled={!s.ready} args={{ panel: 'examples' }}>
           <b>Examples</b>
           <span>Worked benchmarks with reference values, each opened as its own Journal.</span>
           <i class="mono cue-cyan">panel.toggle(examples)</i>
         </Cmd>
-        <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'tutorial' }}>
+        <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" disabled={!s.ready} args={{ panel: 'tutorial' }}>
           <b>Tutorials</b>
           <span>Nine guided walks, one Command at a time with the reason for each: a cantilever, a plate with a hole, heat, modes, a convergence study.</span>
           <i class="mono">panel.toggle(tutorial)</i>
@@ -439,7 +446,7 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       </div>
 
       <div class="caps mono">
-        {s.ready ? '●' : '○'} {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'} · {s.hostCaps?.webgpu ? 'WebGPU available' : 'no WebGPU'} ·{' '}
+        {s.ready ? '●' : '○'} {s.ready && s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'engine not ready'} · {s.hostCaps?.webgpu ? 'WebGPU available' : 'no WebGPU'} ·{' '}
         {s.hostCaps?.crossOriginIsolated ? 'cross-origin isolated' : 'not isolated'} · {storageLine(s)} · local modeling
       </div>
       <nav class="account-policies" aria-label="FEM Lab policies"><a href={`${import.meta.env.BASE_URL}terms.html`} target="_blank" rel="noreferrer">Terms of service</a><a href={`${import.meta.env.BASE_URL}privacy.html`} target="_blank" rel="noreferrer">Privacy notice</a><a href="mailto:andershaf@gmail.com">Contact support</a></nav>
