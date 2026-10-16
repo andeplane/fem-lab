@@ -158,7 +158,7 @@ it('presents Google first with an independent passwordless email path and only d
   act(()=>render(<AccountPanel s={s} dispatch={dispatch}/>,container));
   const methods=container.querySelectorAll<HTMLButtonElement>('[data-cmd="account.signIn"]');
   expect(methods[0]!.textContent).toContain('Continue with Google');expect(methods[1]!.textContent).toBe('Send sign-in link');
-  expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('account-title');expect(container.querySelector('#account-title')?.textContent).toBe('Sign in for AI');
+  expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('account-title');expect(container.querySelector('#account-title')?.textContent).toBe('Sign in');
   expect(container.textContent).toContain('Model, mesh and solve without signing in.');expect(dispatch).not.toHaveBeenCalled();
   act(()=>methods[0]!.click());expect(dispatch).toHaveBeenLastCalledWith({cmd:'account.signIn',method:'google'});
   const email=container.querySelector<HTMLInputElement>('input[type="email"]')!;

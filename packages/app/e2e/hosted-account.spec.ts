@@ -5,16 +5,16 @@ test.describe('@cpu @hosted optional accounts in the production build',()=>{
     await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));await page.goto('./');await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});
     await page.evaluate(()=>window.fem.model.new({name:'anonymous-model'}));
     await expect(page.locator('.shell')).toBeVisible();await page.getByRole('button',{name:'Sign in',exact:true}).click();
-    await expect(page.getByRole('dialog',{name:'Sign in for AI'})).toContainText('Model, mesh and solve without signing in');await page.getByRole('button',{name:'Close account'}).click();
+    await expect(page.getByRole('dialog',{name:'Sign in'})).toContainText('Model, mesh and solve without signing in');await page.getByRole('button',{name:'Close account'}).click();
     await page.evaluate(()=>window.fem.dispatch({cmd:'panel.toggle',panel:'assistant',open:true}));
-    const drawer=page.locator('aside.assistant');await expect(drawer).toBeVisible();await expect(drawer.getByText('Sign in for AI')).toBeVisible();await expect(drawer.locator('input[type=password]')).toHaveCount(0);
+    const drawer=page.locator('aside.assistant');await expect(drawer).toBeVisible();await expect(drawer.getByText('Sign in')).toBeVisible();await expect(drawer.locator('input[type=password]')).toHaveCount(0);
     await page.evaluate(()=>window.fem.dispatch({cmd:'chat.send',text:'Create a beam'}));await expect(drawer).toContainText('Sign in to use the Assistant.');
     const query=await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));expect(query).toBeUndefined();
     const account=await page.evaluate(()=>window.fem.registry.query({query:'query.account'}));expect(account).toMatchObject({uid:null,profile:null});
   });
   test('account controls fit a narrow Chromium viewport',async({page})=>{
     await page.setViewportSize({width:390,height:844});await page.goto('./');await page.waitForFunction(()=>Boolean(window.fem),undefined,{timeout:60000});await page.evaluate(()=>window.fem.dispatch({cmd:'account.open'}));
-    await expect(page.getByRole('dialog',{name:'Sign in for AI'})).toBeVisible();const box=await page.getByRole('dialog',{name:'Sign in for AI'}).boundingBox();expect(box!.width).toBeLessThanOrEqual(390);await expect(page.getByRole('button',{name:'Close account'})).toBeVisible();
+    await expect(page.getByRole('dialog',{name:'Sign in'})).toBeVisible();const box=await page.getByRole('dialog',{name:'Sign in'}).boundingBox();expect(box!.width).toBeLessThanOrEqual(390);await expect(page.getByRole('button',{name:'Close account'})).toBeVisible();
   });
   test('@hosted explains the product before local and hosted actions and keeps anonymous AI drafts local',async({page})=>{
     const aiRequests:string[]=[];
@@ -30,7 +30,7 @@ test.describe('@cpu @hosted optional accounts in the production build',()=>{
     await page.screenshot({path:'/tmp/femlab-768-landing-mobile.png',fullPage:true});
     await page.getByLabel('describe the part').fill('Check a beam with a tip load');
     await page.getByRole('button',{name:'Sign in to continue',exact:true}).click();
-    await expect(page.getByRole('dialog',{name:'Sign in for AI'})).toBeVisible();
+    await expect(page.getByRole('dialog',{name:'Sign in'})).toBeVisible();
     await page.getByRole('button',{name:'Close account'}).click();
     await page.reload();await page.waitForFunction(()=>Boolean(window.fem));
     await expect(page.getByLabel('describe the part')).toHaveValue('Check a beam with a tip load');
@@ -51,7 +51,7 @@ test.describe('@cpu @hosted optional accounts in the production build',()=>{
     await page.getByLabel('describe the part').fill('a 1 m steel cantilever, 10 kN at the tip');
     await expect(page.locator('.ask-send')).toHaveText('Sign in to continue');
     await page.getByLabel('describe the part').press('Enter');
-    const account=page.getByRole('dialog',{name:'Sign in for AI'});
+    const account=page.getByRole('dialog',{name:'Sign in'});
     await expect(account).toBeVisible();
     await expect(page.locator('aside.assistant')).not.toBeVisible();
     await page.getByRole('button',{name:'Close account'}).click();

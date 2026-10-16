@@ -31,7 +31,7 @@ export function ProfileControl({account,dispatch,open=false,disabled=false,compa
   },[open]);
   const accountAction=()=>{if(onAccount)onAccount();else void dispatch({cmd:'account.open'}).catch(()=>undefined);};
   const action=(command:string)=>()=>{const actor=identity.current;void close().then(()=>{if(identity.current!==actor)return;return command==='account.open'?accountAction():dispatch({cmd:command});}).catch(()=>undefined);};
-  if(!account.uid)return <Cmd dispatch={dispatch} cmd="account.open" class={compact?'tbutton account-button':'profile-sign-in'} disabled={disabled||account.status==='loading'} label={compact?'Sign in':'Sign in for AI'} onRun={accountAction}>
+  if(!account.uid)return <Cmd dispatch={dispatch} cmd="account.open" class={compact?'tbutton account-button':'profile-sign-in'} disabled={disabled||account.status==='loading'} label="Sign in" onRun={accountAction}>
     <span class="account-button-label">{account.status==='loading'?'Restoring sign-in…':'Sign in'}</span><span class="account-button-icon" aria-hidden="true">↗</span>
   </Cmd>;
   const email=account.email??'Your account',usage=account.status==='active'?account.profile?.usage:undefined;

@@ -5,6 +5,8 @@ import {EMPTY_ACCOUNT,PUBLIC_CREDIT_UNIT,type AccountState} from '@femlab/regist
 import {HomeAccount,ProfileControl,profileInitials} from '../src/ui/Profile';
 import {Start} from '../src/ui/Overlays';
 import {initialState,panelsReducer} from '../src/store';
+import {handleGlobalKey} from '../src/ui/App';
+import {Palette} from '../src/ui/Overlays';
 
 function signed():AccountState{return {...EMPTY_ACCOUNT,configured:true,status:'active',uid:'A',email:'ada.lovelace@example.test',profile:{id:'A',email:'ada.lovelace@example.test',createdAt:'2026-10-01T00:00:00Z',status:'active',creditUnit:PUBLIC_CREDIT_UNIT,usage:{plan:'free',availableCredits:4999.9155,totalCredits:5000,reservedCredits:0,periodEndsAt:'2026-11-01T00:00:00Z',models:[],maxOutput:4096,contextLimit:64000,tariffVersion:'v1'},freeAllowance:{status:'claimed',credits:5000,periodStartsAt:'2026-10-01T00:00:00Z',periodEndsAt:'2026-11-01T00:00:00Z'}}};}
 const dispatcher=()=>vi.fn(async(_command:Record<string,unknown>):Promise<unknown>=>undefined);
@@ -88,4 +90,20 @@ it('keeps account settings and the profile popover mutually exclusive without to
   expect(panelsReducer({assistant:true,account:true},'profile',true)).toEqual({assistant:true,account:false,profile:true});
   expect(panelsReducer({assistant:true,profile:true},'account',true)).toEqual({assistant:true,account:true,profile:false});
   expect(panelsReducer({profile:true},'profile',false)).toEqual({profile:false});
+});
+it.each(['account','palette','examples','report','projects','export','tutorial','abaqus','abaqusReport','step','stepReport'])('keeps one modal focus owner when %s and profile open in either order',modal=>{
+  expect(panelsReducer({assistant:true,'tree.geometry':true,profile:true},modal,true)).toEqual({assistant:true,'tree.geometry':true,profile:false,[modal]:true});
+  expect(panelsReducer({assistant:true,'tree.geometry':true,[modal]:true},'profile',true)).toEqual({assistant:true,'tree.geometry':true,[modal]:false,profile:true});
+});
+it.each(['ctrlKey','metaKey'] as const)('hands modal focus from profile to the real command palette on %s+K',key=>{
+  const s={...structuredClone(initialState),account:signed(),panels:{profile:true}};
+  const dispatch=vi.fn(async(command:Record<string,unknown>)=>{s.panels=panelsReducer(s.panels,String(command['panel']),command['open'] as boolean|undefined) as typeof s.panels;});
+  const show=()=>act(()=>render(<><ProfileControl account={s.account} dispatch={dispatch} open={s.panels.profile}/><Palette s={s} dispatch={dispatch} commands={[]}/></>,document.body));show();
+  act(()=>handleGlobalKey(new KeyboardEvent('keydown',{key:'k',[key]:true,cancelable:true}),dispatch,1,s.panels));show();
+  expect(s.panels).toMatchObject({profile:false,palette:true});expect(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).toHaveLength(1);
+  expect(document.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Command palette');
+});
+it('blocks model shortcuts behind the profile, but keeps its Escape action callable',()=>{
+  const dispatch=dispatcher();for(const options of [{key:'1',code:'Digit1',shiftKey:true},{key:'z',ctrlKey:true},{key:'z',metaKey:true,shiftKey:true},{key:'c',ctrlKey:true}])handleGlobalKey(new KeyboardEvent('keydown',options),dispatch,1,{profile:true});
+  expect(dispatch).not.toHaveBeenCalled();handleGlobalKey(new KeyboardEvent('keydown',{key:'Escape'}),dispatch,1,{profile:true});expect(dispatch).toHaveBeenCalledExactlyOnceWith({cmd:'panel.toggle',panel:'profile',open:false});
 });

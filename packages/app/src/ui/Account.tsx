@@ -27,7 +27,7 @@ export function AccountPanel({s,dispatch}:{s:UiState;dispatch:Dispatch}) {
   const availablePercent=freshUsage&&freshUsage.totalCredits>0?Math.min(100,Math.max(0,freshUsage.availableCredits/freshUsage.totalCredits*100)):0;
   if(!s.panels['account'])return null;
   return <div class="overlay wide"><div ref={ref} class="account-panel profile-panel" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-title">
-    <div class="account-heading"><div><span class="eyebrow">FEM LAB ACCOUNT</span><h2 id="account-title">{a.uid?'Your account':'Sign in for AI'}</h2></div><Cmd dispatch={dispatch} cmd="panel.toggle" args={{panel:'account',open:false}} class="tbutton" label="Close account">×</Cmd></div>
+    <div class="account-heading"><div><span class="eyebrow">FEM LAB ACCOUNT</span><h2 id="account-title">{a.uid?'Your account':'Sign in'}</h2></div><Cmd dispatch={dispatch} cmd="panel.toggle" args={{panel:'account',open:false}} class="tbutton" label="Close account">×</Cmd></div>
     <p class="profile-intro">{a.uid?'Manage your account, AI allowance and subscription.':'Sign in to use the hosted Assistant and manage your AI allowance.'}</p>
     <div class="profile-local-note"><span class="profile-local-dot" aria-hidden="true"/><p>Model, mesh and solve without signing in. Free monthly AI requires eligibility approval and an explicit claim each UTC calendar month. Signing up starts with zero credits.</p></div>
     {!a.configured?<p role="status">Hosted accounts are not configured in this build.</p>:!a.uid?<div class="account-login">

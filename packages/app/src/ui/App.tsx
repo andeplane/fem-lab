@@ -82,6 +82,11 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   if (e.defaultPrevented) return;
   const meta = e.metaKey || e.ctrlKey;
   const key = e.key.toLowerCase();
+  if(panels['profile']){
+    if(meta&&key==='k'){e.preventDefault();void dispatch({cmd:'panel.toggle',panel:'palette',open:true}).catch(()=>undefined);}
+    else if(e.key==='Escape'){e.preventDefault();void dispatch({cmd:'panel.toggle',panel:'profile',open:false}).catch(()=>undefined);}
+    return;
+  }
   const camera = e.shiftKey && !meta && !e.altKey && !e.repeat && !isEditableTarget(e.target)
     ? CAMERA_SHORTCUTS[e.code as keyof typeof CAMERA_SHORTCUTS]
     : undefined;

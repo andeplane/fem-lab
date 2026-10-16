@@ -831,7 +831,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div>
 
         {__HOSTED_AI__ ? <div class="hosted-account">
-          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${formatAiCredits(ui.account.profile?.usage?.availableCredits ?? 0)} AI credits · Account` : 'Sign in for AI'}</Cmd>
+          <Cmd cmd="account.open" run={() => dispatch({cmd:'account.open'})}>{ui.account.uid ? `${formatAiCredits(ui.account.profile?.usage?.availableCredits ?? 0)} AI credits · Account` : 'Sign in'}</Cmd>
           {ui.account.uid && !ui.account.disclosureAccepted ? <div class="ai-disclosure"><p>Your messages, selected model and project context, tool results and attached images pass through FEM Lab to OpenAI. Conversations stay in this browser; OpenAI processes requests under its API data policy. Review sensitive project content before sending.</p><a href="https://platform.openai.com/docs/guides/your-data" target="_blank" rel="noreferrer">Provider data policy</a><Cmd cmd="ai.acceptDisclosure" run={() => dispatch({cmd:'ai.acceptDisclosure'})}>Accept and enable AI</Cmd></div> : null}
         </div> : null}
         <div class="model-row">
