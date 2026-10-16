@@ -6,6 +6,7 @@ import type { Progress } from '@femlab/registry';
 import type { Viewer, CameraState } from '../src/viewer/viewer';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import { SessionRuntime } from '../src/session-runtime';
+import { SessionTransport } from '../src/session-transport';
 import { FileDelivery, FileArtifactMetadata } from '@femlab/registry';
 import { fakeDir } from './project-fake';
 import { IDBFactory } from 'fake-indexeddb';
@@ -310,6 +311,39 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect(mounted.props!.store.state.projects.some(row => row.id === aId || row.id === bProject.id)).toBe(false);
   await window.fem.dispatch({ cmd: 'project.open', id: anonymous.id });
   expect((await window.fem.query.model()).bodies).toHaveLength(1);
+  // An admitted download may outlive a document, but never an authentication epoch.
+  emitIdentity('A');
+  await vi.waitFor(() => { expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); });
+  await window.fem.dispatch({ cmd: 'project.new', name: 'private delayed save' });
+  const privateFacade = window.fem;
+  const originalExport = SessionTransport.prototype.exportFile;
+  let releaseExport!: () => void;
+  const exportGate = new Promise<void>(resolve => { releaseExport = resolve; });
+  let exportHeld = false;
+  const exportSpy = vi.spyOn(SessionTransport.prototype, 'exportFile').mockImplementation(async function (this: SessionTransport) {
+    const file = await originalExport.call(this);
+    if (!exportHeld) { exportHeld = true; await exportGate; }
+    return file;
+  });
+  const deliveredBeforeSwitch = payloads.length;
+  const latePrivateSave = privateFacade.dispatch({ cmd: 'file.save', to: 'download' }).then(value => ({ value }), error => ({ error }));
+  await vi.waitFor(() => expect(exportHeld).toBe(true));
+  const heldUi = mounted.props!;
+  emitIdentity('B');
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(heldUi); expect(mounted.props!.store.state.account.uid).toBe('B'); expect(mounted.props!.store.state.ready).toBe(true); });
+  const bBeforeReturn = mounted.props!;
+  emitIdentity('A');
+  await vi.waitFor(() => { expect(mounted.props).not.toBe(bBeforeReturn); expect(mounted.props!.store.state.account.uid).toBe('A'); expect(mounted.props!.store.state.ready).toBe(true); });
+  releaseExport();
+  expect(await latePrivateSave).toMatchObject({ error: { code: 'session.expired' } });
+  exportSpy.mockRestore();
+  expect(payloads).toHaveLength(deliveredBeforeSwitch);
+  expect(mounted.props!.store.state.projectFiles).toEqual([]);
+  expect(mounted.props!.store.state.completedFilesVersion).toBe(0);
+  expect((await window.fem.query.model()).bodies).toEqual([]);
+  await expect(privateFacade.query.model()).rejects.toMatchObject({ code: 'session.expired' });
+  emitIdentity(null);
+  await vi.waitFor(() => { expect(mounted.props!.store.state.account.uid).toBeNull(); expect(mounted.props!.store.state.ready).toBe(true); });
   // Persisted history must receive checked entries, not already flattened commands. Exercise
   // the real host/storage/replacement path so a malformed autosave cannot hide behind mocks.
   await window.fem.dispatch({ cmd: 'file.autosave', on: true });

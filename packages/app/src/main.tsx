@@ -81,7 +81,10 @@ class Bundle {
   revoked=false;
   freshStart=false;
   get currentId():string|null{return this.savedMeta?.id??null;}
-  assertOwner():void{if(this.disposed||this.revoked||accounts.version!==this.ownerEpoch||accounts.state.uid!==this.ownerUid)throw expired();}
+  // Physical delivery admitted by this owner may finish after a document replacement.
+  // Authentication epochs remain absolute, including A → B → A transitions.
+  assertIdentity():void{if(this.revoked||accounts.version!==this.ownerEpoch||accounts.state.uid!==this.ownerUid)throw expired();}
+  assertOwner():void{this.assertIdentity();if(this.disposed)throw expired();}
   readonly store = new Store();
   readonly stepImport = new StepImporter(
     () => new Worker(new URL('./step.worker.ts', import.meta.url), { type: 'module' }),
@@ -132,8 +135,8 @@ class Bundle {
         const variant = engineSchema.commands.oneOf.find(variant => variant.properties['cmd']?.const === form.cmd);
         return variant ? defaultFormValues(form.values, fieldsOf(variant, definitions)) : form.values;
       });
-    this.completedFiles = recovered ?? createCompletedFiles({ download: browserDownload, nextId: () => crypto.randomUUID(),
-      archive: input=>{let staged:ReturnType<typeof this.inventory.prepare>|undefined;try{staged=this.inventory.prepare('output',input.name,input.mime,input.data);}catch(error){this.artifactFailure=error instanceof Error?error.message:'Project output could not be retained.';this.store.set({projectArtifactError:this.artifactFailure});}return {complete:()=>{if(staged?.complete()){const owner=completedBundles.get(this.completedFiles);if(owner)void owner.refresh().catch(error=>owner.fail(error));}},discard:()=>staged?.discard()};},
+    this.completedFiles = recovered ?? createCompletedFiles({ download: (name,mime,data)=>{this.assertIdentity();browserDownload(name,mime,data);}, nextId: () => crypto.randomUUID(),
+      archive: input=>{this.assertIdentity();let staged:ReturnType<typeof this.inventory.prepare>|undefined;try{staged=this.inventory.prepare('output',input.name,input.mime,input.data);}catch(error){this.artifactFailure=error instanceof Error?error.message:'Project output could not be retained.';this.store.set({projectArtifactError:this.artifactFailure});}return {complete:()=>{if(staged?.complete()){const owner=completedBundles.get(this.completedFiles);if(owner)void owner.refresh().catch(error=>owner.fail(error));}},discard:()=>staged?.discard()};},
       changed: () => { const store = completedFileStores.get(this.completedFiles); if (store) store.set({ completedFilesVersion: store.state.completedFilesVersion + 1 }); } });
     this.detachAccount = accounts.subscribe(account => {
       if(account.uid!==this.ownerUid||accounts.version!==this.ownerEpoch){
@@ -459,8 +462,10 @@ class Producer {
         };
       },
     }, bundle.capture, undefined, accounts.services, bundle.comparison,projectAccessFor(bundle.ownerUid));
+    const download=ctx.files.download;
+    ctx.files.download=(name,mime,data)=>{bundle.assertIdentity();download(name,mime,data);};
     const folder=ctx.folder;
-    ctx.folder={...folder,readText:async(path,limit)=>{const data=await folder.readText(path,limit);if(this.captureInputReads)this.pickedInput(path,'text/plain',data);return data;},readBytes:async path=>{const data=await folder.readBytes(path);if(this.captureInputReads)this.pickedInput(path,'application/octet-stream',data);return data;}};
+    ctx.folder={...folder,writeText:async(path,text)=>{bundle.assertIdentity();await folder.writeText(path,text);},writeBytes:async(path,bytes)=>{bundle.assertIdentity();await folder.writeBytes(path,bytes);},readText:async(path,limit)=>{const data=await folder.readText(path,limit);if(this.captureInputReads)this.pickedInput(path,'text/plain',data);return data;},readBytes:async path=>{const data=await folder.readBytes(path);if(this.captureInputReads)this.pickedInput(path,'application/octet-stream',data);return data;}};
     ctx.transport=new Proxy(transport,{get:(target,key)=>key==='importFile'?async (file:import('@femlab/registry').ModelFile)=>{const source=this.withInputs({kind:'file',file});const next=await target.replaceWith(source);const snapshot=await next.snapshot();return {seq:-1,revision:snapshot.model.revision,hash:snapshot.model.hash!,warnings:[],output:{type:'none'},journal:snapshot.file.journal};}:typeof Reflect.get(target,key)==='function'?Reflect.get(target,key).bind(target):Reflect.get(target,key)});
     ctx.step = {
       import: input => {
@@ -523,6 +528,9 @@ class Producer {
       const versionBefore = transport.stamp.stateVersion;
       const who = before.store.state.source;
       const ack = await native.dispatch(command);
+      // Only the trusted captured file.save path may finish across a document change.
+      // Its physical I/O is identity-fenced above; never publish it into the new bundle.
+      if(command.cmd==='file.save'&&definition.provider==='host'&&(before.disposed||this.bundle!==before)){before.assertIdentity();return ack;}
       publication = this.bundle;
       const current = this.bundle;
       if (definition.execution === 'replacement' || (definition.execution === 'modelWrite' && transport.stamp.stateVersion !== versionBefore)) {
