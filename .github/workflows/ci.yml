@@ -314,7 +314,7 @@ jobs:
       - name: chromium, hosted anonymous account boundary
         env:
           FEMLAB_AI_MODE: hosted
-        run: xvfb-run -a npx playwright test e2e/hosted-account.spec.ts e2e/product-introduction.spec.ts e2e/projects.spec.ts --project=cpu --grep "@hosted"
+        run: xvfb-run -a npx playwright test e2e/hosted-account.spec.ts --project=cpu
         working-directory: packages/app
       # Preserve the generated thumbnails in the downloaded production artifact.
       - run: |

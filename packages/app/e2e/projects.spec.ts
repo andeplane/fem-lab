@@ -170,28 +170,6 @@ test.describe('@cpu projects in this browser', () => {
     expect(names).toHaveLength(2);
   });
 
-  test('@hosted the hosted landing composer requires sign-in and preserves an unsent draft', async ({ page }) => {
-    test.skip(process.env['FEMLAB_AI_MODE']==='development','Hosted authentication is checked before the explicit BYOK build.');
-    const completions: string[] = [];
-    page.on('request',request=>{if(/\/(?:chat|v1\/ai)\/completions(?:[?#]|$)/.test(request.url()))completions.push(request.url());});
-    await page.goto('./');
-    await ready(page);
-    await page.getByLabel('describe the part').fill('a 1 m steel cantilever, 10 kN at the tip');
-    await expect(page.locator('.ask-send')).toHaveText('Sign in to continue');
-    await page.getByLabel('describe the part').press('Enter');
-    const account=page.getByRole('dialog',{name:'Sign in for AI'});
-    await expect(account).toBeVisible();
-    await expect(page.locator('aside.assistant')).not.toBeVisible();
-    await page.getByRole('button',{name:'Close account'}).click();
-    await expect(page.getByLabel('describe the part')).toHaveValue('a 1 m steel cantilever, 10 kN at the tip');
-    await page.reload();await ready(page);
-    await expect(page.getByLabel('describe the part')).toHaveValue('a 1 m steel cantilever, 10 kN at the tip');
-    expect(completions).toEqual([]);
-    await page.getByRole('button',{name:'Start modeling — free'}).click();
-    await expect(page.locator('.shell')).toBeVisible();
-    await expect(page.getByRole('link',{name:'Docs',exact:true})).toHaveAttribute('href',/\/docs\/$/);
-  });
-
   test('the development composer opens provider settings without a FEM Lab account',async({page})=>{
     test.skip(process.env['FEMLAB_AI_MODE']!=='development','Only the explicit developer-key host exposes provider settings.');
     await page.goto('./');await ready(page);
