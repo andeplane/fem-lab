@@ -1,4 +1,4 @@
-import { EMPTY_ACCOUNT, FemError, type EngineSchema, type ProjectMeta } from '@femlab/registry';
+import { EMPTY_ACCOUNT, FemError, type EngineSchema, type ProjectMeta, type ModelSummary } from '@femlab/registry';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import { readHostCaps } from '../src/capabilities';
 import { StartupHost, startupWait, workspaceStatus } from '../src/startup';
 import { Store } from '../src/store';
 import { App } from '../src/ui/App';
+import { afterEffects } from './wait-for';
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 const projects: ProjectMeta[] = Array.from({ length: 7 }, (_, i) => ({ id: `${i}`, name: `saved ${i}`, at: 1, createdAt: 1, commands: i, hash: null, thumbnail: null }));
 function setup(start: (signal: AbortSignal) => Promise<void> = async () => undefined, listProjects = async () => projects) {
@@ -59,4 +60,40 @@ it('preserves the same Start DOM, drafts, focus and expanded Recent when the fir
   expect(document.querySelector('[aria-label="project name"]')).toBe(name); expect(document.querySelector('[aria-label="describe the part"]')).toBe(ask);
   expect(name.value).toBe('kept draft'); expect(ask.value).toBe('kept question'); expect(document.activeElement).toBe(name); expect(document.querySelectorAll('.recent')).toHaveLength(7);
   expect(document.querySelector<HTMLButtonElement>('[data-cmd="project.new"]')!.disabled).toBe(false); expect(document.querySelector('.startup-status')).toBeNull();
+});
+
+function startedModel(withBody: boolean): ModelSummary {
+  return { name: 'local', revision: 1, hash: 'active', units: { length: 'm' }, idealisation: 'solid3d',
+    bodies: withBody ? [{ name: 'committed', bbox: [{ value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0.001, unit: 'm' }, { value: 0.002, unit: 'm' }, { value: 0.003, unit: 'm' }], measure: { value: 6e-9, unit: 'm^3' }, faces: [] }] : [],
+    materials: [], sets: [], constraints: [], connections: [], loads: [], steps: [], warnings: [] };
+}
+function mountWorkspace(model: ModelSummary) {
+  const store = new Store(); store.set({ model, revision: model.revision, ready: true });
+  render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, document.body);
+  return store;
+}
+it('offers the starter geometry form when a person opens an empty local Model', async () => {
+  const store = mountWorkspace(startedModel(false));
+  await afterEffects();
+  expect(store.state.form).toMatchObject({ cmd: 'geometry.addBox', values: { name: 'body', size: ['1 m', '100 mm', '100 mm'] } });
+});
+it('does not invent a starter draft when the first workspace entry already has geometry', async () => {
+  const store = mountWorkspace(startedModel(true));
+  await afterEffects();
+  expect(store.state.form).toBeNull();
+});
+it('checks the live Model before a delayed starter effect, after geometry arrives between render and effects', async () => {
+  const store = mountWorkspace(startedModel(false));
+  // Preact has rendered the empty Model, but its after-paint effect has not run yet.
+  store.set({ model: startedModel(true) });
+  await afterEffects();
+  expect(store.state.form).toBeNull();
+});
+it('preserves an explicit geometry edit instead of replacing it with the starter body', async () => {
+  const store = new Store(); store.set({ model: startedModel(true), revision: 1, ready: true });
+  store.openForm('geometry.addBox', { name: 'committed', size: ['2 mm', '2 mm', '3 mm'] }, false, { kind: 'body', name: 'committed' });
+  const form = store.state.form;
+  render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, document.body);
+  await afterEffects();
+  expect(store.state.form).toBe(form);
 });

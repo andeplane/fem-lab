@@ -12,6 +12,20 @@ from unittest.mock import patch
 
 
 class HostingReleaseSmoke(unittest.TestCase):
+    def test_app_entry_and_docs_html_revalidate_without_weakening_other_headers(self):
+        for environment in ['production', 'staging']:
+            config = json.loads(Path(__file__).with_name(f'hosting.{environment}.json').read_text())['hosting']
+            headers = {rule['source']: {item['key']: item['value'] for item in rule['headers']} for rule in config['headers']}
+            for path in ['/', '/index.html', '/fem-lab', '/fem-lab/', '/fem-lab/index.html', '/docs/**']:
+                with self.subTest(environment=environment, path=path):
+                    self.assertIn(path, headers)
+                    self.assertEqual(headers[path], {'Cache-Control': 'no-cache'})
+            self.assertEqual(headers['/assets/**'], {'Cache-Control': 'public,max-age=31536000,immutable'})
+            self.assertEqual(headers['**'], {'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'credentialless'})
+            self.assertEqual(headers['/signin.html'], {'Cross-Origin-Embedder-Policy': 'unsafe-none', 'Cache-Control': 'no-store'})
+            self.assertNotIn('redirects', config)
+            self.assertEqual(config['rewrites'], [{'source': '**', 'destination': '/index.html'}])
+
     def test_only_signin_document_leaves_engine_isolation_in_both_environments(self):
         for environment in ['production', 'staging']:
             with self.subTest(environment=environment):

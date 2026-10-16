@@ -3,6 +3,7 @@
 // here — it lives in the engine and arrives as `query.model` snapshots.
 import type { AbaqusConversionReport, AdaptReport, AutosaveState, AutosaveVersion, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, OpenProject, Progress, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import { EMPTY_ACCOUNT, type AccountState, parseRef, refOf } from '@femlab/registry';
+import type { GeometryDraftState } from './geometry-draft';
 import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
@@ -122,6 +123,10 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** Zero-based local modeling-tour stop; host view state, never engineering history. */
+  tourStep: number;
+  /** Explicit tutorial-start generation; lets a view Command replace an already open runner. */
+  tutorialStart: number;
   /** The Examples gallery's two independent, registry-driven filters. */
   exampleFilter: ExampleFilter;
   /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
@@ -132,6 +137,8 @@ export interface UiState {
   /** Every `@`-mentionable object, for the picker chips and the palette. */
   objects: ObjectRef[];
   form: FormState | null;
+  /** Uncommitted geometry view state; never serialized with a project. */
+  geometryDraft: GeometryDraftState;
   /** The last failure of an Apply, so the form can put it under the field `where` names. */
   formError: LastError | null;
   /** Which form field the next viewer pick fills in, from "pick in viewer". */
@@ -278,6 +285,8 @@ export const initialState: UiState = {
     'tree.results': true,
     'tree.plugins': true,
   },
+  tourStep: 0,
+  tutorialStart: 0,
   panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
   resultComparison: { configuration: { mode: 'single' }, viewMode: 'geometry', catalogue: { limit: 8, records: [] }, left: null, right: null, difference: null, coverage: null, interpolated: false, warnings: [], loading: false, error: null, playback: null },
@@ -285,6 +294,7 @@ export const initialState: UiState = {
   tab: 'journal',
   objects: [],
   form: null,
+  geometryDraft: { status: 'idle' },
   formError: null,
   pickInto: null,
   journalWho: {},
@@ -359,6 +369,17 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
   const nextOpen = open ?? !panels[panel];
+  const modals=['account','palette','examples','report','projects','export','tutorial','tour','abaqus','abaqusReport','step','stepReport'];
+  if(nextOpen&&panel==='profile'){
+    const next:Record<string,boolean>={...panels,profile:true};
+    for(const modal of modals)if(panels[modal])next[modal]=false;
+    return next;
+  }
+  if (nextOpen && (panel === 'tutorial' || panel === 'tour')) {
+    const other = panel === 'tour' ? 'tutorial' : 'tour';
+    return { ...panels, ...(panels['profile'] ? { profile: false } : {}), ...(panels[other] ? { [other]: false } : {}), [panel]: true };
+  }
+  if(nextOpen&&panels['profile']&&modals.includes(panel))return {...panels,profile:false,[panel]:true};
   if (!panel.startsWith('tree.menu.') || !nextOpen) return { ...panels, [panel]: nextOpen };
   const next = { ...panels };
   for (const key of Object.keys(next)) if (key.startsWith('tree.menu.')) next[key] = false;

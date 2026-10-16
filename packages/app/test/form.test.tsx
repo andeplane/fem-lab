@@ -67,6 +67,24 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('keeps the explicit geometry command in the recording and Apply when form arguments contain a cmd key', () => {
+    const { root, sent } = mount('geometry.addBox', { cmd: 'solve.run', name: 'draft', size: ['1 m', '1 m', '1 m'] });
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('fem.geometry.addBox(');
+    expect(root.querySelector('.recorded-cmd')!.textContent).not.toContain('fem.solve.run(');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'geometry.addBox', name: 'draft', size: ['1 m', '1 m', '1 m'] });
+  });
+
+  it('places a geometry draft along one axis using the visible zero defaults for untouched optional axes, then cancels without Apply', () => {
+    const { root, store, sent } = mount('geometry.addBox', { name: 'draft', size: ['1 m', '1 m', '1 m'] });
+    type(field(root, 'at').querySelector('input')!, '2 m');
+    expect(store.state.form!.values['at']).toEqual(['2 m', '0 mm', '0 mm']);
+    const cancel = root.querySelector<HTMLButtonElement>('[aria-label="Cancel draft"]')!;
+    cancel.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: '' });
+    expect(sent.every(command => command.cmd === 'form.open')).toBe(true);
+  });
+
   it('opens a heat Material form with thermal and mass fields first and stiffness hidden', () => {
     const { root, store } = mount('material.add', { name: 'conductor' });
     store.set({ model: { ...model(), steps: [{ name: 'heat', procedure: 'heat-steady', loads: [], constraints: [], solved: false }] } });
@@ -401,6 +419,40 @@ describe('SchemaForm', () => {
     expect(store.state.form!.values['shape']).toEqual({ kind: 'cylinder' });
     expect(field(root, 'shape.radius')).not.toBeNull();
     expect(field(root, 'shape.height')).not.toBeNull();
+  });
+
+  it('names the shape choices and exposes exactly one selected kind through the callable draft', () => {
+    const original = { name: 'pin', shape: { kind: 'box' } };
+    const { root, store, sent } = mount('geometry.add', original);
+    const choices = field(root, 'shape').querySelector<HTMLElement>(':scope > [role="group"]')!;
+    expect(choices.getAttribute('aria-label')).toBe('Shape kind');
+    expect(choices.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
+    expect(choices.querySelector('[aria-pressed="true"]')!.textContent).toBe('box');
+    const cylinder = [...choices.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'cylinder')!;
+    expect(cylinder.type).toBe('button');
+    expect(cylinder.dataset['cmd']).toBe('form.open');
+    cylinder.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'form.open', command: 'geometry.add', args: { name: 'pin', shape: { kind: 'cylinder' } }, keepInitial: true });
+    expect(choices.querySelectorAll('[aria-pressed="true"]')).toHaveLength(1);
+    expect(choices.querySelector('[aria-pressed="true"]')!.textContent).toBe('cylinder');
+    expect(store.state.form!.initial).toEqual(original);
+    expect(sent.some(c => c.cmd === 'geometry.add')).toBe(false);
+  });
+
+  it('keeps nested shape choices independent and preserves their parent draft', () => {
+    const original = { name: 'moved', shape: { kind: 'transform', shape: { kind: 'box' } } };
+    const { root, store, sent } = mount('geometry.add', original);
+    const outer = field(root, 'shape').querySelector(':scope > [role="group"]')!;
+    const inner = field(root, 'shape.shape').querySelector(':scope > [role="group"]')!;
+    expect(inner.getAttribute('aria-label')).toBe('Shape kind');
+    expect(outer.querySelector('[aria-pressed="true"]')!.textContent).toBe('transform');
+    [...inner.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent === 'sphere')!.click();
+    expect(store.state.form!.values).toEqual({ name: 'moved', shape: { kind: 'transform', shape: { kind: 'sphere' } } });
+    expect(outer.querySelector('[aria-pressed="true"]')!.textContent).toBe('transform');
+    expect(inner.querySelector('[aria-pressed="true"]')!.textContent).toBe('sphere');
+    expect(field(root, 'shape.shape.radius')).not.toBeNull();
+    expect(sent.at(-1)?.cmd).toBe('form.open');
+    expect(store.state.form!.initial).toEqual(original);
   });
 
   it('offers a sketch editor rather than a JSON textarea, and emits a valid SketchSpec', () => {

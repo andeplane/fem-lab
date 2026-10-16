@@ -1,7 +1,8 @@
 # Hosted Google sign-in
 
-Tracks [#616](https://github.com/andeplane/fem-lab/issues/616) and the redirect-return fix
-[#696](https://github.com/andeplane/fem-lab/issues/696), part of
+Tracks [#616](https://github.com/andeplane/fem-lab/issues/616), the redirect-return fix
+[#696](https://github.com/andeplane/fem-lab/issues/696), and the ADR numbering correction
+[#724](https://github.com/andeplane/fem-lab/issues/724), part of
 [#556](https://github.com/andeplane/fem-lab/issues/556), following
 [custom-domain routing](600-domain-routing.md).
 
@@ -79,7 +80,7 @@ iframe lacks COEP and is blocked by the isolated engine document. A fresh first 
 still reaches Google; the earlier IAB-only network error does not establish a universal
 first-click failure.
 
-[ADR 0035](../adr/0035-google-redirect-in-a-separate-host-document.md) records the
+[ADR 0038](../adr/0038-google-redirect-in-a-separate-host-document.md) records the
 separate same-origin `signin.html` host. Both Hosting configurations leave only that
 document outside COEP, retaining the isolated engine and a strict auth-page CSP. The
 engine shares tab session persistence but never initializes a redirect resolver or helper

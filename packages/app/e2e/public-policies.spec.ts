@@ -55,7 +55,7 @@ test.describe('@cpu public policies',()=>{
   test('landing offers optional account access and public policy links',async({page})=>{
     await page.addInitScript(()=>localStorage.setItem('femlab.tour.dismissed','1'));
     await page.goto('./');
-    await expect(page.locator('.start .pitch')).toContainText('Optional hosted AI');
+    await expect(page.locator('.start .landing-local')).toContainText('Optional hosted AI');
     const policies=page.getByRole('navigation',{name:'FEM Lab policies'});
     await expect(policies.getByRole('link',{name:'Terms of service'})).toHaveAttribute('href',/\/terms\.html$/);
     const popup=page.waitForEvent('popup');
@@ -63,8 +63,8 @@ test.describe('@cpu public policies',()=>{
     const privacy=await popup;
     await expect(privacy.getByRole('heading',{name:'Privacy notice',exact:true})).toBeVisible();
     await privacy.close();
-    await page.getByRole('button',{name:'Sign in for AI',exact:true}).click();
-    const account=page.getByRole('dialog',{name:'Sign in for AI'});
+    await page.getByRole('button',{name:'Sign in',exact:true}).click();
+    const account=page.getByRole('dialog',{name:'Sign in'});
     await expect(account).toBeVisible();
     await expect(account.getByRole('navigation',{name:'Account policies'}).getByRole('link',{name:'Terms of service'})).toHaveAttribute('href',/\/terms\.html$/);
   });

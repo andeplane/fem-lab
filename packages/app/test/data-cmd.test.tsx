@@ -339,10 +339,9 @@ describe('the shell', () => {
 
   it('puts a `data-cmd` on every button, so nothing can do something the registry cannot', () => {
     const { root } = mount();
-    // ADR 0003 binds the shell in `src/ui/**`. The tutorial card and the first-run tour are
-    // self-contained panels whose own doc comments say they are not Commands; they are mounted
-    // here, not written here, so this check skips their subtrees rather than their module.
-    const bare = [...root.querySelectorAll('button')].filter((b) => !b.hasAttribute('data-cmd') && !b.closest('.tutorial-panel, .tour-callout'));
+    // The modeling tour follows the same Command rule as the shell. The existing tutorial
+    // runner has its own Journal-watching action tests, so only that panel is exempt here.
+    const bare = [...root.querySelectorAll('button')].filter((b) => !b.hasAttribute('data-cmd') && !b.closest('.tutorial-panel'));
     expect(bare.map((b) => b.textContent)).toEqual([]);
   });
 
@@ -729,14 +728,16 @@ describe('the shell', () => {
     query.mockRestore();
   });
 
-  // Issue #41: the start screen leads with the assistant composer, then New project, then the
-  // Recent list, then the import/example/tutorial cards. Each carries its registry Command.
-  it('renders the start screen in the issue’s reading order before a Model exists', () => {
+  // Public introduction comes before the optional Assistant and local project/file entry points.
+  // Every action still carries its registry Command.
+  it('introduces local simulation and retains the registered workspace entry points before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
     document.body.append(root);
     render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, root);
-    expect(root.querySelector('input.ask-field')!.getAttribute('placeholder')).toContain('Describe the part');
+    expect(root.querySelector('h1')?.textContent).toContain('your design behaves');
+    expect(root.querySelector('.landing-local')?.textContent).toContain('no account required');
+    expect(root.querySelector('input.ask-field')).not.toBeNull();
     expect(root.textContent).toContain('New project');
     expect(root.textContent).toContain('Projects you start are kept in this browser');
     expect(root.textContent).toContain('Examples');
@@ -745,7 +746,9 @@ describe('the shell', () => {
     expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
     // The composer's field and the project-name field carry the Command they feed.
     expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'panel.toggle',
       'account.open',
+      'project.new',
       'chat.send',
       'chat.send',
       'project.new',

@@ -194,7 +194,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await page.goto('./');
     await ready(page);
     expect(await page.evaluate(() => performance.getEntriesByType('resource').some((entry) => entry.name.includes('/examples/thumbnails/')))).toBe(false);
-    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
+    await page.locator('.start button.card[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
     const examples = await page.evaluate(async () =>
       ((await (await fetch('examples/index.json')).json()) as { examples: { name: string; tags: string[]; difficulty: number; expected: { reference: string } }[] }).examples,
     );
@@ -241,7 +241,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
-    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
+    await page.locator('.start button.card[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
     await expect(page.locator('.gallery')).toBeVisible();
     await expect(page.locator('button[title="file.openExample cantilever"]')).toBeVisible();
     await shot(page, '06-gallery');

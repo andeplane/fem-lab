@@ -1,0 +1,86 @@
+/* Account presentation is scoped so workspace and public-page controls retain their styles. */
+.account-panel.profile-panel { width: min(860px, 94vw); padding: 30px; color: var(--text-high, #e5ebed); background: #151c21; border-color: #35434b; border-radius: 14px; box-shadow: 0 30px 100px #0009; }
+.account-panel.profile-panel .account-heading { align-items: flex-start; gap: 20px; }
+.account-panel.profile-panel .account-heading h2 { margin: 8px 0 0; font-size: 29px; font-weight: 550; letter-spacing: -.035em; }
+.account-panel.profile-panel .account-heading > .tbutton { width: 34px; height: 34px; flex: 0 0 34px; padding: 0; border: 1px solid #3b4850; background: #1e282e; border-radius: 50%; font-size: 22px; }
+.account-panel.profile-panel .eyebrow { color: #9fb0b8; font: 10px/1.5 var(--mono, monospace); letter-spacing: .13em; }
+.account-panel.profile-panel .profile-intro { margin: 12px 0 20px; color: #b3c0c6; font-size: 14px; line-height: 1.6; }
+.account-panel.profile-panel .profile-local-note { display: flex; align-items: flex-start; gap: 11px; padding: 14px 16px; border: 1px solid #30433f; border-radius: 8px; background: #1b2927; }
+.account-panel.profile-panel .profile-local-note p { margin: 0; color: #b4c7c3; font-size: 12px; line-height: 1.7; }
+.account-panel.profile-panel .profile-local-dot { flex: 0 0 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: #8bd9bd; }
+.account-panel.profile-panel .tbutton { min-height: 37px; border-radius: 6px; font-size: 12px; font-weight: 550; white-space: normal; }
+.account-panel.profile-panel .tbutton:focus-visible, .account-panel.profile-panel input:focus-visible, .account-panel.profile-panel select:focus-visible { outline: 2px solid #f9a86b; outline-offset: 3px; }
+.account-panel.profile-panel .account-login { max-width: 440px; margin: 28px auto 12px; padding: 26px; border: 1px solid #35434b; border-radius: 10px; background: #1a242a; gap: 12px; }
+.account-panel.profile-panel .profile-login-heading h3 { margin: 0 0 8px; font-size: 20px; font-weight: 550; letter-spacing: -.02em; }
+.account-panel.profile-panel .profile-login-heading p { margin: 0 0 12px; color: #a7b8c1; font-size: 13px; line-height: 1.7; }
+.account-panel.profile-panel .profile-google { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 16px; color: #172027; background: #f1f3f1; border: 1px solid #f1f3f1; font-size: 14px; }
+.account-panel.profile-panel .profile-google:hover { background: #fff; }
+.account-panel.profile-panel .profile-google > span:last-child { margin-left: auto; color: #626f76; }
+.account-panel.profile-panel .profile-google-symbol { margin-right: auto; font-size: 17px; font-weight: 650; }
+.account-panel.profile-panel .profile-login-divider { display: flex; align-items: center; gap: 12px; margin: 6px 0 0; color: #8fa4ae; font-size: 11px; }
+.account-panel.profile-panel .profile-login-divider::before, .account-panel.profile-panel .profile-login-divider::after { content: ''; height: 1px; flex: 1; background: #35444c; }
+.account-panel.profile-panel label { gap: 7px; margin: 3px 0; color: #c0cdd3; font-size: 12px; font-weight: 500; }
+.account-panel.profile-panel input, .account-panel.profile-panel select { min-width: 0; width: 100%; min-height: 42px; padding: 10px 12px; color: #e6edef; background: #11191e; border: 1px solid #3c505c; border-radius: 6px; font: inherit; }
+.account-panel.profile-panel .profile-email { width: 100%; }
+.account-panel.profile-panel .account-login > small { font-size: 11px; line-height: 1.6; }
+.account-panel.profile-panel .account-identity { justify-content: flex-start; gap: 15px; margin-top: 24px; padding: 20px; border: 1px solid #35434b; border-radius: 9px; background: #1d272d; }
+.account-panel.profile-panel .profile-avatar { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; flex: 0 0 48px; border: 1px solid #8c603e; border-radius: 50%; background: #3b2c22; color: #ffb27a; font-size: 21px; font-weight: 550; }
+.account-panel.profile-panel .profile-identity-text { display: grid; gap: 4px; min-width: 0; }
+.account-panel.profile-panel .profile-identity-text strong { overflow-wrap: anywhere; font-size: 15px; font-weight: 550; }
+.account-panel.profile-panel .profile-connection { color: #99c7b9; font-size: 11px; }
+.account-panel.profile-panel .profile-identity-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.account-panel.profile-panel .profile-quiet { border: 1px solid transparent; background: transparent; color: #aebec7; }
+.account-panel.profile-panel .profile-allowance, .account-panel.profile-panel .profile-subscription { margin-top: 28px; padding-top: 26px; border-top: 1px solid #35434b; }
+.account-panel.profile-panel .profile-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.account-panel.profile-panel .profile-section-heading h3 { margin: 5px 0 0; font-size: 19px; font-weight: 550; letter-spacing: -.02em; }
+.account-panel.profile-panel .profile-plan-badge, .account-panel.profile-panel .profile-eligibility { padding: 5px 9px; border: 1px solid #485962; border-radius: 5px; color: #c0d1d9; font-size: 10px; line-height: 1.4; }
+.account-panel.profile-panel .account-balance { gap: 10px; margin: 18px 0; padding: 22px; background: linear-gradient(125deg, #1b302d, #1b262b); border: 1px solid #3a5b50; border-radius: 9px; }
+.account-panel.profile-panel .account-balance > strong { color: #b2e9d6; font-size: 39px; font-weight: 550; letter-spacing: -.045em; line-height: 1.2; }
+.account-panel.profile-panel .account-balance > strong span { color: #aec2bc; font-size: 13px; font-weight: 400; letter-spacing: 0; }
+.account-panel.profile-panel .account-balance > span:not(.eyebrow) { color: #bfd0ce; font-size: 12px; }
+.account-panel.profile-panel .account-balance meter { width: 100%; height: 12px; margin: 2px 0 4px; border: 0; }
+.account-panel.profile-panel .account-balance meter::-webkit-meter-bar { background: #101c20; border: 0; border-radius: 8px; }
+.account-panel.profile-panel .account-balance meter::-webkit-meter-optimum-value { background: #8ddcbd; border-radius: 8px; }
+.account-panel.profile-panel small { font-size: 11px; line-height: 1.6; color: #9fb3bd; }
+.account-panel.profile-panel .account-free { margin: 16px 0; padding: 18px; border-color: #364851; background: #19242a; }
+.account-panel.profile-panel .account-free h3 { margin: 0; font-size: 14px; }
+.account-panel.profile-panel .account-free p { color: #b4c5cd; font-size: 12px; line-height: 1.7; }
+.account-panel.profile-panel .account-free p[role=status] { color: #d9e2e5; }
+.account-panel.profile-panel .profile-eligibility[data-status=eligible] { color: #b0e5d0; border-color: #507d6c; background: #203c31; }
+.account-panel.profile-panel .profile-eligibility[data-status=review-required] { color: #efc69c; border-color: #735c42; background: #352b21; }
+.account-panel.profile-panel .account-credit-note, .account-panel.profile-panel .profile-section-intro { font-size: 12px; line-height: 1.7; color: #9fb3bd; }
+.account-panel.profile-panel .profile-section-intro { margin: 10px 0 18px; }
+.account-panel.profile-panel .account-purchase-use { padding: 16px; margin: 18px 0; border: 1px solid #374951; border-radius: 8px; }
+.account-panel.profile-panel .account-purchase-use small { display: block; margin-top: 9px; }
+.account-panel.profile-panel .account-plans { gap: 12px; margin: 18px 0; }
+.account-panel.profile-panel .account-plan { display: flex; flex-direction: column; align-items: flex-start; padding: 18px 15px; border: 1px solid #3c4b54; background: #1b252b; border-radius: 9px; min-width: 0; }
+.account-panel.profile-panel .account-plan.is-current { border-color: #b7794d; background: #30271f; }
+.account-panel.profile-panel .account-plan h3 { margin: 0 0 16px; color: #dce6ea; font-size: 15px; font-weight: 550; }
+.account-panel.profile-panel .account-plan > strong { color: #f2e9df; font-size: 25px; font-weight: 550; letter-spacing: -.025em; }
+.account-panel.profile-panel .account-plan > strong small { display: block; margin-top: 4px; font-size: 10px; font-weight: 400; letter-spacing: 0; }
+.account-panel.profile-panel .account-plan > p { margin: 14px 0 18px; font-size: 11px; color: #bdcdd5; line-height: 1.6; }
+.account-panel.profile-panel .account-plan > .tbutton { width: 100%; margin-top: auto; }
+.account-panel.profile-panel .profile-data-section { border-top: 1px solid #35434b; padding-top: 22px; margin-top: 26px; }
+.account-panel.profile-panel .profile-data-toggle { display: block; padding-left: 0; margin-top: 5px; background: transparent; border-color: transparent; color: #bccad1; text-align: left; }
+.account-panel.profile-panel .account-data { display: grid; gap: 16px; margin-top: 14px; padding: 18px; background: #111a20; border: 1px solid #3b4850; border-radius: 8px; }
+.account-panel.profile-panel .account-data p { margin: 0; color: #9eb1bd; font-size: 12px; line-height: 1.7; }
+.account-panel.profile-panel .account-data > .tbutton { justify-self: start; }
+.account-panel.profile-panel .account-data label { border-top: 1px solid #41444a; padding-top: 18px; margin-top: 2px; }
+.account-panel.profile-panel .profile-danger { color: #f1b0a6; border: 1px solid #80544e; background: #3c2728; }
+.account-panel.profile-panel > p[role=status] { color: #beced5; font-size: 13px; line-height: 1.7; }
+.account-panel.profile-panel > .error { margin: 18px 0 0; padding: 12px 15px; background: #39272b; border: 1px solid #87545d; border-radius: 6px; font-size: 12px; }
+.account-panel.profile-panel .account-policies { padding-top: 19px; border-top: 1px solid #35434b; gap: 12px 18px; font-size: 11px; }
+@media(max-width:600px) {
+  .account-panel.profile-panel { padding: 21px 18px; border-radius: 10px; width: 94vw; max-height: 91dvh; }
+  .account-panel.profile-panel .account-heading h2 { font-size: 25px; }
+  .account-panel.profile-panel .account-login { padding: 20px 16px; margin-top: 20px; }
+  .account-panel.profile-panel .account-identity { padding: 16px; gap: 12px; }
+  .account-panel.profile-panel .profile-identity-text { flex: 1; }
+  .account-panel.profile-panel .profile-identity-actions { width: 100%; margin: 3px 0 0 60px; }
+  .account-panel.profile-panel .account-balance { padding: 18px; }
+  .account-panel.profile-panel .account-balance > strong { font-size: 34px; }
+  .account-panel.profile-panel .account-plans { grid-template-columns: 1fr; }
+  .account-panel.profile-panel .account-plan { padding: 18px; }
+}
+.account-panel.profile-panel .profile-allowance-problem { margin: 18px 0; padding: 16px 18px; border: 1px solid #705744; border-radius: 8px; background: #2d2722; }
+.account-panel.profile-panel .profile-allowance-problem p { margin: 0 0 12px; color: #e4c2a5; font-size: 12px; line-height: 1.7; }
