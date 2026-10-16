@@ -528,8 +528,8 @@ function ViewerPane({ s, store, dispatch, viewer, query, comparison, side = 'lef
   useEffect(() => {
     const el = canvas.current;
     if (!el) return;
-    // three.js is a lazy chunk, warmed by `main.tsx` the moment the shell paints, so by the time
-    // a Model exists this `import()` is already in the module cache.
+    // Load the 3D renderer when a workspace needs a canvas. Keeping it out of the
+    // landing document also avoids downloading it before the Pages isolation reload.
     let v: Viewer | null = null;
     let gone = false;
     let observer: ResizeObserver | null = null;

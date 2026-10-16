@@ -1,6 +1,6 @@
 # Getting started
 
-You can complete a local analysis without signing in or paying for AI. Open FEM Lab in current Chromium, let the engine finish starting, and keep the capability notes visible if it reports a CPU or single-threaded path. See [browser requirements](./browser-troubleshooting.md) if startup fails.
+You can complete a local analysis without signing in or paying for AI. Open FEM Lab in current Chromium, let the engine finish starting, and keep the capability notes visible if it reports a CPU or single-threaded path. See [browser requirements](./browser-troubleshooting.md) if startup fails. The 3D viewer downloads when you open a modeling workspace, so the introduction does not need to load it first.
 
 ## Start modeling with the workflow tour
 

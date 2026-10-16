@@ -14,28 +14,6 @@ const apiOrigin = process.env['FEMLAB_AI_API_ORIGIN'] ?? null;
 const developmentAi = process.env['FEMLAB_AI_MODE'] === 'development';
 if (developmentAi && apiOrigin) throw new Error('Development AI builds cannot target a hosted API.');
 
-/** Chunks the start screen needs next but does not import: warm them from `<head>`. */
-const PRELOAD = /^assets\/(viewer|three)-/;
-
-/**
- * Vite emits `<link rel="modulepreload">` for the entry's *static* imports only. The viewer is a
- * dynamic import (`App.tsx`, warmed in `main.tsx`), so its chunk would otherwise not start
- * downloading until the entry has parsed and run. One link tag per chunk fixes that, and the
- * hashed names come from the bundle rather than being guessed.
- */
-function preloadLazyChunks(): Plugin {
-  return {
-    name: 'femlab-preload-lazy-chunks',
-    transformIndexHtml: {
-      order: 'post',
-      handler: (_html, ctx) =>
-        ctx.filename.endsWith('/signin.html')?[]:Object.keys(ctx.bundle ?? {})
-          .filter((name) => PRELOAD.test(name))
-          .map((name) => ({ tag: 'link', attrs: { rel: 'modulepreload', href: BASE + name }, injectTo: 'head' as const })),
-    },
-  };
-}
-
 /** The sign-in host embeds Firebase's non-isolated reserved helper; the engine stays isolated. */
 function isolationHeaders():Plugin {
   const install=(server:import('vite').ViteDevServer|import('vite').PreviewServer)=>{server.middlewares.use((request,response,next)=>{
@@ -49,7 +27,7 @@ function isolationHeaders():Plugin {
 export default defineConfig(({ command }) => ({
   base: BASE,
   worker: { format: 'es' },
-  plugins: [docsPlugin(BASE),isolationHeaders(),preloadLazyChunks(), {
+  plugins: [docsPlugin(BASE),isolationHeaders(), {
     name: 'femlab-dev-csp',
     // Production keeps the static meta policy. Only the dev server needs HMR sockets.
     transformIndexHtml(html, ctx) {
@@ -73,8 +51,8 @@ export default defineConfig(({ command }) => ({
       output: {
         advancedChunks: {
           groups: [
-            // three.js under its own name: the preload filter above needs to find it, and the
-            // viewer's own code then re-hashes without dragging 550 kB out of everyone's cache.
+            // Keep three.js separate so viewer changes do not invalidate the library cache.
+            // ViewerPane loads both chunks only when a modeling workspace opens.
             // The AI SDKs get NO group: grouping them makes rolldown hoist the shared chunk into
             // the entry's *static* imports, which is exactly what this commit is removing.
             { name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ },
