@@ -7,12 +7,16 @@ import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
 import { bindRegistryProducer } from '../src/producer-registry';
+import type { AccountController } from '../src/account/controller';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
 import * as context from '../src/ai/context';
 import * as hosted from '../src/ai/hosted';
 import type { ImageBlock, Message } from '../src/ai/provider';
 
-const account = vi.hoisted(() => ({ state: {} as AccountState, version: 0, token: vi.fn(), refresh: vi.fn(async () => undefined) }));
+const account = vi.hoisted(() => ({
+  state: {} as AccountState, version: 0,
+  token: vi.fn(async () => 'local-test-token'), refresh: vi.fn(async () => undefined),
+} satisfies Pick<AccountController, 'state' | 'version' | 'token' | 'refresh'>));
 vi.mock('../src/account/browser', () => ({ accounts: account }));
 const image: ImageBlock = { type: 'image', mediaType: 'image/png', base64: 'OWNER_A_IMAGE', caption: 'private A reference' };
 const paint = () => new Promise<void>(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
