@@ -1,11 +1,11 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import type { Command, DocumentSnapshot, PortableProject, RunLease, Stamp } from '@femlab/registry';
-import { MAX_MODEL_FILE_BYTES, modelFileEncoder } from '@femlab/registry';
+import { scientificJson, MAX_MODEL_FILE_BYTES, modelFileEncoder } from '@femlab/registry';
 import { SessionRuntime } from '../src/session-runtime';
 import { SessionChannel, SessionTransport } from '../src/session-transport';
 import { SessionWorkspace } from '../src/session-workspace';
-import type { SessionRequest, SessionResponse } from '../src/session-protocol';
+import type { ReplacementSource, SessionRequest, SessionResponse } from '../src/session-protocol';
 const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
 
 class ProjectWorker {
@@ -93,6 +93,49 @@ describe('portable project Worker transport', () => {
       await next.dispatch({ cmd: 'solve.run', step: 'heat', solver: 'cpu-direct' });
       expect(await next.query({ query: 'query.results' })).toMatchObject({ records: expect.arrayContaining([expect.objectContaining({ id: 'result-3' })]) });
     } finally { h.dispose(); }
+  });
+
+  it('preserves signed-zero scientific field values across portable replacement', async () => {
+    const h = setup();
+    try {
+      const { transport } = await h.workspace.start();
+      for (const command of thermal) await transport.dispatch(command);
+      const exported = await transport.exportProject();
+      const reaction = exported.project.results[0]!.result.fields.reaction!;
+      expect(reaction.data[1]).toBe(0);
+      reaction.data[1] = -0;
+      const restored = await transport.replaceWith({ kind: 'portable', portable: exported.project }, exported.stamp);
+      const actual = (await restored.exportProject()).project.results[0]!.result.fields.reaction!.data[1];
+      expect(Object.is(actual, -0)).toBe(true);
+    } finally { h.dispose(); }
+  });
+
+  it.each(['journal', 'file'] as const)('keeps checked native signed-zero Model provenance through %s recovery', async kind => {
+    const h = setup();
+    const owner = new wasm.SessionEngine(1, `native-signed-zero-${kind}`);
+    try {
+      const stamp = JSON.parse(owner.stamp()) as Stamp;
+      const lease = JSON.parse(owner.begin_run(JSON.stringify(stamp.session))) as RunLease;
+      const ticket = owner.begin_replacement(JSON.stringify({ session: lease.stamp.session, runId: lease.runId, operationId: '1' }), lease.stamp.stateVersion);
+      const candidate = await wasm.PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+      await candidate.commands(scientificJson([
+        { cmd: 'model.new', name: 'native signed zero' },
+        { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: -0 },
+      ]));
+      candidate.finish(modelFileEncoder(), MAX_MODEL_FILE_BYTES);
+      const native = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
+      expect(Object.is(native.file.model.materials![0]!.nu, -0)).toBe(true);
+      const saved = JSON.parse(modelFileEncoder()(scientificJson(native.file))) as DocumentSnapshot['file'];
+      expect(Object.is(saved.model.materials![0]!.nu, -0)).toBe(true);
+      expect(saved.journal).toEqual(native.file.journal);
+      const { transport } = await h.workspace.start();
+      const source: ReplacementSource = kind === 'file' ? { kind, file: saved } : { kind, entries: native.file.journal.entries, skipSolves: true };
+      const restored = await transport.replaceWith(source, transport.stamp);
+      const actual = await restored.snapshot();
+      expect(Object.is(actual.file.model.materials![0]!.nu, -0)).toBe(true);
+      expect(actual.file.journal).toEqual(native.file.journal);
+      expect(actual.model.hash).toBe(native.model.hash);
+    } finally { owner.free(); h.dispose(); }
   });
 
   it('keeps the original session readable and writable if portable validation fails before publication', async () => {

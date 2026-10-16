@@ -1,6 +1,6 @@
 import { isBulkQuery, queryBulk, retainedFieldBulk, retainedSurfaceBulk } from './result-transfer';
 import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engine_wasm.js';
-import { MAX_MODEL_FILE_BYTES, modelFileEncoder, type ModelFilePublicationPolicy, type BufferSpec, type DocumentSnapshot, type ExecutionContext, type Progress, type Stamp } from '@femlab/registry';
+import { scientificJson, MAX_MODEL_FILE_BYTES, modelFileEncoder, type ModelFilePublicationPolicy, type BufferSpec, type DocumentSnapshot, type ExecutionContext, type Progress, type Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 import { toStructured } from './engine-error';
 const json = JSON.stringify;
@@ -75,13 +75,13 @@ const need = (): SessionEngine => {
         switch (source.kind) {
           case 'commands': await candidate.commands(json(source.commands)); break;
           case 'journal':
-            await candidate.journal(json(source.entries), source.skipSolves);
+            await candidate.journal(scientificJson(source.entries), source.skipSolves);
             if (source.revision !== undefined && source.revision < source.entries.length) {
               await candidate.commands(json([{ cmd: 'journal.undo', steps: source.entries.length - source.revision }]));
             }
             break;
-          case 'file': await candidate.file(json(source.file)); break;
-          case 'portable': await candidate.project(json(source.portable)); break;
+          case 'file': await candidate.file(scientificJson(source.file)); break;
+          case 'portable': await candidate.project(scientificJson(source.portable)); break;
         }
         candidate.finish(this.publication.encode, this.publication.maxBytes);
         const consumed = candidate; candidate = undefined;

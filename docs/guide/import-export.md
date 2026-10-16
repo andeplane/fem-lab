@@ -66,5 +66,7 @@ Version 1 supports the exact engine version, eight retained results, and at most
 UTF-8 JSON. Projects exceeding that artifact limit cannot be captured or restored through this
 boundary. Results already evicted by the engine's retention limit are not recoverable from a
 later snapshot. Model fingerprints identify the saved inputs; they do not certify an imported
-answer's physical correctness. Account ownership, cloud synchronization, original imported
+answer's physical correctness. Hosts re-encoding the artifact must preserve finite f64 values, including signed zero; the
+registry `scientificJson` encoder provides that JSON boundary. Ordinary `JSON.stringify`
+normalizes negative zero. Account ownership, cloud synchronization, original imported
 files and completed output bytes are responsibilities of the surrounding project-storage host.
