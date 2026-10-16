@@ -649,11 +649,6 @@ fn tentative(
     Ok(Tentative { matrix: t, coarse_basis, coarse_groups })
 }
 
-fn empty_rect(n_rows: usize, n_cols: usize) -> RectCsr {
-    // All three arrays and transpose's cursor were admitted by the caller.
-    RectCsr { n_rows, n_cols, row_ptr: vec![0; n_rows + 1], col_idx: Vec::new(), vals: Vec::new() }
-}
-
 /// Only the three sparse row operations used during setup. Each numerical row always sums
 /// the same source entries in the same order, independent of which worker evaluates it.
 #[derive(Clone, Copy)]
@@ -864,8 +859,18 @@ fn smooth_interpolation(
     sparse_rows(RowOp::Smooth { a, t, diag, omega }, Entries::Interpolation, budget)
 }
 
-fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr, Error> {
+/// A consumed AP is no longer an input after raw=PT*AP. Its current Vec lengths
+/// are the exact originally charged requests, not allocator capacity. Reusing their
+/// prefixes avoids genuinely new allocations; every old charge remains in Budget.
+fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget, retired_ap: Option<RectCsr>) -> Result<RectCsr, Error> {
     budget.entries(a.vals.len() as u128, kind)?;
+    let mut out = match retired_ap {
+        Some(ap) => ap,
+        None => RectCsr { n_rows: 0, n_cols: 0, row_ptr: Vec::new(), col_idx: Vec::new(), vals: Vec::new() },
+    };
+    let reuse_rows = out.row_ptr.len() > a.n_cols;
+    let reuse_columns = out.col_idx.len() >= a.col_idx.len();
+    let reuse_values = out.vals.len() >= a.vals.len();
     budget.allocations_in(
         Some(AdmissionContext {
             operation: "transpose",
@@ -875,16 +880,34 @@ fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr,
             nnz: Some(a.vals.len()),
         }),
         &[
-            vector_bytes::<u32>(a.n_cols + 1),
-            vector_bytes::<u32>(a.col_idx.len()),
-            vector_bytes::<f64>(a.vals.len()),
+            if reuse_rows { 0 } else { vector_bytes::<u32>(a.n_cols + 1) },
+            if reuse_columns { 0 } else { vector_bytes::<u32>(a.col_idx.len()) },
+            if reuse_values { 0 } else { vector_bytes::<f64>(a.vals.len()) },
             vector_bytes::<u32>(a.n_cols),
         ],
         0,
     )?;
-    let mut out = empty_rect(a.n_cols, a.n_rows);
-    out.col_idx = vec![0; a.col_idx.len()];
-    out.vals = vec![0.0; a.vals.len()];
+    // Admission covers all new buffers before any mutation/allocation. On a miss,
+    // RHS allocation completes before assignment drops the old buffer: full old/new
+    // overlap stays charged. Never use reserve's growth delta or Vec.capacity().
+    if reuse_rows {
+        out.row_ptr.truncate(a.n_cols + 1);
+        out.row_ptr.fill(0);
+    } else {
+        out.row_ptr = vec![0; a.n_cols + 1];
+    }
+    if reuse_columns {
+        out.col_idx.truncate(a.col_idx.len());
+    } else {
+        out.col_idx = vec![0; a.col_idx.len()];
+    }
+    if reuse_values {
+        out.vals.truncate(a.vals.len());
+    } else {
+        out.vals = vec![0.0; a.vals.len()];
+    }
+    out.n_rows = a.n_cols;
+    out.n_cols = a.n_rows;
     for &col in &a.col_idx {
         out.row_ptr[col as usize + 1] += 1;
     }
@@ -907,7 +930,7 @@ fn transpose(a: &RectCsr, kind: Entries, budget: &mut Budget) -> Result<RectCsr,
 fn galerkin(a: Matrix<'_>, p: &RectCsr, pt: &RectCsr, budget: &mut Budget) -> Result<Csr, Error> {
     let ap = multiply(a, p, Entries::Operator, budget)?;
     let raw = multiply(Matrix::rect(pt), &ap, Entries::Operator, budget)?;
-    let transposed = transpose(&raw, Entries::Operator, budget)?;
+    let transposed = transpose(&raw, Entries::Operator, budget, Some(ap))?;
     let symmetric = sparse_rows(RowOp::Symmetric { a: &raw, transpose: &transposed }, Entries::Operator, budget)?;
     Ok(Csr { n: symmetric.n_rows, row_ptr: symmetric.row_ptr, col_idx: symmetric.col_idx, vals: symmetric.vals })
 }
@@ -980,7 +1003,7 @@ fn level(
     let Tentative { matrix: t, coarse_basis, coarse_groups } =
         tentative(a.n_rows, &aggregates, basis, vec![Vec::new(); columns], budget)?;
     let p = smooth_interpolation(a, &t, &diag, 0.8 / high, budget)?;
-    let pt = transpose(&p, Entries::Interpolation, budget)?;
+    let pt = transpose(&p, Entries::Interpolation, budget, None)?;
     let coarse_operator = galerkin(a, &p, &pt, budget)?;
     let next = level(
         Matrix::square(&coarse_operator, &coarse_operator.vals),
@@ -1565,6 +1588,148 @@ mod tests {
     }
 
     #[test]
+    fn retired_ap_buffers_transpose_a_gram_matrix_without_new_output_allocations() {
+        // P has disjoint columns: PᵀI₄P=2I₂. AP's four-entry arrays can hold the
+        // two-entry transpose, and its five row offsets can hold three offsets.
+        let a = Csr { n: 4, row_ptr: vec![0, 1, 2, 3, 4], col_idx: vec![0, 1, 2, 3], vals: vec![1.0; 4] };
+        let p = RectCsr {
+            n_rows: 4,
+            n_cols: 2,
+            row_ptr: vec![0, 1, 2, 3, 4],
+            col_idx: vec![0, 1, 0, 1],
+            vals: vec![1.0; 4],
+        };
+        let mut budget = Budget { limits: limits(), bytes: 0, interpolation_nnz: 0, operator_nnz: 0 };
+        let pt = transpose(&p, Entries::Interpolation, &mut budget, None).unwrap();
+        let ap = multiply(Matrix::square(&a, &a.vals), &p, Entries::Operator, &mut budget).unwrap();
+        let raw = multiply(Matrix::rect(&pt), &ap, Entries::Operator, &mut budget).unwrap();
+        let row_pointer = ap.row_ptr.as_ptr();
+        let column_pointer = ap.col_idx.as_ptr();
+        let value_pointer = ap.vals.as_ptr();
+        let previous = budget.bytes;
+        let actual = transpose(&raw, Entries::Operator, &mut budget, Some(ap)).unwrap();
+        assert_eq!(actual.row_ptr.as_ptr(), row_pointer);
+        assert_eq!(actual.col_idx.as_ptr(), column_pointer);
+        assert_eq!(actual.vals.as_ptr(), value_pointer);
+        // Old charges remain intact; only the separate two-entry cursor is new.
+        assert_eq!(budget.bytes, previous + (2 * size_of::<u32>()) as u128);
+        assert_eq!(actual.row_ptr, [0, 1, 2]);
+        assert_eq!(actual.col_idx, [0, 1]);
+        assert_eq!(actual.vals, [2.0, 2.0]);
+        assert_eq!(rect_mv(&actual, &[3.0, 4.0]), [6.0, 8.0]);
+    }
+
+    /// Valid same-flow Galerkin fixture, not a claim that SA builds P from I.
+    /// P=[1ᵀ;I], so AP=P and PᵀP=I+11ᵀ. Both operators are SPD and every
+    /// dimension/entry is small, finite and valid. All consumed AP payloads were
+    /// allocated through this same ledger; there are no fabricated capacity credits.
+    fn gram_transpose_with_retired_ap(m: usize, budget: &mut Budget) -> Result<RectCsr, Error> {
+        let n = m + 1;
+        let a = Csr { n, row_ptr: (0..=n as u32).collect(), col_idx: (0..n as u32).collect(), vals: vec![1.0; n] };
+        let mut p = RectCsr {
+            n_rows: n,
+            n_cols: m,
+            row_ptr: vec![0, m as u32],
+            col_idx: (0..m as u32).collect(),
+            vals: vec![1.0; m],
+        };
+        for row in 0..m {
+            p.row_ptr.push((m + row + 1) as u32);
+            p.col_idx.push(row as u32);
+            p.vals.push(1.0);
+        }
+        let pt = transpose(&p, Entries::Interpolation, budget, None).unwrap();
+        let ap = multiply(Matrix::square(&a, &a.vals), &p, Entries::Operator, budget).unwrap();
+        let raw = multiply(Matrix::rect(&pt), &ap, Entries::Operator, budget).unwrap();
+        assert_eq!(ap.vals.len(), 2 * m);
+        assert_eq!(raw.vals.len(), m * m);
+        let rows = ap.row_ptr.as_ptr();
+        let columns = ap.col_idx.as_ptr();
+        let values = ap.vals.as_ptr();
+        let result = transpose(&raw, Entries::Operator, budget, Some(ap));
+        if let Ok(actual) = &result {
+            // Fresh complete entry arrays must coexist with the old arrays during
+            // replacement; the reused row-pointer buffer must preserve identity.
+            assert_eq!(actual.row_ptr.as_ptr(), rows);
+            assert_ne!(actual.col_idx.as_ptr(), columns);
+            assert_ne!(actual.vals.as_ptr(), values);
+        }
+        result
+    }
+
+    #[test]
+    fn retired_ap_fallback_charges_full_replacements_at_the_real_exact_cap() {
+        let m = 257;
+        let n = m + 1;
+        let span_headers = ROW_PARTITIONS * size_of::<OutputSpan<'_>>();
+        let count_headers = ROW_PARTITIONS * size_of::<Vec<usize>>();
+        let pt_bytes = 4 * (m + 1) + 12 * (2 * m) + 4 * m;
+        let ap_count = n * size_of::<usize>() + count_headers;
+        let ap_output = span_headers + 4 * (n + 1) + 12 * (2 * m);
+        let raw_count = m * size_of::<usize>() + count_headers;
+        let raw_output = span_headers + 4 * (m + 1) + 12 * (m * m);
+        let previous = pt_bytes + ap_count + ap_output + raw_count + raw_output;
+        let replacement = 12 * (m * m) + 4 * m;
+        let exact = previous + replacement;
+        // Real earlier peaks fit the limit supplied at the beginning. The large
+        // dense Gram output makes final replacement the actual maximum; neither
+        // budget mutation nor unrelated padding is needed to target this boundary.
+        let ap_peak = pt_bytes + ap_count + ap_output + (m + 7) * MAP_ENTRY_BYTES;
+        let raw_peak = previous + 4 * (m + 1) * MAP_ENTRY_BYTES;
+        assert!(ap_peak < exact - 1);
+        assert!(raw_peak < exact - 1);
+        let mut results = Vec::new();
+        for threads in [1, 4] {
+            let actual = par::Pool::new(threads).install(|| {
+                let mut budget = Budget {
+                    limits: Limits { max_bytes: exact, ..limits() },
+                    bytes: 0,
+                    interpolation_nnz: 0,
+                    operator_nnz: 0,
+                };
+                let actual = gram_transpose_with_retired_ap(m, &mut budget).unwrap();
+                assert_eq!(budget.bytes, exact as u128);
+                actual
+            });
+            // Independent Gram closed form and energy ||x||²+(Σx)², not a
+            // second transpose or sparse product implementation.
+            for row in 0..m {
+                let lo = actual.row_ptr[row] as usize;
+                let hi = actual.row_ptr[row + 1] as usize;
+                assert_eq!(hi - lo, m);
+                for (col, &value) in actual.vals[lo..hi].iter().enumerate() {
+                    assert_eq!(actual.col_idx[lo + col], col as u32);
+                    assert_eq!(value, if row == col { 2.0 } else { 1.0 });
+                }
+            }
+            let x = (0..m).map(|i| libm::sin((i + 1) as f64 * 0.31)).collect::<Vec<_>>();
+            let y = rect_mv(&actual, &x);
+            let energy = x.iter().zip(y).map(|(x, y)| x * y).sum::<f64>();
+            let sum = x.iter().sum::<f64>();
+            let expected = x.iter().map(|x| x * x).sum::<f64>() + sum * sum;
+            assert!((energy - expected).abs() <= 1e-12 * expected);
+            results.push(actual);
+        }
+        assert_eq!(results[0], results[1]);
+        let mut refused = Budget {
+            limits: Limits { max_bytes: exact - 1, ..limits() },
+            bytes: 0,
+            interpolation_nnz: 0,
+            operator_nnz: 0,
+        };
+        let error = gram_transpose_with_retired_ap(m, &mut refused).unwrap_err();
+        assert_eq!(requested_count(&error, Quota::Bytes, exact - 1), exact);
+        assert_eq!(refused.bytes, previous as u128);
+        assert_eq!(
+            error.cause.split_once("; admission ").unwrap().1,
+            format!(
+                "operation=transpose stage=output-and-cursor rows={m} cols={m} nnz=Some({}) previous_bytes={previous} vector_bytes={:?} scratch_bytes=0",
+                m * m, [0, 4 * (m * m), 8 * (m * m), 4 * m],
+            ),
+        );
+    }
+
+    #[test]
     fn a_real_prolongation_transpose_admits_all_arrays_and_cursor_at_the_exact_byte_bound() {
         for rows in [2, 127] {
             let a = poisson(rows);
@@ -1584,7 +1749,7 @@ mod tests {
                         interpolation_nnz: 0,
                         operator_nnz: 0,
                     };
-                    let actual = transpose(p, Entries::Interpolation, &mut admitted).unwrap();
+                    let actual = transpose(p, Entries::Interpolation, &mut admitted, None).unwrap();
                     assert_eq!(admitted.bytes, exact as u128);
                     // Independent transfer duality, not a second transpose implementation.
                     let coarse = (0..p.n_cols).map(|i| libm::sin((i + 1) as f64 * 0.31)).collect::<Vec<_>>();
@@ -1601,7 +1766,7 @@ mod tests {
                         interpolation_nnz: 0,
                         operator_nnz: 0,
                     };
-                    let error = transpose(p, Entries::Interpolation, &mut refused).unwrap_err();
+                    let error = transpose(p, Entries::Interpolation, &mut refused, None).unwrap_err();
                     assert_eq!(requested_count(&error, Quota::Bytes, exact - 1), exact);
                     assert_eq!(refused.bytes, 0);
                     assert_eq!(

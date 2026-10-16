@@ -93,6 +93,13 @@ before indexed writes, trading that initialization bandwidth for fewer allocatio
 merge copy. Setup remains independent of pool size. The bounded coarsest operator has at
 most 96 rows.
 
+AP becomes dead after raw=PT*AP completes. Its owned buffers may then supply the local
+transpose(raw) output when their originally requested lengths fit. Eligibility never uses
+allocator capacity; all old charges remain, and a miss admits a complete fresh replacement
+before allocation drops the old buffer. The cursor remains separate and newly charged.
+This avoids a new request without changing the cumulative allowance or extending AP's
+existing lifetime across recursion. It changes neither entry counters nor transpose order.
+
 The initial private setup/device payload caps differ between native and wasm32 hosts; they
 remain experimental construction guards until measured on 66k. The near-space handoff has a
 separate 256 MiB construction bound. Exact diagonal systems skip both metadata and hierarchy

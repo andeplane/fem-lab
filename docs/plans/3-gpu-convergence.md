@@ -198,3 +198,28 @@ A real one-row product proves symbolic unknown-fill and final known-one/known-ze
 reports; a build-produced prolongation proves transpose shape and cursor accounting.
 Existing real quota walks retain exact numeric-prefix checks and physical invariants.
 No large rerun or 780k scientific acceptance follows from this diagnostic change.
+
+
+The source-matched `312eb31d` diagnostic run reproduced the same request and allowance,
+and identified the actual failed allocation: Galerkin AP final CSR, 168,552 by 24,390,
+116,947,975 NNZ. Previous charged bytes 7,595,680,345 plus the four output requests
+[288, 674212, 467791900, 935583800] total 8,999,730,545 bytes; the remaining allowance
+is 7,837,371,816, a shortfall of 1,162,358,729. This was a structured refusal before
+GPU iterations; neither later hierarchy fit nor scientific acceptance is established.
+
+The next local optimization consumes AP only after raw=PT*AP completes, reusing eligible
+AP buffers for transpose(raw). Eligibility uses each original requested Vec length, never
+allocator capacity. Every prior charge remains; a miss admits a complete fresh buffer
+before replacing/dropping its old buffer. Cursor allocation, entry counters and numerical
+histogram/prefix/source traversal remain unchanged. There is no cross-level lifetime,
+pool or cursor-tail reuse. The observed root AP row pointer guarantees a 674,212-byte
+saving; entries save another 12*rawNNZ only if their charged AP extents fit. Clearing the
+observed shortfall locally requires rawNNZ>=96,807,044 and that fit, both still unknown.
+
+Small witnesses use actual same-ledger AP/raw products of valid SPD operators. Disjoint
+P columns give PᵀI₄P=2I₂ and reuse all output buffers while charging only the cursor.
+For P=[1ᵀ;I₂₅₇], PᵀI₂₅₈P=I+11ᵀ; AP has 514 entries and raw has 66,049, so entry buffers
+require full fresh replacements. The exact native bound 1,607,556 bytes exceeds all prior
+map peaks; supplying bound minus one initially must reach and refuse that final batch,
+without ledger mutation or padding. Energy and one/four-thread outputs remain independent
+oracles. This is a low-level Galerkin fixture, not a claim SA generates P from identity.

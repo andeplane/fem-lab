@@ -3254,3 +3254,33 @@ minus one, and exact one or zero NNZ at its final bound minus one. The real prol
 transpose exact-bound/duality case also checks the output shape and all four vector requests,
 including the cursor. These failure oracles preserve the existing successful numerical
 answers and genuine monotonically admitted quota walks; they add no budget or tolerance.
+
+
+### Local retired-AP transpose storage (#3)
+
+After raw=PT*AP finishes, its AP input is dead. Transpose(raw) may consume those owned
+buffers, using each originally requested length as its eligibility bound. It preserves
+all prior cumulative charges, admits complete fresh replacement requests on a miss,
+and keeps a separate newly charged cursor. No allocator capacity or retired-byte credit
+is used. Histogram, prefix and source-entry arithmetic are unchanged.
+
+The fit witness uses I₄ and disjoint-column P with columns (1,0,1,0) and (0,1,0,1).
+Its independently known Gram matrix is 2I₂. Actual AP has four entries and raw has two;
+all three original output buffer addresses must survive, and only the eight-byte cursor
+is newly charged. The recovered action on (3,4) is (6,8).
+
+The fallback witness uses I₂₅₈ and P=[1ᵀ;I₂₅₇]. AP=P has 514 entries; its Gram matrix
+I+11ᵀ has 66,049. The old row-pointer buffer fits; both entry arrays need full fresh
+replacement. All operations use the same ordinary ledger and a cap supplied initially.
+The exact native64 cap is 1,607,556 bytes, with earlier peaks strictly below cap minus
+one; exact succeeds and cap minus one must refuse the final replacement batch, retaining
+all previously charged bytes. The known energy is ||x||²+(Σx)², and complete outputs
+must agree at one and four threads. This tests valid low-level products rather than
+claiming that aggregation setup generates this P from identity. Existing build-produced
+Dirichlet energy, transfer duality, complete Plan determinism and GPU gates remain.
+
+The frozen `312eb31d` 780k diagnostic identified a later AP allocation with output shape
+168,552 by 24,390 and 116,947,975 entries, short by 1,162,358,729 setup bytes. Local root
+row-pointer reuse guarantees 674,212 bytes; clearing that shortfall additionally needs
+at least 96,807,044 raw entries fitting the original AP entry extents. Those sizes are
+unobserved, so this optimization carries no whole-780k fit or scientific acceptance claim.
