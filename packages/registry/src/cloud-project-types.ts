@@ -24,4 +24,4 @@ export interface CloudProjectRead {project:CloudProject;manifest:CloudProjectMan
 export interface CloudProjectUploadRequest {projectId?:string;baseRevision:string|null;name:string;manifest:CloudProjectManifest}
 export interface CloudProjectUpload {uploadId:string;projectId:string;expiresAt:string;missingChunks:number[]}
 /** Conflict responses contain only the authenticated owner's current metadata, never content. */
-export interface CloudProjectConflict {code:string;cause:string;where:string;suggestion:string|null;details?:{project?:CloudProject}}
+export interface CloudProjectConflict {code:string;cause:string;where:string;suggestion:string|null;details?:{project?:CloudProject;missingChunks?:number[]}}

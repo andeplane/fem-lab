@@ -21,6 +21,8 @@ Use the configured service origin with a verified Firebase ID token in `Authoriz
 
 Project metadata has `id`, `name`, string-valued `revision` and `changeVersion`, `bytes`, `updatedAt` and nullable `deletedAt`. Revisions are server-owned. Storage status has `available`, `plan`, `limitBytes`, `usedBytes`, `reservedBytes`, `pendingBytes`, `overQuota` and `maxChunkBytes`. Reading quota does not allocate a storage account or grant credits. On older/unavailable hosts, the optional account `storage` field can be absent.
 
+Project JSON requests are limited to 1,000,000 bytes; binary chunks have the separate limit below.
+
 The manifest is:
 
 ```json
@@ -36,6 +38,8 @@ All nonfinal chunks must be exactly 8,000,000 bytes; the final chunk contains 1â
 3. `POST /v1/projects/uploads/{uploadId}/commit` with `{}`. The service verifies uploaded objects, the base revision and current quota, then returns the committed project metadata. Repeating a successful commit returns its receipt.
 
 Persist the exact artifact, upload ID, idempotency key and base revision until acknowledgment. Reusing a key for different content is a conflict. An expired/aborted upload returns `410`; start a new reservation. One project has at most one pending upload. An account has at most four pending uploads and 1,000 current/pending projects. Independent global and per-account metadata/physical limits can return a temporary capacity error; a small-byte artifact does not bypass them.
+
+Operation keys and committed receipts remain retained even after old chunk bytes or manifest metadata are cleaned up. Replaying an old creation operation cannot create a duplicate project. An expired/aborted key remains expired; creating a new operation must be an explicit choice, not an automatic retry with a different key.
 
 ## List, download and delete
 

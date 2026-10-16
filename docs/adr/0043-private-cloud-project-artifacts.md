@@ -22,4 +22,6 @@ Uploading and downloading pass through authenticated service routes, adding one 
 
 Projects do not gain unlimited version history, automatic backup restoration or remote FEM compute. Metadata/temporary limits can temporarily deny new writes while reads/deletes remain available. The API exposes quota status separately from AI credits, and storage-status failures do not disable ordinary account/billing access.
 
+Cleanup can remove deleted chunk metadata and compact a superseded upload's manifest, but its operation key, request digest and committed receipt remain retained, as do project deletion markers. A long-offline creation retry cannot create a second project merely because its old bytes were cleaned up. Expired/aborted keys remain expired; clients must not implicitly rotate such keys. Finite metadata admission caps bound this retained history instead of silently forgetting idempotency.
+
 Once cloud artifacts exist, operational rollback must preserve migration 011, private project buckets and the project-aware recovery image. Older recovery code must not finalize account deletion without cloud purge. API traffic rollback and job rollback are separate decisions.

@@ -58,17 +58,28 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private complete project artifa
     await expect(reserve(uid,[Buffer.from('competing')],first.project)).rejects.toMatchObject({code:'upload-in-progress'});await service.put(uid,a.uploadId,0,async()=>Buffer.from('second'));const second=await service.commit(uid,a.uploadId,{});
     expect(second.revision).toBe('2');await expect(reserve(uid,[Buffer.from('stale')],first.project)).rejects.toMatchObject({code:'project-conflict',details:{project:{revision:'2'}}});await expect(service.chunk(uid,second.id,0,'1')).rejects.toMatchObject({code:'project-conflict'});expect(await service.chunk(uid,second.id,0,'2')).toEqual(Buffer.from('second'));
     expect(await service.commit(uid,a.uploadId,{})).toEqual(second);
+    await service.recover();expect((await db.query('SELECT count(*) n FROM cloud_project_chunks WHERE upload_id=$1',[first.upload.uploadId])).rows[0].n).toBe('0');expect((await db.query('SELECT manifest FROM cloud_project_uploads WHERE id=$1',[first.upload.uploadId])).rows[0].manifest).toEqual({});expect(await service.commit(uid,first.upload.uploadId,{})).toEqual(first.project);
+  });
+  it('database constraints prevent current artifacts from borrowing another project or owner upload',async()=>{
+    const uid=await owner(),other=await owner(),one=await save(uid,[Buffer.from('one')]),two=await save(uid,[Buffer.from('two')]),foreign=await save(other,[Buffer.from('foreign')]);
+    await expect(db.query('UPDATE cloud_projects SET current_upload_id=$2 WHERE id=$1',[one.project.id,two.upload.uploadId])).rejects.toMatchObject({code:'23503'});await expect(db.query('UPDATE cloud_projects SET current_upload_id=$2 WHERE id=$1',[one.project.id,foreign.upload.uploadId])).rejects.toMatchObject({code:'23503'});expect(await service.chunk(uid,one.project.id,0,'1')).toEqual(Buffer.from('one'));
+  });
+  it('never forgets a committed creation key after replacement, deletion and chunk metadata pruning',async()=>{
+    const uid=await owner(),data=Buffer.from('original offline creation'),key=randomUUID(),upload=await reserve(uid,[data],undefined,key);await service.put(uid,upload.uploadId,0,async()=>data);const original=await service.commit(uid,upload.uploadId,{}),replacement=await save(uid,[Buffer.from('later content')],original);await service.remove(uid,original.id,randomUUID(),{baseRevision:replacement.project.revision});await service.recover();
+    const replay=await reserve(uid,[data],undefined,key);expect(replay.uploadId).toBe(upload.uploadId);expect(replay.projectId).toBe(original.id);expect(await service.commit(uid,upload.uploadId,{})).toEqual(original);expect((await db.query('SELECT count(*) n FROM cloud_projects WHERE account_id=$1',[uid])).rows[0].n).toBe('1');expect((await db.query('SELECT count(*) n FROM cloud_project_chunks WHERE upload_id=$1',[upload.uploadId])).rows[0].n).toBe('0');
   });
   it('verifies reserved length/SHA, rejects incomplete or missing-object commits and repairs retries',async()=>{
-    const uid=await owner(),data=Buffer.from('all results'),upload=await reserve(uid,[data]);
+    const uid=await owner(),data=Buffer.from('all results'),requestKey=randomUUID(),upload=await reserve(uid,[data],undefined,requestKey);
     await expect(service.put(uid,upload.uploadId,0,async()=>Buffer.from('wrong'))).rejects.toMatchObject({code:'invalid-project-request'});await expect(service.commit(uid,upload.uploadId,{})).rejects.toMatchObject({code:'upload-incomplete'});
     await service.put(uid,upload.uploadId,0,async()=>data);const key=(await db.query('SELECT object_name FROM cloud_project_chunks WHERE upload_id=$1',[upload.uploadId])).rows[0].object_name;objects.rows.delete(key);
-    await expect(service.commit(uid,upload.uploadId,{})).rejects.toMatchObject({code:'upload-object-missing'});await service.put(uid,upload.uploadId,0,async()=>data);expect((await service.commit(uid,upload.uploadId,{})).bytes).toBe(data.length);
+    await expect(service.commit(uid,upload.uploadId,{})).rejects.toMatchObject({code:'upload-object-missing',details:{missingChunks:[0]}});expect((await reserve(uid,[data],undefined,requestKey)).missingChunks).toEqual([0]);await service.put(uid,upload.uploadId,0,async()=>data);expect((await service.commit(uid,upload.uploadId,{})).bytes).toBe(data.length);
   });
   it('keeps failed-expiry cleanup physically charged and releases bytes only after confirmed deletion',async()=>{
-    const uid=await owner(),data=Buffer.from('expired artifact'),upload=await reserve(uid,[data]);await service.put(uid,upload.uploadId,0,async()=>data);clock=new Date(clock.getTime()+1800001);objects.failDelete=true;
+    const uid=await owner(),data=Buffer.from('expired artifact'),key=randomUUID(),upload=await reserve(uid,[data],undefined,key);await service.put(uid,upload.uploadId,0,async()=>data);clock=new Date(clock.getTime()+1800001);objects.failDelete=true;
     expect(await service.recover()).toMatchObject({failed:expect.any(Number)});expect(await service.status(uid)).toMatchObject({reservedBytes:0,pendingBytes:data.length});await expect(service.commit(uid,upload.uploadId,{})).rejects.toMatchObject({code:'upload-expired'});
     objects.failDelete=false;await service.recover();expect(await service.status(uid)).toMatchObject({pendingBytes:0});expect((await db.query('SELECT count(*) n FROM cloud_project_cleanup WHERE account_id=$1',[uid])).rows[0].n).toBe('0');
+    await expect(reserve(uid,[data],undefined,key)).rejects.toMatchObject({code:'upload-expired'});expect((await db.query('SELECT count(*) n FROM cloud_projects WHERE account_id=$1',[uid])).rows[0].n).toBe('1');
+    expect((await db.query('SELECT deleted_at FROM cloud_projects WHERE id=$1',[upload.projectId])).rows[0].deleted_at).not.toBeNull();expect((await service.list(uid)).projects).toEqual([]);
   });
   it('deletes idempotently, records tombstones, and keeps deleted content unavailable during cleanup failure',async()=>{
     const uid=await owner(),{project}=await save(uid,[Buffer.from('delete privately')]),key=randomUUID(),body={baseRevision:project.revision};
@@ -109,13 +120,16 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('private complete project artifa
     try{
       const preflight=await fetch(origin+'/v1/projects',{method:'OPTIONS',headers:{origin:'https://femlab.app'}});expect(preflight.headers.get('access-control-allow-methods')).toContain('PUT');expect(preflight.headers.get('access-control-allow-origin')).toBe('https://femlab.app');
       expect((await fetch(origin+'/v1/projects')).status).toBe(401);
+      expect((await fetch(origin+'/v1/projects/uploads',{method:'POST',headers:json,body:JSON.stringify({tooMuch:'x'.repeat(1_000_001)})})).status).toBe(413);
       const reserved=await fetch(origin+'/v1/projects/uploads',{method:'POST',headers:json,body:JSON.stringify({name:'HTTP project',baseRevision:null,manifest:manifest([data])})});expect(reserved.status).toBe(200);const upload=await reserved.json() as {uploadId:string;projectId:string};
       expect((await fetch(origin+`/v1/projects/uploads/${upload.uploadId}/chunks/0`,{method:'PUT',headers:{authorization:uid,'content-type':'text/plain'},body:data})).status).toBe(415);
       expect((await fetch(origin+`/v1/projects/uploads/${upload.uploadId}/chunks/0`,{method:'PUT',headers:{authorization:uid,'content-type':'application/octet-stream'},body:data})).status).toBe(200);
       const saved=await (await fetch(origin+`/v1/projects/uploads/${upload.uploadId}/commit`,{method:'POST',headers:json,body:'{}'})).json() as CloudProject;
+      expect(await (await fetch(origin+`/v1/projects/${saved.id}`,{headers:{authorization:uid}})).json()).toMatchObject({project:{id:saved.id,revision:'1'},manifest:manifest([data])});
       const response=await fetch(origin+`/v1/projects/${saved.id}/chunks/0?revision=1`,{headers:{authorization:uid}});expect(response.status).toBe(200);expect(response.headers.get('content-type')).toBe('application/octet-stream');expect(response.headers.get('content-disposition')).toContain('attachment');expect(response.headers.get('cache-control')).toBe('no-store');expect(response.headers.get('x-content-type-options')).toBe('nosniff');expect(Buffer.from(await response.arrayBuffer())).toEqual(data);
       const conflict=await fetch(origin+`/v1/projects/${saved.id}/chunks/0?revision=0`,{headers:{authorization:uid}});expect(conflict.status).toBe(409);expect(await conflict.json()).toMatchObject({code:'project-conflict',details:{project:{id:saved.id,revision:'1'}}});
       const another=await reserve(uid,[data]);const tooLarge=await fetch(origin+`/v1/projects/uploads/${another.uploadId}/chunks/0`,{method:'PUT',headers:{authorization:uid,'content-type':'application/octet-stream'},body:Buffer.alloc(8_000_001)});expect(tooLarge.status).toBe(413);
+      const deleted=await fetch(origin+`/v1/projects/${saved.id}/delete`,{method:'POST',headers:json,body:JSON.stringify({baseRevision:'1'})});expect(deleted.status).toBe(200);expect(await deleted.json()).toMatchObject({id:saved.id,name:'',bytes:0});expect((await fetch(origin+`/v1/projects/${saved.id}`,{headers:{authorization:uid}})).status).toBe(404);
     }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()))}
   });
   it('account deletion cannot finish while cloud content remains and removes all project metadata before identity deletion',async()=>{

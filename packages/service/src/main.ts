@@ -34,7 +34,7 @@ const pool = projectId ? new pg.Pool({ max: 8, connectionTimeoutMillis: 5000, id
 const now = () => new Date();
 const fingerprint=process.env.FREE_ELIGIBILITY_HMAC_KEY?freeEmailFingerprint(process.env.FREE_ELIGIBILITY_HMAC_KEY):undefined;
 const auth=projectId?getAuth(initializeApp({projectId})):undefined;
-const projects=pool&&auth&&projectId&&process.env.PROJECT_BUCKET?cloudProjects({db:pool,account:accountReader(identityVerifier(auth,projectId,now),postgresAccounts(pool,now,randomUUID)),objects:projectObjects(new Storage({projectId,retryOptions:{autoRetry:false,maxRetries:0,totalTimeout:30}}),process.env.PROJECT_BUCKET),now,newId:randomUUID,globalBytes:Number(process.env.PROJECT_STORAGE_GLOBAL_BYTES??100000000000)}):undefined;
+const projects=pool&&auth&&projectId&&process.env.PROJECT_BUCKET?cloudProjects({db:pool,account:accountReader(identityVerifier(auth,projectId,now),postgresAccounts(pool,now,randomUUID)),objects:projectObjects(new Storage({projectId,timeout:30000,retryOptions:{autoRetry:false,maxRetries:0,totalTimeout:30}}),process.env.PROJECT_BUCKET),now,newId:randomUUID,globalBytes:Number(process.env.PROJECT_STORAGE_GLOBAL_BYTES??100000000000)}):undefined;
 
 const prices={plus:process.env.STRIPE_PRICE_PLUS??'',pro:process.env.STRIPE_PRICE_PRO??'',studio:process.env.STRIPE_PRICE_STUDIO??''};
 const purchasePrices={

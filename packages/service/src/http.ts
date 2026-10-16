@@ -37,9 +37,9 @@ async function readBytes(req:IncomingMessage,limit:number):Promise<Buffer> {
   }
   return Buffer.concat(chunks);
 }
-async function readJson(req:IncomingMessage):Promise<unknown> {
+async function readJson(req:IncomingMessage,limit=16*1024*1024):Promise<unknown> {
   if(req.headers['content-type']?.split(';')[0]?.trim().toLowerCase()!=='application/json') throw new ServiceFailure(415,'json-required','Send this request as JSON.','request');
-  const bytes=await readBytes(req,16*1024*1024);
+  const bytes=await readBytes(req,limit);
   try { return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)); }
   catch { throw new ServiceFailure(400,'invalid-json','Send a valid JSON request.','request'); }
 }
@@ -84,15 +84,15 @@ export function serviceServer(deps: HttpDependencies) {
         if(!deps.projects)throw new ServiceFailure(503,'cloud-projects-unavailable','Cloud project storage is unavailable. Local projects remain available.','project');
         const url=new URL(req.url!,'http://service.local'),path=url.pathname;
         if(req.method==='GET'&&path==='/v1/projects'){res.end(JSON.stringify(await deps.projects.list(req.headers.authorization,url.searchParams.get('after')??'0')));return}
-        if(req.method==='POST'&&path==='/v1/projects/uploads'){res.end(JSON.stringify(await deps.projects.reserve(req.headers.authorization,req.headers['idempotency-key'],await readJson(req))));return}
+        if(req.method==='POST'&&path==='/v1/projects/uploads'){res.end(JSON.stringify(await deps.projects.reserve(req.headers.authorization,req.headers['idempotency-key'],await readJson(req,1_000_000))));return}
         const upload=path.match(/^\/v1\/projects\/uploads\/([^/]+)\/chunks\/(\d+)$/);
         if(req.method==='PUT'&&upload){res.end(JSON.stringify(await deps.projects.put(req.headers.authorization,upload[1]!,Number(upload[2]),async()=>{if(req.headers['content-type']!=='application/octet-stream')throw new ServiceFailure(415,'binary-required','Send project chunks as application/octet-stream.','project');const length=req.headers['content-length'];if(length!==undefined&&(!/^\d+$/.test(length)||Number(length)>PROJECT_CHUNK_BYTES))throw new ServiceFailure(413,'project-chunk-too-large','Project chunks are limited to 8,000,000 bytes.','project');return readBytes(req,PROJECT_CHUNK_BYTES)})));return}
         const commit=path.match(/^\/v1\/projects\/uploads\/([^/]+)\/commit$/);
-        if(req.method==='POST'&&commit){res.end(JSON.stringify(await deps.projects.commit(req.headers.authorization,commit[1]!,await readJson(req))));return}
+        if(req.method==='POST'&&commit){res.end(JSON.stringify(await deps.projects.commit(req.headers.authorization,commit[1]!,await readJson(req,1_000_000))));return}
         const chunk=path.match(/^\/v1\/projects\/([^/]+)\/chunks\/(\d+)$/);
         if(req.method==='GET'&&chunk){const bytes=await deps.projects.chunk(req.headers.authorization,chunk[1]!,Number(chunk[2]),url.searchParams.get('revision')??'');res.setHeader('content-type','application/octet-stream');res.setHeader('content-disposition','attachment; filename="femlab-project.chunk"');res.setHeader('x-content-type-options','nosniff');res.end(bytes);return}
         const remove=path.match(/^\/v1\/projects\/([^/]+)\/delete$/);
-        if(req.method==='POST'&&remove){res.end(JSON.stringify(await deps.projects.remove(req.headers.authorization,remove[1]!,req.headers['idempotency-key'],await readJson(req))));return}
+        if(req.method==='POST'&&remove){res.end(JSON.stringify(await deps.projects.remove(req.headers.authorization,remove[1]!,req.headers['idempotency-key'],await readJson(req,1_000_000))));return}
         const project=path.match(/^\/v1\/projects\/([^/]+)$/);
         if(req.method==='GET'&&project){res.end(JSON.stringify(await deps.projects.read(req.headers.authorization,project[1]!)));return}
         throw new ServiceFailure(404,'not-found','This cloud project route is not available.','project');

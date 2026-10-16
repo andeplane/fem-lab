@@ -37,10 +37,13 @@ CREATE TABLE cloud_project_uploads (
   receipt jsonb,
   UNIQUE(account_id,request_key),
   UNIQUE(id,account_id),
+  UNIQUE(id,project_id,account_id),
   FOREIGN KEY(project_id,account_id) REFERENCES cloud_projects(id,account_id)
 );
 CREATE UNIQUE INDEX cloud_project_one_upload ON cloud_project_uploads(project_id) WHERE state='reserved';
 CREATE INDEX cloud_project_upload_expiry ON cloud_project_uploads(state,expires_at);
+ALTER TABLE cloud_projects ADD CONSTRAINT cloud_project_current_upload_owner
+  FOREIGN KEY(current_upload_id,id,account_id) REFERENCES cloud_project_uploads(id,project_id,account_id);
 CREATE TABLE cloud_project_chunks (
   upload_id uuid NOT NULL,
   account_id uuid NOT NULL,
