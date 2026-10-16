@@ -352,7 +352,7 @@ export function SchemaForm(props: FormProps) {
   const physics = form.materialPhysics ?? materialPhysicsFor(s.model, values, fields, defs);
   const visibleFields = form.cmd === 'material.add' ? materialFieldsFor(fields, physics) : form.cmd === 'step.add' ? procedureFields(fields, variant, defs, values['procedure']) : fields;
   const procedure = form.cmd === 'step.add' && typeof values['procedure'] === 'string' ? procedureInfo(values['procedure'], defs) : null;
-  const cmd = { cmd: form.cmd, ...values };
+  const cmd = { ...values, cmd: form.cmd };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
   const missing = missingRequired(fields, values);

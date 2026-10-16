@@ -67,6 +67,14 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('keeps the explicit geometry command in the recording and Apply when form arguments contain a cmd key', () => {
+    const { root, sent } = mount('geometry.addBox', { cmd: 'solve.run', name: 'draft', size: ['1 m', '1 m', '1 m'] });
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('fem.geometry.addBox(');
+    expect(root.querySelector('.recorded-cmd')!.textContent).not.toContain('fem.solve.run(');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'geometry.addBox', name: 'draft', size: ['1 m', '1 m', '1 m'] });
+  });
+
   it('places a geometry draft along one axis using the visible zero defaults for untouched optional axes, then cancels without Apply', () => {
     const { root, store, sent } = mount('geometry.addBox', { name: 'draft', size: ['1 m', '1 m', '1 m'] });
     type(field(root, 'at').querySelector('input')!, '2 m');

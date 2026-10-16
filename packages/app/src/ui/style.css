@@ -3077,8 +3077,8 @@ input.model-name:focus-visible {
 }
 
 /* Draft geometry is visually separate from the committed Model and the solving overlays. */
-.geometry-draft-note { position:absolute; left:18px; bottom:34px; max-width:min(340px,calc(100% - 36px)); display:grid; gap:4px; padding:10px 12px; color:var(--text); background:rgba(13,15,19,.94); border:1px dashed #58b7d6; border-radius:6px; font-size:12px; pointer-events:none; }
+.geometry-draft-note { position:absolute; left:18px; bottom:34px; max-width:min(340px,calc(100% - 36px)); display:grid; gap:4px; padding:10px 12px; color:var(--text-body); background:rgba(13,15,19,.94); border:1px dashed #58b7d6; border-radius:6px; font-size:12px; pointer-events:none; }
 .geometry-draft-note strong { color:#80d4ee; font-weight:500; }
-.geometry-draft-note span { color:var(--muted); line-height:1.5; }
-.geometry-draft-note.error { border-color:var(--warn); }
-.geometry-draft-note.error strong { color:var(--warn); }
+.geometry-draft-note span { color:var(--text-low); line-height:1.5; }
+.geometry-draft-note.error { border-color:var(--warn-text); }
+.geometry-draft-note.error strong { color:var(--warn-text); }

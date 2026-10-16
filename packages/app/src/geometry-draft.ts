@@ -100,7 +100,7 @@ export class GeometryDraft {
     const context = (state.journal?.entries.slice(0, state.revision) ?? [])
       .map(entry => entry.cmd).filter(command => command.cmd === 'model.setIdealisation');
     const commands: Command[] = [{ cmd: 'model.new', name: 'Uncommitted geometry preview' }, ...context,
-      { cmd: form.cmd, ...this.values(form) } as Command];
+      { ...this.values(form), cmd: form.cmd } as Command];
     this.timer = this.clock.schedule(() => {
       this.timer = undefined;
       this.deadline = this.clock.schedule(() => {

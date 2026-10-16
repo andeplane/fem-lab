@@ -6,6 +6,7 @@ import { GeometryDraft, geometryDraftRenderer, type DraftRenderer, type DraftVie
 import { Store } from '../src/store';
 import { defaultFormValues, fieldsOf } from '../src/ui/schema';
 import { SessionRuntime } from '../src/session-runtime';
+import { SessionWorkspace } from '../src/session-workspace';
 import type { SessionRequest, SessionResponse } from '../src/session-protocol';
 import type { AppSurface } from '../src/surface';
 const wasm = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
@@ -94,4 +95,26 @@ it('rejects invalid drafts without retaining old geometry and bounds a stalled w
   stalled.store.openForm('geometry.addBox', box); await vi.advanceTimersByTimeAsync(5180);
   expect(stalled.store.state.geometryDraft).toMatchObject({ status: 'error', error: { code: 'unsupported', where: 'shape' } });
   expect(stalled.render.clear).toHaveBeenCalled(); stalled.draft.dispose();
+});
+
+it('keeps the trusted geometry command when unrestricted form arguments inject mesh or solve commands', async () => {
+  const workspace = new SessionWorkspace({ spawn: () => new EngineWorker() as unknown as Worker, epoch: () => 'active-model', engine: { gpu: false, threads: 1 }, build: async () => ({ dispose() {} }), publish() {} });
+  const active = await workspace.start();
+  await active.transport.dispatch({ cmd: 'geometry.addBox', name: 'committed', size: ['2 m', '1 m', '1 m'] });
+  const before = await active.transport.snapshot();
+  const { renderer: isolated } = renderer();
+  const sent = vi.spyOn(isolated, 'render');
+  const { store, draft } = setup(isolated);
+  store.set({ model: before.model, journal: before.journal, revision: before.model.revision });
+  try {
+    for (const injected of ['solve.run', 'mesh.set', 'model.new']) {
+      store.openForm('geometry.addBox', { ...box, cmd: injected });
+      await vi.advanceTimersByTimeAsync(180);
+      await vi.waitFor(() => expect(store.state.geometryDraft.status).toBe('ready'));
+      expect(sent.mock.lastCall?.[0].map(command => command.cmd)).toEqual(['model.new', 'geometry.addBox']);
+      expect(sent.mock.lastCall?.[0].at(-1)).toMatchObject({ cmd: 'geometry.addBox', name: 'draft', size: ['1 m', '100 mm', '100 mm'] });
+      expect(await active.transport.snapshot()).toEqual(before);
+      expect(store.state.journal).toEqual(before.journal);
+    }
+  } finally { draft.dispose(); active.transport.channel.close(); }
 });
