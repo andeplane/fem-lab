@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import {resolve} from 'node:path';
+import {docsPlugin} from '../../tools/docs.mjs';
 
 /** Isolation without the service worker in dev and preview (ADR 0013). */
 const headers = {
@@ -48,7 +49,7 @@ function isolationHeaders():Plugin {
 export default defineConfig(({ command }) => ({
   base: BASE,
   worker: { format: 'es' },
-  plugins: [isolationHeaders(),preloadLazyChunks(), {
+  plugins: [docsPlugin(BASE),isolationHeaders(),preloadLazyChunks(), {
     name: 'femlab-dev-csp',
     // Production keeps the static meta policy. Only the dev server needs HMR sockets.
     transformIndexHtml(html, ctx) {

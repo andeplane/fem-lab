@@ -12,6 +12,15 @@ from unittest.mock import patch
 
 
 class HostingReleaseSmoke(unittest.TestCase):
+    def test_docs_html_revalidates_without_weakening_asset_cache_or_auth_isolation(self):
+        for environment in ['production', 'staging']:
+            config = json.loads(Path(__file__).with_name(f'hosting.{environment}.json').read_text())['hosting']
+            headers = {rule['source']: {item['key']: item['value'] for item in rule['headers']} for rule in config['headers']}
+            self.assertEqual(headers['/docs/**'], {'Cache-Control': 'no-cache'})
+            self.assertEqual(headers['/assets/**']['Cache-Control'], 'public,max-age=31536000,immutable')
+            self.assertEqual(headers['**']['Cross-Origin-Embedder-Policy'], 'credentialless')
+            self.assertEqual(headers['/signin.html']['Cross-Origin-Embedder-Policy'], 'unsafe-none')
+
     def test_only_signin_document_leaves_engine_isolation_in_both_environments(self):
         for environment in ['production', 'staging']:
             with self.subTest(environment=environment):
